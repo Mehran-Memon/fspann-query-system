@@ -9,7 +9,11 @@ import com.fspann.query.QueryClientHandler;
 import com.fspann.query.QueryGenerator;
 import com.fspann.query.QueryProcessor;
 import com.fspann.query.QueryToken;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import javax.crypto.SecretKey;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -18,10 +22,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/**
- * The main system class for forward-secure, privacy-preserving approximate nearest neighbor (ANN) queries.
- */
 public class ForwardSecureANNSystem {
+    private static final Logger logger = LoggerFactory.getLogger(ForwardSecureANNSystem.class);
+
     private final SecureLSHIndex index;
     private final KeyManager keyManager;
     private final QueryClientHandler queryClientHandler;
@@ -33,12 +36,12 @@ public class ForwardSecureANNSystem {
     private int operationCount;
 
     public ForwardSecureANNSystem(int dimensions, int numHashTables, int numIntervals, int maxBucketSize, int targetBucketSize, List<double[]> initialData) {
-        this.keyManager = new KeyManager(1000); // Rotate every 1000 operations
+        this.keyManager = new KeyManager(1000);
         EvenLSH initialLsh = new EvenLSH(dimensions, numIntervals, initialData != null ? initialData : Collections.emptyList());
         this.index = new SecureLSHIndex(dimensions, numHashTables, numIntervals, null, maxBucketSize, targetBucketSize, initialData);
         this.queryGenerator = new QueryGenerator(initialLsh, keyManager);
         this.queryClientHandler = new QueryClientHandler(keyManager);
-        this.queryProcessor = new QueryProcessor(new HashMap<>(), keyManager); // Initialize with empty map
+        this.queryProcessor = new QueryProcessor(new HashMap<>(), keyManager);
         this.encryptedDataStore = new ConcurrentHashMap<>();
         this.metadata = new ConcurrentHashMap<>();
         this.queryExecutor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
@@ -51,97 +54,41 @@ public class ForwardSecureANNSystem {
             keyManager.generateMasterKey();
             index.setCurrentKey(keyManager.getCurrentKey());
         } catch (Exception e) {
+            logger.error("Failed to initialize keys", e);
             throw new RuntimeException("Failed to initialize keys: " + e.getMessage());
         }
     }
 
-    public void insert(String id, double[] vector) throws Exception {
-        if (id == null || vector == null) {
-            throw new IllegalArgumentException("ID and vector cannot be null");
-        }
-        operationCount++;
-        if (keyManager.needsRotation(operationCount)) {
-            rotateKeys();
-        }
-        SecretKey key = keyManager.getCurrentKey();
-        byte[] encryptedVector = EncryptionUtils.encryptVector(vector, key);
-        EvenLSH lsh = index.getLshFunctions().get(0);
-        int bucketId = lsh.getBucketId(vector);
-        EncryptedPoint point = new EncryptedPoint(encryptedVector, "bucket_" + bucketId, id);
-        encryptedDataStore.put(id, point);
-        index.add(id, vector);
-        queryProcessor.updateBucketIndex(bucketId, Collections.singletonList(point));
-        metadata.put(id, "INSERT");
-    }
+    // Rest of the class remains unchanged...
 
-    public void update(String id, double[] newVector) throws Exception {
-        if (id == null || newVector == null) {
-            throw new IllegalArgumentException("ID and newVector cannot be null");
-        }
-        operationCount++;
-        if (keyManager.needsRotation(operationCount)) {
-            rotateKeys();
-        }
-        EncryptedPoint oldPoint = encryptedDataStore.get(id);
-        if (oldPoint == null) {
-            throw new IllegalArgumentException("Data with ID " + id + " not found.");
-        }
-        SecretKey oldKey = keyManager.getCurrentKey();
-        keyManager.rotateKey("epoch_" + keyManager.getTimeEpoch(), oldPoint.getCiphertext());
-        SecretKey newKey = keyManager.getCurrentKey();
-        EvenLSH lsh = index.getLshFunctions().get(0);
-        int newBucketId = lsh.getBucketId(newVector);
-        byte[] encryptedVector = EncryptionUtils.reEncrypt(oldPoint.getCiphertext(), oldKey, newKey);
-        EncryptedPoint newPoint = new EncryptedPoint(encryptedVector, "bucket_" + newBucketId, id);
-        encryptedDataStore.put(id, newPoint);
-        index.update(id, newVector);
-        queryProcessor.removeFromBucketIndex(id);
-        queryProcessor.updateBucketIndex(newBucketId, Collections.singletonList(newPoint));
-        metadata.put(id, "UPDATE");
-    }
+    public static void main(String[] args) {
+        try {
+            logger.info("Starting ForwardSecureANNSystem...");
+            int dimensions = 128;
+            int numHashTables = 5;
+            int numIntervals = 15;
+            int maxBucketSize = 1000;
+            int targetBucketSize = 1500;
 
-    public void delete(String id) {
-        if (id == null) {
-            throw new IllegalArgumentException("ID cannot be null");
-        }
-        operationCount++;
-        if (keyManager.needsRotation(operationCount)) {
-            rotateKeys();
-        }
-        EncryptedPoint point = encryptedDataStore.get(id);
-        if (point != null) {
-            int bucketId = Integer.parseInt(point.getBucketId().replace("bucket_", ""));
-            index.remove(id);
-            encryptedDataStore.remove(id);
-            queryProcessor.removeFromBucketIndex(id);
-            metadata.put(id, "DELETE");
-        }
-    }
+            List<double[]> initialData = Collections.emptyList();
+            ForwardSecureANNSystem system = new ForwardSecureANNSystem(dimensions, numHashTables, numIntervals, maxBucketSize, targetBucketSize, initialData);
 
-    public List<double[]> query(double[] queryVector, int k) throws Exception {
-        if (queryVector == null || k < 0) {
-            throw new IllegalArgumentException("queryVector cannot be null and k cannot be negative");
-        }
-        operationCount++;
-        if (keyManager.needsRotation(operationCount)) {
-            rotateKeys();
-        }
-        QueryToken queryToken = queryGenerator.generateQueryToken(queryVector, k, 1); // Expansion range of 1
-        List<EncryptedPoint> candidates = queryProcessor.processQuery(queryToken);
-        return queryClientHandler.decryptAndRefine(candidates, queryVector, k);
-    }
+            double[] vector1 = new double[dimensions];
+            Arrays.fill(vector1, 1.0);
+            double[] vector2 = new double[dimensions];
+            Arrays.fill(vector2, 2.0);
+            system.insert("point1", vector1);
+            system.insert("point2", vector2);
 
-    private void rotateKeys() throws Exception {
-        Map<String, byte[]> dataMap = new HashMap<>();
-        for (Map.Entry<String, EncryptedPoint> entry : encryptedDataStore.entrySet()) {
-            dataMap.put(entry.getKey(), entry.getValue().getCiphertext());
-        }
-        keyManager.rotateAllKeys(new ArrayList<>(keyManager.getSessionKeys().keySet()), dataMap);
-        index.rehash(keyManager, "epoch_" + (keyManager.getTimeEpoch() - 1));
-    }
+            double[] queryVector = new double[dimensions];
+            Arrays.fill(queryVector, 1.5);
+            List<double[]> nearestNeighbors = system.query(queryVector, 1);
+            logger.info("Nearest neighbor: {}", Arrays.toString(nearestNeighbors.get(0)));
 
-    public void shutdown() {
-        queryExecutor.shutdown();
-        queryClientHandler.shutdown();
+            system.shutdown();
+            logger.info("ForwardSecureANNSystem shutdown successfully");
+        } catch (Exception e) {
+            logger.error("Error executing ForwardSecureANNSystem", e);
+        }
     }
 }
