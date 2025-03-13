@@ -3,15 +3,18 @@ package com.fspann.query;
 import com.fspann.index.EvenLSH;
 import com.fspann.encryption.EncryptionUtils;
 import com.fspann.keymanagement.KeyManager;
-
 import javax.crypto.SecretKey;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Generates a QueryToken for ANN queries, mapping the query vector to buckets and encrypting it for privacy.
+ */
 public class QueryGenerator {
 
-    private EvenLSH lsh;           // LSH instance for mapping points to buckets
-    private KeyManager keyManager; // For retrieving encryption keys (if needed)
+    private final EvenLSH lsh;
+    private final KeyManager keyManager;
 
     public QueryGenerator(EvenLSH lsh, KeyManager keyManager) {
         this.lsh = lsh;
@@ -21,50 +24,51 @@ public class QueryGenerator {
     /**
      * Generates a QueryToken for an ANN query.
      *
-     * @param queryVector The user's query vector in high-dimensional space
-     * @param topK        Number of nearest neighbors requested
-     * @return a QueryToken that can be sent to the server
+     * @param queryVector The user's query vector in high-dimensional space.
+     * @param topK Number of nearest neighbors requested.
+     * @param expansionRange Range for neighboring buckets (e.g., 1 for ±1).
+     * @return A QueryToken that can be sent to the server.
+     * @throws Exception If encryption or processing fails.
      */
-    public QueryToken generateQueryToken(double[] queryVector, int topK) {
+    public QueryToken generateQueryToken(double[] queryVector, int topK, int expansionRange) throws Exception {
+        if (queryVector == null || queryVector.length == 0) {
+            throw new IllegalArgumentException("Query vector cannot be null or empty.");
+        }
+
         // 1. Compute the primary LSH bucket for the query
         int mainBucket = lsh.getBucketId(queryVector);
 
-        // 2. (Optional) Expand to neighbors for better recall. For example, ±1 around the main bucket.
-        //    This is just a simple illustration. You can adopt more advanced expansions.
+        // 2. Expand to neighboring buckets for better recall
         List<Integer> candidateBuckets = new ArrayList<>();
-        candidateBuckets.add(mainBucket);
-        candidateBuckets.add(mainBucket - 1);
-        candidateBuckets.add(mainBucket + 1);
-
-        // 3. (Optional) Encrypt the query vector for server privacy
-        byte[] encryptedQuery = null;
-        try {
-            SecretKey sessionKey = keyManager.getSessionKey("query-session"); 
-            // or generate a new one: generateSessionKey("query-session")
-            if (sessionKey != null) {
-                encryptedQuery = EncryptionUtils.encrypt(vectorToBytes(queryVector), sessionKey);
+        for (int i = -expansionRange; i <= expansionRange; i++) {
+            int bucket = mainBucket + i;
+            if (bucket > 0 && bucket <= lsh.getCriticalValues().length + 1) { // Valid bucket range
+                candidateBuckets.add(bucket);
             }
-        } catch (Exception e) {
-            e.printStackTrace();
         }
 
-        // 4. Build the QueryToken
-        return new QueryToken(candidateBuckets, encryptedQuery, topK);
+        // 3. Encrypt the query vector for server privacy
+        SecretKey sessionKey = keyManager.getCurrentKey();
+        if (sessionKey == null) {
+            throw new IllegalStateException("No current session key available.");
+        }
+        byte[] encryptedQuery = EncryptionUtils.encryptVector(queryVector, sessionKey);
+
+        // 4. Build the QueryToken with the current epoch as context
+        String encryptionContext = "epoch_" + keyManager.getTimeEpoch();
+        return new QueryToken(candidateBuckets, encryptedQuery, topK, encryptionContext);
     }
 
+    /**
+     * Converts a double[] vector to a byte[] using ByteBuffer for efficiency.
+     * @param vec The input vector.
+     * @return The byte array representation.
+     */
     private byte[] vectorToBytes(double[] vec) {
-        // Convert double[] to byte[] for encryption
-        // This is a simplistic approach. You could use ByteBuffer, etc.
-        // Make sure you handle endianness and dimension properly.
-        int length = vec.length;
-        byte[] result = new byte[length * 8];
-        int offset = 0;
-        for (double val : vec) {
-            long bits = Double.doubleToLongBits(val);
-            for (int i = 0; i < 8; i++) {
-                result[offset++] = (byte)((bits >> (8 * i)) & 0xFF);
-            }
+        ByteBuffer buffer = ByteBuffer.allocate(vec.length * Double.BYTES);
+        for (double value : vec) {
+            buffer.putDouble(value);
         }
-        return result;
+        return buffer.array();
     }
 }
