@@ -1,4 +1,4 @@
-package com.fspann.data;
+package fspann_query_system.data;
 
 import java.io.*;
 import java.nio.ByteBuffer;
