@@ -12,12 +12,15 @@ import com.fspann.query.QueryToken;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
+import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.ArrayList;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -51,7 +54,6 @@ public class ForwardSecureANNSystem {
 
     private void initializeKeys() {
         try {
-            keyManager.generateMasterKey();
             index.setCurrentKey(keyManager.getCurrentKey());
         } catch (Exception e) {
             logger.error("Failed to initialize keys", e);
@@ -59,7 +61,67 @@ public class ForwardSecureANNSystem {
         }
     }
 
-    // Rest of the class remains unchanged...
+    public void insert(String id, double[] vector) throws Exception {
+        operationCount++;
+        SecretKey currentKey = keyManager.getCurrentKey();
+        byte[] encryptedVector = EncryptionUtils.encryptVector(vector, currentKey);
+        EvenLSH lsh = index.getLshFunctions().get(0); // Use first LSH function to determine bucket
+        int bucketId = lsh.getBucketId(vector);
+        EncryptedPoint encryptedPoint = new EncryptedPoint(encryptedVector, "bucket_" + bucketId, id);
+        encryptedDataStore.put(id, encryptedPoint);
+        metadata.put(id, "epoch_" + keyManager.getCurrentKey().hashCode());
+        index.add(id, vector); // Add to LSH index
+
+        if (keyManager.needsRotation(operationCount)) {
+            Map<String, byte[]> encryptedDataMap = new HashMap<>();
+            for (Map.Entry<String, EncryptedPoint> entry : encryptedDataStore.entrySet()) {
+                encryptedDataMap.put(entry.getKey(), entry.getValue().getCiphertext());
+            }
+            keyManager.rotateAllKeys(new ArrayList<>(encryptedDataStore.keySet()), encryptedDataMap);
+            index.rehash(keyManager, "epoch_" + (keyManager.getTimeEpoch() - 1));
+            operationCount = 0;
+        }
+    }
+
+    public List<double[]> query(double[] queryVector, int k) throws Exception {
+        // Use k as topK and set expansionRange to a default value (e.g., 1)
+        QueryToken token = queryGenerator.generateQueryToken(queryVector, k, 1);
+        List<EncryptedPoint> candidates = index.findNearestNeighborsEncrypted(token);
+        List<String> candidateIds = new ArrayList<>();
+        for (EncryptedPoint point : candidates) {
+            candidateIds.add(point.getPointId());
+        }
+        List<double[]> nearestNeighbors = new ArrayList<>();
+        SecretKey currentKey = keyManager.getCurrentKey();
+
+        for (String id : candidateIds) {
+            EncryptedPoint point = encryptedDataStore.get(id);
+            if (point != null) {
+                nearestNeighbors.add(decryptPoint(point, currentKey));
+            }
+        }
+
+        nearestNeighbors.sort((v1, v2) -> Double.compare(distance(queryVector, v1), distance(queryVector, v2)));
+        return nearestNeighbors.subList(0, Math.min(k, nearestNeighbors.size()));
+    }
+
+    private double[] decryptPoint(EncryptedPoint point, SecretKey key) throws Exception {
+        return point.decrypt(key); // Use EncryptedPoint's decrypt method
+    }
+
+    private double distance(double[] v1, double[] v2) {
+        double sum = 0.0;
+        for (int i = 0; i < v1.length; i++) {
+            double diff = v1[i] - v2[i];
+            sum += diff * diff;
+        }
+        return Math.sqrt(sum);
+    }
+
+    public void shutdown() {
+        queryExecutor.shutdown();
+        logger.info("Query executor shut down");
+    }
 
     public static void main(String[] args) {
         try {
