@@ -8,16 +8,13 @@ import javax.crypto.SecretKey;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * A secure LSH-based index for approximate nearest neighbor (ANN) queries with forward security.
- */
 public class SecureLSHIndex {
     private final int dimensions;
     private final int numHashTables;
     private final int numIntervals;
     private final List<EvenLSH> lshFunctions;
     private final List<Map<Integer, List<EncryptedPoint>>> hashTables;
-    private final Map<String, double[]> vectors; // Unencrypted for indexing (temporary)
+    private final Map<String, double[]> vectors;
     private final Map<String, EncryptedPoint> encryptedPoints;
     private SecretKey currentKey;
     private final int maxBucketSize;
@@ -50,7 +47,7 @@ public class SecureLSHIndex {
         }
         vectors.put(id, vector.clone());
         byte[] encryptedVector = EncryptionUtils.encryptVector(vector, currentKey);
-        EvenLSH lsh = lshFunctions.get(0); // Use first LSH for initial bucket assignment
+        EvenLSH lsh = lshFunctions.get(0);
         int bucketId = lsh.getBucketId(vector);
         EncryptedPoint point = new EncryptedPoint(encryptedVector, "bucket_" + bucketId, id);
         encryptedPoints.put(id, point);
@@ -60,7 +57,7 @@ public class SecureLSHIndex {
             bucketId = lsh.getBucketId(vector);
             List<double[]> points = Collections.singletonList(vector);
             List<List<byte[]>> buckets = BucketConstructor.greedyMerge(points, maxBucketSize, currentKey);
-            buckets = BucketConstructor.applyFakeAddition(buckets, targetBucketSize, currentKey);
+            buckets = BucketConstructor.applyFakeAddition(buckets, targetBucketSize, currentKey, dimensions);
             EncryptedPoint encryptedPoint = new EncryptedPoint(buckets.get(0).get(0), "bucket_" + bucketId, id);
             hashTables.get(i).computeIfAbsent(bucketId, k -> new ArrayList<>()).add(encryptedPoint);
         }
@@ -89,11 +86,6 @@ public class SecureLSHIndex {
         }
     }
 
-    /**
-     * Finds candidate points based on the QueryToken's candidate buckets.
-     * @param queryToken The QueryToken containing candidate buckets and encrypted query.
-     * @return List of EncryptedPoint candidates.
-     */
     public List<EncryptedPoint> findNearestNeighborsEncrypted(QueryToken queryToken) {
         if (queryToken == null) {
             throw new IllegalArgumentException("QueryToken cannot be null");
