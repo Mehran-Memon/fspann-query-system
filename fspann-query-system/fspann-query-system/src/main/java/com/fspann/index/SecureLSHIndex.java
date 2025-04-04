@@ -5,7 +5,8 @@ import com.fspann.keymanagement.KeyManager;
 import com.fspann.query.EncryptedPoint;
 import com.fspann.query.QueryToken;
 import com.fspann.utils.PersistenceUtils;
-
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import javax.crypto.SecretKey;
 import java.io.File;
 import java.io.IOException;
@@ -15,7 +16,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class SecureLSHIndex implements Serializable {
     private static final long serialVersionUID = 1L;
-
+    private static final Logger logger = LoggerFactory.getLogger(SecureLSHIndex.class);
     private final int dimensions;
     private final int numHashTables;
     private final int numIntervals;
@@ -29,6 +30,7 @@ public class SecureLSHIndex implements Serializable {
 
     public SecureLSHIndex(int dimensions, int numHashTables, int numIntervals, SecretKey key,
                           int maxBucketSize, int targetBucketSize, List<double[]> initialData) {
+
         this.dimensions = dimensions;
         this.numHashTables = numHashTables;
         this.numIntervals = numIntervals;
@@ -49,10 +51,11 @@ public class SecureLSHIndex implements Serializable {
         }
     }
 
-    public void add(String id, double[] vector, boolean useFakePoints) throws Exception {
+    public int add(String id, double[] vector, boolean useFakePoints) throws Exception {
         if (vector == null || vector.length != dimensions) {
             throw new IllegalArgumentException("Vector is null or dimension mismatch: expected " + dimensions);
         }
+
         vectors.put(id, vector.clone());
         byte[] encryptedVector = EncryptionUtils.encryptVector(vector, currentKey);
         EvenLSH lsh = lshFunctions.getFirst();
@@ -60,19 +63,41 @@ public class SecureLSHIndex implements Serializable {
         EncryptedPoint point = new EncryptedPoint(encryptedVector, "bucket_" + bucketId, id);
         encryptedPoints.put(id, point);
 
+        int totalFakePointsAdded = 0;
+
         for (int i = 0; i < numHashTables; i++) {
             lsh = lshFunctions.get(i);
             bucketId = lsh.getBucketId(vector);
             List<double[]> points = Collections.singletonList(vector);
+
             List<List<byte[]>> buckets = BucketConstructor.greedyMerge(points, maxBucketSize, currentKey);
+
             if (useFakePoints) {
                 buckets = BucketConstructor.applyFakeAddition(buckets, targetBucketSize, currentKey, dimensions);
+
+                // 📊 Count how many fake points were added
+                int numFakes = Math.max(0, buckets.getFirst().size() - 1); // subtract real point
+                totalFakePointsAdded += numFakes;
             }
+
             EncryptedPoint encryptedPoint = new EncryptedPoint(buckets.getFirst().getFirst(), "bucket_" + bucketId, id);
             hashTables.get(i).computeIfAbsent(bucketId, k -> new ArrayList<>()).add(encryptedPoint);
         }
+
+        return totalFakePointsAdded;
     }
 
+    public void delete(String id) {
+        vectors.remove(id);
+        encryptedPoints.remove(id);
+
+        for (int i = 0; i < numHashTables; i++) {
+            Map<Integer, List<EncryptedPoint>> table = hashTables.get(i);
+            for (Map.Entry<Integer, List<EncryptedPoint>> entry : table.entrySet()) {
+                entry.getValue().removeIf(p -> p.getPointId().equals(id));
+            }
+        }
+    }
 
     public void update(String id, double[] newVector, boolean useFakePoints) throws Exception {
         remove(id);
@@ -84,18 +109,20 @@ public class SecureLSHIndex implements Serializable {
 
 
     public void remove(String id) {
-        EncryptedPoint point = encryptedPoints.get(id);
-        if (point == null) return;
+        // Step 1: Remove from vectors and hash tables
         vectors.remove(id);
         encryptedPoints.remove(id);
+        logger.debug("Removed vector data for id: {}", id);
+
+        // Step 2: If needed, remove from hash tables
         for (int i = 0; i < numHashTables; i++) {
-            int bucketId = Integer.parseInt(point.getBucketId().replace("bucket_", ""));
-            List<EncryptedPoint> bucket = hashTables.get(i).get(bucketId);
-            if (bucket != null) {
-                bucket.removeIf(p -> p.getPointId().equals(id));
+            Map<Integer, List<EncryptedPoint>> hashTable = hashTables.get(i);
+            for (Map.Entry<Integer, List<EncryptedPoint>> entry : hashTable.entrySet()) {
+                entry.getValue().removeIf(point -> point.getPointId().equals(id));
             }
         }
     }
+
 
     public List<EncryptedPoint> findNearestNeighborsEncrypted(QueryToken queryToken) {
         if (queryToken == null) {

@@ -44,6 +44,9 @@ public class ForwardSecureANNSystem {
     private final boolean useForwardSecurity;
     private int operationCount;
     public final Profiler profiler = new Profiler();
+    private int totalFakePoints = 0;
+    private int totalRehashes = 0;
+    private long totalInsertTimeMs = 0;
 
     public ForwardSecureANNSystem(String basePath, String queryPath, String groundTruthPath,
                                   int numHashTables, int numIntervals,
@@ -58,6 +61,9 @@ public class ForwardSecureANNSystem {
         this.queryVectors = dataLoader.readFvecs(queryPath);
         this.groundTruth = dataLoader.readIvecs(groundTruthPath);
         logger.info("[STEP] ✅ Dataset loading complete. Base Vectors: {}, Query Vectors: {}", baseVectors.size(), queryVectors.size());
+
+        int estimatedRehashes = baseVectors.size() / 1000; // or keyManager.getRotationThreshold()
+        logger.info("[INFO] 🔁 Estimated total rehash runs for this dataset: {}", estimatedRehashes);
 
         this.dimensions = baseVectors.isEmpty() ? 0 : baseVectors.getFirst().length;
 
@@ -93,10 +99,12 @@ public class ForwardSecureANNSystem {
         try {
             logger.info("[STEP] 📦 Starting Index Insertion...");
             profiler.start("IndexBuild");
+            long start = System.currentTimeMillis();
             for (int i = 0; i < baseVectors.size(); i++) {
                 String id = "vector_" + i;
                 insert(id, baseVectors.get(i));
             }
+            totalInsertTimeMs += (System.currentTimeMillis() - start);
             profiler.stop("IndexBuild");
             profiler.log("IndexBuild");
             logger.info("[STEP] ✅ Index Insertion Complete. Inserted {} vectors.", baseVectors.size());
@@ -118,10 +126,12 @@ public class ForwardSecureANNSystem {
         encryptedDataStore.put(id, encryptedPoint);
         metadata.put(id, "epoch_" + currentKey.hashCode());
 
-        index.add(id, vector, useFakePoints);
+        int addedFakes = index.add(id, vector, useFakePoints);
+        totalFakePoints += addedFakes;
 
         if (useForwardSecurity && keyManager.needsRotation(operationCount)) {
             profiler.start("Rehash");
+            totalRehashes++;
 
             Map<String, byte[]> encryptedDataMap = new HashMap<>();
             for (Map.Entry<String, EncryptedPoint> entry : encryptedDataStore.entrySet()) {
@@ -137,6 +147,32 @@ public class ForwardSecureANNSystem {
             operationCount = 0;
         }
     }
+
+    public void delete(String id) throws Exception {
+        // Remove from the encrypted data store
+        encryptedDataStore.remove(id);
+        metadata.remove(id);
+        logger.debug("Removed vector and metadata for id: {}", id);
+
+        // Remove from the index
+        index.remove(id);
+
+        // Remove the key associated with the vector
+        keyManager.removeKey(id);
+
+        // If needed, trigger rehash (if deletion affects forward security)
+        if (keyManager.needsRotation(operationCount)) {
+            profiler.start("Rehash");
+            index.rehash(keyManager, "epoch_" + (keyManager.getTimeEpoch() - 1));
+            profiler.stop("Rehash");
+            profiler.log("Rehash");
+            operationCount = 0;
+        }
+
+        logger.info("Deleted vector and key for id: {}", id);
+    }
+
+
 
     public List<double[]> query(double[] queryVector, int k) throws Exception {
         profiler.start("Query");
@@ -237,6 +273,10 @@ public class ForwardSecureANNSystem {
             logger.info("[STEP] ✅ Evaluation Complete.");
 
             system.profiler.exportToCSV("logs/profiler_stats.csv");
+
+            logger.info("[SUMMARY] Total insert time (ms): {}", system.totalInsertTimeMs);
+            logger.info("[SUMMARY] Total rehashes: {}", system.totalRehashes);
+            logger.info("[SUMMARY] Total fake points inserted: {}", system.totalFakePoints);
 
             system.saveIndex(backupPath);
             system.shutdown();
