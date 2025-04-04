@@ -1,14 +1,21 @@
 package com.fspann.index;
 
 import com.fspann.encryption.EncryptionUtils;
+import com.fspann.keymanagement.KeyManager;
 import com.fspann.query.EncryptedPoint;
 import com.fspann.query.QueryToken;
-import com.fspann.keymanagement.KeyManager;
+import com.fspann.utils.PersistenceUtils;
+
 import javax.crypto.SecretKey;
+import java.io.File;
+import java.io.IOException;
+import java.io.Serializable;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
-public class SecureLSHIndex {
+public class SecureLSHIndex implements Serializable {
+    private static final long serialVersionUID = 1L;
+
     private final int dimensions;
     private final int numHashTables;
     private final int numIntervals;
@@ -16,11 +23,12 @@ public class SecureLSHIndex {
     private final List<Map<Integer, List<EncryptedPoint>>> hashTables;
     private final Map<String, double[]> vectors;
     private final Map<String, EncryptedPoint> encryptedPoints;
-    private SecretKey currentKey;
+    private transient SecretKey currentKey; // Transient: don't serialize secrets
     private final int maxBucketSize;
     private final int targetBucketSize;
 
-    public SecureLSHIndex(int dimensions, int numHashTables, int numIntervals, SecretKey key, int maxBucketSize, int targetBucketSize, List<double[]> initialData) {
+    public SecureLSHIndex(int dimensions, int numHashTables, int numIntervals, SecretKey key,
+                          int maxBucketSize, int targetBucketSize, List<double[]> initialData) {
         this.dimensions = dimensions;
         this.numHashTables = numHashTables;
         this.numIntervals = numIntervals;
@@ -41,13 +49,13 @@ public class SecureLSHIndex {
         }
     }
 
-    public void add(String id, double[] vector) throws Exception {
+    public void add(String id, double[] vector, boolean useFakePoints) throws Exception {
         if (vector == null || vector.length != dimensions) {
             throw new IllegalArgumentException("Vector is null or dimension mismatch: expected " + dimensions);
         }
         vectors.put(id, vector.clone());
         byte[] encryptedVector = EncryptionUtils.encryptVector(vector, currentKey);
-        EvenLSH lsh = lshFunctions.get(0);
+        EvenLSH lsh = lshFunctions.getFirst();
         int bucketId = lsh.getBucketId(vector);
         EncryptedPoint point = new EncryptedPoint(encryptedVector, "bucket_" + bucketId, id);
         encryptedPoints.put(id, point);
@@ -57,19 +65,23 @@ public class SecureLSHIndex {
             bucketId = lsh.getBucketId(vector);
             List<double[]> points = Collections.singletonList(vector);
             List<List<byte[]>> buckets = BucketConstructor.greedyMerge(points, maxBucketSize, currentKey);
-            buckets = BucketConstructor.applyFakeAddition(buckets, targetBucketSize, currentKey, dimensions);
-            EncryptedPoint encryptedPoint = new EncryptedPoint(buckets.get(0).get(0), "bucket_" + bucketId, id);
+            if (useFakePoints) {
+                buckets = BucketConstructor.applyFakeAddition(buckets, targetBucketSize, currentKey, dimensions);
+            }
+            EncryptedPoint encryptedPoint = new EncryptedPoint(buckets.getFirst().getFirst(), "bucket_" + bucketId, id);
             hashTables.get(i).computeIfAbsent(bucketId, k -> new ArrayList<>()).add(encryptedPoint);
         }
     }
 
-    public void update(String id, double[] newVector) throws Exception {
+
+    public void update(String id, double[] newVector, boolean useFakePoints) throws Exception {
         remove(id);
-        add(id, newVector);
+        add(id, newVector, useFakePoints);
         for (EvenLSH lsh : lshFunctions) {
             lsh.updateCriticalValues(new ArrayList<>(vectors.values()), numIntervals);
         }
     }
+
 
     public void remove(String id) {
         EncryptedPoint point = encryptedPoints.get(id);
@@ -77,7 +89,6 @@ public class SecureLSHIndex {
         vectors.remove(id);
         encryptedPoints.remove(id);
         for (int i = 0; i < numHashTables; i++) {
-            EvenLSH lsh = lshFunctions.get(i);
             int bucketId = Integer.parseInt(point.getBucketId().replace("bucket_", ""));
             List<EncryptedPoint> bucket = hashTables.get(i).get(bucketId);
             if (bucket != null) {
@@ -105,9 +116,6 @@ public class SecureLSHIndex {
     }
 
     public void rehash(KeyManager keyManager, String context) throws Exception {
-        if (keyManager == null) {
-            throw new IllegalArgumentException("KeyManager cannot be null");
-        }
         SecretKey oldKey = keyManager.getPreviousKey();
         SecretKey newKey = keyManager.getCurrentKey();
         if (newKey == null) {
@@ -132,5 +140,34 @@ public class SecureLSHIndex {
 
     public void setCurrentKey(SecretKey key) {
         this.currentKey = key;
+    }
+
+    // 💾 Save the index
+    public void saveIndex(String directoryPath) throws IOException {
+        File dir = new File(directoryPath);
+        if (!dir.exists()) dir.mkdirs();
+
+        PersistenceUtils.saveObject(encryptedPoints, directoryPath + "/encrypted_points.ser");
+        PersistenceUtils.saveObject(hashTables, directoryPath + "/hash_tables.ser");
+        PersistenceUtils.saveObject(vectors, directoryPath + "/vectors.ser");
+    }
+
+    // 💾 Load the index
+    @SuppressWarnings("unchecked")
+    public void loadIndex(String directoryPath) throws IOException, ClassNotFoundException {
+        this.encryptedPoints.clear();
+        this.hashTables.clear();
+        this.vectors.clear();
+
+        Map<String, EncryptedPoint> epMap =
+                PersistenceUtils.loadObject(directoryPath + "/encrypted_points.ser", Map.class);
+        List<Map<Integer, List<EncryptedPoint>>> htList =
+                PersistenceUtils.loadObject(directoryPath + "/hash_tables.ser", List.class);
+        Map<String, double[]> vecMap =
+                PersistenceUtils.loadObject(directoryPath + "/vectors.ser", Map.class);
+
+        this.encryptedPoints.putAll(epMap);
+        this.hashTables.addAll(htList);
+        this.vectors.putAll(vecMap);
     }
 }

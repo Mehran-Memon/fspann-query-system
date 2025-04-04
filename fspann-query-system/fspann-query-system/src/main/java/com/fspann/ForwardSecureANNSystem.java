@@ -1,6 +1,8 @@
 package com.fspann;
 
+import com.fspann.data.DataLoader;
 import com.fspann.encryption.EncryptionUtils;
+import com.fspann.evaluation.EvaluationEngine;
 import com.fspann.index.EvenLSH;
 import com.fspann.index.SecureLSHIndex;
 import com.fspann.keymanagement.KeyManager;
@@ -9,18 +11,15 @@ import com.fspann.query.QueryClientHandler;
 import com.fspann.query.QueryGenerator;
 import com.fspann.query.QueryProcessor;
 import com.fspann.query.QueryToken;
+import com.fspann.utils.Profiler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
-import java.nio.ByteBuffer;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.ArrayList;
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -36,12 +35,36 @@ public class ForwardSecureANNSystem {
     private final ConcurrentHashMap<String, EncryptedPoint> encryptedDataStore;
     private final ConcurrentHashMap<String, String> metadata;
     private final ExecutorService queryExecutor;
+    private final DataLoader dataLoader;
+    private final List<double[]> baseVectors;
+    private final List<double[]> queryVectors;
+    private final List<int[]> groundTruth;
+    private final int dimensions;
+    private final boolean useFakePoints;
+    private final boolean useForwardSecurity;
     private int operationCount;
+    public final Profiler profiler = new Profiler();
 
-    public ForwardSecureANNSystem(int dimensions, int numHashTables, int numIntervals, int maxBucketSize, int targetBucketSize, List<double[]> initialData) {
+    public ForwardSecureANNSystem(String basePath, String queryPath, String groundTruthPath,
+                                  int numHashTables, int numIntervals,
+                                  int maxBucketSize, int targetBucketSize,
+                                  boolean useFakePoints, boolean useForwardSecurity) throws IOException {
+        this.dataLoader = new DataLoader();
+        this.useFakePoints = useFakePoints;
+        this.useForwardSecurity = useForwardSecurity;
+
+        logger.info("[STEP] 📥 Loading Datasets...");
+        this.baseVectors = dataLoader.readFvecs(basePath);
+        this.queryVectors = dataLoader.readFvecs(queryPath);
+        this.groundTruth = dataLoader.readIvecs(groundTruthPath);
+        logger.info("[STEP] ✅ Dataset loading complete. Base Vectors: {}, Query Vectors: {}", baseVectors.size(), queryVectors.size());
+
+        this.dimensions = baseVectors.isEmpty() ? 0 : baseVectors.getFirst().length;
+
+        logger.info("[STEP] 🔐 Initializing KeyManager and LSH...");
         this.keyManager = new KeyManager(1000);
-        EvenLSH initialLsh = new EvenLSH(dimensions, numIntervals, initialData != null ? initialData : Collections.emptyList());
-        this.index = new SecureLSHIndex(dimensions, numHashTables, numIntervals, null, maxBucketSize, targetBucketSize, initialData);
+        EvenLSH initialLsh = new EvenLSH(dimensions, numIntervals, baseVectors);
+        this.index = new SecureLSHIndex(dimensions, numHashTables, numIntervals, null, maxBucketSize, targetBucketSize, baseVectors);
         this.queryGenerator = new QueryGenerator(initialLsh, keyManager);
         this.queryClientHandler = new QueryClientHandler(keyManager);
         this.queryProcessor = new QueryProcessor(new HashMap<>(), keyManager);
@@ -49,48 +72,82 @@ public class ForwardSecureANNSystem {
         this.metadata = new ConcurrentHashMap<>();
         this.queryExecutor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
         this.operationCount = 0;
+
         initializeKeys();
+        initializeData();
     }
 
     private void initializeKeys() {
         try {
-            index.setCurrentKey(keyManager.getCurrentKey());
+            logger.info("[STEP] 🔐 Starting Key Initialization...");
+            SecretKey currentKey = keyManager.getCurrentKey();
+            index.setCurrentKey(currentKey);
+            logger.info("[STEP] ✅ Key Initialization Complete.");
         } catch (Exception e) {
             logger.error("Failed to initialize keys", e);
             throw new RuntimeException("Failed to initialize keys: " + e.getMessage());
         }
     }
 
+    private void initializeData() {
+        try {
+            logger.info("[STEP] 📦 Starting Index Insertion...");
+            profiler.start("IndexBuild");
+            for (int i = 0; i < baseVectors.size(); i++) {
+                String id = "vector_" + i;
+                insert(id, baseVectors.get(i));
+            }
+            profiler.stop("IndexBuild");
+            profiler.log("IndexBuild");
+            logger.info("[STEP] ✅ Index Insertion Complete. Inserted {} vectors.", baseVectors.size());
+        } catch (Exception e) {
+            logger.error("Failed to initialize data", e);
+            throw new RuntimeException("Failed to initialize data: " + e.getMessage());
+        }
+    }
+
     public void insert(String id, double[] vector) throws Exception {
         operationCount++;
         SecretKey currentKey = keyManager.getCurrentKey();
+        keyManager.registerKey(id, currentKey);
+
         byte[] encryptedVector = EncryptionUtils.encryptVector(vector, currentKey);
-        EvenLSH lsh = index.getLshFunctions().get(0); // Use first LSH function to determine bucket
+        EvenLSH lsh = index.getLshFunctions().getFirst();
         int bucketId = lsh.getBucketId(vector);
         EncryptedPoint encryptedPoint = new EncryptedPoint(encryptedVector, "bucket_" + bucketId, id);
         encryptedDataStore.put(id, encryptedPoint);
-        metadata.put(id, "epoch_" + keyManager.getCurrentKey().hashCode());
-        index.add(id, vector); // Add to LSH index
+        metadata.put(id, "epoch_" + currentKey.hashCode());
 
-        if (keyManager.needsRotation(operationCount)) {
+        index.add(id, vector, useFakePoints);
+
+        if (useForwardSecurity && keyManager.needsRotation(operationCount)) {
+            profiler.start("Rehash");
+
             Map<String, byte[]> encryptedDataMap = new HashMap<>();
             for (Map.Entry<String, EncryptedPoint> entry : encryptedDataStore.entrySet()) {
                 encryptedDataMap.put(entry.getKey(), entry.getValue().getCiphertext());
             }
+
             keyManager.rotateAllKeys(new ArrayList<>(encryptedDataStore.keySet()), encryptedDataMap);
             index.rehash(keyManager, "epoch_" + (keyManager.getTimeEpoch() - 1));
+
+            profiler.stop("Rehash");
+            profiler.log("Rehash");
+
             operationCount = 0;
         }
     }
 
     public List<double[]> query(double[] queryVector, int k) throws Exception {
-        // Use k as topK and set expansionRange to a default value (e.g., 1)
+        profiler.start("Query");
+
         QueryToken token = queryGenerator.generateQueryToken(queryVector, k, 1);
         List<EncryptedPoint> candidates = index.findNearestNeighborsEncrypted(token);
         List<String> candidateIds = new ArrayList<>();
         for (EncryptedPoint point : candidates) {
             candidateIds.add(point.getPointId());
         }
+
         List<double[]> nearestNeighbors = new ArrayList<>();
         SecretKey currentKey = keyManager.getCurrentKey();
 
@@ -101,12 +158,15 @@ public class ForwardSecureANNSystem {
             }
         }
 
-        nearestNeighbors.sort((v1, v2) -> Double.compare(distance(queryVector, v1), distance(queryVector, v2)));
+        nearestNeighbors.sort(Comparator.comparingDouble(v -> distance(queryVector, v)));
+        profiler.stop("Query");
+        profiler.log("Query");
+
         return nearestNeighbors.subList(0, Math.min(k, nearestNeighbors.size()));
     }
 
     private double[] decryptPoint(EncryptedPoint point, SecretKey key) throws Exception {
-        return point.decrypt(key); // Use EncryptedPoint's decrypt method
+        return point.decrypt(key);
     }
 
     private double distance(double[] v1, double[] v2) {
@@ -123,34 +183,80 @@ public class ForwardSecureANNSystem {
         logger.info("Query executor shut down");
     }
 
+    public List<double[]> getQueryVectors() {
+        return queryVectors;
+    }
+
+    public List<int[]> getGroundTruth() {
+        return groundTruth;
+    }
+
+    public List<double[]> getBaseVectors() {
+        return baseVectors;
+    }
+
+    public void saveIndex(String path) {
+        try {
+            index.saveIndex(path);
+            logger.info("Encrypted index saved to: {}", path);
+        } catch (IOException e) {
+            logger.error("Failed to save index", e);
+        }
+    }
+
+    public void loadIndex(String path) {
+        try {
+            index.loadIndex(path);
+            logger.info("Encrypted index loaded from: {}", path);
+        } catch (IOException | ClassNotFoundException e) {
+            logger.error("Failed to load index", e);
+        }
+    }
+
     public static void main(String[] args) {
         try {
-            logger.info("Starting ForwardSecureANNSystem...");
-            int dimensions = 128;
-            int numHashTables = 5;
-            int numIntervals = 15;
-            int maxBucketSize = 1000;
-            int targetBucketSize = 1500;
+            logger.info("🚀 Starting ForwardSecureANNSystem...");
 
-            List<double[]> initialData = Collections.emptyList();
-            ForwardSecureANNSystem system = new ForwardSecureANNSystem(dimensions, numHashTables, numIntervals, maxBucketSize, targetBucketSize, initialData);
+            ForwardSecureANNSystem system = getForwardSecureANNSystem();
+            String backupPath = "data/index_backup";
 
-            double[] vector1 = new double[dimensions];
-            Arrays.fill(vector1, 1.0);
-            double[] vector2 = new double[dimensions];
-            Arrays.fill(vector2, 2.0);
-            system.insert("point1", vector1);
-            system.insert("point2", vector2);
+            if (Files.exists(new File(backupPath + "/encrypted_points.ser").toPath())) {
+                logger.info("[STEP] Loading Index Backup...");
+                system.loadIndex(backupPath);
+            } else {
+                logger.info("[STEP] No index backup found. Rebuilding from scratch...");
+            }
 
-            double[] queryVector = new double[dimensions];
-            Arrays.fill(queryVector, 1.5);
+            logger.info("[STEP] Running Sample Query...");
+            double[] queryVector = system.getQueryVectors().getFirst();
             List<double[]> nearestNeighbors = system.query(queryVector, 1);
-            logger.info("Nearest neighbor: {}", Arrays.toString(nearestNeighbors.get(0)));
+            logger.info("Nearest neighbor: {}", Arrays.toString(nearestNeighbors.getFirst()));
 
+            logger.info("[STEP] Evaluating Recall@10 on 100 queries...");
+            EvaluationEngine.evaluate(system, 10, 100);
+            logger.info("[STEP] ✅ Evaluation Complete.");
+
+            system.profiler.exportToCSV("logs/profiler_stats.csv");
+
+            system.saveIndex(backupPath);
             system.shutdown();
-            logger.info("ForwardSecureANNSystem shutdown successfully");
+
+            logger.info("✅ ForwardSecureANNSystem shutdown successfully");
         } catch (Exception e) {
-            logger.error("Error executing ForwardSecureANNSystem", e);
+            logger.error("❌ Error executing ForwardSecureANNSystem", e);
         }
+    }
+
+    private static ForwardSecureANNSystem getForwardSecureANNSystem() throws IOException {
+        String basePath = "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\sift_dataset\\sift\\sift_base.fvecs";
+        String queryPath = "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\sift_dataset\\sift\\sift_query.fvecs";
+        String groundTruthPath = "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\sift_dataset\\sift\\sift_groundtruth.ivecs";
+
+        return new ForwardSecureANNSystem(
+                basePath, queryPath, groundTruthPath,
+                5, 15, 1000, 1500,
+                true,  // useFakePoints
+                true   // useForwardSecurity
+        );
     }
 }
