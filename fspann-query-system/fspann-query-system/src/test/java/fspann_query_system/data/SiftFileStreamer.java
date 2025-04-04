@@ -133,10 +133,10 @@ public class SiftFileStreamer {
     // Main method to demonstrate usage
     public static void main(String[] args) {
         String[] files = {
-                "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\sift_dataset\\sift\\sift_base.fvecs",
-                "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\sift_dataset\\sift\\sift_learn.fvecs",
-                "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\sift_dataset\\sift\\sift_query.fvecs",
-                "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\sift_dataset\\sift\\sift_groundtruth.ivecs"
+                "data/sift_dataset/sift/sift_base.fvecs",
+                "data/sift_dataset/sift/sift_groundtruth.ivecs",
+                "data/sift_dataset/sift/sift_learn.fvecs",
+                "data/sift_dataset/sift/sift_query.fvecs"
         };
 
         // Process each file
