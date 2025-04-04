@@ -1,7 +1,8 @@
 package com.fspann.keymanagement;
 
 import com.fspann.encryption.EncryptionUtils;
-
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import javax.crypto.KeyGenerator;
 import javax.crypto.Mac;
 import javax.crypto.SecretKey;
@@ -10,13 +11,17 @@ import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class KeyManager {
+    private static final Logger logger = LoggerFactory.getLogger(KeyManager.class);
     private final SecretKey masterKey;
     private SecretKey currentKey;
     private SecretKey previousKey;
     private final AtomicInteger timeEpoch;
     private final int rotationInterval;
+    private final Map<String, SecretKey> keyStore;  // <-- Added this line
 
     public KeyManager(int rotationInterval) {
         this.rotationInterval = rotationInterval;
@@ -24,6 +29,7 @@ public class KeyManager {
         this.masterKey = generateMasterKey();
         this.currentKey = deriveKey(0);
         this.previousKey = null;
+        this.keyStore = new ConcurrentHashMap<>(); // <-- Initialize keyStore
     }
 
     private SecretKey generateMasterKey() {
@@ -56,7 +62,7 @@ public class KeyManager {
         return operationCount >= rotationInterval;
     }
 
-    public void rotateAllKeys(List<String> ids, java.util.Map<String, byte[]> encryptedDataMap) throws Exception {
+    public void rotateAllKeys(List<String> ids, Map<String, byte[]> encryptedDataMap) throws Exception {
         int oldEpoch = timeEpoch.getAndIncrement();
         previousKey = currentKey;
         currentKey = deriveKey(oldEpoch + 1);
@@ -79,6 +85,11 @@ public class KeyManager {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    public void removeKey(String id) {
+        keyStore.remove(id);
+        logger.debug("Removed key for vector: {}", id);
     }
 
     /**
