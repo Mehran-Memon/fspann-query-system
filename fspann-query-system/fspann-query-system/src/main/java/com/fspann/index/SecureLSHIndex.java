@@ -7,6 +7,7 @@ import com.fspann.query.QueryToken;
 import com.fspann.utils.PersistenceUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 import javax.crypto.SecretKey;
 import java.io.File;
 import java.io.IOException;
@@ -17,6 +18,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class SecureLSHIndex implements Serializable {
     private static final long serialVersionUID = 1L;
     private static final Logger logger = LoggerFactory.getLogger(SecureLSHIndex.class);
+
     private final int dimensions;
     private final int numHashTables;
     private final int numIntervals;
@@ -30,7 +32,6 @@ public class SecureLSHIndex implements Serializable {
 
     public SecureLSHIndex(int dimensions, int numHashTables, int numIntervals, SecretKey key,
                           int maxBucketSize, int targetBucketSize, List<double[]> initialData) {
-
         this.dimensions = dimensions;
         this.numHashTables = numHashTables;
         this.numIntervals = numIntervals;
@@ -58,7 +59,7 @@ public class SecureLSHIndex implements Serializable {
 
         vectors.put(id, vector.clone());
         byte[] encryptedVector = EncryptionUtils.encryptVector(vector, currentKey);
-        EvenLSH lsh = lshFunctions.getFirst();
+        EvenLSH lsh = lshFunctions.get(0);
         int bucketId = lsh.getBucketId(vector);
         EncryptedPoint point = new EncryptedPoint(encryptedVector, "bucket_" + bucketId, id);
         encryptedPoints.put(id, point);
@@ -76,11 +77,11 @@ public class SecureLSHIndex implements Serializable {
                 buckets = BucketConstructor.applyFakeAddition(buckets, targetBucketSize, currentKey, dimensions);
 
                 // 📊 Count how many fake points were added
-                int numFakes = Math.max(0, buckets.getFirst().size() - 1); // subtract real point
+                int numFakes = Math.max(0, buckets.get(0).size() - 1); // subtract real point
                 totalFakePointsAdded += numFakes;
             }
 
-            EncryptedPoint encryptedPoint = new EncryptedPoint(buckets.getFirst().getFirst(), "bucket_" + bucketId, id);
+            EncryptedPoint encryptedPoint = new EncryptedPoint(buckets.get(0).get(0), "bucket_" + bucketId, id);
             hashTables.get(i).computeIfAbsent(bucketId, k -> new ArrayList<>()).add(encryptedPoint);
         }
 
@@ -107,23 +108,6 @@ public class SecureLSHIndex implements Serializable {
         }
     }
 
-
-    public void remove(String id) {
-        // Step 1: Remove from vectors and hash tables
-        vectors.remove(id);
-        encryptedPoints.remove(id);
-        logger.debug("Removed vector data for id: {}", id);
-
-        // Step 2: If needed, remove from hash tables
-        for (int i = 0; i < numHashTables; i++) {
-            Map<Integer, List<EncryptedPoint>> hashTable = hashTables.get(i);
-            for (Map.Entry<Integer, List<EncryptedPoint>> entry : hashTable.entrySet()) {
-                entry.getValue().removeIf(point -> point.getPointId().equals(id));
-            }
-        }
-    }
-
-
     public List<EncryptedPoint> findNearestNeighborsEncrypted(QueryToken queryToken) {
         if (queryToken == null) {
             throw new IllegalArgumentException("QueryToken cannot be null");
@@ -140,6 +124,48 @@ public class SecureLSHIndex implements Serializable {
             }
         }
         return new ArrayList<>(candidates);
+    }
+
+    public List<EncryptedPoint> findRangeQueryEncrypted(double[] queryVector, double range) {
+        // Set to store candidates to avoid duplicates
+        Set<EncryptedPoint> candidates = new HashSet<>();
+
+        // Loop through each hash table to check for matching buckets
+        for (int i = 0; i < numHashTables; i++) {
+            EvenLSH lsh = lshFunctions.get(i);
+            // Get the bucketId corresponding to the query vector
+            int bucketId = lsh.getBucketId(queryVector);
+
+            // Retrieve the points in the given bucket
+            List<EncryptedPoint> bucket = hashTables.get(i).getOrDefault(bucketId, new ArrayList<>());
+
+            // Loop through the bucket and check distance for range query
+            for (EncryptedPoint point : bucket) {
+                try {
+                    // Decrypt the point and calculate the distance to the query vector
+                    double[] decryptedVector = point.decrypt(currentKey);
+                    double dist = distance(queryVector, decryptedVector);
+
+                    // If the point is within the range, add it to the candidates set
+                    if (dist <= range) {
+                        candidates.add(point);
+                    }
+                } catch (Exception e) {
+                    logger.error("Error during decryption or distance calculation", e);
+                }
+            }
+        }
+        // Return a list of encrypted points within the range
+        return new ArrayList<>(candidates);
+    }
+
+    private double distance(double[] v1, double[] v2) {
+        double sum = 0.0;
+        for (int i = 0; i < v1.length; i++) {
+            double diff = v1[i] - v2[i];
+            sum += diff * diff;
+        }
+        return Math.sqrt(sum);
     }
 
     public void rehash(KeyManager keyManager, String context) throws Exception {
@@ -179,6 +205,25 @@ public class SecureLSHIndex implements Serializable {
         PersistenceUtils.saveObject(vectors, directoryPath + "/vectors.ser");
     }
 
+    public void remove(String id) {
+        // Step 1: Remove vector and encrypted point from the main data store
+        vectors.remove(id);
+        encryptedPoints.remove(id);
+
+        // Step 2: Remove from each of the hash tables (across all hash functions)
+        for (int i = 0; i < numHashTables; i++) {
+            Map<Integer, List<EncryptedPoint>> hashTable = hashTables.get(i);
+            // Iterate through all the buckets in the hash table and remove the point with the given id
+            for (Map.Entry<Integer, List<EncryptedPoint>> entry : hashTable.entrySet()) {
+                List<EncryptedPoint> points = entry.getValue();
+                points.removeIf(point -> point.getPointId().equals(id)); // Remove point by id
+            }
+        }
+
+        // Log the removal for debugging
+        logger.debug("Removed vector and encrypted point for id: {}", id);
+    }
+
     // 💾 Load the index
     @SuppressWarnings("unchecked")
     public void loadIndex(String directoryPath) throws IOException, ClassNotFoundException {
@@ -197,4 +242,5 @@ public class SecureLSHIndex implements Serializable {
         this.hashTables.addAll(htList);
         this.vectors.putAll(vecMap);
     }
+
 }
