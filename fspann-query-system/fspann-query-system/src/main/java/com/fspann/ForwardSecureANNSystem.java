@@ -120,7 +120,7 @@ public class ForwardSecureANNSystem {
         keyManager.registerKey(id, currentKey);
 
         byte[] encryptedVector = EncryptionUtils.encryptVector(vector, currentKey);
-        EvenLSH lsh = index.getLshFunctions().getFirst();
+        EvenLSH lsh = index.getLshFunctions().get(0);
         int bucketId = lsh.getBucketId(vector);
         EncryptedPoint encryptedPoint = new EncryptedPoint(encryptedVector, "bucket_" + bucketId, id);
         encryptedDataStore.put(id, encryptedPoint);
@@ -148,6 +148,7 @@ public class ForwardSecureANNSystem {
         }
     }
 
+    // Modified delete method
     public void delete(String id) throws Exception {
         // Remove from the encrypted data store
         encryptedDataStore.remove(id);
@@ -172,13 +173,20 @@ public class ForwardSecureANNSystem {
         logger.info("Deleted vector and key for id: {}", id);
     }
 
-
-
-    public List<double[]> query(double[] queryVector, int k) throws Exception {
+    // Range query method
+    public List<double[]> query(double[] queryVector, int k, double range) throws Exception {
         profiler.start("Query");
 
-        QueryToken token = queryGenerator.generateQueryToken(queryVector, k, 1);
-        List<EncryptedPoint> candidates = index.findNearestNeighborsEncrypted(token);
+        List<EncryptedPoint> candidates;
+        if (range > 0) {
+            // Perform range query
+            candidates = index.findRangeQueryEncrypted(queryVector, range);
+        } else {
+            // Perform k-NN query
+            QueryToken token = queryGenerator.generateQueryToken(queryVector, k, 1);
+            candidates = index.findNearestNeighborsEncrypted(token);
+        }
+
         List<String> candidateIds = new ArrayList<>();
         for (EncryptedPoint point : candidates) {
             candidateIds.add(point.getPointId());
@@ -264,13 +272,14 @@ public class ForwardSecureANNSystem {
             }
 
             logger.info("[STEP] Running Sample Query...");
-            double[] queryVector = system.getQueryVectors().getFirst();
-            List<double[]> nearestNeighbors = system.query(queryVector, 1);
-            logger.info("Nearest neighbor: {}", Arrays.toString(nearestNeighbors.getFirst()));
+            double[] queryVector = system.getQueryVectors().getFirst(); // Use the first query vector as an example
+            List<double[]> nearestNeighbors = system.query(queryVector, 10, 0); // k-NN query with k=10
+            logger.info("Nearest neighbors: {}", Arrays.toString(nearestNeighbors.getFirst())); // Log first neighbor
 
-            logger.info("[STEP] Evaluating Recall@10 on 100 queries...");
-            EvaluationEngine.evaluate(system, 10, 100);
-            logger.info("[STEP] ✅ Evaluation Complete.");
+            // For Range Query:
+            double range = 5.0; // Example range
+            List<double[]> rangeNeighbors = system.query(queryVector, 10, range); // Range query
+            logger.info("Range query results: {}", rangeNeighbors);
 
             system.profiler.exportToCSV("logs/profiler_stats.csv");
 
