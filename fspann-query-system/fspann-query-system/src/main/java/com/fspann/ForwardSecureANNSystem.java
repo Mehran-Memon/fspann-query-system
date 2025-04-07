@@ -56,18 +56,24 @@ public class ForwardSecureANNSystem {
         this.useFakePoints = useFakePoints;
         this.useForwardSecurity = useForwardSecurity;
 
+        // Log the dataset loading process
         logger.info("[STEP] 📥 Loading Datasets...");
+        long datasetStartTime = System.currentTimeMillis();
         this.baseVectors = dataLoader.readFvecs(basePath);
         this.queryVectors = dataLoader.readFvecs(queryPath);
         this.groundTruth = dataLoader.readIvecs(groundTruthPath);
-        logger.info("[STEP] ✅ Dataset loading complete. Base Vectors: {}, Query Vectors: {}", baseVectors.size(), queryVectors.size());
+        long datasetEndTime = System.currentTimeMillis();
+        logger.info("[STEP] ✅ Dataset loading complete. Base Vectors: {}, Query Vectors: {} in {} ms",
+                baseVectors.size(), queryVectors.size(), (datasetEndTime - datasetStartTime));
 
         int estimatedRehashes = baseVectors.size() / 1000; // or keyManager.getRotationThreshold()
         logger.info("[INFO] 🔁 Estimated total rehash runs for this dataset: {}", estimatedRehashes);
 
-        this.dimensions = baseVectors.isEmpty() ? 0 : baseVectors.getFirst().length;
+        this.dimensions = baseVectors.isEmpty() ? 0 : baseVectors.get(0).length;
 
+        // Log KeyManager and LSH Initialization
         logger.info("[STEP] 🔐 Initializing KeyManager and LSH...");
+        long keyManagerStartTime = System.currentTimeMillis();
         this.keyManager = new KeyManager(1000);
         EvenLSH initialLsh = new EvenLSH(dimensions, numIntervals, baseVectors);
         this.index = new SecureLSHIndex(dimensions, numHashTables, numIntervals, null, maxBucketSize, targetBucketSize, baseVectors);
@@ -78,6 +84,10 @@ public class ForwardSecureANNSystem {
         this.metadata = new ConcurrentHashMap<>();
         this.queryExecutor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
         this.operationCount = 0;
+
+        // Log time taken for KeyManager initialization
+        long keyManagerEndTime = System.currentTimeMillis();
+        logger.info("[STEP] ✅ Key Initialization Complete in {} ms.", (keyManagerEndTime - keyManagerStartTime));
 
         initializeKeys();
         initializeData();
@@ -107,7 +117,7 @@ public class ForwardSecureANNSystem {
             totalInsertTimeMs += (System.currentTimeMillis() - start);
             profiler.stop("IndexBuild");
             profiler.log("IndexBuild");
-            logger.info("[STEP] ✅ Index Insertion Complete. Inserted {} vectors.", baseVectors.size());
+            logger.info("[STEP] ✅ Index Insertion Complete. Inserted {} vectors in {} ms.", baseVectors.size(), totalInsertTimeMs);
         } catch (Exception e) {
             logger.error("Failed to initialize data", e);
             throw new RuntimeException("Failed to initialize data: " + e.getMessage());
@@ -120,7 +130,7 @@ public class ForwardSecureANNSystem {
         keyManager.registerKey(id, currentKey);
 
         byte[] encryptedVector = EncryptionUtils.encryptVector(vector, currentKey);
-        EvenLSH lsh = index.getLshFunctions().get(0);
+        EvenLSH lsh = index.getLshFunctions().getFirst();
         int bucketId = lsh.getBucketId(vector);
         EncryptedPoint encryptedPoint = new EncryptedPoint(encryptedVector, "bucket_" + bucketId, id);
         encryptedDataStore.put(id, encryptedPoint);
@@ -148,7 +158,6 @@ public class ForwardSecureANNSystem {
         }
     }
 
-    // Modified delete method
     public void delete(String id) throws Exception {
         // Remove from the encrypted data store
         encryptedDataStore.remove(id);
@@ -173,7 +182,6 @@ public class ForwardSecureANNSystem {
         logger.info("Deleted vector and key for id: {}", id);
     }
 
-    // Range query method
     public List<double[]> query(double[] queryVector, int k, double range) throws Exception {
         profiler.start("Query");
 
@@ -202,6 +210,7 @@ public class ForwardSecureANNSystem {
             }
         }
 
+        // Sort the neighbors based on the distance to the query vector
         nearestNeighbors.sort(Comparator.comparingDouble(v -> distance(queryVector, v)));
         profiler.stop("Query");
         profiler.log("Query");
@@ -272,14 +281,13 @@ public class ForwardSecureANNSystem {
             }
 
             logger.info("[STEP] Running Sample Query...");
-            double[] queryVector = system.getQueryVectors().getFirst(); // Use the first query vector as an example
-            List<double[]> nearestNeighbors = system.query(queryVector, 10, 0); // k-NN query with k=10
-            logger.info("Nearest neighbors: {}", Arrays.toString(nearestNeighbors.getFirst())); // Log first neighbor
+            double[] queryVector = system.getQueryVectors().getFirst();  // Use .get(0) for the first query vector
+            List<double[]> nearestNeighbors = system.query(queryVector, 1, 0);  // Pass range as 0 for k-NN query
+            logger.info("Nearest neighbor: {}", Arrays.toString(nearestNeighbors.getFirst()));  // Use .get(0) for the first result
 
-            // For Range Query:
-            double range = 5.0; // Example range
-            List<double[]> rangeNeighbors = system.query(queryVector, 10, range); // Range query
-            logger.info("Range query results: {}", rangeNeighbors);
+            logger.info("[STEP] Evaluating Recall@10 on 100 queries...");
+            EvaluationEngine.evaluate(system, 10, 100, 0);  // Pass range as 0 for k-NN query
+            logger.info("[STEP] ✅ Evaluation Complete.");
 
             system.profiler.exportToCSV("logs/profiler_stats.csv");
 
@@ -295,6 +303,7 @@ public class ForwardSecureANNSystem {
             logger.error("❌ Error executing ForwardSecureANNSystem", e);
         }
     }
+
 
     private static ForwardSecureANNSystem getForwardSecureANNSystem() throws IOException {
         String basePath = "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\sift_dataset\\sift\\sift_base.fvecs";
