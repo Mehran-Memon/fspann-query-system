@@ -6,9 +6,8 @@
   <groupId>com.fspann</groupId>
   <artifactId>fspann-query-system</artifactId>
   <version>0.0.1-SNAPSHOT</version>
-
   <name>fspann-query-system</name>
-  <url>https://github.com/yourusername/fspann-query-system</url> <!-- Update with your project URL -->
+  <url>https://github.com/yourusername/fspann-query-system</url>
 
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -17,10 +16,11 @@
 
   <dependencyManagement>
     <dependencies>
+      <!-- JUnit BOM for consistent versioning -->
       <dependency>
         <groupId>org.junit</groupId>
         <artifactId>junit-bom</artifactId>
-        <version>5.11.0</version>
+        <version>5.11.0</version>  <!-- Latest JUnit BOM version -->
         <type>pom</type>
         <scope>import</scope>
       </dependency>
@@ -48,29 +48,36 @@
       <artifactId>slf4j-api</artifactId>
       <version>2.0.13</version>
     </dependency>
-    <!-- Logback as SLF4J Binding -->
+
+    <!-- Logback for logging -->
     <dependency>
       <groupId>ch.qos.logback</groupId>
       <artifactId>logback-classic</artifactId>
       <version>1.5.6</version>
     </dependency>
 
-    <!-- JUnit for Unit Testing -->
-    <dependency>
-      <groupId>org.junit.jupiter</groupId>
-      <artifactId>junit-jupiter-api</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.junit.jupiter</groupId>
-      <artifactId>junit-jupiter-engine</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.junit.jupiter</groupId>
-      <artifactId>junit-jupiter-params</artifactId>
-      <scope>test</scope>
-    </dependency>
+      <!-- JUnit 5 Dependencies -->
+      <dependency>
+        <groupId>org.junit.jupiter</groupId>
+        <artifactId>junit-jupiter-api</artifactId>
+        <version>5.11.0</version> <!-- Make sure you are using the correct version -->
+        <scope>test</scope>
+      </dependency>
+
+      <dependency>
+        <groupId>org.junit.jupiter</groupId>
+        <artifactId>junit-jupiter-engine</artifactId>
+        <version>5.11.0</version> <!-- Same version as jupiter-api -->
+        <scope>test</scope>
+      </dependency>
+
+      <dependency>
+        <groupId>org.junit.platform</groupId>
+        <artifactId>junit-platform-launcher</artifactId>
+        <version>1.11.0</version> <!-- This should be compatible with JUnit Jupiter -->
+        <scope>test</scope>
+      </dependency>
+
 
     <!-- Gson for JSON Handling -->
     <dependency>
@@ -86,84 +93,54 @@
       <version>2.17.2</version>
     </dependency>
 
+    <!-- Apache Commons Compress -->
     <dependency>
       <groupId>org.apache.commons</groupId>
       <artifactId>commons-compress</artifactId>
       <version>1.26.1</version>
     </dependency>
-
   </dependencies>
 
   <build>
     <!-- Specify source and test directories due to nested structure -->
-    <sourceDirectory>fspann-query-system/src/main/java</sourceDirectory>
-    <testSourceDirectory>fspann-query-system/src/test/java</testSourceDirectory>
+    <sourceDirectory>fspann-query-system/src/main</sourceDirectory>
+    <testSourceDirectory>fspann-query-system/src/test</testSourceDirectory>
 
     <pluginManagement>
       <plugins>
+        <!-- Maven Clean Plugin -->
         <plugin>
           <artifactId>maven-clean-plugin</artifactId>
           <version>3.4.0</version>
         </plugin>
-        <plugin>
-          <artifactId>maven-resources-plugin</artifactId>
-          <version>3.3.1</version>
-        </plugin>
+
+        <!-- Maven Compiler Plugin -->
         <plugin>
           <artifactId>maven-compiler-plugin</artifactId>
           <version>3.13.0</version>
         </plugin>
+
+        <!-- Maven Surefire Plugin for running tests -->
         <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-surefire-plugin</artifactId>
-          <version>3.5.0</version>
+          <version>3.0.0-M5</version> <!-- Latest compatible version -->
         </plugin>
+
+        <!-- Maven Jar Plugin -->
         <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-jar-plugin</artifactId>
           <version>3.4.2</version>
-        </plugin>
-        <plugin>
-          <groupId>org.apache.maven.plugins</groupId>
-          <artifactId>maven-deploy-plugin</artifactId>
-          <version>3.1.3</version>
-        </plugin>
-        <plugin>
-          <groupId>org.apache.maven.plugins</groupId>
-          <artifactId>maven-install-plugin</artifactId>
-          <version>3.1.3</version>
-        </plugin>
-        <plugin>
-          <groupId>org.apache.maven.plugins</groupId>
-          <artifactId>maven-site-plugin</artifactId>
-          <version>3.12.1</version>
-        </plugin>
-        <plugin>
-          <artifactId>maven-project-info-reports-plugin</artifactId>
-          <version>3.6.2</version>
+          <configuration>
+            <archive>
+              <manifest>
+                <mainClass>com.fspann.ForwardSecureANNSystem</mainClass>
+              </manifest>
+            </archive>
+          </configuration>
         </plugin>
       </plugins>
     </pluginManagement>
-
-    <plugins>
-      <!-- Configure maven-compiler-plugin for Java 23 -->
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-compiler-plugin</artifactId>
-        <configuration>
-          <release>23</release>
-        </configuration>
-      </plugin>
-      <!-- Configure maven-jar-plugin to set the main class -->
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-jar-plugin</artifactId>
-        <configuration>
-          <archive>
-            <manifest>
-              <mainClass>com.fspann.ForwardSecureANNSystem</mainClass>
-            </manifest>
-          </archive>
-        </configuration>
-      </plugin>
-    </plugins>
   </build>
 </project>

@@ -1,4 +1,4 @@
-package com.fspann.keymanagement;
+package java.com.fspann.keymanagement;
 
 import com.fspann.encryption.EncryptionUtils;
 import org.slf4j.Logger;
@@ -21,7 +21,7 @@ public class KeyManager {
     private SecretKey previousKey;
     private final AtomicInteger timeEpoch;
     private final int rotationInterval;
-    private final Map<String, SecretKey> keyStore;  // <-- Added this line
+    private final Map<String, SecretKey> keyStore;
 
     public KeyManager(int rotationInterval) {
         this.rotationInterval = rotationInterval;
@@ -72,9 +72,7 @@ public class KeyManager {
         return timeEpoch.get();
     }
 
-    // For compatibility; no longer needed in KDF-based model
     public void registerKey(String id, SecretKey currentKey) {
-        // No-op
     }
 
     public SecretKey getSessionKey(String context) {
