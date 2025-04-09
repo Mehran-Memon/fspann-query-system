@@ -273,7 +273,7 @@ public class ForwardSecureANNSystem {
             ForwardSecureANNSystem system = getForwardSecureANNSystem();
             String backupPath = "data/index_backup";
 
-            if (Files.exists(new File(backupPath + "/encrypted_points.ser").toPath())) {
+            if (Files.exists(new File(backupPath + "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data").toPath())) {
                 logger.info("[STEP] Loading Index Backup...");
                 system.loadIndex(backupPath);
             } else {
