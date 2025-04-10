@@ -135,7 +135,7 @@
           <configuration>
             <archive>
               <manifest>
-                <mainClass>com.fspann.ForwardSecureANNSystem</mainClass>
+                <mainClass>java.com.fspann.ForwardSecureANNSystem</mainClass>
               </manifest>
             </archive>
           </configuration>
