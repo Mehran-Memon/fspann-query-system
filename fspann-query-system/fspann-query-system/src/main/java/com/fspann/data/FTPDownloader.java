@@ -1,4 +1,4 @@
-package com.fspann.data;
+package java.com.fspann.data;
 
 import java.io.BufferedOutputStream;
 import java.io.FileOutputStream;
