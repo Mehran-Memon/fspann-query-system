@@ -1,6 +1,6 @@
-package com.fspann.query;
+package java.com.fspann.query;
 
-import com.fspann.keymanagement.KeyManager;
+import java.com.fspann.keymanagement.KeyManager;
 
 public class QueryClientHandler {
     private final KeyManager keyManager;

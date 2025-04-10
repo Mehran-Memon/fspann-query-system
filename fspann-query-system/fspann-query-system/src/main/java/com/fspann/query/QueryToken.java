@@ -1,9 +1,8 @@
-package com.fspann.query;
+package java.com.fspann.query;
 
 import java.util.Collections;
 import java.util.List;
 import java.util.ArrayList;
-
 
 public class QueryToken {
     private final List<Integer> candidateBuckets;
@@ -12,8 +11,8 @@ public class QueryToken {
     private final String encryptionContext;
 
     public QueryToken(List<Integer> candidateBuckets, byte[] encryptedQuery, int topK, String encryptionContext) {
-        if (candidateBuckets == null) {
-            throw new IllegalArgumentException("candidateBuckets cannot be null");
+        if (candidateBuckets == null || candidateBuckets.isEmpty()) {
+            throw new IllegalArgumentException("candidateBuckets cannot be null or empty");
         }
         if (topK < 0) {
             throw new IllegalArgumentException("topK cannot be negative: " + topK);
@@ -21,6 +20,7 @@ public class QueryToken {
         this.candidateBuckets = Collections.unmodifiableList(new ArrayList<>(candidateBuckets));
         this.encryptedQuery = encryptedQuery != null ? encryptedQuery.clone() : null;
         this.topK = topK;
+        // Ensure that the encryptionContext is never null
         this.encryptionContext = encryptionContext != null ? encryptionContext : "epoch_0";
     }
 
@@ -42,5 +42,14 @@ public class QueryToken {
 
     public String getEncryptionContext() {
         return encryptionContext;
+    }
+
+    @Override
+    public String toString() {
+        return "QueryToken{" +
+                "candidateBuckets=" + candidateBuckets +
+                ", topK=" + topK +
+                ", encryptionContext='" + encryptionContext + '\'' +
+                '}';
     }
 }
