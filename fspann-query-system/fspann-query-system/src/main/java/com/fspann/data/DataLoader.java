@@ -1,4 +1,4 @@
-package com.fspann.data;
+package java.com.fspann.data;
 import java.io.*;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
