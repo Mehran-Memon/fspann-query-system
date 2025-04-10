@@ -1,7 +1,7 @@
-package com.fspann.query;
+package java.com.fspann.query;
 
-import com.fspann.encryption.EncryptionUtils;
-import com.fspann.keymanagement.KeyManager;
+import java.com.fspann.encryption.EncryptionUtils;
+import java.com.fspann.keymanagement.KeyManager;
 import javax.crypto.SecretKey;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -16,7 +16,7 @@ public class QueryProcessor {
     }
 
     public List<EncryptedPoint> processQuery(List<EncryptedPoint> candidates) throws Exception {
-        if (candidates == null) {
+        if (candidates == null || candidates.isEmpty()) {
             return new ArrayList<>();
         }
 
@@ -30,6 +30,8 @@ public class QueryProcessor {
             SecretKey previousKey = keyManager.getPreviousKey();
             if (previousKey != null) {
                 double[] decrypted = point.decrypt(previousKey);
+
+                // Check if re-encryption is necessary before adding to the result
                 byte[] reEncrypted = EncryptionUtils.encryptVector(decrypted, currentKey);
                 point = new EncryptedPoint(reEncrypted, point.getBucketId(), point.getPointId());
             }
@@ -40,10 +42,16 @@ public class QueryProcessor {
     }
 
     public void updateBucketIndex(int bucketId, List<EncryptedPoint> points) {
-        bucketIndex.put(bucketId, new ArrayList<>(Objects.requireNonNull(points, "points cannot be null")));
+        // Validate input before updating
+        if (points == null || points.isEmpty()) {
+            throw new IllegalArgumentException("Points cannot be null or empty");
+        }
+
+        bucketIndex.put(bucketId, new ArrayList<>(points));
     }
 
     public void removeFromBucketIndex(String pointId) {
+        // Iterate through the buckets and remove the point by its ID
         bucketIndex.values().forEach(bucket -> bucket.removeIf(p -> p.getPointId().equals(pointId)));
     }
 }
