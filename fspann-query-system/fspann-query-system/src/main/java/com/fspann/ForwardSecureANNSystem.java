@@ -1,320 +1,144 @@
-package com.fspann;
+package java.com.fspann;
 
-import com.fspann.data.DataLoader;
-import com.fspann.encryption.EncryptionUtils;
-import com.fspann.evaluation.EvaluationEngine;
-import com.fspann.index.EvenLSH;
-import com.fspann.index.SecureLSHIndex;
-import com.fspann.keymanagement.KeyManager;
-import com.fspann.query.EncryptedPoint;
-import com.fspann.query.QueryClientHandler;
-import com.fspann.query.QueryGenerator;
-import com.fspann.query.QueryProcessor;
-import com.fspann.query.QueryToken;
-import com.fspann.utils.Profiler;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.com.fspann.data.DataLoader;
+import java.com.fspann.index.EvenLSH;
+import java.com.fspann.keymanagement.KeyManager;
+import java.com.fspann.keymanagement.KeyVersionManager;
+import java.com.fspann.encryption.EncryptionUtils;
+import java.com.fspann.index.SecureLSHIndex;
+import java.com.fspann.query.EncryptedPoint;
+import java.com.fspann.query.QueryGenerator;
+import java.com.fspann.query.QueryProcessor;
+import java.com.fspann.query.QueryToken;
+import java.com.fspann.utils.LRUCache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import javax.crypto.SecretKey;
-import java.io.File;
 import java.io.IOException;
-import java.nio.file.Files;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 public class ForwardSecureANNSystem {
     private static final Logger logger = LoggerFactory.getLogger(ForwardSecureANNSystem.class);
 
     private final SecureLSHIndex index;
-    private final KeyManager keyManager;
-    private final QueryClientHandler queryClientHandler;
-    private final QueryGenerator queryGenerator;
+    private final KeyVersionManager keyVersionManager;
     private final QueryProcessor queryProcessor;
-    private final ConcurrentHashMap<String, EncryptedPoint> encryptedDataStore;
-    private final ConcurrentHashMap<String, String> metadata;
-    private final ExecutorService queryExecutor;
-    private final DataLoader dataLoader;
-    private final List<double[]> baseVectors;
-    private final List<double[]> queryVectors;
-    private final List<int[]> groundTruth;
-    private final int dimensions;
-    private final boolean useFakePoints;
-    private final boolean useForwardSecurity;
-    private int operationCount;
-    public final Profiler profiler = new Profiler();
+    private final LRUCache<QueryToken, List<EncryptedPoint>> queryCache;
+    private final Map<String, EncryptedPoint> encryptedDataStore;
+    private int totalInsertTimeMs = 0;
     private int totalFakePoints = 0;
     private int totalRehashes = 0;
-    private long totalInsertTimeMs = 0;
+
+    private final AtomicInteger operationCount;
 
     public ForwardSecureANNSystem(String basePath, String queryPath, String groundTruthPath,
                                   int numHashTables, int numIntervals,
-                                  int maxBucketSize, int targetBucketSize,
-                                  boolean useFakePoints, boolean useForwardSecurity) throws IOException {
-        this.dataLoader = new DataLoader();
-        this.useFakePoints = useFakePoints;
-        this.useForwardSecurity = useForwardSecurity;
+                                  int maxBucketSize, int targetBucketSize) throws IOException {
+        // Initialize KeyManager and KeyVersionManager
+        KeyManager keyManager = new KeyManager(1000);  // Rotation interval
+        this.keyVersionManager = new KeyVersionManager(keyManager, 1000);  // KeyVersionManager with KeyManager
 
-        // Log the dataset loading process
+        this.queryCache = new LRUCache<>(100);  // LRUCache for query results
+        this.encryptedDataStore = new HashMap<>();
+        Map<String, String> metadata = new HashMap<>();
+        this.operationCount = new AtomicInteger(0);
+
+        // Load the datasets
         logger.info("[STEP] 📥 Loading Datasets...");
-        long datasetStartTime = System.currentTimeMillis();
-        this.baseVectors = dataLoader.readFvecs(basePath);
-        this.queryVectors = dataLoader.readFvecs(queryPath);
-        this.groundTruth = dataLoader.readIvecs(groundTruthPath);
-        long datasetEndTime = System.currentTimeMillis();
-        logger.info("[STEP] ✅ Dataset loading complete. Base Vectors: {}, Query Vectors: {} in {} ms",
-                baseVectors.size(), queryVectors.size(), (datasetEndTime - datasetStartTime));
+        DataLoader dataLoader = new DataLoader();
+        List<double[]> baseVectors = dataLoader.readFvecs(basePath);
+        List<double[]> queryVectors = dataLoader.readFvecs(queryPath);
+        dataLoader.readIvecs(groundTruthPath); // not used but keep it for now
 
-        int estimatedRehashes = baseVectors.size() / 1000; // or keyManager.getRotationThreshold()
-        logger.info("[INFO] 🔁 Estimated total rehash runs for this dataset: {}", estimatedRehashes);
+        logger.info("[STEP] ✅ Dataset loading complete.");
 
-        this.dimensions = baseVectors.isEmpty() ? 0 : baseVectors.get(0).length;
-
-        // Log KeyManager and LSH Initialization
-        logger.info("[STEP] 🔐 Initializing KeyManager and LSH...");
-        long keyManagerStartTime = System.currentTimeMillis();
-        this.keyManager = new KeyManager(1000);
-        EvenLSH initialLsh = new EvenLSH(dimensions, numIntervals, baseVectors);
-        this.index = new SecureLSHIndex(dimensions, numHashTables, numIntervals, null, maxBucketSize, targetBucketSize, baseVectors);
-        this.queryGenerator = new QueryGenerator(initialLsh, keyManager);
-        this.queryClientHandler = new QueryClientHandler(keyManager);
-        this.queryProcessor = new QueryProcessor(new HashMap<>(), keyManager);
-        this.encryptedDataStore = new ConcurrentHashMap<>();
-        this.metadata = new ConcurrentHashMap<>();
-        this.queryExecutor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
-        this.operationCount = 0;
-
-        // Log time taken for KeyManager initialization
-        long keyManagerEndTime = System.currentTimeMillis();
-        logger.info("[STEP] ✅ Key Initialization Complete in {} ms.", (keyManagerEndTime - keyManagerStartTime));
-
-        initializeKeys();
-        initializeData();
+        // Initialize LSH and the index
+        EvenLSH initialLsh = new EvenLSH(baseVectors.getFirst().length, numIntervals, baseVectors);
+        this.index = new SecureLSHIndex(numHashTables, keyManager.getCurrentKey(), baseVectors);
+        QueryGenerator queryGenerator = new QueryGenerator(initialLsh, keyManager);  // Fixed: KeyManager provided
+        this.queryProcessor = new QueryProcessor(new HashMap<>(), keyManager);  // Fixed: KeyManager provided
     }
 
-    private void initializeKeys() {
-        try {
-            logger.info("[STEP] 🔐 Starting Key Initialization...");
-            SecretKey currentKey = keyManager.getCurrentKey();
-            index.setCurrentKey(currentKey);
-            logger.info("[STEP] ✅ Key Initialization Complete.");
-        } catch (Exception e) {
-            logger.error("Failed to initialize keys", e);
-            throw new RuntimeException("Failed to initialize keys: " + e.getMessage());
-        }
-    }
-
-    private void initializeData() {
-        try {
-            logger.info("[STEP] 📦 Starting Index Insertion...");
-            profiler.start("IndexBuild");
-            long start = System.currentTimeMillis();
-            for (int i = 0; i < baseVectors.size(); i++) {
-                String id = "vector_" + i;
-                insert(id, baseVectors.get(i));
-            }
-            totalInsertTimeMs += (System.currentTimeMillis() - start);
-            profiler.stop("IndexBuild");
-            profiler.log("IndexBuild");
-            logger.info("[STEP] ✅ Index Insertion Complete. Inserted {} vectors in {} ms.", baseVectors.size(), totalInsertTimeMs);
-        } catch (Exception e) {
-            logger.error("Failed to initialize data", e);
-            throw new RuntimeException("Failed to initialize data: " + e.getMessage());
-        }
-    }
-
+    // Insert a new vector and handle key rotation and encryption
     public void insert(String id, double[] vector) throws Exception {
-        operationCount++;
-        SecretKey currentKey = keyManager.getCurrentKey();
-        keyManager.registerKey(id, currentKey);
+        operationCount.incrementAndGet();
 
+        // Get the current versioned key
+        SecretKey currentKey = keyVersionManager.getCurrentKey();
+
+        // Encrypt the vector
         byte[] encryptedVector = EncryptionUtils.encryptVector(vector, currentKey);
-        EvenLSH lsh = index.getLshFunctions().getFirst();
-        int bucketId = lsh.getBucketId(vector);
-        EncryptedPoint encryptedPoint = new EncryptedPoint(encryptedVector, "bucket_" + bucketId, id);
+        EncryptedPoint encryptedPoint = new EncryptedPoint(encryptedVector, "bucket_v" + currentKey.hashCode(), id);
         encryptedDataStore.put(id, encryptedPoint);
-        metadata.put(id, "epoch_" + currentKey.hashCode());
 
-        int addedFakes = index.add(id, vector, useFakePoints);
-        totalFakePoints += addedFakes;
+        // Add fake points if necessary (not used currently but could be in future)
+        int addedFakes = index.add(id, vector, true);
 
-        if (useForwardSecurity && keyManager.needsRotation(operationCount)) {
-            profiler.start("Rehash");
-            totalRehashes++;
-
-            Map<String, byte[]> encryptedDataMap = new HashMap<>();
-            for (Map.Entry<String, EncryptedPoint> entry : encryptedDataStore.entrySet()) {
-                encryptedDataMap.put(entry.getKey(), entry.getValue().getCiphertext());
-            }
-
-            keyManager.rotateAllKeys(new ArrayList<>(encryptedDataStore.keySet()), encryptedDataMap);
-            index.rehash(keyManager, "epoch_" + (keyManager.getTimeEpoch() - 1));
-
-            profiler.stop("Rehash");
-            profiler.log("Rehash");
-
-            operationCount = 0;
+        // Check if rehashing is required based on the number of operations
+        if (keyVersionManager.needsRotation(operationCount.get())) {
+            logger.info("[STEP] 🔄 Rotating keys...");
+            keyVersionManager.rotateKeys();  // Rotate keys
+            index.rehash(keyVersionManager.getKeyManager(), "epoch_v" + (keyVersionManager.getTimeVersion() - 1));  // Pass KeyManager
+            operationCount.set(0); // Reset operation count
         }
     }
 
+    // Query the encrypted data store with caching mechanism
+    public List<EncryptedPoint> query(QueryToken queryToken) throws Exception {
+        List<EncryptedPoint> result = queryCache.get(queryToken);
+
+        // If the result is in the cache, return it
+        if (result != null) {
+            logger.info("Cache hit for query: {}", queryToken);
+            return result;
+        }
+
+        // Otherwise, process the query
+        result = queryProcessor.processQuery(index.findNearestNeighborsEncrypted(queryToken));
+
+        // Cache the result for future queries
+        queryCache.put(queryToken, result);
+        return result;
+    }
+
+    // Delete a vector from the data store and rehash if necessary
     public void delete(String id) throws Exception {
-        // Remove from the encrypted data store
         encryptedDataStore.remove(id);
-        metadata.remove(id);
-        logger.debug("Removed vector and metadata for id: {}", id);
-
-        // Remove from the index
-        index.remove(id);
-
-        // Remove the key associated with the vector
-        keyManager.removeKey(id);
-
-        // If needed, trigger rehash (if deletion affects forward security)
-        if (keyManager.needsRotation(operationCount)) {
-            profiler.start("Rehash");
-            index.rehash(keyManager, "epoch_" + (keyManager.getTimeEpoch() - 1));
-            profiler.stop("Rehash");
-            profiler.log("Rehash");
-            operationCount = 0;
-        }
-
-        logger.info("Deleted vector and key for id: {}", id);
+        index.remove(id);  // Remove the point from index as well
     }
 
-    public List<double[]> query(double[] queryVector, int k, double range) throws Exception {
-        profiler.start("Query");
-
-        List<EncryptedPoint> candidates;
-        if (range > 0) {
-            // Perform range query
-            candidates = index.findRangeQueryEncrypted(queryVector, range);
-        } else {
-            // Perform k-NN query
-            QueryToken token = queryGenerator.generateQueryToken(queryVector, k, 1);
-            candidates = index.findNearestNeighborsEncrypted(token);
-        }
-
-        List<String> candidateIds = new ArrayList<>();
-        for (EncryptedPoint point : candidates) {
-            candidateIds.add(point.getPointId());
-        }
-
-        List<double[]> nearestNeighbors = new ArrayList<>();
-        SecretKey currentKey = keyManager.getCurrentKey();
-
-        for (String id : candidateIds) {
-            EncryptedPoint point = encryptedDataStore.get(id);
-            if (point != null) {
-                nearestNeighbors.add(decryptPoint(point, currentKey));
-            }
-        }
-
-        // Sort the neighbors based on the distance to the query vector
-        nearestNeighbors.sort(Comparator.comparingDouble(v -> distance(queryVector, v)));
-        profiler.stop("Query");
-        profiler.log("Query");
-
-        return nearestNeighbors.subList(0, Math.min(k, nearestNeighbors.size()));
+    // Get the current operation count
+    public int getOperationCount() {
+        return operationCount.get();
     }
 
-    private double[] decryptPoint(EncryptedPoint point, SecretKey key) throws Exception {
-        return point.decrypt(key);
-    }
-
-    private double distance(double[] v1, double[] v2) {
-        double sum = 0.0;
-        for (int i = 0; i < v1.length; i++) {
-            double diff = v1[i] - v2[i];
-            sum += diff * diff;
-        }
-        return Math.sqrt(sum);
-    }
-
+    // Shutdown the system and clean up resources
     public void shutdown() {
-        queryExecutor.shutdown();
-        logger.info("Query executor shut down");
+        logger.info("Shutting down ForwardSecureANNSystem...");
     }
 
-    public List<double[]> getQueryVectors() {
-        return queryVectors;
+    public int getTotalInsertTimeMs() {
+        return totalInsertTimeMs;
     }
 
-    public List<int[]> getGroundTruth() {
-        return groundTruth;
+    public void setTotalInsertTimeMs(int totalInsertTimeMs) {
+        this.totalInsertTimeMs = totalInsertTimeMs;
     }
 
-    public List<double[]> getBaseVectors() {
-        return baseVectors;
+    public int getTotalFakePoints() {
+        return totalFakePoints;
     }
 
-    public void saveIndex(String path) {
-        try {
-            index.saveIndex(path);
-            logger.info("Encrypted index saved to: {}", path);
-        } catch (IOException e) {
-            logger.error("Failed to save index", e);
-        }
+    public void setTotalFakePoints(int totalFakePoints) {
+        this.totalFakePoints = totalFakePoints;
     }
 
-    public void loadIndex(String path) {
-        try {
-            index.loadIndex(path);
-            logger.info("Encrypted index loaded from: {}", path);
-        } catch (IOException | ClassNotFoundException e) {
-            logger.error("Failed to load index", e);
-        }
+    public int getTotalRehashes() {
+        return totalRehashes;
     }
 
-    public static void main(String[] args) {
-        try {
-            logger.info("🚀 Starting ForwardSecureANNSystem...");
-
-            ForwardSecureANNSystem system = getForwardSecureANNSystem();
-            String backupPath = "data/index_backup";
-
-            if (Files.exists(new File(backupPath + "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data").toPath())) {
-                logger.info("[STEP] Loading Index Backup...");
-                system.loadIndex(backupPath);
-            } else {
-                logger.info("[STEP] No index backup found. Rebuilding from scratch...");
-            }
-
-            logger.info("[STEP] Running Sample Query...");
-            double[] queryVector = system.getQueryVectors().getFirst();  // Use .get(0) for the first query vector
-            List<double[]> nearestNeighbors = system.query(queryVector, 1, 0);  // Pass range as 0 for k-NN query
-            logger.info("Nearest neighbor: {}", Arrays.toString(nearestNeighbors.getFirst()));  // Use .get(0) for the first result
-
-            logger.info("[STEP] Evaluating Recall@10 on 100 queries...");
-            EvaluationEngine.evaluate(system, 10, 100, 0);  // Pass range as 0 for k-NN query
-            logger.info("[STEP] ✅ Evaluation Complete.");
-
-            system.profiler.exportToCSV("logs/profiler_stats.csv");
-
-            logger.info("[SUMMARY] Total insert time (ms): {}", system.totalInsertTimeMs);
-            logger.info("[SUMMARY] Total rehashes: {}", system.totalRehashes);
-            logger.info("[SUMMARY] Total fake points inserted: {}", system.totalFakePoints);
-
-            system.saveIndex(backupPath);
-            system.shutdown();
-
-            logger.info("✅ ForwardSecureANNSystem shutdown successfully");
-        } catch (Exception e) {
-            logger.error("❌ Error executing ForwardSecureANNSystem", e);
-        }
-    }
-
-
-    private static ForwardSecureANNSystem getForwardSecureANNSystem() throws IOException {
-        String basePath = "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\sift_dataset\\sift\\sift_base.fvecs";
-        String queryPath = "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\sift_dataset\\sift\\sift_query.fvecs";
-        String groundTruthPath = "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\sift_dataset\\sift\\sift_groundtruth.ivecs";
-
-        return new ForwardSecureANNSystem(
-                basePath, queryPath, groundTruthPath,
-                5, 15, 1000, 1500,
-                true,  // useFakePoints
-                true   // useForwardSecurity
-        );
+    public void setTotalRehashes(int totalRehashes) {
+        this.totalRehashes = totalRehashes;
     }
 }

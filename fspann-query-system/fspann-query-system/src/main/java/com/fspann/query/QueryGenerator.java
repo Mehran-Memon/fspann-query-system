@@ -25,14 +25,8 @@ public class QueryGenerator {
         String keyVersion = "key_v" + keyManager.getTimeVersion(); // Retrieve versioned key
         int mainBucket = lsh.getBucketId(queryVector);
 
-        // Expand the candidate buckets range based on the query
-        List<Integer> candidateBuckets = new ArrayList<>();
-        for (int i = -expansionRange; i <= expansionRange; i++) {
-            int bucket = mainBucket + i;
-            if (bucket > 0 && bucket <= lsh.getCriticalValues().length + 1) {
-                candidateBuckets.add(bucket);
-            }
-        }
+        // Use expandBuckets to get the expanded list of candidate buckets
+        List<Integer> candidateBuckets = lsh.expandBuckets(mainBucket, expansionRange);
 
         // Retrieve the session key based on the current key version
         SecretKey sessionKey = keyManager.getSessionKey(keyVersion);
@@ -49,4 +43,5 @@ public class QueryGenerator {
         // Return the query token with candidate buckets, encrypted query vector, and other necessary information
         return new QueryToken(candidateBuckets, encryptedQuery, topK, encryptionContext);
     }
+
 }
