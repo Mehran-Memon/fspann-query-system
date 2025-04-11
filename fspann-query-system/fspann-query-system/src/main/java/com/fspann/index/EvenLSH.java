@@ -1,11 +1,12 @@
-package com.fspann.index;
+package java.com.fspann.index;
 
-import com.fspann.encryption.EncryptionUtils;
+import java.com.fspann.encryption.EncryptionUtils;
 import javax.crypto.SecretKey;
 import java.security.SecureRandom;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Arrays;
-
 
 public class EvenLSH {
     private double[] a;               // Unit vector for projection
@@ -16,40 +17,35 @@ public class EvenLSH {
     public EvenLSH(int dimensions, int numIntervals, List<double[]> initialData) {
         this.dimensions = dimensions;
         this.numIntervals = numIntervals;
-        this.a = new double[dimensions];
+        this.a = generateUnitVector(dimensions); // Generate unit vector using a method
+        this.criticalValues = new double[numIntervals];
+        if (initialData != null && !initialData.isEmpty()) {
+            updateCriticalValues(initialData, numIntervals);
+        } else {
+            setDefaultCriticalValues();
+        }
+    }
+
+    private void setDefaultCriticalValues() {
+        double step = 20.0 / numIntervals;
+        for (int i = 0; i < numIntervals; i++) {
+            criticalValues[i] = -10.0 + (i + 1) * step;
+        }
+    }
+
+    private double[] generateUnitVector(int dimensions) {
         SecureRandom random = new SecureRandom();
-        // Initialize random unit vector
+        double[] vector = new double[dimensions];
         double norm = 0.0;
         for (int i = 0; i < dimensions; i++) {
-            a[i] = random.nextGaussian();
-            norm += a[i] * a[i];
+            vector[i] = random.nextGaussian();
+            norm += vector[i] * vector[i];
         }
         norm = Math.sqrt(norm);
         for (int i = 0; i < dimensions; i++) {
-            a[i] /= norm; // Normalize to unit vector
+            vector[i] /= norm; // Normalize to unit vector
         }
-
-        // Initialize critical values based on initial data or default range
-        this.criticalValues = new double[numIntervals];
-        if (initialData == null || initialData.isEmpty()) {
-            // Default range: [-10, 10] divided into numIntervals
-            double step = 20.0 / numIntervals;
-            for (int i = 0; i < numIntervals; i++) {
-                criticalValues[i] = -10.0 + (i + 1) * step;
-            }
-        } else {
-            // Compute projections and divide into even intervals
-            double[] projections = new double[initialData.size()];
-            for (int i = 0; i < initialData.size(); i++) {
-                projections[i] = project(initialData.get(i));
-            }
-            Arrays.sort(projections);
-            // Divide into numIntervals quantiles
-            for (int i = 0; i < numIntervals; i++) {
-                int index = (i + 1) * projections.length / (numIntervals + 1);
-                criticalValues[i] = projections[Math.min(index, projections.length - 1)];
-            }
-        }
+        return vector;
     }
 
     private double project(double[] point) {
@@ -94,16 +90,18 @@ public class EvenLSH {
 
     public void rehash() {
         // Recompute the random projection vector
-        SecureRandom random = new SecureRandom();
-        double norm = 0.0;
-        for (int i = 0; i < dimensions; i++) {
-            a[i] = random.nextGaussian();
-            norm += a[i] * a[i];
+        a = generateUnitVector(dimensions);
+    }
+
+    public List<Integer> expandBuckets(int mainBucket, int expansionRange) {
+        List<Integer> candidateBuckets = new ArrayList<>();
+        for (int i = -expansionRange; i <= expansionRange; i++) {
+            int bucket = mainBucket + i;
+            if (bucket > 0 && bucket <= numIntervals) {
+                candidateBuckets.add(bucket);  // Add valid bucket IDs within range
+            }
         }
-        norm = Math.sqrt(norm);
-        for (int i = 0; i < dimensions; i++) {
-            a[i] /= norm;
-        }
+        return candidateBuckets;
     }
 
     public double[] getCriticalValues() {
