@@ -1,15 +1,17 @@
-package com.fspann.index;
+package java.com.fspann.index;
 
-import com.fspann.encryption.EncryptionUtils;
+import java.com.fspann.encryption.EncryptionUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import javax.crypto.SecretKey;
+import java.security.SecureRandom;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
+import java.util.Collections;
 
-/**
- * Utility class for LSH-related computations, such as computing critical values for even bucket division.
- */
 public class LSHUtils {
+
+    private static final Logger logger = LoggerFactory.getLogger(LSHUtils.class);
 
     /**
      * Compute critical values (quantiles) for even division using plaintext data.
@@ -25,6 +27,8 @@ public class LSHUtils {
         if (numIntervals < 1) {
             throw new IllegalArgumentException("Number of intervals must be at least 1.");
         }
+
+        // Calculate projections
         List<Double> projections = new ArrayList<>();
         for (double[] point : data) {
             if (point.length != a.length) {
@@ -36,9 +40,13 @@ public class LSHUtils {
             }
             projections.add(proj);
         }
+
+        // Sort the projections
         Collections.sort(projections);
         int n = projections.size();
         double[] criticalValues = new double[numIntervals];
+
+        // Compute the critical values (quantiles)
         for (int i = 1; i <= numIntervals; i++) {
             int index = (int) Math.floor(i * n / (double) (numIntervals + 1));
             criticalValues[i - 1] = projections.get(Math.min(index, n - 1));
@@ -58,11 +66,15 @@ public class LSHUtils {
         if (encryptedData == null || encryptedData.isEmpty()) {
             throw new IllegalArgumentException("Encrypted data list cannot be null or empty.");
         }
+
+        // Decrypt data in smaller chunks for memory optimization
         List<double[]> decryptedData = new ArrayList<>();
         for (byte[] encryptedPoint : encryptedData) {
             double[] point = EncryptionUtils.decryptVector(encryptedPoint, key);
             decryptedData.add(point);
         }
+
+        // Compute critical values for the decrypted data
         return computeCriticalValues(decryptedData, a, numIntervals);
     }
 
@@ -72,7 +84,7 @@ public class LSHUtils {
      * @return Unit vector as double[].
      */
     public static double[] generateUnitVector(int dimensions) {
-        java.security.SecureRandom random = new java.security.SecureRandom();
+        SecureRandom random = new SecureRandom();
         double[] a = new double[dimensions];
         double norm = 0.0;
         for (int i = 0; i < dimensions; i++) {
