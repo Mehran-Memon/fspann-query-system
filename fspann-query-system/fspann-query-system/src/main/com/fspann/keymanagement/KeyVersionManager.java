@@ -1,4 +1,4 @@
-package java.com.fspann.keymanagement;
+package com.fspann.keymanagement;
 
 import javax.crypto.SecretKey;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -48,7 +48,7 @@ public class KeyVersionManager {
         return operationCount >= rotationInterval;  // Return true if operation count exceeds the interval
     }
 
-    // Increment operation count for each operation
+   // Increment operation count for each operation
     public void incrementOperationCount() {
         operationCount.incrementAndGet();  // Increase the operation count
     }
