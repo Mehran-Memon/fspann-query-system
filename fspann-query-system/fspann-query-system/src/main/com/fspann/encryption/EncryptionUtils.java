@@ -1,6 +1,6 @@
-package java.com.fspann.encryption;
+package com.fspann.encryption;
 
-import java.com.fspann.index.BucketConstructor;
+import com.fspann.index.BucketConstructor;
 
 import javax.crypto.Cipher;
 import javax.crypto.SecretKey;

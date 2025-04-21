@@ -1,7 +1,7 @@
-package java.com.fspann.query;
+package com.fspann.query;
 
-import java.com.fspann.encryption.EncryptionUtils;
-import java.com.fspann.keymanagement.KeyManager;
+import com.fspann.encryption.EncryptionUtils;
+import com.fspann.keymanagement.KeyManager;
 import javax.crypto.SecretKey;
 import java.util.Objects;
 import java.util.Arrays;
@@ -12,11 +12,11 @@ public class EncryptedPoint {
     private static final Logger logger = LoggerFactory.getLogger(EncryptedPoint.class); // Initialize the logger
     private byte[] ciphertext;
     private String bucketId;
-    private String pointId;
+    private final String pointId;
 
     // Constructor with ciphertext, bucketId, and pointId
     public EncryptedPoint(byte[] ciphertext, String bucketId, String pointId) {
-        this.ciphertext = ciphertext != null ? ciphertext.clone() : new byte[0];
+        this.ciphertext = ciphertext != null ? ciphertext.clone() : new byte[0]; // Ensure ciphertext is never null
         this.bucketId = Objects.requireNonNull(bucketId, "bucketId cannot be null");
         this.pointId = Objects.requireNonNull(pointId, "pointId cannot be null");
     }
@@ -28,7 +28,7 @@ public class EncryptedPoint {
 
     // Getter for ciphertext
     public byte[] getCiphertext() {
-        return ciphertext.clone();
+        return ciphertext.clone(); // Clone to ensure immutability
     }
 
     // Getter for bucketId
@@ -57,10 +57,11 @@ public class EncryptedPoint {
         logger.info("Re-encrypting EncryptedPoint with new key for context: {}", context);
 
         // Get old and new keys for re-encryption
-        SecretKey oldKey = keyManager.getSessionKey(context);
-        SecretKey newKey = keyManager.getCurrentKey();
+        SecretKey oldKey = keyManager.getSessionKey(context); // Get session key using keyManager
+        SecretKey newKey = keyManager.getCurrentKey(); // Get current key using keyManager
 
         if (oldKey == null || newKey == null) {
+            logger.error("Failed to retrieve valid keys for re-encryption: oldKey={}, newKey={}", oldKey, newKey);
             throw new IllegalStateException("Failed to retrieve valid keys for re-encryption.");
         }
 

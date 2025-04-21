@@ -1,4 +1,5 @@
-package java.com.fspann.data;
+package com.fspann.data;
+
 import java.io.*;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -55,7 +56,7 @@ public class DataLoader {
                 vectorCount++;
             }
 
-            logger.info("✅ Finished reading {} vectors from {}", vectors, filename);
+            logger.info("✅ Reading Finished for {} vectors from {}", vectors, filename);
         }
 
         return vectors;
