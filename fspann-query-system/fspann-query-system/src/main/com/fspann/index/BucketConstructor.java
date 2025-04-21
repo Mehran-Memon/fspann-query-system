@@ -1,6 +1,6 @@
-package java.com.fspann.index;
+package com.fspann.index;
 
-import java.com.fspann.encryption.EncryptionUtils;
+import com.fspann.encryption.EncryptionUtils;
 import javax.crypto.SecretKey;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
