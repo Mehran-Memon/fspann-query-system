@@ -1,6 +1,6 @@
-package java.com.fspann.keymanagement;
+package com.fspann.keymanagement;
 
-import java.com.fspann.encryption.EncryptionUtils;
+import com.fspann.encryption.EncryptionUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
