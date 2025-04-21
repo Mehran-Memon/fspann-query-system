@@ -1,4 +1,4 @@
-package java.com.fspann.query;
+package com.fspann.query;
 
 import java.util.Collections;
 import java.util.List;

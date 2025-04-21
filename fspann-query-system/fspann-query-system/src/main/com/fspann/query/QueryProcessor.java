@@ -1,7 +1,7 @@
-package java.com.fspann.query;
+package com.fspann.query;
 
-import java.com.fspann.encryption.EncryptionUtils;
-import java.com.fspann.keymanagement.KeyManager;
+import com.fspann.encryption.EncryptionUtils;
+import com.fspann.keymanagement.KeyManager;
 import javax.crypto.SecretKey;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
