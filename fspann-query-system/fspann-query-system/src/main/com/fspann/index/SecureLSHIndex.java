@@ -1,10 +1,10 @@
-package java.com.fspann.index;
+package com.fspann.index;
 
-import java.com.fspann.encryption.EncryptionUtils;
-import java.com.fspann.keymanagement.KeyManager;
-import java.com.fspann.query.EncryptedPoint;
-import java.com.fspann.utils.PersistenceUtils;
-import java.com.fspann.query.QueryToken;
+import com.fspann.encryption.EncryptionUtils;
+import com.fspann.keymanagement.KeyManager;
+import com.fspann.query.EncryptedPoint;
+import com.fspann.utils.PersistenceUtils;
+import com.fspann.query.QueryToken;
 import javax.crypto.SecretKey;
 import java.io.IOException;
 import java.util.*;

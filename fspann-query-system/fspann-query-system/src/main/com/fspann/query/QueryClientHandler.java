@@ -1,8 +1,8 @@
-package java.com.fspann.query;
+package com.fspann.query;
 
-import java.com.fspann.index.EvenLSH;
-import java.com.fspann.keymanagement.KeyManager;
-import java.com.fspann.encryption.EncryptionUtils;
+import com.fspann.index.EvenLSH;
+import com.fspann.keymanagement.KeyManager;
+import com.fspann.encryption.EncryptionUtils;
 import javax.crypto.SecretKey;
 import java.util.List;
 

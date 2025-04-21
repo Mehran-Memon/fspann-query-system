@@ -1,22 +1,23 @@
-package java.com.fspann.query;
+package com.fspann.query;
 
-import java.com.fspann.index.EvenLSH;
-import java.com.fspann.encryption.EncryptionUtils;
-import java.com.fspann.keymanagement.KeyManager;
+import com.fspann.index.EvenLSH;
+import com.fspann.encryption.EncryptionUtils;
+import com.fspann.keymanagement.KeyManager;
 import javax.crypto.SecretKey;
-import java.util.ArrayList;
 import java.util.List;
 
 public class QueryGenerator {
     private final EvenLSH lsh;
     private final KeyManager keyManager;
 
+    // Constructor that accepts EvenLSH and KeyManager
     public QueryGenerator(EvenLSH lsh, KeyManager keyManager) {
         this.lsh = lsh;
         this.keyManager = keyManager;
     }
 
-    public QueryToken generateQueryToken(double[] queryVector, int topK, int expansionRange) throws Exception {
+    // Keep the method static for generating QueryToken
+    public static QueryToken generateQueryToken(EvenLSH lsh, KeyManager keyManager, double[] queryVector, int topK, int expansionRange) throws Exception {
         if (queryVector == null || queryVector.length == 0) {
             throw new IllegalArgumentException("Query vector cannot be null or empty.");
         }
@@ -43,5 +44,4 @@ public class QueryGenerator {
         // Return the query token with candidate buckets, encrypted query vector, and other necessary information
         return new QueryToken(candidateBuckets, encryptedQuery, topK, encryptionContext);
     }
-
 }

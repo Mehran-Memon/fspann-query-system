@@ -1,4 +1,4 @@
-package java.com.fspann.utils;
+package com.fspann.utils;
 
 import java.io.FileWriter;
 import java.io.IOException;

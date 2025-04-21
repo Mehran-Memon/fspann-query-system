@@ -1,6 +1,6 @@
-package java.com.fspann.index;
+package com.fspann.index;
 
-import java.com.fspann.encryption.EncryptionUtils;
+import com.fspann.encryption.EncryptionUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import javax.crypto.SecretKey;
