@@ -1,4 +1,4 @@
-package fspann_query_system.data;
+package com.fspann.fspann_query_system.data;
 
 import java.io.*;
 

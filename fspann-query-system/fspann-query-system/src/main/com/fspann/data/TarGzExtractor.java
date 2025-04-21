@@ -1,4 +1,4 @@
-package java.com.fspann.data;
+package com.fspann.data;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -30,10 +30,16 @@ public class TarGzExtractor {
 
         // Create output directory if it doesn't exist
         File outputDir = new File(OUTPUT_DIR);
+        boolean dirCreated = false;
         if (!outputDir.exists()) {
-            outputDir.mkdirs();
-            System.out.println("Created output directory: " + OUTPUT_DIR);
+            dirCreated = outputDir.mkdirs();
+            if (dirCreated) {
+                System.out.println("Created output directory: " + OUTPUT_DIR);
+            } else {
+                System.err.println("Failed to create output directory: " + OUTPUT_DIR);
+            }
         }
+
 
         try {
             // Create input streams for reading the .tar.gz file
@@ -70,8 +76,14 @@ public class TarGzExtractor {
 
                 // Ensure parent directories exist
                 File parent = outputFile.getParentFile();
-                if (!parent.exists()) {
-                    parent.mkdirs();
+                boolean parentDirCreated = false;
+                if (parent != null && !parent.exists()) {
+                    parentDirCreated = parent.mkdirs();
+                    if (parentDirCreated) {
+                        System.out.println("Created parent directories: " + parent.getAbsolutePath());
+                    } else {
+                        System.err.println("Failed to create parent directories: " + parent.getAbsolutePath());
+                    }
                 }
 
                 // Create output stream for the current file
