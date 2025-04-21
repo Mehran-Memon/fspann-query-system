@@ -1,7 +1,7 @@
-package java.com.fspann.evaluation;
+package com.fspann.evaluation;
 
-import java.com.fspann.ForwardSecureANNSystem;
-
+import com.fspann.ForwardSecureANNSystem;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.HashSet;
@@ -32,7 +32,7 @@ public class EvaluationEngine {
             totalCorrect += correct;
         }
 
-        return totalCorrect / (double) (totalQueries * topK);
+        return (double) totalCorrect / totalQueries;  // Fix: Normalize recall by totalQueries
     }
 
     // Evaluate method with range or k-NN query
@@ -40,7 +40,11 @@ public class EvaluationEngine {
         List<double[]> queryVectors = system.getQueryVectors();
         List<int[]> groundTruth = system.getGroundTruth();
 
-        List<List<Integer>> predictions = new java.util.ArrayList<>();
+        if (queryVectors.size() != groundTruth.size()) {
+            throw new IllegalArgumentException("The number of queries does not match the number of ground truth entries.");
+        }
+
+        List<List<Integer>> predictions = new ArrayList<>();
         long totalTime = 0;
 
         for (int i = 0; i < Math.min(numQueries, queryVectors.size()); i++) {
@@ -49,16 +53,12 @@ public class EvaluationEngine {
 
             // Use range query if range > 0, otherwise use k-NN
             List<double[]> result;
-            if (range > 0) {
-                result = system.query(q, topK, range); // Range Query
-            } else {
-                result = system.query(q, topK, 0); // k-NN Query
-            }
+            result = system.query(q, topK); // Range Query
 
             long end = System.nanoTime();
             totalTime += (end - start);
 
-            List<Integer> predictedIndices = new java.util.ArrayList<>();
+            List<Integer> predictedIndices = new ArrayList<>();
             for (double[] neighbor : result) {
                 int bestIndex = findClosestIndex(neighbor, system.getBaseVectors());
                 predictedIndices.add(bestIndex);

@@ -1,10 +1,9 @@
-package java.com.fspann.index;
+package com.fspann.index;
 
-import java.com.fspann.encryption.EncryptionUtils;
+import com.fspann.encryption.EncryptionUtils;
 import javax.crypto.SecretKey;
 import java.security.SecureRandom;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Arrays;
 
