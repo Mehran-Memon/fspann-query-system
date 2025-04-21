@@ -127,6 +127,27 @@
           <version>3.0.0-M5</version> <!-- Latest compatible version -->
         </plugin>
 
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-assembly-plugin</artifactId>
+          <version>3.1.0</version>
+          <executions>
+            <execution>
+              <phase>package</phase>
+              <goals>
+                <goal>single</goal>
+              </goals>
+              <configuration>
+                <archive>
+                  <manifest>
+                    <mainClass>com.fspann.ForwardSecureANNSystem</mainClass> <!-- Your main class -->
+                  </manifest>
+                </archive>
+              </configuration>
+            </execution>
+          </executions>
+        </plugin>
+
         <!-- Maven Jar Plugin -->
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
