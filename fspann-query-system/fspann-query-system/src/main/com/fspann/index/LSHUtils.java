@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 import javax.crypto.SecretKey;
 import java.security.SecureRandom;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Collections;
 
@@ -20,6 +21,7 @@ public class LSHUtils {
      * @param numIntervals Number of intervals (buckets) desired.
      * @return Array of critical values.
      */
+// Log the critical values computed for the bucket division
     public static double[] computeCriticalValues(List<double[]> data, double[] a, int numIntervals) {
         if (data == null || data.isEmpty()) {
             throw new IllegalArgumentException("Data list cannot be null or empty.");
@@ -49,8 +51,12 @@ public class LSHUtils {
         // Compute the critical values (quantiles)
         for (int i = 1; i <= numIntervals; i++) {
             int index = (int) Math.floor(i * n / (double) (numIntervals + 1));
-            criticalValues[i - 1] = projections.get(Math.min(index, n - 1));
+            criticalValues[i - 1] = projections.get(Math.min(index, projections.size() - 1));
         }
+
+        // Log the critical values
+        logger.info("Critical values: " + Arrays.toString(criticalValues));
+
         return criticalValues;
     }
 

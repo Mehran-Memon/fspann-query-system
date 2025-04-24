@@ -59,9 +59,9 @@ public class ForwardSecureANNSystem {
         // Load the datasets
         logger.info("[STEP] 📥 Loading Datasets...");
         DataLoader dataLoader = new DataLoader();
-        List<double[]> baseVectors = dataLoader.readFvecs(basePath);
-        List<double[]> queryVectors = dataLoader.readFvecs(queryPath);
-        dataLoader.readIvecs(groundTruthPath);
+        List<double[]> baseVectors = dataLoader.loadData(basePath, 1000);
+        List<double[]> queryVectors = dataLoader.loadData(queryPath, 1000);
+        dataLoader.loadData(groundTruthPath,1000);
 
         logger.info("[STEP] ✅ Dataset loading complete.");
 

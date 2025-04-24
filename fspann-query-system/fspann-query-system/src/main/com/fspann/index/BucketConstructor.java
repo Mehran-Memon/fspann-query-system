@@ -1,16 +1,20 @@
 package com.fspann.index;
 
+import com.fspann.ForwardSecureANNSystem;
 import com.fspann.encryption.EncryptionUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import javax.crypto.SecretKey;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
-import java.util.logging.Logger;
 
 public class BucketConstructor {
 
     private static final double FAKE_POINT_MARKER = -1.0;  // Marker for fake points
-    private static final Logger logger = Logger.getLogger(BucketConstructor.class.getName());
+    private static final Logger logger = LoggerFactory.getLogger(BucketConstructor.class);
 
     /**
      * Perform greedy merging of sorted points into buckets, with encryption applied.
@@ -20,6 +24,7 @@ public class BucketConstructor {
      * @return List of buckets containing encrypted points.
      * @throws Exception if encryption fails.
      */
+// Log bucket ID and LSH values during greedy merging
     public static List<List<byte[]>> greedyMerge(List<double[]> sortedPoints, int maxBucketSize, SecretKey key) throws Exception {
         List<List<byte[]>> buckets = new ArrayList<>();
         List<byte[]> currentBucket = new ArrayList<>();
@@ -30,8 +35,12 @@ public class BucketConstructor {
             byte[] encryptedPoint = (key != null) ? EncryptionUtils.encryptVector(point, key) : doubleToByteArray(point);
             currentBucket.add(encryptedPoint);
 
+            // Log LSH value and bucket size
+            logger.info("Point: " + Arrays.toString(point) + " -> Encrypted: " + Arrays.toString(encryptedPoint));
+
             // If bucket size exceeds limit, add to final buckets and reset current bucket
             if (currentBucket.size() >= maxBucketSize) {
+                logger.info("Bucket added with " + currentBucket.size() + " points.");
                 buckets.add(new ArrayList<>(currentBucket));
                 currentBucket.clear();
             }
@@ -39,6 +48,7 @@ public class BucketConstructor {
 
         // Add any remaining points
         if (!currentBucket.isEmpty()) {
+            logger.info("Final bucket added with " + currentBucket.size() + " points.");
             buckets.add(currentBucket);
         }
 
@@ -56,23 +66,30 @@ public class BucketConstructor {
      */
     public static List<List<byte[]>> applyFakeAddition(List<List<byte[]>> buckets, int targetSize, SecretKey key, int dimension) throws Exception {
         List<List<byte[]>> uniformBuckets = new ArrayList<>();
+        int totalFakePointsAdded = 0;
 
         // Process each bucket
         for (List<byte[]> bucket : buckets) {
             List<byte[]> newBucket = new ArrayList<>(bucket);
             int numFake = targetSize - bucket.size();  // Calculate how many fake points to add
 
+            // Log before adding fake points
+            if (numFake > 0) {
+                logger.info("Adding " + numFake + " fake points to bucket.");
+            }
+
             for (int i = 0; i < numFake; i++) {
                 // Generate and encrypt a fake point
                 double[] fakePoint = generateFakePoint(dimension);
                 byte[] encryptedFake = (key != null) ? EncryptionUtils.encryptVector(fakePoint, key) : doubleToByteArray(fakePoint);
                 newBucket.add(encryptedFake);
+                totalFakePointsAdded++;
             }
 
-            // Add the modified bucket to the list
             uniformBuckets.add(newBucket);
         }
 
+        logger.info("Total fake points added: " + totalFakePointsAdded);
         return uniformBuckets;
     }
 
