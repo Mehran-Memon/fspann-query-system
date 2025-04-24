@@ -6,12 +6,14 @@ import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Arrays;
+import java.util.logging.Logger;
 
 public class EvenLSH {
     private double[] a;               // Unit vector for projection
     private double[] criticalValues;  // Critical values for even bucket division
     private final int dimensions;     // Number of dimensions
     private final int numIntervals;   // Number of intervals (buckets)
+    private static final Logger logger = Logger.getLogger(EvenLSH.class.getName());
 
     public EvenLSH(int dimensions, int numIntervals, List<double[]> initialData) {
         this.dimensions = dimensions;
@@ -60,11 +62,14 @@ public class EvenLSH {
             throw new IllegalArgumentException("Point dimension mismatch: expected " + dimensions + ", got " + point.length);
         }
         double projection = project(point);
+        // Log LSH value and bucket ID
+        logger.info("Point: " + Arrays.toString(point) + " -> LSH Value: " + projection);
         for (int i = 0; i < criticalValues.length; i++) {
             if (projection <= criticalValues[i]) {
                 return i + 1; // 1-indexed bucket IDs
             }
         }
+        logger.info("Assigned to bucket ID: " + (criticalValues.length + 1));
         return criticalValues.length + 1;
     }
 
