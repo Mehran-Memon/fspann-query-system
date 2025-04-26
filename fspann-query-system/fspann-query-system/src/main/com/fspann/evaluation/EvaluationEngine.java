@@ -47,13 +47,13 @@ public class EvaluationEngine {
         List<List<Integer>> predictions = new ArrayList<>();
         long totalTime = 0;
 
+        // Profiling queries
         for (int i = 0; i < Math.min(numQueries, queryVectors.size()); i++) {
             double[] q = queryVectors.get(i);
             long start = System.nanoTime();
 
             // Use range query if range > 0, otherwise use k-NN
-            List<double[]> result;
-            result = system.query(q, topK); // Range Query
+            List<double[]> result = system.query(q, topK); // Range Query
 
             long end = System.nanoTime();
             totalTime += (end - start);
