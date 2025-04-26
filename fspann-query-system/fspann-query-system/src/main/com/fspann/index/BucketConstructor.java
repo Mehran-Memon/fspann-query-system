@@ -1,46 +1,31 @@
 package com.fspann.index;
 
-import com.fspann.ForwardSecureANNSystem;
 import com.fspann.encryption.EncryptionUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import javax.crypto.SecretKey;
-import java.nio.ByteBuffer;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
+import java.nio.ByteBuffer;
 
 public class BucketConstructor {
 
     private static final double FAKE_POINT_MARKER = -1.0;  // Marker for fake points
-    private static final Logger logger = LoggerFactory.getLogger(BucketConstructor.class);
 
-    /**
-     * Perform greedy merging of sorted points into buckets, with encryption applied.
-     * @param sortedPoints Sorted list of points.
-     * @param maxBucketSize Maximum allowed size for a bucket.
-     * @param key SecretKey for encryption.
-     * @return List of buckets containing encrypted points.
-     * @throws Exception if encryption fails.
-     */
-// Log bucket ID and LSH values during greedy merging
-    public static List<List<byte[]>> greedyMerge(List<double[]> sortedPoints, int maxBucketSize, SecretKey key) throws Exception {
+    // Method to perform greedy merge based on Even LSH
+    public static List<List<byte[]>> greedyMerge(List<double[]> sortedPoints, int maxBucketSize, EvenLSH lsh, SecretKey key) throws Exception {
         List<List<byte[]>> buckets = new ArrayList<>();
         List<byte[]> currentBucket = new ArrayList<>();
 
-        // Process each point
+        // Process each point and assign to buckets based on Even LSH
         for (double[] point : sortedPoints) {
-            // Encrypt the point
+            // Get bucket ID using Even LSH
+            int bucketId = lsh.getBucketId(point);
+
+            // Encrypt the point and add to current bucket
             byte[] encryptedPoint = (key != null) ? EncryptionUtils.encryptVector(point, key) : doubleToByteArray(point);
             currentBucket.add(encryptedPoint);
 
-            // Log LSH value and bucket size
-            logger.info("Point: " + Arrays.toString(point) + " -> Encrypted: " + Arrays.toString(encryptedPoint));
-
             // If bucket size exceeds limit, add to final buckets and reset current bucket
             if (currentBucket.size() >= maxBucketSize) {
-                logger.info("Bucket added with " + currentBucket.size() + " points.");
                 buckets.add(new ArrayList<>(currentBucket));
                 currentBucket.clear();
             }
@@ -48,38 +33,43 @@ public class BucketConstructor {
 
         // Add any remaining points
         if (!currentBucket.isEmpty()) {
-            logger.info("Final bucket added with " + currentBucket.size() + " points.");
             buckets.add(currentBucket);
         }
+
+        // Log bucket sizes after merge
+        logBucketSizes(buckets);
 
         return buckets;
     }
 
-    /**
-     * Apply fake point addition to each bucket, ensuring each bucket has the target size.
-     * @param buckets The buckets to apply fake points to.
-     * @param targetSize The target size for each bucket.
-     * @param key The SecretKey for encryption.
-     * @param dimension The dimensionality of the points.
-     * @return A list of buckets with fake points added.
-     * @throws Exception if encryption fails.
-     */
+    // Method to apply fake point insertion to ensure balanced bucket sizes
     public static List<List<byte[]>> applyFakeAddition(List<List<byte[]>> buckets, int targetSize, SecretKey key, int dimension) throws Exception {
         List<List<byte[]>> uniformBuckets = new ArrayList<>();
         int totalFakePointsAdded = 0;
 
+        // Calculate the average bucket size
+        int totalSize = 0;
+        for (List<byte[]> bucket : buckets) {
+            totalSize += bucket.size();
+        }
+        double averageSize = (double) totalSize / buckets.size();
+
         // Process each bucket
         for (List<byte[]> bucket : buckets) {
             List<byte[]> newBucket = new ArrayList<>(bucket);
-            int numFake = targetSize - bucket.size();  // Calculate how many fake points to add
+            int bucketSize = bucket.size();
+            int numFake = 0;
 
-            // Log before adding fake points
-            if (numFake > 0) {
-                logger.info("Adding " + numFake + " fake points to bucket.");
+            // Compare the current bucket size to the average and decide how many fake points to add
+            if (bucketSize < averageSize * 0.8) { // Add fake points if the bucket size is less than 80% of average size
+                numFake = targetSize - bucketSize;
             }
 
+            // Limit fake points to prevent excessive addition
+            numFake = Math.min(numFake, 10); // Adjust the threshold for fake points
+
+            // Add fake points
             for (int i = 0; i < numFake; i++) {
-                // Generate and encrypt a fake point
                 double[] fakePoint = generateFakePoint(dimension);
                 byte[] encryptedFake = (key != null) ? EncryptionUtils.encryptVector(fakePoint, key) : doubleToByteArray(fakePoint);
                 newBucket.add(encryptedFake);
@@ -89,40 +79,16 @@ public class BucketConstructor {
             uniformBuckets.add(newBucket);
         }
 
-        logger.info("Total fake points added: " + totalFakePointsAdded);
+        // Log the total fake points added
+        System.out.println("Total fake points added: " + totalFakePointsAdded);
+
+        // Log bucket sizes after fake point insertion
+        logBucketSizes(uniformBuckets);
+
         return uniformBuckets;
     }
 
-    /**
-     * Re-encrypt all buckets using the new key.
-     * @param buckets The buckets to re-encrypt.
-     * @param oldKey The old key used for decryption.
-     * @param newKey The new key used for encryption.
-     * @return A new list of re-encrypted buckets.
-     * @throws Exception if decryption or encryption fails.
-     */
-    public static List<List<byte[]>> reEncryptBuckets(List<List<byte[]>> buckets, SecretKey oldKey, SecretKey newKey) throws Exception {
-        List<List<byte[]>> reEncryptedBuckets = new ArrayList<>();
-
-        // Re-encrypt each bucket
-        for (List<byte[]> bucket : buckets) {
-            List<byte[]> newBucket = new ArrayList<>();
-            for (byte[] encryptedPoint : bucket) {
-                double[] decryptedPoint = EncryptionUtils.decryptVector(encryptedPoint, oldKey);  // Decrypt point
-                byte[] reEncryptedPoint = EncryptionUtils.encryptVector(decryptedPoint, newKey);  // Re-encrypt point
-                newBucket.add(reEncryptedPoint);
-            }
-            reEncryptedBuckets.add(newBucket);
-        }
-
-        return reEncryptedBuckets;
-    }
-
-    /**
-     * Generate a fake point with random values.
-     * @param dimension The number of dimensions for the fake point.
-     * @return The generated fake point.
-     */
+    // Helper method to generate fake points
     private static double[] generateFakePoint(int dimension) {
         double[] fake = new double[dimension];
         for (int i = 0; i < dimension; i++) {
@@ -132,10 +98,20 @@ public class BucketConstructor {
     }
 
     /**
-     * Convert a double[] vector to a byte[] for storage or transmission.
-     * @param vector The vector to convert.
-     * @return The byte[] representation of the vector.
+     * Converts a byte array into a double array.
+     * @param bytes The byte array to convert.
+     * @return The converted double array.
      */
+    public static double[] byteToDoubleArray(byte[] bytes) {
+        ByteBuffer buffer = ByteBuffer.wrap(bytes);
+        double[] vector = new double[bytes.length / Double.BYTES];
+        for (int i = 0; i < vector.length; i++) {
+            vector[i] = buffer.getDouble();  // Extract each double from the byte buffer
+        }
+        return vector;
+    }
+
+    // Helper method to convert double[] to byte[]
     private static byte[] doubleToByteArray(double[] vector) {
         ByteBuffer buffer = ByteBuffer.allocate(vector.length * Double.BYTES);
         for (double value : vector) {
@@ -144,17 +120,10 @@ public class BucketConstructor {
         return buffer.array();
     }
 
-    /**
-     * Convert a byte[] back into a double[] vector.
-     * @param bytes The byte array to convert.
-     * @return The double[] representation of the byte array.
-     */
-    public static double[] byteToDoubleArray(byte[] bytes) {
-        ByteBuffer buffer = ByteBuffer.wrap(bytes);
-        double[] vector = new double[bytes.length / Double.BYTES];
-        for (int i = 0; i < vector.length; i++) {
-            vector[i] = buffer.getDouble();  // Get each double from the buffer
+    // Log bucket sizes for tracking
+    private static void logBucketSizes(List<List<byte[]>> buckets) {
+        for (int i = 0; i < buckets.size(); i++) {
+            System.out.println("Bucket " + (i + 1) + " size: " + buckets.get(i).size());
         }
-        return vector;
     }
 }

@@ -5,8 +5,11 @@ import java.nio.*;
 import java.nio.charset.*;
 import java.nio.file.*;
 import java.util.*;
+
+import com.fasterxml.jackson.databind.JsonNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 public class DataLoader {
     private static final Logger logger = LoggerFactory.getLogger(DataLoader.class);
@@ -37,6 +40,38 @@ public class DataLoader {
         }
     }
 
+    public List<int[]> loadGroundTruth(String filename, int batchSize) throws IOException {
+        List<int[]> groundTruth = new ArrayList<>();
+        try (BufferedReader reader = Files.newBufferedReader(Paths.get(filename), StandardCharsets.UTF_8)) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                String[] values = line.split(",");
+                int[] indices = new int[values.length];
+                for (int i = 0; i < values.length; i++) {
+                    try {
+                        indices[i] = Integer.parseInt(values[i]);
+                    } catch (NumberFormatException e) {
+                        logger.warn("Skipping invalid number in line: " + line);
+                        continue;
+                    }
+                }
+                groundTruth.add(indices);
+                if (groundTruth.size() >= batchSize) {
+                    processGroundTruthBatch(groundTruth);
+                    groundTruth.clear();
+                }
+            }
+        }
+        if (!groundTruth.isEmpty()) {
+            processGroundTruthBatch(groundTruth); // Process the remaining data if any
+        }
+        return groundTruth;
+    }
+
+    // Process batches for ground truth data
+    private void processGroundTruthBatch(List<int[]> groundTruth) {
+        logger.info("Processed ground truth batch of size: {}", groundTruth.size());
+    }
 
     /**
      * Detects the file format based on the file extension.
@@ -97,10 +132,28 @@ public class DataLoader {
      * @throws IOException
      */
     private List<double[]> loadJSON(String filename, int batchSize) throws IOException {
-        // Placeholder: Add JSON processing logic here
-        logger.info("Loading JSON data from: " + filename);
-        return new ArrayList<>(); // Return an empty list as a placeholder
+        List<double[]> data = new ArrayList<>();
+        ObjectMapper objectMapper = new ObjectMapper();
+        // Assume the JSON file has an array of vectors, each represented as an array of numbers
+        JsonNode rootNode = objectMapper.readTree(new File(filename));
+
+        for (JsonNode node : rootNode) {
+            double[] vector = new double[node.size()];
+            for (int i = 0; i < node.size(); i++) {
+                vector[i] = node.get(i).asDouble();
+            }
+            data.add(vector);
+            if (data.size() >= batchSize) {
+                processBatch(data);
+                data.clear();
+            }
+        }
+        if (!data.isEmpty()) {
+            processBatch(data); // Process any remaining data
+        }
+        return data;
     }
+
 
     /**
      * Loads data from a Parquet file.
@@ -125,10 +178,7 @@ public class DataLoader {
             int expectedDim = -1;
 
             while (fis.read(dimBuffer) != -1) {
-                // Set the byte order to little-endian
                 ByteBuffer dimByteBuffer = ByteBuffer.wrap(dimBuffer).order(ByteOrder.LITTLE_ENDIAN);
-
-                // Read the dimension of the vector (4 bytes)
                 int dim = dimByteBuffer.getInt();
 
                 if (expectedDim == -1) {
@@ -160,7 +210,6 @@ public class DataLoader {
                     vectorCount = 0;
                 }
                 logger.info("Loaded vector with dimension: " + dim);
-
             }
         } catch (IOException e) {
             logger.error("Error reading .fvecs file: " + filename, e);
@@ -181,10 +230,7 @@ public class DataLoader {
             int expectedDim = -1;
 
             while (fis.read(dimBuffer) != -1) {
-                // Set the byte order to little-endian
                 ByteBuffer dimByteBuffer = ByteBuffer.wrap(dimBuffer).order(ByteOrder.LITTLE_ENDIAN);
-
-                // Read the dimension of the vector (4 bytes)
                 int dim = dimByteBuffer.getInt();
 
                 if (expectedDim == -1) {
@@ -214,7 +260,6 @@ public class DataLoader {
                     vectorCount = 0;
                 }
                 logger.info("Loaded vector with dimension: " + dim);
-
             }
         } catch (IOException e) {
             logger.error("Error reading .ivecs file: " + filename, e);
