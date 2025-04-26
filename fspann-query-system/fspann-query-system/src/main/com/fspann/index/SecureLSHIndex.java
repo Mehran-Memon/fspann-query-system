@@ -1,10 +1,14 @@
 package com.fspann.index;
 
+import com.fspann.ForwardSecureANNSystem;
 import com.fspann.encryption.EncryptionUtils;
 import com.fspann.keymanagement.KeyManager;
 import com.fspann.query.EncryptedPoint;
 import com.fspann.utils.PersistenceUtils;
 import com.fspann.query.QueryToken;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import javax.crypto.SecretKey;
 import java.io.IOException;
 import java.util.*;
@@ -14,6 +18,7 @@ public class SecureLSHIndex {
     private final Map<String, EncryptedPoint> encryptedPoints;
     private SecretKey currentKey; // Current key for encryption and decryption
     private final int numHashTables;
+    private static final Logger logger = LoggerFactory.getLogger(ForwardSecureANNSystem.class);
 
     // Constructor initializes the hash tables and LSH functions
     public SecureLSHIndex(int numHashTables, SecretKey key, List<double[]> initialData) {
@@ -25,6 +30,22 @@ public class SecureLSHIndex {
         // Initialize the hash tables
         for (int i = 0; i < numHashTables; i++) {
             hashTables.add(new HashMap<>());
+        }
+
+        // Build the index using initial data
+        if (initialData != null && !initialData.isEmpty()) {
+            addInitialData(initialData);
+        }
+    }
+
+    // Add initial data to the index (for first time setup or loading dataset)
+    private void addInitialData(List<double[]> initialData) {
+        for (double[] vector : initialData) {
+            try {
+                add(UUID.randomUUID().toString(), vector, false);  // Use random ID for initial data
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
         }
     }
 
@@ -55,6 +76,9 @@ public class SecureLSHIndex {
 
     // Add a new encrypted vector to the index
     public int add(String id, double[] vector, boolean useFakePoints) throws Exception {
+        // Dynamically determine the dimension of the vector
+        int dimension = vector.length;
+
         // Encrypt the vector with the current key
         byte[] encryptedVector = EncryptionUtils.encryptVector(vector, currentKey);
         EncryptedPoint encryptedPoint = new EncryptedPoint(encryptedVector, "bucket_v" + currentKey.hashCode(), id);
@@ -62,7 +86,7 @@ public class SecureLSHIndex {
 
         // Add the point to the hash tables (this is a simplified version)
         int totalFakePointsAdded = 0;
-        EvenLSH lsh = new EvenLSH(128, 10, Arrays.asList(vector)); // Dummy LSH
+        EvenLSH lsh = new EvenLSH(dimension, 10);  // Dynamically use the dimension of the vector for LSH
         int bucketId = lsh.getBucketId(vector);
         for (int i = 0; i < numHashTables; i++) {
             Map<Integer, List<EncryptedPoint>> table = hashTables.get(i);
@@ -121,7 +145,6 @@ public class SecureLSHIndex {
         return new ArrayList<>(candidates);
     }
 
-
     // Rehash the index with a new key
     public void rehash(KeyManager keyManager, String context) throws Exception {
         SecretKey oldKey = keyManager.getPreviousKey();
@@ -130,16 +153,20 @@ public class SecureLSHIndex {
             throw new IllegalStateException("No current key available for rehashing");
         }
 
+        // Log the context and rehashing operation
+        logger.info("Rehashing with context: {}", context);
+
+        // Re-encrypt all data with the new key
         for (Map<Integer, List<EncryptedPoint>> table : hashTables) {
             for (List<EncryptedPoint> bucket : table.values()) {
                 for (EncryptedPoint point : bucket) {
                     byte[] encryptedData = point.getCiphertext();
                     byte[] newEncryptedData = EncryptionUtils.reEncryptData(encryptedData, oldKey, newKey);
-                    point.setCiphertext(newEncryptedData);
+                    point.setCiphertext(newEncryptedData);  // Update the encrypted data with the new key
                 }
             }
         }
 
-        this.currentKey = newKey;
+        this.currentKey = newKey;  // Update the current key
     }
 }

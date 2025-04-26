@@ -20,12 +20,7 @@ public class QueryToken {
         this.candidateBuckets = Collections.unmodifiableList(new ArrayList<>(candidateBuckets));
         this.encryptedQuery = encryptedQuery != null ? encryptedQuery.clone() : null;
         this.topK = topK;
-        // Ensure that the encryptionContext is never null
         this.encryptionContext = encryptionContext != null ? encryptionContext : "epoch_0";
-    }
-
-    public QueryToken(List<Integer> candidateBuckets, byte[] encryptedQuery, int topK) {
-        this(candidateBuckets, encryptedQuery, topK, null);
     }
 
     public List<Integer> getCandidateBuckets() {
