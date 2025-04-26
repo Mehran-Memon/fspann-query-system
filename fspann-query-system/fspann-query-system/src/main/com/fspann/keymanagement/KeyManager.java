@@ -1,12 +1,8 @@
 package com.fspann.keymanagement;
 
-import com.fspann.encryption.EncryptionUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import javax.crypto.Mac;
 import javax.crypto.SecretKey;
 import javax.crypto.KeyGenerator;
+import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
@@ -14,22 +10,31 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import com.fspann.encryption.EncryptionUtils;
 
 public class KeyManager {
-    private static final Logger logger = LoggerFactory.getLogger(KeyManager.class);
     private final SecretKey masterKey;
     private final Map<String, SecretKey> keyStore;
     private final AtomicInteger timeVersion;
-    private final int rotationInterval; // The threshold to rotate keys
-    private final AtomicInteger operationCount; // Track operations
+    private final int rotationInterval;
+    private final AtomicInteger operationCount;
 
-    // Constructor with rotation interval
+    // Constructor initializes with a Map of existing keys
+    public KeyManager(Map<String, SecretKey> keys) {
+        this.keyStore = new ConcurrentHashMap<>(keys);  // Initialize with existing keys
+        this.masterKey = null;  // Master key is not needed for this constructor
+        this.timeVersion = new AtomicInteger(1);  // Default starting version
+        this.rotationInterval = 1000;  // Default rotation interval
+        this.operationCount = new AtomicInteger(0);
+    }
+
+    // Constructor to generate a new master key
     public KeyManager(int rotationInterval) {
         this.rotationInterval = rotationInterval;
-        this.timeVersion = new AtomicInteger(1); // Start versioning from v1
+        this.timeVersion = new AtomicInteger(1);
         this.masterKey = generateMasterKey();
         this.keyStore = new ConcurrentHashMap<>();
-        this.operationCount = new AtomicInteger(0);  // Initialize operation count
+        this.operationCount = new AtomicInteger(0);
 
         // Generate and store the initial key
         generateAndStoreKey("key_v1");
@@ -51,7 +56,6 @@ public class KeyManager {
         try {
             SecretKey key = deriveKey(timeVersion.get());
             keyStore.put(keyVersion, key);
-            logger.info("Generated and stored: {}", keyVersion);
         } catch (Exception e) {
             throw new RuntimeException("Failed to generate and store key for version: " + keyVersion, e);
         }
@@ -86,7 +90,6 @@ public class KeyManager {
     public void rotateAllKeys(List<String> ids, Map<String, byte[]> encryptedDataMap) throws Exception {
         int currentVersion = timeVersion.getAndIncrement(); // Increment version
         generateAndStoreKey("key_v" + currentVersion);  // Store new key for the new version
-        logger.info("Rotated keys: Version {} -> {}", currentVersion, "key_v" + currentVersion);
 
         // Re-encrypt the data with the new key
         SecretKey oldKey = keyStore.get("key_v" + (currentVersion - 1)); // Get the previous key
@@ -111,16 +114,19 @@ public class KeyManager {
         }
     }
 
+    // Return the key store
+    public Map<String, SecretKey> getKeyStore() {
+        return keyStore;  // Return the current key store
+    }
+
     // Register a key for a specific ID (used in SecureLSHIndex or other parts)
     public void registerKey(String id, SecretKey currentKey) {
         keyStore.put(id, currentKey);  // Store key against the id (or vector)
-        logger.debug("Registered key for vector: {}", id);
     }
 
     // Remove a key for a specific ID (cleanup)
     public void removeKey(String id) {
         keyStore.remove(id);
-        logger.debug("Removed key for vector: {}", id);
     }
 
     // Get current key version

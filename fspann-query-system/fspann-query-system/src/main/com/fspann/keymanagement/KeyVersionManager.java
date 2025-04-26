@@ -24,31 +24,25 @@ public class KeyVersionManager {
 
     // Get the current key (versioned key)
     public SecretKey getCurrentKey() {
-        String keyVersion = "key_v" + timeVersion.get();
-        return keyManager.getSessionKey(keyVersion);  // Retrieve session key based on version
+        return keyManager.getCurrentKey();  // Use KeyManager's method to get the current key
     }
 
     // Get the previous key (previous versioned key)
     public SecretKey getPreviousKey() {
-        int previousVersion = timeVersion.get() - 1;
-        if (previousVersion > 0) {
-            String keyVersion = "key_v" + previousVersion;
-            return keyManager.getSessionKey(keyVersion);  // Retrieve the previous session key
-        }
-        return null; // No previous key for version 0
+        return keyManager.getPreviousKey();  // Use KeyManager's method to get the previous key
     }
 
     // Rotate keys (increase the version)
     public void rotateKeys() {
-        timeVersion.incrementAndGet();  // Increment version number
+        timeVersion.incrementAndGet();  // Increment version number in KeyManager
     }
 
     // Method to check if key rotation is needed
-    public boolean needsRotation(int operationCount) {
-        return operationCount >= rotationInterval;  // Return true if operation count exceeds the interval
+    public boolean needsRotation() {
+        return operationCount.get() >= rotationInterval;  // Return true if operation count exceeds the interval
     }
 
-   // Increment operation count for each operation
+    // Increment operation count for each operation
     public void incrementOperationCount() {
         operationCount.incrementAndGet();  // Increase the operation count
     }
