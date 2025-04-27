@@ -1,14 +1,17 @@
 package com.fspann.index;
 
+import com.fspann.encryption.EncryptionUtils;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.PriorityQueue;
-import com.fspann.encryption.EncryptionUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class ANN {
 
     private EvenLSH lsh;  // The Even LSH instance used for hashing and bucket assignment
     private List<List<byte[]>> buckets;  // The list of LSH buckets (index)
+    private static final Logger logger = LoggerFactory.getLogger(ANN.class);
 
     public ANN(int dimensions, int numBuckets) {
         // Initialize Even LSH with specified dimensions and number of buckets
@@ -21,18 +24,27 @@ public class ANN {
      * @param data The dataset to build the ANN index.
      */
     public void buildIndex(List<double[]> data) {
-        // Update critical values (bucket boundaries) for Even LSH
-        lsh.updateCriticalValues(data);
+        try {
+            // Update critical values (bucket boundaries) for Even LSH
+            lsh.updateCriticalValues(data);
 
-        // Initialize the buckets (using Even LSH)
-        this.buckets.clear();
-        for (double[] point : data) {
-            int bucketId = lsh.getBucketId(point);  // Get the bucket ID for the point
-            while (buckets.size() <= bucketId) {
-                buckets.add(new ArrayList<>());  // Ensure the bucket list is large enough
+            // Initialize the buckets (using Even LSH)
+            this.buckets.clear();
+            for (double[] point : data) {
+                int bucketId = lsh.getBucketId(point);  // Get the bucket ID for the point
+                while (buckets.size() <= bucketId) {
+                    buckets.add(new ArrayList<>());  // Ensure the bucket list is large enough
+                }
+                byte[] encryptedPoint = EncryptionUtils.encryptVector(point, null);  // Encrypt the point
+                buckets.get(bucketId - 1).add(encryptedPoint);  // Add the point to the corresponding bucket
             }
-            byte[] encryptedPoint = EncryptionUtils.encryptVector(point, null);  // Encrypt the point
-            buckets.get(bucketId - 1).add(encryptedPoint);  // Add the point to the corresponding bucket
+
+            // Apply fake points to balance bucket sizes
+            this.buckets = BucketConstructor.applyFakeAddition(buckets, 1000, null, data.get(0).length);  // 1000 is the target bucket size
+        } catch (Exception e) {
+            // Log the exception
+            logger.error("Error while building ANN index: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 
@@ -43,35 +55,51 @@ public class ANN {
      * @return A list of k-nearest neighbors.
      */
     public List<byte[]> getApproximateNearestNeighbors(double[] queryPoint, int k) {
-        // Get the bucket ID for the query point
-        int queryBucketId = lsh.getBucketId(queryPoint);
+        List<byte[]> nearestNeighbors = new ArrayList<>();
+        try {
+            // Get the bucket ID for the query point
+            int queryBucketId = lsh.getBucketId(queryPoint);
 
-        // Create a priority queue to store the nearest neighbors (min-heap)
-        PriorityQueue<byte[]> nearestNeighbors = new PriorityQueue<>(k, (a, b) -> {
-            double[] pointA = EncryptionUtils.decryptVector(a, null);
-            double[] pointB = EncryptionUtils.decryptVector(b, null);
-            double distanceA = calculateDistance(queryPoint, pointA);  // Calculate distance between query and pointA
-            double distanceB = calculateDistance(queryPoint, pointB);  // Calculate distance between query and pointB
-            return Double.compare(distanceA, distanceB);  // Compare distances
-        });
+            // Create a priority queue to store the nearest neighbors (min-heap)
+            PriorityQueue<byte[]> pq = new PriorityQueue<>(k, (a, b) -> {
+                try {
+                    double[] pointA = EncryptionUtils.decryptVector(a, null);
+                    double[] pointB = EncryptionUtils.decryptVector(b, null);
+                    double distanceA = calculateDistance(queryPoint, pointA);  // Calculate distance between query and pointA
+                    double distanceB = calculateDistance(queryPoint, pointB);  // Calculate distance between query and pointB
+                    return Double.compare(distanceA, distanceB);  // Compare distances
+                } catch (Exception e) {
+                    System.err.println("Error during decryption in priority queue comparison: " + e.getMessage());
+                    return 0;
+                }
+            });
 
-        // Search for neighbors in the same bucket and neighboring buckets
-        for (int i = queryBucketId - 1; i <= queryBucketId + 1; i++) {
-            if (i >= 0 && i < buckets.size()) {
-                for (byte[] encryptedPoint : buckets.get(i)) {
-                    double[] point = EncryptionUtils.decryptVector(encryptedPoint, null);
-                    if (nearestNeighbors.size() < k) {
-                        nearestNeighbors.add(encryptedPoint);
-                    } else {
-                        nearestNeighbors.poll();
-                        nearestNeighbors.add(encryptedPoint);
+            // Search for neighbors in the same bucket and neighboring buckets
+            for (int i = queryBucketId - 1; i <= queryBucketId + 1; i++) {
+                if (i >= 0 && i < buckets.size()) {
+                    for (byte[] encryptedPoint : buckets.get(i)) {
+                        double[] point = EncryptionUtils.decryptVector(encryptedPoint, null);
+                        if (pq.size() < k) {
+                            pq.add(encryptedPoint);
+                        } else {
+                            pq.poll();
+                            pq.add(encryptedPoint);
+                        }
                     }
                 }
             }
+
+            // Add the top k nearest neighbors to the result list
+            while (!pq.isEmpty()) {
+                nearestNeighbors.add(pq.poll());
+            }
+        } catch (Exception e) {
+            // Log the exception
+            System.err.println("Error while finding nearest neighbors: " + e.getMessage());
+            e.printStackTrace();
         }
 
-        // Return the k-nearest neighbors
-        return new ArrayList<>(nearestNeighbors);
+        return nearestNeighbors;
     }
 
     /**
@@ -79,12 +107,18 @@ public class ANN {
      * @param newPoint The new point to add to the index.
      */
     public void updateIndex(double[] newPoint) {
-        int bucketId = lsh.getBucketId(newPoint);  // Get the bucket ID for the new point
-        while (buckets.size() <= bucketId) {
-            buckets.add(new ArrayList<>());  // Ensure the bucket list is large enough
+        try {
+            int bucketId = lsh.getBucketId(newPoint);  // Get the bucket ID for the new point
+            while (buckets.size() <= bucketId) {
+                buckets.add(new ArrayList<>());  // Ensure the bucket list is large enough
+            }
+            byte[] encryptedPoint = EncryptionUtils.encryptVector(newPoint, null);  // Encrypt the new point
+            buckets.get(bucketId - 1).add(encryptedPoint);  // Add the new point to the corresponding bucket
+        } catch (Exception e) {
+            // Log the exception
+            System.err.println("Error while updating ANN index: " + e.getMessage());
+            e.printStackTrace();
         }
-        byte[] encryptedPoint = EncryptionUtils.encryptVector(newPoint, null);  // Encrypt the new point
-        buckets.get(bucketId - 1).add(encryptedPoint);  // Add the new point to the corresponding bucket
     }
 
     /**
@@ -92,11 +126,17 @@ public class ANN {
      * @param point The point to remove.
      */
     public void removePoint(double[] point) {
-        int bucketId = lsh.getBucketId(point);  // Get the bucket ID for the point
-        List<byte[]> bucket = buckets.get(bucketId - 1);  // Get the bucket
+        try {
+            int bucketId = lsh.getBucketId(point);  // Get the bucket ID for the point
+            List<byte[]> bucket = buckets.get(bucketId - 1);  // Get the bucket
 
-        byte[] encryptedPoint = EncryptionUtils.encryptVector(point, null);  // Encrypt the point
-        bucket.remove(encryptedPoint);  // Remove the point from the bucket
+            byte[] encryptedPoint = EncryptionUtils.encryptVector(point, null);  // Encrypt the point
+            bucket.remove(encryptedPoint);  // Remove the point from the bucket
+        } catch (Exception e) {
+            // Log the exception
+            System.err.println("Error while removing point from ANN index: " + e.getMessage());
+            e.printStackTrace();
+        }
     }
 
     /**

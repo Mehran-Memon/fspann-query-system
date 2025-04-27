@@ -1,14 +1,18 @@
 package com.fspann.index;
 
+import com.fspann.ForwardSecureANNSystem;
 import com.fspann.encryption.EncryptionUtils;
 import javax.crypto.SecretKey;
 import java.util.ArrayList;
 import java.util.List;
 import java.nio.ByteBuffer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class BucketConstructor {
 
     private static final double FAKE_POINT_MARKER = -1.0;  // Marker for fake points
+    private static final Logger logger = LoggerFactory.getLogger(BucketConstructor.class);
 
     // Method to perform greedy merge based on Even LSH
     public static List<List<byte[]>> greedyMerge(List<double[]> sortedPoints, int maxBucketSize, EvenLSH lsh, SecretKey key) throws Exception {
@@ -60,8 +64,8 @@ public class BucketConstructor {
             int bucketSize = bucket.size();
             int numFake = 0;
 
-            // Compare the current bucket size to the average and decide how many fake points to add
-            if (bucketSize < averageSize * 0.8) { // Add fake points if the bucket size is less than 80% of average size
+            // Add fake points if the bucket size is less than 90% of the target size
+            if (bucketSize < targetSize * 0.9) { // Add fake points if bucket is less than 90% of target size
                 numFake = targetSize - bucketSize;
             }
 

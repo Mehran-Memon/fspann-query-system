@@ -13,6 +13,7 @@ import com.fspann.query.QueryProcessor;
 import com.fspann.query.QueryToken;
 import com.fspann.utils.LRUCache;
 import com.fspann.utils.Profiler;
+import com.fspann.index.ANN;
 import com.fspann.keymanagement.MetadataManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,8 +24,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
-
-import static com.fspann.query.QueryGenerator.*;
 
 public class ForwardSecureANNSystem {
     private static final Logger logger = LoggerFactory.getLogger(ForwardSecureANNSystem.class);
@@ -71,6 +70,9 @@ public class ForwardSecureANNSystem {
         this.index = new SecureLSHIndex(numHashTables, keyManager.getCurrentKey(), baseVectors);
         QueryGenerator queryGenerator = new QueryGenerator(initialLsh, keyManager);
         this.queryProcessor = new QueryProcessor(new HashMap<>(), keyManager, 1000);
+
+        ANN ann = new ANN(baseVectors.get(0).length, numIntervals);  // Initialize the ANN index
+        ann.buildIndex(baseVectors);  // Build the index with the base data
     }
 
     // Added getter to resolve 'getQueryVectors' error
@@ -157,6 +159,14 @@ public class ForwardSecureANNSystem {
     // Added method to resolve 'shutdown' error
     public void shutdown() {
         logger.info("Shutting down ForwardSecureANNSystem...");
+    }
+
+    public List<int[]> getGroundTruth() {
+        return groundTruth;
+    }
+
+    public List<double[]> getBaseVectors() {
+        return baseVectors;
     }
 
     public static void main(String[] args) {

@@ -42,29 +42,44 @@ public class DataLoader {
 
     public List<int[]> loadGroundTruth(String filename, int batchSize) throws IOException {
         List<int[]> groundTruth = new ArrayList<>();
-        try (BufferedReader reader = Files.newBufferedReader(Paths.get(filename), StandardCharsets.UTF_8)) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                String[] values = line.split(",");
-                int[] indices = new int[values.length];
-                for (int i = 0; i < values.length; i++) {
-                    try {
-                        indices[i] = Integer.parseInt(values[i]);
-                    } catch (NumberFormatException e) {
-                        logger.warn("Skipping invalid number in line: " + line);
-                        continue;
-                    }
+        List<double[]> batch = new ArrayList<>();
+
+        try (FileInputStream fis = new FileInputStream(filename)) {
+            byte[] dimBuffer = new byte[4];
+
+            while (fis.read(dimBuffer) != -1) {
+                ByteBuffer dimByteBuffer = ByteBuffer.wrap(dimBuffer).order(ByteOrder.LITTLE_ENDIAN);
+                int dim = dimByteBuffer.getInt();
+                int[] vector = new int[dim];
+                byte[] vectorBuffer = new byte[dim * 4];
+                fis.read(vectorBuffer);
+
+                ByteBuffer.wrap(vectorBuffer).order(ByteOrder.LITTLE_ENDIAN).asIntBuffer().get(vector);
+                groundTruth.add(vector);
+
+                // Convert to double[] for batch processing
+                double[] doubleVector = new double[dim];
+                for (int i = 0; i < dim; i++) {
+                    doubleVector[i] = vector[i];
                 }
-                groundTruth.add(indices);
-                if (groundTruth.size() >= batchSize) {
-                    processGroundTruthBatch(groundTruth);
-                    groundTruth.clear();
+                batch.add(doubleVector);
+
+                // Process batch if full
+                if (batch.size() >= batchSize) {
+                    processBatch(batch);
+                    batch.clear();
                 }
             }
+        } catch (IOException e) {
+            logger.error("Error reading .ivecs file: " + filename, e);
+            throw new IOException("Failed to load ground truth from .ivecs file: " + filename, e);
         }
-        if (!groundTruth.isEmpty()) {
-            processGroundTruthBatch(groundTruth); // Process the remaining data if any
+
+        // Process any remaining data in the batch
+        if (!batch.isEmpty()) {
+            processBatch(batch);
         }
+
         return groundTruth;
     }
 
@@ -171,9 +186,10 @@ public class DataLoader {
     }
 
     private List<double[]> loadFvecs(String filename, int batchSize) throws IOException {
-        List<double[]> vectors = new ArrayList<>();
+        List<double[]> allVectors = new ArrayList<>(); // Accumulate all vectors here
+        List<double[]> batch = new ArrayList<>();      // Temporary batch list
         try (FileInputStream fis = new FileInputStream(filename)) {
-            byte[] dimBuffer = new byte[4];  // 4 bytes for storing the dimension of the vector
+            byte[] dimBuffer = new byte[4];
             int vectorCount = 0;
             int expectedDim = -1;
 
@@ -182,31 +198,27 @@ public class DataLoader {
                 int dim = dimByteBuffer.getInt();
 
                 if (expectedDim == -1) {
-                    expectedDim = dim;  // Set expected dimension based on the first vector
+                    expectedDim = dim;
                 }
 
-                // Create a vector of the given dimension
                 double[] vector = new double[dim];
-                byte[] vectorBuffer = new byte[dim * 4];  // 4 bytes per float value
+                byte[] vectorBuffer = new byte[dim * 4];
                 fis.read(vectorBuffer);
-
-                // For .fvecs, interpret data as floats
-                ByteBuffer.wrap(vectorBuffer).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer().get(new float[dim]);
 
                 float[] tempVector = new float[dim];
                 ByteBuffer.wrap(vectorBuffer).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer().get(tempVector);
 
-                // Convert float vector to double
                 for (int i = 0; i < dim; i++) {
                     vector[i] = (double) tempVector[i];
                 }
 
-                vectors.add(vector);
+                allVectors.add(vector); // Add to the complete list
+                batch.add(vector);      // Add to the batch list
 
                 vectorCount++;
                 if (vectorCount >= batchSize) {
-                    processBatch(vectors);
-                    vectors.clear();
+                    processBatch(batch);
+                    batch.clear();
                     vectorCount = 0;
                 }
                 logger.info("Loaded vector with dimension: " + dim);
@@ -216,16 +228,17 @@ public class DataLoader {
             throw new IOException("Failed to load data from .fvecs file: " + filename, e);
         }
 
-        if (!vectors.isEmpty()) {
-            processBatch(vectors);
+        if (!batch.isEmpty()) {
+            processBatch(batch);
         }
-        return vectors;
+        return allVectors; // Return the full list of vectors
     }
 
     private List<double[]> loadIvecs(String filename, int batchSize) throws IOException {
-        List<double[]> vectors = new ArrayList<>();
+        List<double[]> allVectors = new ArrayList<>(); // Accumulate all vectors here
+        List<double[]> batch = new ArrayList<>();      // Temporary batch list
         try (FileInputStream fis = new FileInputStream(filename)) {
-            byte[] dimBuffer = new byte[4];  // 4 bytes for storing the dimension of the vector
+            byte[] dimBuffer = new byte[4];
             int vectorCount = 0;
             int expectedDim = -1;
 
@@ -234,29 +247,27 @@ public class DataLoader {
                 int dim = dimByteBuffer.getInt();
 
                 if (expectedDim == -1) {
-                    expectedDim = dim;  // Set expected dimension based on the first vector
+                    expectedDim = dim;
                 }
 
-                // Create a vector of the given dimension
                 double[] vector = new double[dim];
-                byte[] vectorBuffer = new byte[dim * 4];  // 4 bytes per integer value
+                byte[] vectorBuffer = new byte[dim * 4];
                 fis.read(vectorBuffer);
 
-                // For .ivecs, interpret data as integers
                 int[] intVector = new int[dim];
                 ByteBuffer.wrap(vectorBuffer).order(ByteOrder.LITTLE_ENDIAN).asIntBuffer().get(intVector);
 
-                // Convert int vector to double
                 for (int i = 0; i < dim; i++) {
-                    vector[i] = (double) intVector[i];  // Convert integer vector to double
+                    vector[i] = (double) intVector[i];
                 }
 
-                vectors.add(vector);
+                allVectors.add(vector); // Add to the complete list
+                batch.add(vector);      // Add to the batch list
 
                 vectorCount++;
                 if (vectorCount >= batchSize) {
-                    processBatch(vectors);
-                    vectors.clear();
+                    processBatch(batch);
+                    batch.clear();
                     vectorCount = 0;
                 }
                 logger.info("Loaded vector with dimension: " + dim);
@@ -266,10 +277,10 @@ public class DataLoader {
             throw new IOException("Failed to load data from .ivecs file: " + filename, e);
         }
 
-        if (!vectors.isEmpty()) {
-            processBatch(vectors);
+        if (!batch.isEmpty()) {
+            processBatch(batch);
         }
-        return vectors;
+        return allVectors; // Return the full list of vectors
     }
 
     /**
