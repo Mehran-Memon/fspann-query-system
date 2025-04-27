@@ -68,7 +68,8 @@ public class EvenLSH {
                 return i + 1; // 1-indexed bucket IDs
             }
         }
-        return criticalValues.length + 1; // Default to the last bucket
+        // Ensure the bucket ID does not exceed the number of buckets
+        return Math.min(criticalValues.length + 1, numBuckets);  // Default to the last bucket if out of range
     }
 
     /**
@@ -82,13 +83,18 @@ public class EvenLSH {
             projections.add(project(vector));
         }
 
+        // If projections list is empty, log the issue and return
+        if (projections.isEmpty()) {
+            throw new IllegalArgumentException("Projections cannot be empty.");
+        }
+
         // Sort the projections and divide them into intervals (buckets)
         projections.sort(Double::compare);
         int numIntervals = numBuckets;
 
         // Assign critical values as quantiles
         for (int i = 1; i <= numIntervals; i++) {
-            int index = (i * projections.size()) / (numIntervals + 1);
+            int index = (int) Math.floor(i * projections.size() / (double) (numIntervals + 1));
             criticalValues[i - 1] = projections.get(Math.min(index, projections.size() - 1));
         }
 
