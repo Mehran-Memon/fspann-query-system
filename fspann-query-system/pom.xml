@@ -53,28 +53,28 @@
     <dependency>
       <groupId>ch.qos.logback</groupId>
       <artifactId>logback-classic</artifactId>
-      <version>1.5.6</version>
+      <version>1.5.13</version>
     </dependency>
 
       <!-- JUnit 5 Dependencies -->
       <dependency>
         <groupId>org.junit.jupiter</groupId>
         <artifactId>junit-jupiter-api</artifactId>
-        <version>5.11.0</version> <!-- Make sure you are using the correct version -->
+        <version>5.11.0</version>
         <scope>test</scope>
       </dependency>
 
       <dependency>
         <groupId>org.junit.jupiter</groupId>
         <artifactId>junit-jupiter-engine</artifactId>
-        <version>5.11.0</version> <!-- Same version as jupiter-api -->
+        <version>5.11.0</version>
         <scope>test</scope>
       </dependency>
 
       <dependency>
         <groupId>org.junit.platform</groupId>
         <artifactId>junit-platform-launcher</artifactId>
-        <version>1.11.0</version> <!-- This should be compatible with JUnit Jupiter -->
+        <version>1.11.0</version>
         <scope>test</scope>
       </dependency>
 

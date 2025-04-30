@@ -182,52 +182,86 @@ public class ForwardSecureANNSystem {
     }
 
     public static void main(String[] args) {
-
-
         try {
-            logger.info("🚀 Starting ForwardSecureANNSystem...");
-            ForwardSecureANNSystem system = getForwardSecureANNSystem();
-            String backupPath = "data/index_backup";
-            File backupDir = new File(backupPath);
-            if (!backupDir.exists()) {
-                backupDir.mkdirs(); // Create directory if it doesn't exist
+            // Initialize DataLoader
+            DataLoader dataLoader = new DataLoader();
+            int batchSize = 1000;
+
+            // Define file paths
+            String basePath = "data/sift_dataset/sift/sift_base.fvecs";
+            String queryPath = "data/sift_dataset/sift/sift_query.fvecs";
+            String groundTruthPath = "data/sift_dataset/sift/sift_groundtruth.ivecs";
+
+            // Verify file existence
+            for (String path : new String[]{basePath, queryPath, groundTruthPath}) {
+                File file = new File(path);
+                if (!file.exists() || !file.isFile()) {
+                    logger.error("File not found or invalid: {}", file.getAbsolutePath());
+                    throw new IOException("File not found: " + path);
+                }
+                logger.info("File verified: {}", file.getAbsolutePath());
             }
 
-            if (Files.exists(new File(backupPath + "/encrypted_points.ser").toPath())) {
-                logger.info("[STEP] Loading Index Backup...");
-                system.loadIndex(backupPath);
+            // Initialize system with file paths
+            logger.info("Initializing ForwardSecureANNSystem...");
+            ForwardSecureANNSystem system = new ForwardSecureANNSystem(
+                    basePath, queryPath, groundTruthPath,
+                    3, 10, 1000, 1500, true, true
+            );
+            logger.info("System initialized successfully");
+
+            // Check for index backup
+            String backupPath = "data/index_backup";
+            File backupDir = new File(backupPath);
+            if (backupDir.exists() && backupDir.isDirectory()) {
+                logger.info("[STEP] Index backup found at: {}", backupPath);
             } else {
                 logger.info("[STEP] No index backup found. Rebuilding from scratch...");
             }
 
+            // Run sample query
             logger.info("[STEP] Running Sample Query...");
             List<double[]> queryVectors = system.getQueryVectors();
             if (queryVectors.isEmpty()) {
                 logger.error("No query vectors available to process.");
-                return;
+                throw new IllegalStateException("Query vectors list is empty");
             }
-            double[] queryVector = queryVectors.get(0);
-            List<double[]> nearestNeighbors = system.query(queryVector, 10); // Fixed k value
+            List<double[]> nearestNeighbors = system.query(queryVectors.get(0), 10);
             logger.info("Nearest neighbor: {}", Arrays.toString(nearestNeighbors.get(0)));
 
+            // Evaluate
             logger.info("[STEP] Evaluating Recall@10 on 100 queries...");
             EvaluationEngine.evaluate(system, 10, 100, 0);
             logger.info("[STEP] ✅ Evaluation Complete.");
 
-            system.profiler.exportToCSV("logs/profiler_stats.csv");
-
-            logger.info("[SUMMARY] Total insert time (ms): {}", system.totalInsertTimeMs);
-            logger.info("[SUMMARY] Total rehashes: {}", system.totalRehashes);
-            logger.info("[SUMMARY] Total fake points inserted: {}", system.totalFakePoints);
-
+            // Save index
+            logger.info("[STEP] Saving Index...");
+            if (!backupDir.exists()) {
+                backupDir.mkdirs();
+            }
             system.saveIndex(backupPath);
+
+            // Shutdown
+            logger.info("[STEP] Shutting down...");
             system.shutdown();
 
-            logger.info("✅ ForwardSecureANNSystem shutdown successfully");
         } catch (Exception e) {
             logger.error("❌ Error executing ForwardSecureANNSystem", e);
+            throw new RuntimeException("Execution failed", e);
         }
     }
+
+//    public static void main(String[] args) {
+//        DataLoader dataLoader = new DataLoader();
+//        try {
+//            List<double[]> queryVectors = dataLoader.loadData("C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\sift_dataset\\sift\\sift_query.fvecs", 1000);
+//            logger.info("Query vectors loaded: {}", queryVectors.size());
+//            List<int[]> groundTruth = dataLoader.loadGroundTruth("C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\sift_dataset\\sift\\sift_groundtruth.ivecs", 1000);
+//            logger.info("Ground truth entries loaded: {}", groundTruth.size());
+//        } catch (IOException e) {
+//            logger.error("Failed to load data", e);
+//        }
+//    }
 
     private static ForwardSecureANNSystem getForwardSecureANNSystem() throws IOException {
         String basePath = "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\sift_dataset\\sift\\sift_base.fvecs";
