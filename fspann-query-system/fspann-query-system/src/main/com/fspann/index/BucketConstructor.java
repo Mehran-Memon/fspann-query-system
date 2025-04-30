@@ -1,6 +1,5 @@
 package com.fspann.index;
 
-import com.fspann.ForwardSecureANNSystem;
 import com.fspann.encryption.EncryptionUtils;
 import javax.crypto.SecretKey;
 import java.util.ArrayList;

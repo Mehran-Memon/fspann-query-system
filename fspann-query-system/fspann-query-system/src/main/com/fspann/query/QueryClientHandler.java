@@ -53,17 +53,11 @@ public class QueryClientHandler {
      * @return The generated query token.
      * @throws Exception If any error occurs during query token generation.
      */
-    public QueryToken generateQueryToken(double[] queryVector, int topK, int expansionRange, EvenLSH lsh) throws Exception {
-        // Encrypt the query vector using the current session key
+    public QueryToken generateQueryToken(double[] queryVector, int topK, int expansionRange, int numTables, EvenLSH lsh) throws Exception {
         byte[] encryptedQuery = encryptQuery(queryVector);
-
-        // Generate candidate buckets based on LSH and expansion range
-        String keyVersion = "key_v" + keyManager.getTimeVersion(); // Retrieve versioned key for the session
+        String keyVersion = "key_v" + keyManager.getTimeVersion();
         int mainBucket = lsh.getBucketId(queryVector);
-
         List<Integer> candidateBuckets = lsh.expandBuckets(mainBucket, expansionRange);
-
-        // Create the query token
-        return new QueryToken(candidateBuckets, encryptedQuery, topK, "epoch_v" + keyManager.getTimeVersion());
+        return new QueryToken(candidateBuckets, encryptedQuery, topK, numTables, "epoch_v" + keyManager.getTimeVersion());
     }
 }

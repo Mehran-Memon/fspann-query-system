@@ -1,43 +1,45 @@
 package com.fspann.keymanagement;
 
+import com.fspann.utils.PersistenceUtils;
 import javax.crypto.SecretKey;
 import javax.crypto.KeyGenerator;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
-import com.fspann.encryption.EncryptionUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class KeyManager {
-    private final SecretKey masterKey;
     private final Map<String, SecretKey> keyStore;
     private final AtomicInteger timeVersion;
     private final int rotationInterval;
     private final AtomicInteger operationCount;
+    private static final Logger logger = LoggerFactory.getLogger(KeyManager.class);
+    private SecretKey masterKey;
 
-    // Constructor initializes with a Map of existing keys
-    public KeyManager(Map<String, SecretKey> keys) {
+    // Constructor to initialize from existing keys
+    public KeyManager(Map<String, SecretKey> keys, int rotationInterval) {
         this.keyStore = new ConcurrentHashMap<>(keys);  // Initialize with existing keys
-        this.masterKey = null;  // Master key is not needed for this constructor
-        this.timeVersion = new AtomicInteger(1);  // Default starting version
-        this.rotationInterval = 1000;  // Default rotation interval
+        this.timeVersion = new AtomicInteger(keys.size() > 0 ? keys.size() : 1);  // Set the version based on the existing keys
+        this.rotationInterval = rotationInterval;
         this.operationCount = new AtomicInteger(0);
+        logger.info("Keys loaded. Current version: v{}", timeVersion.get());
     }
 
-    // Constructor to generate a new master key
+    // Constructor to generate a new master key if no existing keys are provided
     public KeyManager(int rotationInterval) {
-        this.rotationInterval = rotationInterval;
-        this.timeVersion = new AtomicInteger(1);
-        this.masterKey = generateMasterKey();
         this.keyStore = new ConcurrentHashMap<>();
+        this.timeVersion = new AtomicInteger(1);  // Default starting version
+        this.masterKey = generateMasterKey();
+        this.rotationInterval = rotationInterval;
         this.operationCount = new AtomicInteger(0);
 
         // Generate and store the initial key
-        generateAndStoreKey("key_v1");
+        generateAndStoreKey("key_v" + timeVersion.get());
     }
 
     // Method to generate master key (AES-256)
@@ -52,66 +54,51 @@ public class KeyManager {
     }
 
     // Method to generate and store keys based on version
-    private void generateAndStoreKey(String keyVersion) {
+    public void generateAndStoreKey(String keyVersion) {
         try {
-            SecretKey key = deriveKey(timeVersion.get());
+            SecretKey key = HmacKeyDerivationUtils.deriveKey(masterKey, "key", timeVersion.get());
             keyStore.put(keyVersion, key);
+            logger.info("Generated and stored: {}", keyVersion);
         } catch (Exception e) {
             throw new RuntimeException("Failed to generate and store key for version: " + keyVersion, e);
         }
     }
 
-    // Derive a new key using HMAC (key derivation)
-    private SecretKey deriveKey(int version) {
+    // Method to retrieve the current session key for a specific version
+    public SecretKey getSessionKey(int version) {
         try {
-            return HmacKeyDerivationUtils.deriveKey(masterKey, "key", version);
+            return keyStore.get("key_v" + version);  // Retrieve the key for that version
         } catch (Exception e) {
-            throw new RuntimeException("Failed to derive key for version " + version, e);
+            throw new IllegalArgumentException("Invalid session key version: " + version, e);
         }
     }
 
     // Get the current key (versioned key)
     public SecretKey getCurrentKey() {
-        String keyVersion = "key_v" + timeVersion.get();
-        return keyStore.get(keyVersion);
+        return getSessionKey(timeVersion.get());
     }
 
-    // Get the previous key (previous versioned key)
+    // Method to get the previous key (previous versioned key)
     public SecretKey getPreviousKey() {
         int previousVersion = timeVersion.get() - 1;
         if (previousVersion > 0) {
-            String keyVersion = "key_v" + previousVersion;
-            return keyStore.get(keyVersion);
+            return getSessionKey(previousVersion);  // Retrieve the previous session key
         }
         return null; // No previous key for version 0
-    }
-
-    // Rotate all keys (increase version and generate new keys)
-    public void rotateAllKeys(List<String> ids, Map<String, byte[]> encryptedDataMap) throws Exception {
-        int currentVersion = timeVersion.getAndIncrement(); // Increment version
-        generateAndStoreKey("key_v" + currentVersion);  // Store new key for the new version
-
-        // Re-encrypt the data with the new key
-        SecretKey oldKey = keyStore.get("key_v" + (currentVersion - 1)); // Get the previous key
-        SecretKey newKey = getCurrentKey();  // Get the new key
-
-        for (String id : ids) {
-            byte[] encryptedData = encryptedDataMap.get(id);
-            // Re-encrypt the encrypted data with the new key version
-            byte[] newEncryptedData = EncryptionUtils.reEncryptData(encryptedData, oldKey, newKey);
-            encryptedDataMap.put(id, newEncryptedData);
-        }
     }
 
     // Method to get session key from context (for version retrieval)
     public SecretKey getSessionKey(String context) {
         try {
             String[] parts = context.split("_");
-            int version = Integer.parseInt(parts[1]);
-            return deriveKey(version);
+            if (parts.length > 1) {
+                int version = Integer.parseInt(parts[1].substring(1));  // Extract numeric part after "v" (e.g., "v1" -> 1)
+                return getSessionKey(version);  // Retrieve the key for that version
+            }
         } catch (Exception e) {
-            throw new IllegalArgumentException("Invalid session key context: " + context);
+            throw new IllegalArgumentException("Invalid session key context: " + context, e);
         }
+        return null;  // Return null if no valid session key context is found
     }
 
     // Return the key store
@@ -119,29 +106,9 @@ public class KeyManager {
         return keyStore;  // Return the current key store
     }
 
-    // Register a key for a specific ID (used in SecureLSHIndex or other parts)
-    public void registerKey(String id, SecretKey currentKey) {
-        keyStore.put(id, currentKey);  // Store key against the id (or vector)
-    }
-
-    // Remove a key for a specific ID (cleanup)
-    public void removeKey(String id) {
-        keyStore.remove(id);
-    }
-
     // Get current key version
     public int getTimeVersion() {
         return timeVersion.get();
-    }
-
-    // Increment operation count and return if rotation is needed
-    public boolean needsRotation() {
-        return operationCount.get() >= rotationInterval;
-    }
-
-    // Increment the operation count
-    public void incrementAndGet() {
-        operationCount.incrementAndGet();
     }
 
     // HMAC-based key derivation function for versioned keys

@@ -22,6 +22,11 @@ public class EncryptionUtils {
 
     // Method to encrypt the vector using AES-GCM and return the IV + encrypted data
     public static byte[] encryptVector(double[] vector, SecretKey key) throws Exception {
+
+        if (key == null) {
+            throw new IllegalArgumentException("Encryption key cannot be null");
+        }
+
         Cipher cipher = Cipher.getInstance(ALGORITHM);
         byte[] iv = generateIV();  // Generate a new IV for each encryption
         GCMParameterSpec spec = new GCMParameterSpec(GCM_TAG_LENGTH, iv); // Set GCM parameters (IV and tag length)

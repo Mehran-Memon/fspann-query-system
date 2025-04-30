@@ -8,9 +8,10 @@ public class QueryToken {
     private final List<Integer> candidateBuckets;
     private final byte[] encryptedQuery;
     private final int topK;
+    private final int numTables;
     private final String encryptionContext;
 
-    public QueryToken(List<Integer> candidateBuckets, byte[] encryptedQuery, int topK, String encryptionContext) {
+    public QueryToken(List<Integer> candidateBuckets, byte[] encryptedQuery, int topK, int numTables, String encryptionContext) {
         if (candidateBuckets == null || candidateBuckets.isEmpty()) {
             throw new IllegalArgumentException("candidateBuckets cannot be null or empty");
         }
@@ -20,6 +21,7 @@ public class QueryToken {
         this.candidateBuckets = Collections.unmodifiableList(new ArrayList<>(candidateBuckets));
         this.encryptedQuery = encryptedQuery != null ? encryptedQuery.clone() : null;
         this.topK = topK;
+        this.numTables = numTables;
         this.encryptionContext = encryptionContext != null ? encryptionContext : "epoch_0";
     }
 
@@ -35,6 +37,10 @@ public class QueryToken {
         return topK;
     }
 
+    public int getNumTables() {
+        return numTables;
+    }
+
     public String getEncryptionContext() {
         return encryptionContext;
     }
@@ -44,6 +50,7 @@ public class QueryToken {
         return "QueryToken{" +
                 "candidateBuckets=" + candidateBuckets +
                 ", topK=" + topK +
+                ", numTables=" + numTables +
                 ", encryptionContext='" + encryptionContext + '\'' +
                 '}';
     }

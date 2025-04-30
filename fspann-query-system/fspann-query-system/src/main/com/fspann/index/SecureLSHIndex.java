@@ -1,6 +1,5 @@
 package com.fspann.index;
 
-import com.fspann.ForwardSecureANNSystem;
 import com.fspann.encryption.EncryptionUtils;
 import com.fspann.keymanagement.KeyManager;
 import com.fspann.query.EncryptedPoint;
@@ -8,17 +7,16 @@ import com.fspann.utils.PersistenceUtils;
 import com.fspann.query.QueryToken;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import javax.crypto.SecretKey;
 import java.io.IOException;
 import java.util.*;
 
 public class SecureLSHIndex {
+    private static final Logger logger = LoggerFactory.getLogger(SecureLSHIndex.class);
     private final List<Map<Integer, List<EncryptedPoint>>> hashTables;
     private final Map<String, EncryptedPoint> encryptedPoints;
     private SecretKey currentKey; // Current key for encryption and decryption
     private final int numHashTables;
-    private static final Logger logger = LoggerFactory.getLogger(ForwardSecureANNSystem.class);
 
     // Constructor initializes the hash tables and LSH functions
     public SecureLSHIndex(int numHashTables, SecretKey key, List<double[]> initialData) {
@@ -26,15 +24,12 @@ public class SecureLSHIndex {
         this.currentKey = key;
         this.hashTables = new ArrayList<>();
         this.encryptedPoints = new HashMap<>();
-
-        // Initialize the hash tables
         for (int i = 0; i < numHashTables; i++) {
             hashTables.add(new HashMap<>());
         }
-
         // Build the index using initial data
         if (initialData != null && !initialData.isEmpty()) {
-            addInitialData(initialData);
+            addInitialData(initialData); // Calls addInitialData
         }
     }
 
@@ -42,9 +37,9 @@ public class SecureLSHIndex {
     private void addInitialData(List<double[]> initialData) {
         for (double[] vector : initialData) {
             try {
-                add(UUID.randomUUID().toString(), vector, false);  // Use random ID for initial data
+                add(UUID.randomUUID().toString(), vector, false, initialData);
             } catch (Exception e) {
-                e.printStackTrace();
+                logger.error("Error adding vector: {}", e.getMessage(), e);
             }
         }
     }
@@ -52,11 +47,12 @@ public class SecureLSHIndex {
     // Save the encrypted index to disk
     public void saveIndex(String directoryPath) {
         try {
-            // Save the encrypted points and hash tables to files
             PersistenceUtils.saveObject(encryptedPoints, directoryPath + "/encrypted_points.ser");
             PersistenceUtils.saveObject(hashTables, directoryPath + "/hash_tables.ser");
+            logger.info("Index saved to: {}", directoryPath);
         } catch (IOException e) {
-            e.printStackTrace();
+            logger.error("Failed to save index to: {}", directoryPath, e);
+            throw new RuntimeException("Failed to save index", e);
         }
     }
 
@@ -75,30 +71,36 @@ public class SecureLSHIndex {
     }
 
     // Add a new encrypted vector to the index
-    public int add(String id, double[] vector, boolean useFakePoints) throws Exception {
-        // Dynamically determine the dimension of the vector
+    public int add(String id, double[] vector, boolean useFakePoints, List<double[]> baseVectors) throws Exception {
         int dimension = vector.length;
-
-        // Encrypt the vector with the current key
         byte[] encryptedVector = EncryptionUtils.encryptVector(vector, currentKey);
-        EncryptedPoint encryptedPoint = new EncryptedPoint(encryptedVector, "bucket_v" + currentKey.hashCode(), id);
-        encryptedPoints.put(id, encryptedPoint);
-
-        // Add the point to the hash tables (this is a simplified version)
-        int totalFakePointsAdded = 0;
-        EvenLSH lsh = new EvenLSH(dimension, 10);  // Dynamically use the dimension of the vector for LSH
+        int index = baseVectors.indexOf(vector);
+        if (index == -1) {
+            logger.error("Vector not found in baseVectors for id: {}", id);
+            throw new IllegalArgumentException("Vector not found in baseVectors");
+        }
+        EvenLSH lsh = new EvenLSH(dimension, 10);
         int bucketId = lsh.getBucketId(vector);
+        EncryptedPoint encryptedPoint = new EncryptedPoint(encryptedVector, "bucket_v" + bucketId, id, index);
+        encryptedPoints.put(id, encryptedPoint); // Store in encryptedPoints
+        int totalFakePointsAdded = 0;
         for (int i = 0; i < numHashTables; i++) {
             Map<Integer, List<EncryptedPoint>> table = hashTables.get(i);
             table.computeIfAbsent(bucketId, k -> new ArrayList<>()).add(encryptedPoint);
-
-            // Simulate adding fake points if necessary
             if (useFakePoints) {
                 totalFakePointsAdded++;
             }
         }
-
         return totalFakePointsAdded;
+    }
+
+    private int findVectorIndex(double[] vector, List<double[]> baseVectors) {
+        for (int i = 0; i < baseVectors.size(); i++) {
+            if (Arrays.equals(vector, baseVectors.get(i))) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     // Remove a point by ID from the index
@@ -126,23 +128,20 @@ public class SecureLSHIndex {
         if (queryToken == null) {
             throw new IllegalArgumentException("QueryToken cannot be null");
         }
-
         Set<EncryptedPoint> candidates = new HashSet<>();
         List<Integer> candidateBuckets = queryToken.getCandidateBuckets();
+        int numTables = queryToken.getNumTables(); // Use numTables from QueryToken
         if (candidateBuckets == null || candidateBuckets.isEmpty()) {
             return new ArrayList<>();
         }
-
-        // Process candidate buckets and collect encrypted points
-        for (int i = 0; i < numHashTables; i++) {
+        for (int i = 0; i < Math.min(numTables, numHashTables); i++) {
             for (Integer bucketId : candidateBuckets) {
                 List<EncryptedPoint> bucket = hashTables.get(i).getOrDefault(bucketId, new ArrayList<>());
                 candidates.addAll(bucket);
             }
         }
-
-        // Return a list of encrypted points
-        return new ArrayList<>(candidates);
+        List<EncryptedPoint> result = new ArrayList<>(candidates);
+        return result.subList(0, Math.min(queryToken.getTopK(), result.size()));
     }
 
     // Rehash the index with a new key

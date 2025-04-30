@@ -1,22 +1,56 @@
 package com.fspann.index;
 
 import com.fspann.encryption.EncryptionUtils;
+import com.fspann.keymanagement.KeyManager;
+import com.fspann.query.QueryToken;
+import javax.crypto.SecretKey;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.PriorityQueue;
+import java.util.UUID;
+
+import com.fspann.query.EncryptedPoint;
+import com.fspann.query.QueryGenerator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class ANN {
-
-    private EvenLSH lsh;  // The Even LSH instance used for hashing and bucket assignment
-    private List<List<byte[]>> buckets;  // The list of LSH buckets (index)
+    private EvenLSH lsh;
+    private List<List<byte[]>> buckets;
+    private KeyManager keyManager;
+    private final int numBuckets;
+    private SecureLSHIndex secureIndex;
     private static final Logger logger = LoggerFactory.getLogger(ANN.class);
 
-    public ANN(int dimensions, int numBuckets) {
-        // Initialize Even LSH with specified dimensions and number of buckets
+    public ANN(int dimensions, int numBuckets, KeyManager keyManager) {
         this.lsh = new EvenLSH(dimensions, numBuckets);
-        this.buckets = new ArrayList<>();
+        this.numBuckets = numBuckets;
+        this.buckets = new ArrayList<>(numBuckets);
+        for (int i = 0; i < numBuckets; i++) {
+            buckets.add(new ArrayList<>());
+        }
+        this.keyManager = keyManager;
+        this.secureIndex = new SecureLSHIndex(1, keyManager.getCurrentKey(), null);
+    }
+
+    public List<EncryptedPoint> getApproximateNearestNeighbors(double[] queryVector, int k) {
+        try {
+            SecretKey sessionKey = keyManager.getCurrentKey();
+            if (sessionKey == null) {
+                logger.error("Encryption key cannot be null.");
+                throw new IllegalArgumentException("Encryption key cannot be null");
+            }
+
+            QueryToken queryToken = QueryGenerator.generateQueryToken(queryVector, k, 1, lsh, keyManager);
+            List<EncryptedPoint> candidates = secureIndex.findNearestNeighborsEncrypted(queryToken);
+            return candidates.subList(0, Math.min(k, candidates.size()));
+        } catch (Exception e) {
+            logger.error("Error finding nearest neighbors: {}", e.getMessage(), e);
+            throw new RuntimeException("Error finding nearest neighbors", e);
+        }
+    }
+
+    public int getBucketId(double[] point) {
+        return lsh.getBucketId(point);
     }
 
     /**
@@ -25,81 +59,27 @@ public class ANN {
      */
     public void buildIndex(List<double[]> data) {
         try {
-            // Update critical values (bucket boundaries) for Even LSH
-            lsh.updateCriticalValues(data);
-
-            // Initialize the buckets (using Even LSH)
-            this.buckets.clear();
-            for (double[] point : data) {
-                int bucketId = lsh.getBucketId(point);  // Get the bucket ID for the point
-                while (buckets.size() <= bucketId) {
-                    buckets.add(new ArrayList<>());  // Ensure the bucket list is large enough
-                }
-                byte[] encryptedPoint = EncryptionUtils.encryptVector(point, null);  // Encrypt the point
-                buckets.get(bucketId - 1).add(encryptedPoint);  // Add the point to the corresponding bucket
+            SecretKey sessionKey = keyManager.getCurrentKey();
+            if (sessionKey == null) {
+                logger.error("Encryption key cannot be null.");
+                throw new IllegalArgumentException("Encryption key cannot be null");
             }
-
-            // Apply fake points to balance bucket sizes
-            this.buckets = BucketConstructor.applyFakeAddition(buckets, 1000, null, data.get(0).length);  // 1000 is the target bucket size
+            lsh.updateCriticalValues(data);
+            buckets.clear();
+            for (int i = 0; i < numBuckets; i++) {
+                buckets.add(new ArrayList<>());
+            }
+            for (double[] point : data) {
+                secureIndex.add(UUID.randomUUID().toString(), point, false, data);
+            }
         } catch (Exception e) {
-            // Log the exception
-            logger.error("Error while building ANN index: " + e.getMessage());
-            e.printStackTrace();
+            logger.error("Error while building ANN index: {}", e.getMessage(), e);
+            throw new RuntimeException("Error building ANN index", e);
         }
     }
 
-    /**
-     * Finds the k-nearest neighbors (ANN) for the given query point.
-     * @param queryPoint The query point to find nearest neighbors for.
-     * @param k The number of nearest neighbors to retrieve.
-     * @return A list of k-nearest neighbors.
-     */
-    public List<byte[]> getApproximateNearestNeighbors(double[] queryPoint, int k) {
-        List<byte[]> nearestNeighbors = new ArrayList<>();
-        try {
-            // Get the bucket ID for the query point
-            int queryBucketId = lsh.getBucketId(queryPoint);
-
-            // Create a priority queue to store the nearest neighbors (min-heap)
-            PriorityQueue<byte[]> pq = new PriorityQueue<>(k, (a, b) -> {
-                try {
-                    double[] pointA = EncryptionUtils.decryptVector(a, null);
-                    double[] pointB = EncryptionUtils.decryptVector(b, null);
-                    double distanceA = calculateDistance(queryPoint, pointA);  // Calculate distance between query and pointA
-                    double distanceB = calculateDistance(queryPoint, pointB);  // Calculate distance between query and pointB
-                    return Double.compare(distanceA, distanceB);  // Compare distances
-                } catch (Exception e) {
-                    System.err.println("Error during decryption in priority queue comparison: " + e.getMessage());
-                    return 0;
-                }
-            });
-
-            // Search for neighbors in the same bucket and neighboring buckets
-            for (int i = queryBucketId - 1; i <= queryBucketId + 1; i++) {
-                if (i >= 0 && i < buckets.size()) {
-                    for (byte[] encryptedPoint : buckets.get(i)) {
-                        double[] point = EncryptionUtils.decryptVector(encryptedPoint, null);
-                        if (pq.size() < k) {
-                            pq.add(encryptedPoint);
-                        } else {
-                            pq.poll();
-                            pq.add(encryptedPoint);
-                        }
-                    }
-                }
-            }
-
-            // Add the top k nearest neighbors to the result list
-            while (!pq.isEmpty()) {
-                nearestNeighbors.add(pq.poll());
-            }
-        } catch (Exception e) {
-            // Log the exception
-            System.err.println("Error while finding nearest neighbors: " + e.getMessage());
-            e.printStackTrace();
-        }
-
-        return nearestNeighbors;
+    public KeyManager getKeyManager() {
+        return keyManager;
     }
 
     /**
@@ -108,16 +88,22 @@ public class ANN {
      */
     public void updateIndex(double[] newPoint) {
         try {
-            int bucketId = lsh.getBucketId(newPoint);  // Get the bucket ID for the new point
-            while (buckets.size() <= bucketId) {
-                buckets.add(new ArrayList<>());  // Ensure the bucket list is large enough
+            SecretKey sessionKey = keyManager.getCurrentKey();
+            if (sessionKey == null) {
+                logger.error("Encryption key cannot be null.");
+                throw new IllegalArgumentException("Encryption key cannot be null");
             }
-            byte[] encryptedPoint = EncryptionUtils.encryptVector(newPoint, null);  // Encrypt the new point
-            buckets.get(bucketId - 1).add(encryptedPoint);  // Add the new point to the corresponding bucket
+
+            int bucketId = lsh.getBucketId(newPoint);  // Fixed typo: changed 'point' to 'newPoint'
+            if (bucketId < 0 || bucketId >= numBuckets) {
+                logger.warn("Invalid bucket ID: {}. Cannot add point.", bucketId);
+                return;
+            }
+            byte[] encryptedPoint = EncryptionUtils.encryptVector(newPoint, sessionKey);
+            buckets.get(bucketId).add(encryptedPoint);
         } catch (Exception e) {
-            // Log the exception
-            System.err.println("Error while updating ANN index: " + e.getMessage());
-            e.printStackTrace();
+            logger.error("Error while updating ANN index: {}", e.getMessage(), e);
+            throw new RuntimeException("Error updating ANN index", e);
         }
     }
 
@@ -127,15 +113,22 @@ public class ANN {
      */
     public void removePoint(double[] point) {
         try {
-            int bucketId = lsh.getBucketId(point);  // Get the bucket ID for the point
-            List<byte[]> bucket = buckets.get(bucketId - 1);  // Get the bucket
+            SecretKey sessionKey = keyManager.getCurrentKey();
+            if (sessionKey == null) {
+                logger.error("Encryption key cannot be null.");
+                throw new IllegalArgumentException("Encryption key cannot be null");
+            }
 
-            byte[] encryptedPoint = EncryptionUtils.encryptVector(point, null);  // Encrypt the point
-            bucket.remove(encryptedPoint);  // Remove the point from the bucket
+            int bucketId = lsh.getBucketId(point);
+            if (bucketId < 0 || bucketId >= numBuckets) {
+                logger.warn("Invalid bucket ID: {}. Cannot remove point.", bucketId);
+                return;
+            }
+            byte[] encryptedPoint = EncryptionUtils.encryptVector(point, sessionKey);
+            buckets.get(bucketId).removeIf(ep -> java.util.Arrays.equals(ep, encryptedPoint));
         } catch (Exception e) {
-            // Log the exception
-            System.err.println("Error while removing point from ANN index: " + e.getMessage());
-            e.printStackTrace();
+            logger.error("Error while removing point from ANN index: {}", e.getMessage(), e);
+            throw new RuntimeException("Error removing point from ANN index", e);
         }
     }
 
@@ -148,9 +141,9 @@ public class ANN {
     private double calculateDistance(double[] pointA, double[] pointB) {
         double sum = 0.0;
         for (int i = 0; i < pointA.length; i++) {
-            sum += Math.pow(pointA[i] - pointB[i], 2);  // Sum of squared differences
+            sum += Math.pow(pointA[i] - pointB[i], 2);
         }
-        return Math.sqrt(sum);  // Return the Euclidean distance
+        return Math.sqrt(sum);
     }
 
     /**

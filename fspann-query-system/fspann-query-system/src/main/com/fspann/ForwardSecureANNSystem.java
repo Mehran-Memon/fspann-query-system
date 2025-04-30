@@ -25,6 +25,8 @@ import java.nio.file.Files;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.apache.commons.math3.util.MathArrays.distance;
+
 public class ForwardSecureANNSystem {
     private static final Logger logger = LoggerFactory.getLogger(ForwardSecureANNSystem.class);
 
@@ -40,8 +42,8 @@ public class ForwardSecureANNSystem {
     private List<int[]> groundTruth;
     private List<double[]> queryVectors;
     private final MetadataManager metadataManager;
+    private final ANN ann;
 
-    // Fields added to resolve unresolved symbol errors
     private long totalInsertTimeMs = 0;
     private int totalRehashes = 0;
     private int totalFakePoints = 0;
@@ -64,14 +66,18 @@ public class ForwardSecureANNSystem {
         queryVectors = dataLoader.loadData(queryPath, 1000);
         groundTruth = dataLoader.loadGroundTruth(groundTruthPath, 1000);
 
+        logger.info("Base Vectors Size: {}", baseVectors.size());
+        logger.info("Query Vectors Size: {}", queryVectors.size());
+        logger.info("Ground Truth Size: {}", groundTruth.size());
+
         logger.info("[STEP] ✅ Dataset loading complete.");
 
         EvenLSH initialLsh = new EvenLSH(baseVectors.get(0).length, numIntervals);
-        this.index = new SecureLSHIndex(numHashTables, keyManager.getCurrentKey(), baseVectors);
-        QueryGenerator queryGenerator = new QueryGenerator(initialLsh, keyManager);
+        this.index = new SecureLSHIndex(numHashTables, keyManager.getCurrentKey(), baseVectors);        QueryGenerator queryGenerator = new QueryGenerator(initialLsh, keyManager);
         this.queryProcessor = new QueryProcessor(new HashMap<>(), keyManager, 1000);
 
-        ANN ann = new ANN(baseVectors.get(0).length, numIntervals);  // Initialize the ANN index
+        logger.info("Query vectors size before sample query: {}", queryVectors.size());
+        ann = new ANN(baseVectors.get(0).length, numIntervals, keyManager);  // Initialize the ANN index
         ann.buildIndex(baseVectors);  // Build the index with the base data
     }
 
@@ -80,12 +86,20 @@ public class ForwardSecureANNSystem {
         return queryVectors;
     }
 
-    public List<double[]> query(double[] queryVector, int topK) throws Exception {
-        // Inside ForwardSecureANNSystem constructor
-        EvenLSH lsh = new EvenLSH(baseVectors.get(0).length, 1000);  // Initialize LSH
-        // Adjusted call to generateQueryToken with all necessary arguments
-        QueryToken queryToken = QueryGenerator.generateQueryToken(queryVector, topK, 1, lsh, keyManager);
+    public ANN getANN() {
+        return ann;
+    }
 
+    public List<double[]> query(double[] queryVector, int topK) throws Exception {
+
+        SecretKey currentKey = keyManager.getCurrentKey();
+        if (currentKey == null) {
+            logger.error("Failed to get the current session key. KeyManager might not be initialized correctly.");
+            throw new IllegalStateException("Current session key is null");
+        }
+
+        EvenLSH lsh = new EvenLSH(baseVectors.get(0).length, 1000);  // Initialize LSH
+        QueryToken queryToken = QueryGenerator.generateQueryToken(queryVector, topK, 1, lsh, keyManager);
 
         List<EncryptedPoint> result = queryCache.get(queryToken);
         if (result != null) {
@@ -99,32 +113,29 @@ public class ForwardSecureANNSystem {
     }
 
     public void insert(String id, double[] vector) throws Exception {
-        long startTime = System.currentTimeMillis(); // Track insertion time
+        long startTime = System.currentTimeMillis();
         operationCount.incrementAndGet();
-
-        SecretKey currentKey = keyVersionManager.getCurrentKey();
+        SecretKey currentKey = keyManager.getSessionKey(keyVersionManager.getTimeVersion());
         byte[] encryptedVector = EncryptionUtils.encryptVector(vector, currentKey);
-        EncryptedPoint encryptedPoint = new EncryptedPoint(encryptedVector, "bucket_v" + currentKey.hashCode(), id);
+        int index = baseVectors.indexOf(vector);
+        int bucketId = ann.getBucketId(vector);
+        EncryptedPoint encryptedPoint = new EncryptedPoint(encryptedVector, "bucket_v" + bucketId, id, index);
         encryptedDataStore.put(id, encryptedPoint);
-
-        // Adjusted call assuming add takes 2 arguments
-        int addedFakes = index.add(id, vector, true);
+        int addedFakes = this.index.add(id, vector, true, baseVectors);
         totalFakePoints += addedFakes;
-
         if (keyVersionManager.needsRotation()) {
             logger.info("[STEP] 🔄 Rotating keys...");
             keyVersionManager.rotateKeys();
-            index.rehash(keyManager, "epoch_v" + keyManager.getTimeVersion());
+            this.index.rehash(keyManager, "epoch_v" + keyVersionManager.getTimeVersion());
             totalRehashes++;
             operationCount.set(0);
         }
-
-        totalInsertTimeMs += (System.currentTimeMillis() - startTime); // Update total insert time
+        totalInsertTimeMs += (System.currentTimeMillis() - startTime);
     }
 
     private List<double[]> decryptEncryptedPoints(List<EncryptedPoint> encryptedPoints) throws Exception {
         List<double[]> decryptedVectors = new ArrayList<>();
-        SecretKey currentKey = keyVersionManager.getCurrentKey();
+        SecretKey currentKey = keyManager.getSessionKey(keyVersionManager.getTimeVersion()); // Use the keyVersionManager to get the current key
 
         for (EncryptedPoint point : encryptedPoints) {
             double[] decryptedVector = point.decrypt(currentKey);
@@ -143,7 +154,8 @@ public class ForwardSecureANNSystem {
             index.saveIndex(path);
             logger.info("Encrypted index saved to: {}", path);
         } catch (Exception e) {
-            logger.error("Failed to save index", e);
+            logger.error("Failed to save index to: {}", path, e);
+            throw new RuntimeException("Failed to save index", e);
         }
     }
 
@@ -170,10 +182,16 @@ public class ForwardSecureANNSystem {
     }
 
     public static void main(String[] args) {
+
+
         try {
             logger.info("🚀 Starting ForwardSecureANNSystem...");
             ForwardSecureANNSystem system = getForwardSecureANNSystem();
             String backupPath = "data/index_backup";
+            File backupDir = new File(backupPath);
+            if (!backupDir.exists()) {
+                backupDir.mkdirs(); // Create directory if it doesn't exist
+            }
 
             if (Files.exists(new File(backupPath + "/encrypted_points.ser").toPath())) {
                 logger.info("[STEP] Loading Index Backup...");
