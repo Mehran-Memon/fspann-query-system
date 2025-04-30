@@ -82,7 +82,7 @@ public class SecureLSHIndex {
         EvenLSH lsh = new EvenLSH(dimension, 10);
         int bucketId = lsh.getBucketId(vector);
         EncryptedPoint encryptedPoint = new EncryptedPoint(encryptedVector, "bucket_v" + bucketId, id, index);
-        encryptedPoints.put(id, encryptedPoint); // Store in encryptedPoints
+        encryptedPoints.put(id, encryptedPoint);
         int totalFakePointsAdded = 0;
         for (int i = 0; i < numHashTables; i++) {
             Map<Integer, List<EncryptedPoint>> table = hashTables.get(i);
