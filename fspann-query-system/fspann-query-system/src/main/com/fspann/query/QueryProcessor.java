@@ -39,27 +39,17 @@ public class QueryProcessor {
             throw new IllegalStateException("No current session key available");
         }
 
-        // Process each candidate point
         for (EncryptedPoint point : candidates) {
-            // If a previous key exists, decrypt the point with it and re-encrypt it with the current key
             SecretKey previousKey = keyManager.getPreviousKey();
             if (previousKey != null) {
-                // Decrypt the point using the previous key
                 double[] decrypted = point.decrypt(previousKey);
-
-                // Re-encrypt with the current key
                 byte[] reEncrypted = EncryptionUtils.encryptVector(decrypted, currentKey);
-
-                // Create a new EncryptedPoint with the re-encrypted data
-                point = new EncryptedPoint(reEncrypted, point.getBucketId(), point.getPointId());
+                point = new EncryptedPoint(reEncrypted, point.getBucketId(), point.getPointId(), point.getIndex());
             }
-            // Add the re-encrypted (or original) point to the result list
             result.add(point);
         }
 
-        // Cache the result before returning
         cache.put(generateCacheKey(candidates), result);
-
         return result;
     }
 
@@ -69,12 +59,11 @@ public class QueryProcessor {
      * @return A string key for caching.
      */
     private String generateCacheKey(List<EncryptedPoint> candidates) {
-        // Generate a unique key based on the candidate points' IDs or any other suitable method
-        StringBuilder sb = new StringBuilder();
+        StringBuilder key = new StringBuilder();
         for (EncryptedPoint point : candidates) {
-            sb.append(point.getPointId());
+            key.append(point.getPointId()).append(",");
         }
-        return sb.toString();
+        return key.toString();
     }
 
     /**
