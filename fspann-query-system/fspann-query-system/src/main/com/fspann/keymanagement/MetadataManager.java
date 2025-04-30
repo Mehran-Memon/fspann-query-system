@@ -1,7 +1,6 @@
 package com.fspann.keymanagement;
 
 import com.fspann.utils.PersistenceUtils;
-
 import javax.crypto.SecretKey;
 import java.io.IOException;
 import java.util.HashMap;
@@ -18,7 +17,7 @@ public class MetadataManager {
         this.keyManager = keyManager;
         this.metadata = new HashMap<>();
         loadMetadata();
-        loadKeys();
+        loadKeys();  // Load keys after metadata is initialized
     }
 
     public void loadMetadata() {
@@ -40,9 +39,17 @@ public class MetadataManager {
     public void loadKeys() {
         try {
             Map<String, SecretKey> keys = PersistenceUtils.loadObject(KEYS_FILE_PATH, Map.class);
-            this.keyManager = new KeyManager(keys);  // Initialize KeyManager with the loaded keys
+
+            if (keys != null && !keys.isEmpty()) {
+                // If keys exist, initialize KeyManager with the existing keys
+                this.keyManager = new KeyManager(keys, 1000); // Initialize with existing keys and a rotation interval
+            } else {
+                // If no keys found, initialize KeyManager with default settings
+                this.keyManager = new KeyManager(1000);  // Default rotation interval
+            }
         } catch (IOException | ClassNotFoundException e) {
-            System.out.println("Error loading keys.");
+            System.out.println("Error loading keys or no keys found, initializing new KeyManager.");
+            this.keyManager = new KeyManager(1000);  // Initialize with default rotation interval if no keys exist
         }
     }
 

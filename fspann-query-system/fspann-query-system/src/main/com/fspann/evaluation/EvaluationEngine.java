@@ -5,10 +5,14 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.HashSet;
+import com.fspann.index.ANN;
+import com.fspann.query.EncryptedPoint;
+
+import static org.apache.commons.math3.util.MathArrays.distance;
 
 public class EvaluationEngine {
 
-    // Utility method to compute Recall@K
+        // Utility method to compute Recall@K
     public static double computeRecallAtK(List<int[]> groundTruth, List<List<Integer>> predictions, int topK) {
         int totalCorrect = 0;
         int totalQueries = predictions.size();
@@ -39,51 +43,48 @@ public class EvaluationEngine {
     public static void evaluate(ForwardSecureANNSystem system, int topK, int numQueries, double range) throws Exception {
         List<double[]> queryVectors = system.getQueryVectors();
         List<int[]> groundTruth = system.getGroundTruth();
-
         if (queryVectors.size() != groundTruth.size()) {
             throw new IllegalArgumentException("The number of queries does not match the number of ground truth entries.");
         }
-
         List<List<Integer>> predictions = new ArrayList<>();
         long totalTime = 0;
-
-        // Profiling queries
         for (int i = 0; i < Math.min(numQueries, queryVectors.size()); i++) {
             double[] q = queryVectors.get(i);
             long start = System.nanoTime();
-
-            // Use range query if range > 0, otherwise use k-NN
-            List<double[]> result = system.query(q, topK); // Range Query
-
+            List<double[]> result = system.query(q, topK);
             long end = System.nanoTime();
             totalTime += (end - start);
-
             List<Integer> predictedIndices = new ArrayList<>();
             for (double[] neighbor : result) {
-                int bestIndex = findClosestIndex(neighbor, system.getBaseVectors());
+                int bestIndex = findClosestIndex(neighbor, system.getBaseVectors(), system.getANN(), topK);
                 predictedIndices.add(bestIndex);
             }
             predictions.add(predictedIndices);
         }
-
-        // Compute Recall at K
         double recall = computeRecallAtK(groundTruth, predictions, topK);
         double avgTimeMs = totalTime / 1_000_000.0 / numQueries;
-
         System.out.printf("✅ Recall@%d: %.4f%n", topK, recall);
         System.out.printf("⚡ Avg Query Time: %.2f ms%n", avgTimeMs);
     }
 
     // Utility method to find the closest index to a given vector
-    public static int findClosestIndex(double[] vector, List<double[]> baseVectors) {
+    public static int findClosestIndex(double[] vector, List<double[]> baseVectors, ANN ann, int k) {
+        List<EncryptedPoint> neighbors = ann.getApproximateNearestNeighbors(vector, k);
         double minDistance = Double.MAX_VALUE;
         int bestIndex = -1;
-        for (int i = 0; i < baseVectors.size(); i++) {
-            double[] baseVector = baseVectors.get(i);
-            double dist = distance(vector, baseVector);
-            if (dist < minDistance) {
-                minDistance = dist;
-                bestIndex = i;
+        for (EncryptedPoint neighbor : neighbors) {
+            try {
+                double[] decrypted = neighbor.decrypt(ann.getKeyManager().getCurrentKey());
+                int index = neighbor.getIndex();
+                if (index != -1 && index < baseVectors.size()) {
+                    double dist = distance(vector, decrypted);
+                    if (dist < minDistance) {
+                        minDistance = dist;
+                        bestIndex = index;
+                    }
+                }
+            } catch (Exception e) {
+                System.err.println("Error decrypting neighbor: " + e.getMessage());
             }
         }
         return bestIndex;
