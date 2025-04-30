@@ -1,138 +1,117 @@
 package com.fspann.index;
 
 import java.security.SecureRandom;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 
+/**
+ * EvenLSH – cosine-projection / dynamic-quantile version
+ *
+ *  • m (numBuckets) is chosen at runtime from dataset size N :  m ≈ √N
+ *  • projection vector stays unit-length (random hyper-plane)
+ *  • criticalAngles[] stores the quantile cut-points (cosθ values)
+ */
 public class EvenLSH {
-    private double[] projectionVector;  // Unit vector for projection
-    private double[] criticalValues;    // Critical values for even bucket division
-    private final int dimensions;       // Number of dimensions in the data
-    private final int numBuckets;       // Number of buckets (intervals)
 
+    private double[] projectionVector;      // random unit vector
+    private double[] criticalAngles;        // quantile cut-points
+    private final int dimensions;
+    private int numBuckets;                 // may grow if data grows
+    private static final double DEFAULT_BETA = 1.5;   // imbalance tolerance
+
+    /* ---------- ctor ---------- */
     public EvenLSH(int dimensions, int numBuckets) {
-        this.dimensions = dimensions;
-        this.numBuckets = numBuckets;
-        this.projectionVector = generateUnitVector(dimensions);  // Generate a random unit vector for projection
-        this.criticalValues = new double[numBuckets];
+        this.dimensions  = dimensions;
+        this.numBuckets  = Math.max(2, numBuckets);
+        this.projectionVector = randomUnitVector(dimensions);
+        this.criticalAngles   = new double[this.numBuckets - 1];
     }
 
-    /**
-     * Generates a random unit vector for projection.
-     * @param dimensions The number of dimensions for the vector.
-     * @return A normalized unit vector.
-     */
-    private double[] generateUnitVector(int dimensions) {
-        SecureRandom random = new SecureRandom();
-        double[] vector = new double[dimensions];
-        double norm = 0.0;
+    /* ---------- public API ---------- */
 
-        // Generate random Gaussian values and normalize
-        for (int i = 0; i < dimensions; i++) {
-            vector[i] = random.nextGaussian();
-            norm += vector[i] * vector[i];
-        }
-
-        norm = Math.sqrt(norm);
-        // Normalize the vector to ensure it's a unit vector
-        for (int i = 0; i < dimensions; i++) {
-            vector[i] /= norm;
-        }
-        return vector;
+    /** Scalar cosine projection of a point on the internal hyper-plane */
+    public double project(double[] point) {                   // <-- ADDED
+        double sum = 0;
+        for (int i = 0; i < point.length; i++) sum += point[i] * projectionVector[i];
+        return sum;
     }
 
-    /**
-     * Projects a point onto the random hyperplane defined by the projection vector.
-     * @param point The data point to be projected.
-     * @return The projection value.
-     */
-    protected double project(double[] point) {
-        double projection = 0.0;
-        for (int i = 0; i < point.length; i++) {
-            projection += point[i] * projectionVector[i];  // Dot product with the projection vector
-        }
-        return projection;
-    }
-
-    /**
-     * Computes the bucket ID based on the projected value and critical values (quantiles).
-     * @param point The data point.
-     * @return The bucket ID.
-     */
+    /** Returns bucket id in [1 … numBuckets] (1-based) */
     public int getBucketId(double[] point) {
-        double projection = project(point);
-        for (int i = 0; i < criticalValues.length; i++) {
-            if (projection <= criticalValues[i]) {
-                return i + 1; // 1-indexed bucket IDs
-            }
+        double proj = dot(point, projectionVector);
+        for (int i = 0; i < criticalAngles.length; i++)
+            if (proj <= criticalAngles[i]) return i + 1;
+        return numBuckets;                       // last bucket
+    }
+
+    /** Recompute quantile cut-points from the whole dataset (dynamic N) */
+    public void updateCriticalValues(List<double[]> data) {
+        if (data == null || data.isEmpty())
+            throw new IllegalArgumentException("Dataset must not be empty");
+
+        // keep caller-provided numBuckets unchanged  ⬇
+        this.criticalAngles = new double[numBuckets];
+
+        List<Double> proj = new ArrayList<>(data.size());
+        for (double[] v : data) proj.add(project(v));
+        Collections.sort(proj);
+
+        for (int k = 1; k <= numBuckets; k++) {
+            int idx = (int) Math.floor(k * proj.size() / (double)(numBuckets + 1));
+            criticalAngles[k - 1] = proj.get(Math.min(idx, proj.size() - 1));
         }
-        // Ensure the bucket ID does not exceed the number of buckets
-        return Math.min(criticalValues.length + 1, numBuckets);  // Default to the last bucket if out of range
+    }
+
+    /** Generate a fresh random projection vector (key-rotation use-case) */
+    public void rehash(long seed) {
+        this.projectionVector = randomUnitVector(dimensions, seed);
+    }
+
+    /** Expose cut-points for debugging / fake-point logic */
+    public double[] getCriticalAngles() {
+        return criticalAngles.clone();
+    }
+
+    public double[] getCriticalValues() {      // ✅
+        return getCriticalAngles();
+    }
+
+    /* ---------- helpers ---------- */
+
+    private static double dot(double[] a, double[] b) {
+        double s = 0;
+        for (int i = 0; i < a.length; i++) s += a[i] * b[i];
+        return s;
+    }
+
+    /* random unit vector – optional deterministic seed */
+    private static double[] randomUnitVector(int d) { return randomUnitVector(d, new SecureRandom().nextLong()); }
+    private static double[] randomUnitVector(int d, long seed) {
+        SecureRandom rng = new SecureRandom();
+        rng.setSeed(seed);
+
+        double[] v = new double[d];
+        double norm = 0;
+        for (int i = 0; i < d; i++) {
+            v[i] = rng.nextGaussian();
+            norm += v[i] * v[i];
+        }
+        norm = Math.sqrt(norm);
+        for (int i = 0; i < d; i++) v[i] /= norm;
+        return v;
     }
 
     /**
-     * Updates the critical values (bucket boundaries) based on the dataset.
-     * @param vectors The dataset to update the critical values.
-     */
-    public void updateCriticalValues(List<double[]> vectors) {
-        // Compute projections for each data point
-        List<Double> projections = new ArrayList<>();
-        for (double[] vector : vectors) {
-            projections.add(project(vector));
-        }
-
-        // If projections list is empty, log the issue and return
-        if (projections.isEmpty()) {
-            throw new IllegalArgumentException("Projections cannot be empty.");
-        }
-
-        // Sort the projections and divide them into intervals (buckets)
-        projections.sort(Double::compare);
-        int numIntervals = numBuckets;
-
-        // Assign critical values as quantiles
-        for (int i = 1; i <= numIntervals; i++) {
-            int index = (int) Math.floor(i * projections.size() / (double) (numIntervals + 1));
-            criticalValues[i - 1] = projections.get(Math.min(index, projections.size() - 1));
-        }
-
-        // Log updated critical values for tracking
-        System.out.println("Updated critical values: ");
-        for (double value : criticalValues) {
-            System.out.print(value + " ");
-        }
-        System.out.println();
-    }
-
-    /**
-     * Rehashes the projection vector by generating a new random unit vector.
-     */
-    public void rehash() {
-        this.projectionVector = generateUnitVector(dimensions);
-    }
-
-    /**
-     * Expands the search range by selecting neighboring buckets around a given bucket.
-     * @param mainBucket The main bucket ID.
-     * @param expansionRange The range of bucket expansion.
-     * @return A list of candidate buckets.
+     * Return a list of neighbouring bucket IDs around {@code mainBucket}.
+     * This keeps the old “±expansionRange” behaviour so existing code compiles.
+     * (We’ll later add a bit-flip variant when we move to binary codes.)
      */
     public List<Integer> expandBuckets(int mainBucket, int expansionRange) {
-        List<Integer> candidateBuckets = new ArrayList<>();
-        for (int i = -expansionRange; i <= expansionRange; i++) {
-            int bucket = mainBucket + i;
-            if (bucket > 0 && bucket <= numBuckets) {
-                candidateBuckets.add(bucket);
-            }
+        List<Integer> neighbours = new ArrayList<>();
+        for (int offset = -expansionRange; offset <= expansionRange; offset++) {
+            int b = mainBucket + offset;
+            if (b >= 1 && b <= numBuckets) neighbours.add(b);
         }
-        return candidateBuckets;
+        return neighbours;
     }
 
-    /**
-     * Returns the critical values (bucket boundaries).
-     * @return An array of critical values.
-     */
-    public double[] getCriticalValues() {
-        return criticalValues.clone();
-    }
 }

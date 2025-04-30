@@ -7,9 +7,8 @@ import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import com.fspann.data.DataLoader;
 
-import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -21,6 +20,9 @@ public class LSHSystemTest {
     private static final int NUM_BUCKETS = 100;
     private static final int MAX_BUCKET_SIZE = 1000;
     private static final int TARGET_BUCKET_SIZE = 1000;
+    private List<double[]> baseVectors;
+    private List<int[]> groundTruth;
+    private List<double[]> queryVectors;
 
     private EvenLSH lsh;
     private SecretKey secretKey;
@@ -62,7 +64,7 @@ public class LSHSystemTest {
         List<double[]> sortedPoints = loadSampleData(1000, DIMENSIONS);
 
         // Perform greedy merge
-        List<List<byte[]>> buckets = BucketConstructor.greedyMerge(sortedPoints, MAX_BUCKET_SIZE, lsh, secretKey);
+        List<List<byte[]>> buckets = BucketConstructor.greedyMergeCosine(sortedPoints, lsh, MAX_BUCKET_SIZE, secretKey);
 
         // Verify buckets
         assertNotNull(buckets, "Buckets should not be null");
