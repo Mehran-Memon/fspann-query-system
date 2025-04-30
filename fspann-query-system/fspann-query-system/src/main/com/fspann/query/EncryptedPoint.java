@@ -3,32 +3,39 @@ package com.fspann.query;
 import com.fspann.encryption.EncryptionUtils;
 import com.fspann.keymanagement.KeyManager;
 import javax.crypto.SecretKey;
-import java.util.Objects;
 import java.util.Arrays;
+import java.util.Objects;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class EncryptedPoint {
-    private static final Logger logger = LoggerFactory.getLogger(EncryptedPoint.class); // Initialize the logger
+    private static final Logger logger = LoggerFactory.getLogger(EncryptedPoint.class);
     private byte[] ciphertext;
     private String bucketId;
     private final String pointId;
+    private final int index;
 
-    // Constructor with ciphertext, bucketId, and pointId
-    public EncryptedPoint(byte[] ciphertext, String bucketId, String pointId) {
-        this.ciphertext = ciphertext != null ? ciphertext.clone() : new byte[0]; // Ensure ciphertext is never null
+    // Constructor with ciphertext, bucketId, pointId, and index
+    public EncryptedPoint(byte[] ciphertext, String bucketId, String pointId, int index) {
+        this.ciphertext = ciphertext != null ? ciphertext.clone() : new byte[0];
         this.bucketId = Objects.requireNonNull(bucketId, "bucketId cannot be null");
         this.pointId = Objects.requireNonNull(pointId, "pointId cannot be null");
+        this.index = index;
     }
 
-    // Constructor with just ciphertext, setting default values for bucketId and pointId
+    // Constructor with just ciphertext, setting default values
     public EncryptedPoint(byte[] ciphertext) {
-        this(ciphertext, "unknown", "unknown");
+        this(ciphertext, "unknown", "unknown", -1); // Default index to -1
+    }
+
+    // Getter for index
+    public int getIndex() {
+        return index;
     }
 
     // Getter for ciphertext
     public byte[] getCiphertext() {
-        return ciphertext.clone(); // Clone to ensure immutability
+        return ciphertext.clone();
     }
 
     // Getter for bucketId
@@ -41,7 +48,7 @@ public class EncryptedPoint {
         return pointId;
     }
 
-    // Setter for ciphertext (to allow modification after rehash)
+    // Setter for ciphertext
     public void setCiphertext(byte[] newCiphertext) {
         this.ciphertext = newCiphertext != null ? newCiphertext.clone() : new byte[0];
     }
@@ -53,19 +60,16 @@ public class EncryptedPoint {
 
     // Re-encrypt the point's ciphertext with a new key
     public void reEncrypt(KeyManager keyManager, String context) throws Exception {
-        // Log key rotation process
         logger.info("Re-encrypting EncryptedPoint with new key for context: {}", context);
 
-        // Get old and new keys for re-encryption
-        SecretKey oldKey = keyManager.getSessionKey(context); // Get session key using keyManager
-        SecretKey newKey = keyManager.getCurrentKey(); // Get current key using keyManager
+        SecretKey oldKey = keyManager.getSessionKey(context);
+        SecretKey newKey = keyManager.getCurrentKey();
 
         if (oldKey == null || newKey == null) {
             logger.error("Failed to retrieve valid keys for re-encryption: oldKey={}, newKey={}", oldKey, newKey);
             throw new IllegalStateException("Failed to retrieve valid keys for re-encryption.");
         }
 
-        // Decrypt with the old key and re-encrypt with the new key
         double[] decryptedVector = EncryptionUtils.decryptVector(ciphertext, oldKey);
         this.ciphertext = EncryptionUtils.encryptVector(decryptedVector, newKey);
     }
@@ -75,7 +79,7 @@ public class EncryptedPoint {
         return EncryptionUtils.decryptVector(ciphertext, key);
     }
 
-    // Override equals to compare EncryptedPoint objects based on ciphertext, bucketId, and pointId
+    // Override equals
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
@@ -83,15 +87,17 @@ public class EncryptedPoint {
         EncryptedPoint that = (EncryptedPoint) o;
         return Arrays.equals(ciphertext, that.ciphertext) &&
                 bucketId.equals(that.bucketId) &&
-                pointId.equals(that.pointId);
+                pointId.equals(that.pointId) &&
+                index == that.index;
     }
 
-    // Override hashCode to generate hash based on ciphertext, bucketId, and pointId
+    // Override hashCode
     @Override
     public int hashCode() {
         int result = Arrays.hashCode(ciphertext);
         result = 31 * result + bucketId.hashCode();
         result = 31 * result + pointId.hashCode();
+        result = 31 * result + index;
         return result;
     }
 }

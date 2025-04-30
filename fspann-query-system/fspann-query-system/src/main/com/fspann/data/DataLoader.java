@@ -5,7 +5,6 @@ import java.nio.*;
 import java.nio.charset.*;
 import java.nio.file.*;
 import java.util.*;
-
 import com.fasterxml.jackson.databind.JsonNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -81,11 +80,6 @@ public class DataLoader {
         }
 
         return groundTruth;
-    }
-
-    // Process batches for ground truth data
-    private void processGroundTruthBatch(List<int[]> groundTruth) {
-        logger.info("Processed ground truth batch of size: {}", groundTruth.size());
     }
 
     /**
@@ -186,24 +180,39 @@ public class DataLoader {
     }
 
     private List<double[]> loadFvecs(String filename, int batchSize) throws IOException {
-        List<double[]> allVectors = new ArrayList<>(); // Accumulate all vectors here
-        List<double[]> batch = new ArrayList<>();      // Temporary batch list
+        List<double[]> allVectors = new ArrayList<>();
+        List<double[]> batch = new ArrayList<>();
         try (FileInputStream fis = new FileInputStream(filename)) {
             byte[] dimBuffer = new byte[4];
             int vectorCount = 0;
             int expectedDim = -1;
 
-            while (fis.read(dimBuffer) != -1) {
+            while (true) {
+                int bytesRead = fis.read(dimBuffer);
+                if (bytesRead == -1) {
+                    break;
+                }
+                if (bytesRead < 4) {
+                    logger.warn("Incomplete dimension read: expected 4 bytes, got {}", bytesRead);
+                    break;
+                }
                 ByteBuffer dimByteBuffer = ByteBuffer.wrap(dimBuffer).order(ByteOrder.LITTLE_ENDIAN);
                 int dim = dimByteBuffer.getInt();
 
                 if (expectedDim == -1) {
                     expectedDim = dim;
+                } else if (dim != expectedDim) {
+                    logger.warn("Vector with different dimension found: expected {}, got {}", expectedDim, dim);
+                    continue;
                 }
 
                 double[] vector = new double[dim];
                 byte[] vectorBuffer = new byte[dim * 4];
-                fis.read(vectorBuffer);
+                int vectorBytesRead = fis.read(vectorBuffer);
+                if (vectorBytesRead != dim * 4) {
+                    logger.warn("Incomplete vector read: expected {} bytes, got {}", dim * 4, vectorBytesRead);
+                    break;
+                }
 
                 float[] tempVector = new float[dim];
                 ByteBuffer.wrap(vectorBuffer).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer().get(tempVector);
@@ -212,8 +221,8 @@ public class DataLoader {
                     vector[i] = (double) tempVector[i];
                 }
 
-                allVectors.add(vector); // Add to the complete list
-                batch.add(vector);      // Add to the batch list
+                allVectors.add(vector);
+                batch.add(vector);
 
                 vectorCount++;
                 if (vectorCount >= batchSize) {
@@ -231,7 +240,8 @@ public class DataLoader {
         if (!batch.isEmpty()) {
             processBatch(batch);
         }
-        return allVectors; // Return the full list of vectors
+        logger.info("Total vectors loaded from {}: {}", filename, allVectors.size());
+        return allVectors;
     }
 
     private List<double[]> loadIvecs(String filename, int batchSize) throws IOException {
