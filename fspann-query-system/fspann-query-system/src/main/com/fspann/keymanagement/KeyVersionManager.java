@@ -34,8 +34,8 @@ public class KeyVersionManager {
 
     // Rotate keys (increase the version)
     public void rotateKeys() {
-        timeVersion.incrementAndGet();  // Increment version number in KeyManager
-    }
+        int newVersion = timeVersion.incrementAndGet();
+        keyManager.generateAndStoreKey("key_v" + newVersion);      }
 
     // Method to check if key rotation is needed
     public boolean needsRotation() {

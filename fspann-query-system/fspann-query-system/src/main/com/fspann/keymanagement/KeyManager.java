@@ -1,6 +1,5 @@
 package com.fspann.keymanagement;
 
-import com.fspann.utils.PersistenceUtils;
 import javax.crypto.SecretKey;
 import javax.crypto.KeyGenerator;
 import javax.crypto.Mac;
@@ -8,6 +7,8 @@ import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.Map;
+import java.util.NavigableMap;
+import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.Logger;
@@ -20,6 +21,10 @@ public class KeyManager {
     private final AtomicInteger operationCount;
     private static final Logger logger = LoggerFactory.getLogger(KeyManager.class);
     private SecretKey masterKey;
+    private static final int NUM_SHARDS = 32;     // tune for load
+    private final Map<Integer, Integer> shardVersion = new ConcurrentHashMap<>();
+    private final Map<Integer, NavigableMap<Integer,SecretKey>> shardKeys
+            = new ConcurrentHashMap<>();
 
     // Constructor to initialize from existing keys
     public KeyManager(Map<String, SecretKey> keys, int rotationInterval) {
@@ -40,6 +45,36 @@ public class KeyManager {
 
         // Generate and store the initial key
         generateAndStoreKey("key_v" + timeVersion.get());
+    }
+
+
+    // ── public helper
+    /* ---------- helper: derive shard key from masterKey ---------- */
+    private SecretKey deriveKey(SecretKey base, String info, int version) {
+        try {
+            return HmacKeyDerivationUtils.deriveKey(base, info, version);
+        } catch (Exception e) {
+            throw new RuntimeException("Key derivation failed: "+info, e);
+        }
+    }
+
+    /* ---------- called once per shard rotation ---------- */
+    public void rotateShard(int shardId) {
+        int v = shardVersion.compute(shardId,
+                (s, oldV) -> oldV == null ? 1 : oldV + 1);
+
+        SecretKey newK = deriveKey(masterKey, "shard-" + shardId, v);
+
+        shardKeys
+                .computeIfAbsent(shardId, x -> new TreeMap<>())
+                .put(v, newK);
+        logger.info("Shard {} rotated to v{}", shardId, v);
+    }
+
+    /* ---------- lookup helper used by tests & index ---------- */
+    public SecretKey getShardKey(int shardId, int version) {
+        NavigableMap<Integer,SecretKey> m = shardKeys.get(shardId);
+        return (m == null) ? null : m.get(version);
     }
 
     // Method to generate master key (AES-256)

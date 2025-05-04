@@ -3,12 +3,14 @@ package com.fspann.query;
 import com.fspann.encryption.EncryptionUtils;
 import com.fspann.keymanagement.KeyManager;
 import javax.crypto.SecretKey;
+import java.io.Serializable;
 import java.util.Arrays;
 import java.util.Objects;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class EncryptedPoint {
+public class EncryptedPoint implements Serializable {
+    private static final long serialVersionUID = 1L;
     private static final Logger logger = LoggerFactory.getLogger(EncryptedPoint.class);
     private byte[] ciphertext;
     private String bucketId;
