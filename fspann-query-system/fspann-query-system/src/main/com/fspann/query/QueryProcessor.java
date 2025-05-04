@@ -1,24 +1,46 @@
 package com.fspann.query;
 
+import com.fspann.ForwardSecureANNSystem;
+import com.fspann.config.SystemConfig;
 import com.fspann.encryption.EncryptionUtils;
 import com.fspann.keymanagement.KeyManager;
+import com.fspann.utils.Profiler;
 import javax.crypto.SecretKey;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
-
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import com.fspann.utils.LRUCache;
 
 public class QueryProcessor {
     private final Map<Integer, List<EncryptedPoint>> bucketIndex;
     private final KeyManager keyManager;
     private final LRUCache<String, List<EncryptedPoint>> cache;
+    private final Profiler profiler;
+    private static final Logger logger = LoggerFactory.getLogger(QueryProcessor.class);
 
     // Constructor to initialize the KeyManager and cache
     public QueryProcessor(Map<Integer, List<EncryptedPoint>> bucketIndex, KeyManager keyManager, int cacheCapacity) {
         this.bucketIndex = bucketIndex;
         this.keyManager = keyManager;
         this.cache = new LRUCache<>(cacheCapacity); // Set cache capacity
+        this.profiler = new Profiler();
+
+    }
+
+    public String generateCacheKey(QueryToken queryToken) {
+        // Using encryption context, candidate buckets, and encrypted query to create a unique cache key
+        StringBuilder sb = new StringBuilder();
+        sb.append(queryToken.getEncryptionContext());  // Adding encryption context
+        sb.append(queryToken.getTopK());  // Adding topK
+        sb.append(queryToken.getNumTables());  // Adding numTables
+        sb.append(Arrays.toString(queryToken.getCandidateBuckets().toArray()));  // Adding candidateBuckets
+        sb.append(Arrays.toString(queryToken.getEncryptedQuery()));  // Adding encryptedQuery
+
+        // Return a string representation as cache key
+        return sb.toString();
     }
 
     /**
@@ -28,8 +50,13 @@ public class QueryProcessor {
      * @return The list of encrypted points after processing.
      * @throws Exception if there is an error during decryption or encryption.
      */
-    public List<EncryptedPoint> processQuery(List<EncryptedPoint> candidates) throws Exception {
+    public List<EncryptedPoint> processQuery(QueryToken queryToken, List<EncryptedPoint> candidates) throws Exception {
+        byte[] encryptedQuery = queryToken.getEncryptedQuery();
+
+        if (SystemConfig.PROFILER_ENABLED) profiler.start("query");
+
         if (candidates == null || candidates.isEmpty()) {
+            logger.warn("No candidates found for the query.");
             return new ArrayList<>();
         }
 
@@ -42,16 +69,29 @@ public class QueryProcessor {
         for (EncryptedPoint point : candidates) {
             SecretKey previousKey = keyManager.getPreviousKey();
             if (previousKey != null) {
+                if (SystemConfig.PROFILER_ENABLED) profiler.start("decryption");
                 double[] decrypted = point.decrypt(previousKey);
+                if (SystemConfig.PROFILER_ENABLED) profiler.stop("decryption");
+
+                if (SystemConfig.PROFILER_ENABLED) profiler.start("encryption");
                 byte[] reEncrypted = EncryptionUtils.encryptVector(decrypted, currentKey);
-                point = new EncryptedPoint(reEncrypted, point.getBucketId(), point.getPointId(), point.getIndex());
+                EncryptedPoint newEncryptedPoint = new EncryptedPoint(reEncrypted, point.getBucketId(), point.getPointId(), point.getIndex());
+                result.add(newEncryptedPoint);  // Add to result
+                if (SystemConfig.PROFILER_ENABLED) profiler.stop("encryption");
+            } else {
+                logger.warn("No previous key available for point {}. Skipping re-encryption.", point.getPointId());
+                result.add(point);  // Optionally add the original point if no re-encryption occurs
             }
-            result.add(point);
         }
 
-        cache.put(generateCacheKey(candidates), result);
+        if (SystemConfig.PROFILER_ENABLED) profiler.stop("query");
+
+        // Use queryToken for cache key to ensure uniqueness
+        String cacheKey = generateCacheKey(queryToken);  // Use queryToken to generate the cache key
+        cache.put(cacheKey, result);  // Store the result in the cache using the generated key
         return result;
     }
+
 
     /**
      * Generates a cache key based on the query candidates.
