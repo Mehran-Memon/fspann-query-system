@@ -68,14 +68,20 @@ public class SecureLSHIndex {
                    boolean useFakePoints,
                    List<double[]> baseVectors) throws Exception {
 
+        int vecIndex = -1;
+        if (baseVectors != null) {
+            vecIndex = baseVectors.indexOf(vector);
+        }
         byte[] encrypted = EncryptionUtils.encryptVector(vector, currentKey);
-        int    index     = baseVectors.indexOf(vector);
+        int index = baseVectors.indexOf(vector);
         if (index < 0)
             throw new IllegalArgumentException("Vector not in baseVectors");
 
+        // Creating EncryptedPoint with correct constructor
         EncryptedPoint ep = new EncryptedPoint(encrypted,
                 "bucket_v" + bucketCode,
-                id, index);
+                id, index);  // Use the constructor here
+
         encryptedPoints.put(id, ep);
 
         bucketToShard.putIfAbsent(bucketCode, bucketCode % NUM_SHARDS);
@@ -190,7 +196,6 @@ public class SecureLSHIndex {
 
         this.currentKey = newKey;  // Update the current key
     }
-
 
     /**
      * Re-encrypt all buckets that belong to the given shard.

@@ -92,7 +92,6 @@ public class QueryProcessor {
         return result;
     }
 
-
     /**
      * Generates a cache key based on the query candidates.
      * @param candidates The query candidates.

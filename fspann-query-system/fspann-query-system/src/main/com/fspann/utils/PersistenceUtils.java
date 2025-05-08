@@ -1,6 +1,7 @@
 package com.fspann.utils;
 
 import java.io.*;
+import java.nio.file.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -16,6 +17,17 @@ public class PersistenceUtils {
      * @throws IOException If an I/O error occurs.
      */
     public static <T> void saveObject(T obj, String path) throws IOException {
+        Path filePath = Paths.get(path);
+        // Ensure the parent directory exists
+        if (filePath.getParent() != null && !Files.exists(filePath.getParent())) {
+            try {
+                Files.createDirectories(filePath.getParent()); // Create the directories if they don't exist
+            } catch (IOException e) {
+                logger.error("Failed to create directories for path: {}", path, e);
+                throw e;
+            }
+        }
+
         try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(path))) {
             oos.writeObject(obj);
             logger.info("Object saved successfully to {}", path);
@@ -36,6 +48,12 @@ public class PersistenceUtils {
      */
     @SuppressWarnings("unchecked")
     public static <T> T loadObject(String path, Class<T> type) throws IOException, ClassNotFoundException {
+        Path filePath = Paths.get(path);
+        if (!Files.exists(filePath)) {
+            logger.error("File not found: {}", path);
+            throw new FileNotFoundException("File not found: " + path);
+        }
+
         try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(path))) {
             T obj = (T) ois.readObject();
             logger.info("Object loaded successfully from {}", path);
