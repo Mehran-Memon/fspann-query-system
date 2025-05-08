@@ -25,10 +25,11 @@ class ForwardSecurityShardTest {
     private static EvenLSH          lsh;
     private static SecureLSHIndex   index;
     private static List<double[]>   base;                 // dummy base vectors
+    String keysFilePath = "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\index_backup\\keys.ser";
 
     @BeforeAll
     static void setUp() {
-        km    = new KeyManager(5_000_000);                // rotation threshold
+        km    = new KeyManager(keyFilePath,5_000_000);                // rotation threshold
         lsh   = new EvenLSH(DIM, 10);
         base  = randomVectors(5_000, DIM);
         lsh.updateCriticalValues(base);

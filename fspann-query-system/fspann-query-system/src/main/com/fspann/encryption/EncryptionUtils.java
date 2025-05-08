@@ -12,8 +12,8 @@ public class EncryptionUtils {
 
     private static final String ALGORITHM = "AES/GCM/NoPadding"; // AES with GCM for authenticated encryption
     private static final int GCM_TAG_LENGTH = 128; // Authentication tag length for GCM (128 bits)
-
     // Method to generate a random IV for AES GCM mode (12-byte for GCM)
+
     private static byte[] generateIV() {
         byte[] iv = new byte[12]; // GCM requires a 12-byte IV
         new SecureRandom().nextBytes(iv);
@@ -21,32 +21,24 @@ public class EncryptionUtils {
     }
 
     // Method to encrypt the vector using AES-GCM and return the IV + encrypted data
-    public static byte[] encryptVector(double[] vector, SecretKey key) throws Exception {
+    public static byte[] encryptVector(double[] vec, SecretKey key) throws Exception {
+        // Convert the vector to a byte array (multi-dimensional handling)
+        byte[] vectorBytes = new byte[vec.length * Double.BYTES];
+        ByteBuffer byteBuffer = ByteBuffer.wrap(vectorBytes);
 
-        if (key == null) {
-            throw new IllegalArgumentException("Encryption key cannot be null");
+        for (double value : vec) {
+            byteBuffer.putDouble(value);
         }
 
-        Cipher cipher = Cipher.getInstance(ALGORITHM);
-        byte[] iv = generateIV();  // Generate a new IV for each encryption
-        GCMParameterSpec spec = new GCMParameterSpec(GCM_TAG_LENGTH, iv); // Set GCM parameters (IV and tag length)
-        cipher.init(Cipher.ENCRYPT_MODE, key, spec);
+        // Encrypt the byte array
+        return encryptData(vectorBytes, key);  // Encrypting the byte representation of the vector
+    }
 
-        // Convert the vector into a byte array
-        ByteBuffer buffer = ByteBuffer.allocate(vector.length * Double.BYTES);
-        for (double v : vector) {
-            buffer.putDouble(v);
-        }
-
-        // Perform the encryption
-        byte[] cipherText = cipher.doFinal(buffer.array());
-
-        // Combine IV and ciphertext
-        byte[] encryptedData = new byte[iv.length + cipherText.length];
-        System.arraycopy(iv, 0, encryptedData, 0, iv.length);
-        System.arraycopy(cipherText, 0, encryptedData, iv.length, cipherText.length);
-
-        return encryptedData; // Return the concatenated IV + encrypted data
+    private static byte[] encryptData(byte[] data, SecretKey key) throws Exception {
+        // Encrypt the data using AES, for example
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.ENCRYPT_MODE, key);
+        return cipher.doFinal(data);
     }
 
     // Method to decrypt the encrypted data using AES-GCM

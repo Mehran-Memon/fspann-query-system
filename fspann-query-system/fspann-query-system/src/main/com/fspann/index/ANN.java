@@ -17,11 +17,15 @@ public class ANN {
     private final int numBuckets;
     private final SecureLSHIndex secureIndex;
     private static final Logger logger = LoggerFactory.getLogger(ANN.class);
+    private List<double[]> dataRef;
+    private final List<double[]> baseVectors;
 
-    public ANN(int dimensions, int numBuckets, KeyManager keyManager) {
+    public ANN(int dimensions, int numBuckets, KeyManager keyManager,
+               List<double[]> baseVectors) {
         this.lsh = new EvenLSH(dimensions, numBuckets);
         this.numBuckets = numBuckets;
         this.keyManager = keyManager;
+        this.baseVectors = baseVectors;
         this.secureIndex = new SecureLSHIndex(1, keyManager.getCurrentKey(), null);
     }
 
@@ -30,6 +34,7 @@ public class ANN {
      * @param data dataset to build the ANN index with
      */
     public void buildIndex(List<double[]> data) {
+        this.dataRef = data;
         try {
             SecretKey sessionKey = keyManager.getCurrentKey();
             if (sessionKey == null) {
@@ -59,7 +64,6 @@ public class ANN {
         return keyManager;  // Return the key manager instance
     }
 
-
     /**
      * Finds approximate nearest neighbors for a query vector.
      * @param queryVector the query vector
@@ -88,18 +92,31 @@ public class ANN {
      * @param newPoint the new point to add to the index
      */
     public void updateIndex(double[] newPoint) {
+
         try {
             SecretKey sessionKey = keyManager.getCurrentKey();
             if (sessionKey == null) {
-                logger.error("Encryption key cannot be null.");
-                throw new IllegalArgumentException("Encryption key cannot be null");
+                throw new IllegalStateException("Encryption key cannot be null");
+            }
+
+            // Make sure the vector list is ready and contains the point
+            if (baseVectors != null && !baseVectors.contains(newPoint)) {
+                baseVectors.add(newPoint);
             }
 
             int bucketId = lsh.getBucketId(newPoint);
-            byte[] encryptedPoint = EncryptionUtils.encryptVector(newPoint, sessionKey);
-            secureIndex.add(UUID.randomUUID().toString(), newPoint, bucketId, false, null); // Add to the secure index
+
+        /* Insert once ― pass the real baseVectors so SecureLSHIndex
+           can resolve the index inside the vector list                */
+            secureIndex.add(
+                    UUID.randomUUID().toString(), // point ID
+                    newPoint,                     // raw vector
+                    bucketId,                     // bucket
+                    /* useFakePoints = */ false,
+                    baseVectors);                 // reference list
+
         } catch (Exception e) {
-            logger.error("Error while updating ANN index: {}", e.getMessage(), e);
+            logger.error("Error while updating ANN index", e);
             throw new RuntimeException("Error updating ANN index", e);
         }
     }

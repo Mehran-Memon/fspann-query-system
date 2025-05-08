@@ -12,10 +12,13 @@ import org.slf4j.LoggerFactory;
 public class EncryptedPoint implements Serializable {
     private static final long serialVersionUID = 1L;
     private static final Logger logger = LoggerFactory.getLogger(EncryptedPoint.class);
-    private byte[] ciphertext;
+
+    private byte[] ciphertext;  // Store the encrypted data
     private String bucketId;
     private final String pointId;
     private final int index;
+    private double[] vector;  // Store the original vector
+    private int vectorIndex;
 
     // Constructor with ciphertext, bucketId, pointId, and index
     public EncryptedPoint(byte[] ciphertext, String bucketId, String pointId, int index) {
@@ -25,19 +28,19 @@ public class EncryptedPoint implements Serializable {
         this.index = index;
     }
 
-    // Constructor with just ciphertext, setting default values
-    public EncryptedPoint(byte[] ciphertext) {
-        this(ciphertext, "unknown", "unknown", -1); // Default index to -1
-    }
-
-    // Getter for index
-    public int getIndex() {
-        return index;
+    // Setter for ciphertext
+    public void setCiphertext(byte[] newCiphertext) {
+        this.ciphertext = newCiphertext != null ? newCiphertext.clone() : new byte[0];
     }
 
     // Getter for ciphertext
     public byte[] getCiphertext() {
         return ciphertext.clone();
+    }
+
+    // Getter for index
+    public int getIndex() {
+        return index;
     }
 
     // Getter for bucketId
@@ -50,14 +53,19 @@ public class EncryptedPoint implements Serializable {
         return pointId;
     }
 
-    // Setter for ciphertext
-    public void setCiphertext(byte[] newCiphertext) {
-        this.ciphertext = newCiphertext != null ? newCiphertext.clone() : new byte[0];
+    // Getter for vector
+    public double[] getVector() {
+        return vector;
     }
 
-    // Setter for bucketId
-    public void setBucketId(String newBucketId) {
-        this.bucketId = Objects.requireNonNull(newBucketId, "newBucketId cannot be null");
+    // Setter for the vector (if needed for modifications)
+    public void setVector(double[] vector) {
+        this.vector = vector;
+    }
+
+    // Getter for vectorIndex
+    public int getVectorIndex() {
+        return vectorIndex;
     }
 
     // Re-encrypt the point's ciphertext with a new key

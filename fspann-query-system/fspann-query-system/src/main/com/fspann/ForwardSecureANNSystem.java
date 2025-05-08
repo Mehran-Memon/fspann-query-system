@@ -1,9 +1,7 @@
 package com.fspann;
 
-import com.fspann.config.SystemConfig;
 import com.fspann.data.DataLoader;
 import com.fspann.encryption.EncryptionUtils;
-import com.fspann.evaluation.EvaluationEngine;
 import com.fspann.index.EvenLSH;
 import com.fspann.index.SecureLSHIndex;
 import com.fspann.keymanagement.KeyManager;
@@ -20,11 +18,13 @@ import com.fspann.keymanagement.MetadataManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.crypto.SecretKey;
 import java.io.File;
+import java.util.Set;
+
 import java.io.IOException;
-import java.nio.file.Files;
+import javax.crypto.SecretKey;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.commons.math3.util.MathArrays.distance;
@@ -47,22 +47,47 @@ public class ForwardSecureANNSystem {
     private final ANN ann;
     private final ReEncryptor reEncryptor;
     private final Thread reEncryptThread;
+    private final int numIntervals;
+    private final Set<Integer> uniqueHashes = ConcurrentHashMap.newKeySet();
+    String metadataFilePath = "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\index_backup\\metadata.ser";
+    String keysFilePath = "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\index_backup\\keys.ser";
 
     private long totalInsertTimeMs = 0;
     private int totalRehashes = 0;
     private int totalFakePoints = 0;
 
-    public  ForwardSecureANNSystem(String basePath, String queryPath, String groundTruthPath,
+    public ForwardSecureANNSystem(String basePath, String queryPath, String groundTruthPath,
                                   int numHashTables, int numIntervals,
-                                  int maxBucketSize, int targetBucketSize, boolean useFakePoints, boolean useForwardSecurity) throws IOException {
-
-        keyManager = new KeyManager(1000);
+                                  int maxBucketSize, int targetBucketSize, boolean useFakePoints, boolean useForwardSecurity,
+                                  String keysFilePath) throws IOException {
+        // Initialize keyManager first
+        this.keyManager = new KeyManager(keysFilePath, 1000);  // Pass the keysFilePath here
+        MetadataManager metadataManager = new MetadataManager(keyManager);
+        try {
+            metadataManager.loadMetadata(metadataFilePath); // Ensure metadata is loaded
+            metadataManager.loadKeys(keysFilePath);         // Ensure keys are loaded
+        } catch (IOException | ClassNotFoundException e) {
+            System.out.println("Error loading metadata or keys, initializing new manager.");
+            // Handle the issue if loading fails, perhaps creating a fresh MetadataManager
+            createNewMetadata(); // This can be a method to handle fresh creation
+        }
+        this.encryptedDataStore = new HashMap<>();
+        // Now initialize other components
         this.keyVersionManager = new KeyVersionManager(keyManager, 1000);
         this.queryCache = new LRUCache<>(1000);
-        this.encryptedDataStore = new HashMap<>();
         this.operationCount = new AtomicInteger(0);
         this.profiler = new Profiler();
         this.metadataManager = new MetadataManager(keyManager);
+        this.numIntervals = numIntervals;
+        metadataManager.addMetadata("version", "1.0", metadataFilePath);
+        String version = metadataManager.getMetadata("version");
+
+        // Check if metadata file exists, if not, create it
+        File metadataFile = new File("C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\index_backup\\metadata.ser\"");
+        if (!metadataFile.exists()) {
+            // Create new metadata if not found
+            createNewMetadata();
+        }
 
         // Load datasets
         logger.info("[STEP] 📥 Loading Datasets...");
@@ -82,7 +107,7 @@ public class ForwardSecureANNSystem {
 
         // Initialize ANN
         logger.info("Initializing ANN index...");
-        ann = new ANN(baseVectors.get(0).length, numIntervals, keyManager);
+        ann = new ANN(baseVectors.get(0).length, numIntervals, keyManager, baseVectors );
         ann.buildIndex(baseVectors);  // Build the index with the base data
         this.reEncryptor = new ReEncryptor(index, keyManager);
         this.reEncryptThread = new Thread(reEncryptor, "ReEncryptor");
@@ -93,13 +118,15 @@ public class ForwardSecureANNSystem {
 
     public List<double[]> query(double[] queryVector, int topK) throws Exception {
         logger.info("[STEP] 📤 Querying with vector: {}", Arrays.toString(queryVector));
+
         SecretKey currentKey = keyManager.getCurrentKey();
+
         if (currentKey == null) {
             logger.error("Failed to get the current session key. KeyManager might not be initialized correctly.");
             throw new IllegalStateException("Current session key is null");
         }
 
-        EvenLSH lsh = new EvenLSH(baseVectors.get(0).length, 1000);
+        EvenLSH lsh = new EvenLSH(queryVector.length, numIntervals);  // Ensure lsh can handle multi-dimensional vectors
         QueryToken queryToken = QueryGenerator.generateQueryToken(queryVector, topK, 1, lsh, keyManager);
         logger.info("[STEP] 📦 Generated query token: {}", queryToken);
 
@@ -115,43 +142,44 @@ public class ForwardSecureANNSystem {
         return decryptEncryptedPoints(result);
     }
 
-    public void insert(String id, double[] vector) throws Exception {
-        if (SystemConfig.PROFILER_ENABLED) profiler.start("insert");
+    public void insert(String id, double[] vec) throws Exception {
+        long t0 = System.nanoTime();
 
-        long startTime = System.currentTimeMillis();
-        operationCount.incrementAndGet();
+        // Check if key rotation is needed after an insert
+        keyManager.rotateKeysIfNeeded(); // Rotate the keys if the operation count exceeds the threshold
 
-        // Ensure the vector exists in baseVectors by adding it if not present
-        if (!baseVectors.contains(vector)) {
-            baseVectors.add(vector);
-        }
+        // Continue with the insert process
+        int hash = Arrays.hashCode(vec);
+        if (!uniqueHashes.add(hash)) return; // Skip if already processed
 
-        SecretKey currentKey = keyManager.getSessionKey(keyVersionManager.getTimeVersion());
-        byte[] encryptedVec = EncryptionUtils.encryptVector(vector, currentKey);
+        int vecIdx = baseVectors.size();
+        baseVectors.add(vec);
 
-        int vecIndex = baseVectors.indexOf(vector); // Now works because vector is added to baseVectors
-        int bucketId = ann.getBucketId(vector);        // bucketCode == bucketId for now
+        // Encrypt the new vector
+        SecretKey key  = keyManager.getCurrentKey();
+        byte[] cipher  = EncryptionUtils.encryptVector(vec, key);
+        int bucketId   = ann.getBucketId(vec);
 
-        EncryptedPoint ep = new EncryptedPoint(encryptedVec, "bucket_v" + bucketId, id, vecIndex);
+        // Book-keeping
+        EncryptedPoint ep = new EncryptedPoint(cipher, "bucket_v"+bucketId, id, vecIdx);
         encryptedDataStore.put(id, ep);
 
-        /* use the SecureLSHIndex field explicitly */
-        int addedFakes = this.index.add(id, vector, bucketId, true, baseVectors);
-        totalFakePoints += addedFakes;
+        // Update index with the encrypted point
+        totalFakePoints += index.add(id, vec, bucketId, true, baseVectors);
+        ann.updateIndex(vec);
 
-        if (keyVersionManager.needsRotation()) {
-            logger.info("[STEP] 🔄 Rotating keys...");
-            keyVersionManager.rotateKeys();
-            this.index.rehash(keyManager, "epoch_v" + keyVersionManager.getTimeVersion());
-            totalRehashes++;
-            operationCount.set(0);
-        }
-        totalInsertTimeMs += (System.currentTimeMillis() - startTime);
+        // Rehash the index with new keys if necessary
+        keyManager.rehashIndexForNewKeys();
 
-        if (SystemConfig.PROFILER_ENABLED) profiler.stop("insert");
+        totalInsertTimeMs += (System.nanoTime() - t0) / 1_000_000.0;
+    }
 
-        System.gc();
-
+    private void createNewMetadata() {
+        // Implement logic to generate new metadata
+        // This could be any default or initial configuration that your system needs
+        System.out.println("Creating new metadata...");
+        metadataManager.addMetadata("version", "1.0", "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\index_backup");
+        metadataManager.saveMetadata("C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\index_backup");
     }
 
     private List<double[]> decryptEncryptedPoints(List<EncryptedPoint> encryptedPoints) throws Exception {
@@ -214,57 +242,63 @@ public class ForwardSecureANNSystem {
         } catch (InterruptedException ignored) {
         }
     }
-    public static void main(String[] args) {
-        final Logger log = LoggerFactory.getLogger("FSPANN-Main");
-        try {
-            // System bootstrap
-            String basePath = "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\sift_dataset\\sift\\sift_base.fvecs";
-            String queryPath = "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\sift_dataset\\sift\\sift_query.fvecs";
-            String groundTruthPath = "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\sift_dataset\\sift\\sift_groundtruth.ivecs";
 
-            // Initialize the system
-            ForwardSecureANNSystem sys = new ForwardSecureANNSystem(
-                    basePath, queryPath, groundTruthPath,
-                    3, 10, 1000, 1500, true, true);
+    public static void main(String[] args) throws Exception {
+        // Initialize the ForwardSecureANNSystem with proper file paths and parameters
+        var sys = new ForwardSecureANNSystem(
+                "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\sift_dataset\\sift\\sift_base.fvecs",
+                "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\sift_dataset\\sift\\sift_query.fvecs",
+                "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\sift_dataset\\sift\\sift_groundtruth.ivecs",
+                3,               // hash tables
+                10,              // numIntervals
+                1_000, 1_500,    // bucket sizes
+                true, true, "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\index_backup\\keys.ser");     // forward security enabled
 
-            // Insert 1 million data points
-            log.info("Inserting 1 million data points...");
-            Random rnd = new Random();
-            List<double[]> base = sys.getBaseVectors();
-
-            // Insert 1M data points
-            for (int i = 0; i < 1000000; i++) {
-                double[] vec = base.get(rnd.nextInt(base.size()));
-                sys.insert("dyn_" + i, vec);
-                if (i % 10000 == 0) {
-                    log.info("  ↳ {} records inserted", i + 1);
-                }
-            }
-
-            // Perform a sample query with one of the inserted vectors
-            log.info("Performing a sample query...");
-            double[] q0 = sys.getQueryVectors().getFirst(); // Sample query vector
-            sys.query(q0, 10);  // Query top 10 nearest neighbors
-
-            // Delete a random data point (optional)
-            String deleteId = "dyn_" + rnd.nextInt(1000000);
-            log.info("Deleting the data point with ID: {}", deleteId);
-            sys.delete(deleteId);
-
-            // Save and load the index
-            log.info("Saving the index...");
-            sys.saveIndex("C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\index_backup");
-
-            log.info("Loading the index...");
-            sys.loadIndex("C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\index_backup");
-
-            // Shutdown the system gracefully
-            sys.shutdown();
-
-        } catch (Exception ex) {
-            LoggerFactory.getLogger("FSPANN-Main").error("🔥 Fatal error", ex);
-            System.exit(1);
+        // Check if base vectors are loaded properly
+        if (sys.getBaseVectors() == null || sys.getBaseVectors().isEmpty()) {
+            System.err.println("Base vectors are empty or not loaded correctly.");
+            return;
         }
+
+        // List to hold the results of the insertion
+        List<String> insertedUUIDs = new ArrayList<>();
+        System.out.println("Starting batch insertion...");
+        for (double[] vec : sys.getBaseVectors()) {
+            try {
+                String uuid = UUID.randomUUID().toString();
+                sys.insert(uuid, vec);
+                insertedUUIDs.add(uuid); // Collect the inserted UUIDs
+            } catch (Exception e) {
+                System.err.println("Error during insertion of vector: " + Arrays.toString(vec));
+                throw new RuntimeException("Error during insertion", e);
+            }
+        }
+        System.out.println("Batch insertion completed.");
+
+        // *** Query Sample ***
+        System.out.println("Performing a sample query...");
+        List<double[]> result = sys.query(sys.getQueryVectors().get(0), 10);
+        if (result == null || result.isEmpty()) {
+            System.err.println("Query returned no results.");
+            return;
+        }
+        System.out.println("Top-1 distance = " + java.util.Arrays.toString(result.get(0)));
+
+        // *** Save Index ***
+        String backupDirectory = "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\index_backup";
+        File dir = new File(backupDirectory);
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+
+        System.out.println("Saving the index...");
+        sys.saveIndex(backupDirectory);
+        System.out.println("Index saved successfully.");
+
+        // *** Shutdown System ***
+        System.out.println("Shutting down system...");
+        sys.shutdown();
+        System.out.println("System shutdown complete.");
     }
 
-    }
+ }

@@ -18,9 +18,10 @@ public class BenchmarkRunner {
         String base   = "data/sift_dataset/sift/sift_base.fvecs";
         String query  = "data/sift_dataset/sift/sift_query.fvecs";
         String gt     = "data/sift_dataset/sift/sift_groundtruth.ivecs";
+        String meta  = "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\index_backup\\metadata.ser";
 
         ForwardSecureANNSystem sys = new ForwardSecureANNSystem(
-                base, query, gt, 3, 10, 1_000, 1_500, true, true);
+                base, query, gt, 3, 10, 1_000, 1_500, true, true, meta);
 
         Profiler prof = new Profiler();
         Random   rnd  = new Random(42);
