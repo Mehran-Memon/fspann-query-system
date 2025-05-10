@@ -1,6 +1,5 @@
 package com.fspann.keymanagement;
 
-import com.fspann.encryption.EncryptionUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -28,7 +27,7 @@ public class KeyManager {
     private final Map<Integer, NavigableMap<Integer, SecretKey>> shardKeys = new ConcurrentHashMap<>();
     private int CountOperation;
     private int maxOperationsBeforeRotation = 1000; // Number of operations after which key rotation is triggered
-    private Map<String, EncryptedPoint> encryptedDataStore;
+    private ConcurrentHashMap<String, EncryptedPoint> encryptedDataStore = new ConcurrentHashMap<>();
 
 
     // Constructor to load keys from file or create new keys if not found
@@ -165,9 +164,11 @@ public class KeyManager {
         // Create a temporary list to hold the data that needs to be re-encrypted
         List<Map.Entry<String, EncryptedPoint>> entriesToReEncrypt = new ArrayList<>();
 
-        // Collect all entries from encryptedDataStore for re-encryption
-        for (Map.Entry<String, EncryptedPoint> entry : encryptedDataStore.entrySet()) {
-            entriesToReEncrypt.add(entry);
+        // Synchronized block to collect entries from encryptedDataStore safely
+        synchronized (encryptedDataStore) { // Ensuring that the collection isn't modified during iteration
+            for (Map.Entry<String, EncryptedPoint> entry : encryptedDataStore.entrySet()) {
+                entriesToReEncrypt.add(entry); // Collect entries in a temporary list
+            }
         }
 
         // Now, iterate over the collected entries and re-encrypt
