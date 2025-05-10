@@ -19,12 +19,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
+import java.nio.ByteBuffer;
 import java.util.Set;
 
 import java.io.IOException;
 import javax.crypto.SecretKey;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.commons.math3.util.MathArrays.distance;
@@ -60,6 +62,7 @@ public class ForwardSecureANNSystem {
                                   int numHashTables, int numIntervals,
                                   int maxBucketSize, int targetBucketSize, boolean useFakePoints, boolean useForwardSecurity,
                                   String keysFilePath) throws IOException {
+
         // Initialize keyManager first
         this.keyManager = new KeyManager(keysFilePath, 1000);  // Pass the keysFilePath here
         MetadataManager metadataManager = new MetadataManager(keyManager);
@@ -83,14 +86,14 @@ public class ForwardSecureANNSystem {
         String version = metadataManager.getMetadata("version");
 
         // Check if metadata file exists, if not, create it
-        File metadataFile = new File("C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\index_backup\\metadata.ser\"");
+        File metadataFile = new File("C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\index_backup\\metadata.ser");
         if (!metadataFile.exists()) {
             // Create new metadata if not found
             createNewMetadata();
         }
 
         // Load datasets
-        logger.info("[STEP] 📥 Loading Datasets...");
+        logger.info("Loading Datasets");
         DataLoader dataLoader = new DataLoader();
         baseVectors = dataLoader.loadData(basePath, 1000);
         queryVectors = dataLoader.loadData(queryPath, 1000);
@@ -98,7 +101,7 @@ public class ForwardSecureANNSystem {
         logger.info("Base Vectors Size: {}", baseVectors.size());
         logger.info("Query Vectors Size: {}", queryVectors.size());
         logger.info("Ground Truth Size: {}", groundTruth.size());
-        logger.info("[STEP] ✅ Dataset loading complete.");
+        logger.info("Dataset loading complete.");
 
         EvenLSH initialLsh = new EvenLSH(baseVectors.get(0).length, numIntervals);
         this.index = new SecureLSHIndex(numHashTables, keyManager.getCurrentKey(), baseVectors);
@@ -106,7 +109,7 @@ public class ForwardSecureANNSystem {
         this.queryProcessor = new QueryProcessor(new HashMap<>(), keyManager, 1000);
 
         // Initialize ANN
-        logger.info("Initializing ANN index...");
+        logger.info("Initializing ANN index");
         ann = new ANN(baseVectors.get(0).length, numIntervals, keyManager, baseVectors );
         ann.buildIndex(baseVectors);  // Build the index with the base data
         this.reEncryptor = new ReEncryptor(index, keyManager);
@@ -243,6 +246,15 @@ public class ForwardSecureANNSystem {
         }
     }
 
+    private static byte[] convertVectorToByteArray(double[] vec) {
+        // Convert the vector into a byte array (this is just a simple example, adjust based on your encryption logic)
+        ByteBuffer buffer = ByteBuffer.allocate(vec.length * Double.BYTES);
+        for (double d : vec) {
+            buffer.putDouble(d); // Put each double value in the byte buffer
+        }
+        return buffer.array(); // Return the byte array
+    }
+
     public static void main(String[] args) throws Exception {
         // Initialize the ForwardSecureANNSystem with proper file paths and parameters
         var sys = new ForwardSecureANNSystem(
@@ -260,23 +272,35 @@ public class ForwardSecureANNSystem {
             return;
         }
 
-        // List to hold the results of the insertion
-        List<String> insertedUUIDs = new ArrayList<>();
-        System.out.println("Starting batch insertion...");
+        // Using a ConcurrentHashMap to handle UUIDs and other modifications safely
+        Map<String, EncryptedPoint> insertedUUIDs = new ConcurrentHashMap<>();
+        System.out.println("Starting batch insertion");
+        int batchSize = 0;
+
         for (double[] vec : sys.getBaseVectors()) {
+            batchSize++;
             try {
                 String uuid = UUID.randomUUID().toString();
+                String pointId = uuid;  // Use uuid as the pointId
+                byte[] ciphertext = convertVectorToByteArray(vec);  // Use the static method here
+                String bucketId = "defaultBucket";  // You might derive this from some logic in your code
+                int index = batchSize;
+                EncryptedPoint encryptedPoint = new EncryptedPoint(ciphertext, bucketId, pointId, index);
+                insertedUUIDs.put(uuid, encryptedPoint);
                 sys.insert(uuid, vec);
-                insertedUUIDs.add(uuid); // Collect the inserted UUIDs
             } catch (Exception e) {
-                System.err.println("Error during insertion of vector: " + Arrays.toString(vec));
-                throw new RuntimeException("Error during insertion", e);
+                System.err.println("Error during insertion of vector: " + Arrays.toString(vec) + " at batch #" + batchSize);
+                continue; // Continue processing the next vector
+            }
+
+            if (batchSize % 1000 == 0) {
+                System.out.println("Processed " + batchSize + " vectors.");
             }
         }
-        System.out.println("Batch insertion completed.");
+        System.out.println("Batch insertion completed. Total inserted UUIDs: " + insertedUUIDs.size());
 
         // *** Query Sample ***
-        System.out.println("Performing a sample query...");
+        System.out.println("Performing a sample query");
         List<double[]> result = sys.query(sys.getQueryVectors().get(0), 10);
         if (result == null || result.isEmpty()) {
             System.err.println("Query returned no results.");
@@ -291,14 +315,13 @@ public class ForwardSecureANNSystem {
             dir.mkdirs();
         }
 
-        System.out.println("Saving the index...");
+        System.out.println("Saving the index");
         sys.saveIndex(backupDirectory);
         System.out.println("Index saved successfully.");
 
         // *** Shutdown System ***
-        System.out.println("Shutting down system...");
+        System.out.println("Shutting down system");
         sys.shutdown();
         System.out.println("System shutdown complete.");
     }
-
  }

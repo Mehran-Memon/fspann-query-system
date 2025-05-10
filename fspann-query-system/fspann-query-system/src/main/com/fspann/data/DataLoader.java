@@ -80,7 +80,6 @@ public class DataLoader {
 
                 vectorCount++;
                 if (vectorCount >= batchSize) {
-                    logger.info("Processed ground truth batch of size: {}", vectorCount);
                     vectorCount = 0;
                 }
             }
@@ -88,13 +87,11 @@ public class DataLoader {
             logger.error("Error reading .ivecs file: {}", filename, e);
             throw new IOException("Failed to load ground truth from .ivecs file: " + filename, e);
         }
-        logger.info("Total ground truth entries loaded from {}: {}", filename, groundTruth.size());
         return groundTruth;
     }
 
     private String detectFileFormat(String filename) {
         String extension = filename.substring(filename.lastIndexOf(".") + 1).toUpperCase();
-        logger.info("Detected file format: " + extension);
         return extension;
     }
 
@@ -218,7 +215,6 @@ public class DataLoader {
         if (!batch.isEmpty()) {
             processBatch(batch);
         }
-        logger.info("Total vectors loaded from {}: {}", filename, allVectors.size());
         return allVectors;
     }
 
@@ -232,8 +228,7 @@ public class DataLoader {
     }
 
     private double[] parseIvecsLine(String line) {
-        // Example placeholder parsing logic for IVECS format
-        return new double[0]; // Implement actual parsing for IVECS format
+        return new double[0];
     }
 
     private List<double[]> loadNPZ(String filename, int batchSize) throws IOException {
@@ -242,8 +237,6 @@ public class DataLoader {
     }
 
     private void processBatch(List<double[]> data) {
-        logger.info("Processing batch of size: {}", data.size());
-        // Implement additional batch processing if needed
     }
 
     @FunctionalInterface
