@@ -8,6 +8,7 @@ import com.fspann.query.QueryGenerator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import javax.crypto.SecretKey;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 
@@ -20,13 +21,29 @@ public class ANN {
     private List<double[]> dataRef;
     private final List<double[]> baseVectors;
 
-    public ANN(int dimensions, int numBuckets, KeyManager keyManager,
+    /**
+     * @param dimensions   dimensionality of vectors
+     * @param numBuckets   number of hash buckets (also used as shard count here)
+     * @param keyManager   key manager for encryption
+     * @param baseVectors  backing list for vector storage
+     */
+    public ANN(int dimensions,
+               int numBuckets,
+               KeyManager keyManager,
                List<double[]> baseVectors) {
         this.lsh = new EvenLSH(dimensions, numBuckets);
         this.numBuckets = numBuckets;
         this.keyManager = keyManager;
         this.baseVectors = baseVectors;
-        this.secureIndex = new SecureLSHIndex(1, keyManager.getCurrentKey(), null);
+
+        // Build a SecureLSHIndex with 1 hash table, numBuckets shards,
+        // using the current session key, and seeded with our baseVectors
+        this.secureIndex = new SecureLSHIndex(
+                1,                      // one hash table
+                numBuckets,             // shards = bucket count
+                keyManager.getCurrentKey(),
+                baseVectors             // initial data to index
+        );
     }
 
     /**
@@ -34,22 +51,32 @@ public class ANN {
      * @param data dataset to build the ANN index with
      */
     public void buildIndex(List<double[]> data) {
-        this.dataRef = data;
+        if (data == null || data.isEmpty()) {
+            logger.warn("Cannot build ANN index: dataset is null or empty");
+            return; // Or throw a specific exception if required
+        }
+
         try {
             SecretKey sessionKey = keyManager.getCurrentKey();
             if (sessionKey == null) {
-                logger.error("Encryption key cannot be null.");
+                logger.error("Encryption key cannot be null");
                 throw new IllegalArgumentException("Encryption key cannot be null");
             }
 
+            logger.debug("Building ANN index with {} vectors", data.size());
             lsh.updateCriticalValues(data);
-            // Clear index manually if needed by removing all points
-            secureIndex.clear(); // Assuming 'clear' method exists, or implement it
+            secureIndex.clear(); // Clear index after validation
 
             for (double[] point : data) {
+                if (point == null || point.length != 128) { // Add dimension check
+                    logger.warn("Skipping invalid vector: {}", Arrays.toString(point));
+                    continue;
+                }
                 int bucketId = lsh.getBucketId(point);
                 secureIndex.add(UUID.randomUUID().toString(), point, bucketId, false, data);
             }
+            this.dataRef = data; // Store dataRef after successful processing
+            logger.info("ANN index built successfully with {} vectors", data.size());
         } catch (Exception e) {
             logger.error("Error while building ANN index: {}", e.getMessage(), e);
             throw new RuntimeException("Error building ANN index", e);
@@ -122,32 +149,11 @@ public class ANN {
     }
 
     /**
-     * Removes a point from the ANN index.
-     * @param point the point to remove
-     */
-    public void removePoint(double[] point) {
-        try {
-            SecretKey sessionKey = keyManager.getCurrentKey();
-            if (sessionKey == null) {
-                logger.error("Encryption key cannot be null.");
-                throw new IllegalArgumentException("Encryption key cannot be null");
-            }
-
-            int bucketId = lsh.getBucketId(point);
-            byte[] encryptedPoint = EncryptionUtils.encryptVector(point, sessionKey);
-            // Remove point from the secure index (adjust based on SecureLSHIndex's remove method)
-            secureIndex.remove(UUID.randomUUID().toString()); // Assuming remove only needs ID
-        } catch (Exception e) {
-            logger.error("Error while removing point from ANN index: {}", e.getMessage(), e);
-            throw new RuntimeException("Error removing point from ANN index", e);
-        }
-    }
-
-    /**
      * Returns the current index used by the ANN.
      * @return the SecureLSHIndex used by the ANN
      */
     public SecureLSHIndex getSecureIndex() {
         return secureIndex;
     }
+
 }

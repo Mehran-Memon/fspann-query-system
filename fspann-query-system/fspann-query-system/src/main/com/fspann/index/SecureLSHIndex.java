@@ -1,44 +1,57 @@
 package com.fspann.index;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fspann.config.SystemConfig;
 import com.fspann.encryption.EncryptionUtils;
 import com.fspann.keymanagement.KeyManager;
 import com.fspann.query.EncryptedPoint;
-import com.fspann.utils.PersistenceUtils;
 import com.fspann.query.QueryToken;
+import com.fspann.utils.PersistenceUtils;
 import com.fspann.utils.Profiler;
+import org.apache.commons.lang3.tuple.Pair;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 import javax.crypto.SecretKey;
 import java.io.IOException;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
+/**
+ * Thread-safe, secure LSH index over encrypted points.
+ */
 public class SecureLSHIndex {
 
     /* ---------- constants ---------- */
     private static final Logger logger = LoggerFactory.getLogger(SecureLSHIndex.class);
-    private static final int    NUM_SHARDS = 32;      // <-- choose any shard fan-out
+    private static final int NUM_SHARDS = 32;      // constant
 
     /* ---------- fields ---------- */
-    private final Map<String, EncryptedPoint> encryptedPoints = new HashMap<>();
-    private final List<Map<Integer, List<EncryptedPoint>>> hashTables = new ArrayList<>();
-    private final Map<Integer, Integer> bucketToShard = new HashMap<>();
-
-    private SecretKey currentKey;
     private final int numHashTables;
+    private final int numShards;
+    private SecretKey currentKey;
     private final Profiler profiler;
+    private final ReadWriteLock indexLock = new ReentrantReadWriteLock();
+    private final ConcurrentHashMap<String, EncryptedPoint> encryptedPoints = new ConcurrentHashMap<>();
+    private final List<ConcurrentHashMap<Integer, CopyOnWriteArrayList<EncryptedPoint>>> hashTables = new ArrayList<>();
+    private final ConcurrentHashMap<Integer, Integer> bucketToShard = new ConcurrentHashMap<>();
+    private Map<Integer, CopyOnWriteArrayList<EncryptedPoint>> index = new ConcurrentHashMap<>();
 
     /* ---------- ctor ---------- */
     public SecureLSHIndex(int numHashTables,
+                          int numShards,
                           SecretKey key,
                           List<double[]> initialData) {
-
         this.numHashTables = numHashTables;
-        this.currentKey    = key;
+        this.numShards = numShards;
+        this.currentKey = key;
         this.profiler = new Profiler();
 
         for (int i = 0; i < numHashTables; i++) {
-            hashTables.add(new HashMap<>());
+            hashTables.add(new ConcurrentHashMap<>());
         }
 
         if (initialData != null && !initialData.isEmpty()) {
@@ -46,11 +59,24 @@ public class SecureLSHIndex {
         }
     }
 
+    public void addEncryptedPoint(Integer key, EncryptedPoint point) {
+        index.computeIfAbsent(key, k -> new CopyOnWriteArrayList<>()).add(point);
+    }
+
+    /* ---------- helper ---------- */
+    private int findVectorIndex(double[] vector, List<double[]> baseVectors) {
+        for (int i = 0; i < baseVectors.size(); i++) {
+            if (Arrays.equals(vector, baseVectors.get(i))) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
     /* ---------- initial bulk load ---------- */
     private void addInitialData(List<double[]> data) {
-        EvenLSH lsh = new EvenLSH(data.get(0).length, /*dummy*/10);
+        EvenLSH lsh = new EvenLSH(data.get(0).length, 10);
         lsh.updateCriticalValues(data);
-
         for (double[] vec : data) {
             try {
                 int bucketCode = lsh.getBucketId(vec);
@@ -67,84 +93,119 @@ public class SecureLSHIndex {
                    int bucketCode,
                    boolean useFakePoints,
                    List<double[]> baseVectors) throws Exception {
+        indexLock.writeLock().lock();
+        try {
+            int index = findVectorIndex(vector, baseVectors);
+            if (index < 0) {
+                throw new IllegalArgumentException("Vector not in baseVectors");
+            }
 
-        int vecIndex = -1;
-        if (baseVectors != null) {
-            vecIndex = baseVectors.indexOf(vector);
+            byte[] iv = EncryptionUtils.generateIV();
+            byte[] encrypted = EncryptionUtils.encryptVector(vector, iv, currentKey);
+            EncryptedPoint ep = new EncryptedPoint(
+                    encrypted,
+                    String.valueOf(bucketCode),  // bucketId
+                    id,                          // pointId
+                    index,                       // index in baseVectors
+                    iv,
+                    id                           // id field
+            );
+
+            encryptedPoints.put(id, ep);
+            bucketToShard.putIfAbsent(bucketCode, bucketCode % numShards);
+
+            int fakeAdded = 0;
+            for (int t = 0; t < numHashTables; t++) {
+                hashTables.get(t)
+                        .computeIfAbsent(bucketCode, k -> new CopyOnWriteArrayList<>())
+                        .add(ep);
+                if (useFakePoints) {
+                    fakeAdded++;
+                }
+            }
+            return fakeAdded;
+        } finally {
+            indexLock.writeLock().unlock();
         }
-        byte[] encrypted = EncryptionUtils.encryptVector(vector, currentKey);
-        int index = baseVectors.indexOf(vector);
-        if (index < 0)
-            throw new IllegalArgumentException("Vector not in baseVectors");
-
-        // Creating EncryptedPoint with correct constructor
-        EncryptedPoint ep = new EncryptedPoint(encrypted,
-                "bucket_v" + bucketCode,
-                id, index);  // Use the constructor here
-
-        encryptedPoints.put(id, ep);
-
-        bucketToShard.putIfAbsent(bucketCode, bucketCode % NUM_SHARDS);
-
-        int fakeAdded = 0;
-        for (int t = 0; t < numHashTables; t++) {
-            hashTables.get(t)
-                    .computeIfAbsent(bucketCode, k -> new ArrayList<>())
-                    .add(ep);
-            if (useFakePoints) fakeAdded++;
-        }
-        return fakeAdded;
     }
 
     // Save the encrypted index to disk
     public void saveIndex(String directoryPath) {
+        indexLock.writeLock().lock();
         try {
             PersistenceUtils.saveObject(encryptedPoints, directoryPath + "/encrypted_points.ser");
-            PersistenceUtils.saveObject(hashTables, directoryPath + "/hash_tables.ser");
+            PersistenceUtils.saveObject(hashTables,   directoryPath + "/hash_tables.ser");
             logger.info("Index saved to: {}", directoryPath);
         } catch (IOException e) {
             logger.error("Failed to save index to: {}", directoryPath, e);
             throw new RuntimeException("Failed to save index", e);
+        } finally {
+            indexLock.writeLock().unlock();
         }
     }
 
     // Load the encrypted index from disk
+    @SuppressWarnings("unchecked")
     public void loadIndex(String directoryPath) {
-
+        indexLock.writeLock().lock();
         try {
-            @SuppressWarnings("unchecked")
-            // Load the encrypted points and hash tables from files
-            Map<String,EncryptedPoint> epMap = PersistenceUtils.loadObject(directoryPath+"/encrypted_points.ser", Map.class);            List<Map<Integer, List<EncryptedPoint>>> htList = PersistenceUtils.loadObject(directoryPath + "/hash_tables.ser", List.class);
-            this.encryptedPoints.putAll(epMap);
-            this.hashTables.addAll(htList);
-        } catch (IOException | ClassNotFoundException e) {
-            e.printStackTrace();
+            encryptedPoints.clear();
+            hashTables.forEach(Map::clear);
 
+            // Load encrypted points
+            Map<String, EncryptedPoint> epMap = PersistenceUtils.loadObject(
+                    directoryPath + "/encrypted_points.ser",
+                    new TypeReference<ConcurrentHashMap<String, EncryptedPoint>>() {}
+            );
+
+            // Load hash tables with proper type conversion
+            List<ConcurrentHashMap<Integer, List<EncryptedPoint>>> htList = PersistenceUtils.loadObject(
+                    directoryPath + "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\index_backup\\hash_tables.ser", new TypeReference<List<ConcurrentHashMap<Integer, List<EncryptedPoint>>>>() {}
+            );
+
+            encryptedPoints.putAll(epMap);
+
+            // Convert loaded List<EncryptedPoint> to CopyOnWriteArrayList
+            for (int i = 0; i < Math.min(hashTables.size(), htList.size()); i++) {
+                ConcurrentHashMap<Integer, CopyOnWriteArrayList<EncryptedPoint>> targetTable = hashTables.get(i);
+                htList.get(i).forEach((bucketId, points) ->
+                        targetTable.put(bucketId, new CopyOnWriteArrayList<>(points))
+                );
+            }
+        } catch (IOException | ClassNotFoundException e) {
+            logger.error("Failed to load index from {}", directoryPath, e);
+            throw new RuntimeException("Failed to load index", e);
+        } finally {
+            indexLock.writeLock().unlock();
         }
     }
 
     // Remove a point by ID from the index
     public void remove(String id) {
-        encryptedPoints.remove(id);
-
-        for (Map<Integer, List<EncryptedPoint>> table : hashTables) {
-            table.forEach((bucketId, points) -> points.removeIf(p -> p.getPointId().equals(id)));
+        indexLock.writeLock().lock();
+        try {
+            encryptedPoints.remove(id);
+            for (ConcurrentHashMap<Integer, CopyOnWriteArrayList<EncryptedPoint>> table : hashTables) {
+                table.forEach((bucketId, points) -> points.removeIf(p -> p.getPointId().equals(id)));
+            }
+        } finally {
+            indexLock.writeLock().unlock();
         }
     }
 
+    // Clear the entire index
     public void clear() {
-        // Clear the encrypted points map
-        encryptedPoints.clear();
-
-        // Iterate over each hash table and clear the entries
-        for (Map<Integer, List<EncryptedPoint>> table : hashTables) {
-            table.clear();
+        indexLock.writeLock().lock();
+        try {
+            encryptedPoints.clear();
+            for (Map<Integer, ?> table : hashTables) {
+                table.clear();
+            }
+            logger.info("SecureLSHIndex has been cleared.");
+        } finally {
+            indexLock.writeLock().unlock();
         }
-
-        // Optionally, log that the index has been cleared for debugging or tracking
-        System.out.println("SecureLSHIndex has been cleared.");
     }
-
 
     // Set the current key (for rehashing)
     public void setCurrentKey(SecretKey key) {
@@ -153,93 +214,87 @@ public class SecureLSHIndex {
 
     // Find nearest neighbors using the encrypted query and LSH
     public List<EncryptedPoint> findNearestNeighborsEncrypted(QueryToken queryToken) {
-        if (queryToken == null) {
-            throw new IllegalArgumentException("QueryToken cannot be null");
-        }
-        Set<EncryptedPoint> candidates = new HashSet<>();
-        List<Integer> candidateBuckets = queryToken.getCandidateBuckets();
-        int numTables = queryToken.getNumTables(); // Use numTables from QueryToken
-        if (candidateBuckets == null || candidateBuckets.isEmpty()) {
-            return new ArrayList<>();
-        }
-        for (int i = 0; i < Math.min(numTables, numHashTables); i++) {
-            for (Integer bucketId : candidateBuckets) {
-                List<EncryptedPoint> bucket = hashTables.get(i).getOrDefault(bucketId, new ArrayList<>());
-                candidates.addAll(bucket);
+        indexLock.readLock().lock();
+        try {
+            if (queryToken == null) {
+                throw new IllegalArgumentException("QueryToken cannot be null");
             }
+            Set<EncryptedPoint> candidates = new HashSet<>();
+            List<Integer> candidateBuckets = queryToken.getCandidateBuckets();
+            int numTables = Math.min(queryToken.getNumTables(), numHashTables);
+            if (candidateBuckets == null || candidateBuckets.isEmpty()) {
+                return Collections.emptyList();
+            }
+            for (int i = 0; i < numTables; i++) {
+                for (Integer bucketId : candidateBuckets) {
+                    CopyOnWriteArrayList<EncryptedPoint> bucket = hashTables.get(i)
+                            .getOrDefault(bucketId, new CopyOnWriteArrayList<>());
+                    candidates.addAll(bucket);
+                }
+            }
+            List<EncryptedPoint> result = new ArrayList<>(candidates);
+            return result.subList(0, Math.min(queryToken.getTopK(), result.size()));
+        } finally {
+            indexLock.readLock().unlock();
         }
-        List<EncryptedPoint> result = new ArrayList<>(candidates);
-        return result.subList(0, Math.min(queryToken.getTopK(), result.size()));
     }
 
     // Rehash the index with a new key
     public void rehash(KeyManager keyManager, String context) throws Exception {
-        SecretKey oldKey = keyManager.getPreviousKey();
-        SecretKey newKey = keyManager.getCurrentKey();
-        if (newKey == null) {
-            throw new IllegalStateException("No current key available for rehashing");
+        indexLock.writeLock().lock();
+        try {
+            SecretKey oldKey = keyManager.getPreviousKey();
+            SecretKey newKey = keyManager.getCurrentKey();
+            if (newKey == null) {
+                throw new IllegalStateException("No current key available for rehashing");
+            }
+            logger.info("Rehashing with context: {}", context);
+            for (ConcurrentHashMap<Integer, CopyOnWriteArrayList<EncryptedPoint>> table : hashTables) {
+                for (CopyOnWriteArrayList<EncryptedPoint> bucket : table.values()) {
+                    for (EncryptedPoint point : bucket) {
+                        Pair<byte[], byte[]> reEnc = EncryptionUtils.reEncryptData(
+                                point.getCiphertext(), point.getIV(), oldKey, newKey);
+                        point.setCiphertext(reEnc.getLeft());
+                    }
+                }
+            }
+            this.currentKey = newKey;
+        } finally {
+            indexLock.writeLock().unlock();
         }
+    }
 
-        // Log the context and rehashing operation
-        logger.info("Rehashing with context: {}", context);
+    public void reEncryptShard(int shardId, KeyManager km, List<SecretKey> previousKeys) {
+        // Retrieve the shard from the index using the shardId
+        CopyOnWriteArrayList<EncryptedPoint> shard = index.get(shardId);
 
-        // Re-encrypt all data with the new key
-        for (Map<Integer, List<EncryptedPoint>> table : hashTables) {
-            for (List<EncryptedPoint> bucket : table.values()) {
-                for (EncryptedPoint point : bucket) {
-                    byte[] encryptedData = point.getCiphertext();
-                    byte[] newEncryptedData = EncryptionUtils.reEncryptData(encryptedData, oldKey, newKey);
-                    point.setCiphertext(newEncryptedData);  // Update the encrypted data with the new key
+        // Check if the shard is valid (not null)
+        if (shard != null) {
+            for (EncryptedPoint ep : shard) {
+                try {
+                    // Call reEncrypt with both the KeyManager and the previous keys
+                    ep.reEncrypt(km, previousKeys);
+                } catch (Exception e) {
+                    logger.error("Failed to re-encrypt EncryptedPoint for shard {}: {}", shardId, ep.getPointId(), e);
                 }
             }
         }
+    }
 
-        this.currentKey = newKey;  // Update the current key
+    // Find by ID
+    public EncryptedPoint findById(String id) {
+        indexLock.readLock().lock();
+        try {
+            return encryptedPoints.get(id);
+        } finally {
+            indexLock.readLock().unlock();
+        }
     }
 
     /**
-     * Re-encrypt all buckets that belong to the given shard.
-     * Called by the background ReEncryptor or unit-tests.
-     *
-     * @param shardId the shard whose key has just rotated
-     * @param km      the KeyManager that holds old & new shard keys
+     * @return the number of hash tables used by this index
      */
-    public void reEncryptShard(int shardId, KeyManager km) throws Exception {
-        if (SystemConfig.PROFILER_ENABLED) profiler.start("reenc-batch");
-
-        // fetch keys: latest + previous version for this shard
-        int   latestVer = km.getTimeVersion();                 // global counter
-        SecretKey newKey = km.getShardKey(shardId, latestVer);
-        SecretKey oldKey = km.getShardKey(shardId, latestVer - 1);
-
-        if (newKey == null || oldKey == null) {
-            logger.warn("Shard {} reEncrypt: missing keys (old={}, new={})",
-                    shardId, oldKey, newKey);
-            return;
-        }
-
-        /* iterate through every hash-table & bucket */
-        for (Map<Integer,List<EncryptedPoint>> table : hashTables) {
-            for (Map.Entry<Integer,List<EncryptedPoint>> e : table.entrySet()) {
-
-                int bucketCode = e.getKey();
-                if (bucketToShard.getOrDefault(bucketCode, -1) != shardId) continue;
-
-                for (EncryptedPoint ep : e.getValue()) {
-                    byte[] reEnc = EncryptionUtils.reEncryptData(
-                            ep.getCiphertext(), oldKey, newKey);
-                    ep.setCiphertext(reEnc);
-                }
-            }
-        }
-        if (SystemConfig.PROFILER_ENABLED) profiler.stop("reenc-batch");
-
-        logger.info("Shard {} re-encrypted with version v{}", shardId, latestVer);
+    public int getNumHashTables() {
+        return numHashTables;
     }
-
-    public EncryptedPoint findById(String id) {
-        return encryptedPoints.get(id);  // Retrieve the EncryptedPoint by its ID
-    }
-
-
 }

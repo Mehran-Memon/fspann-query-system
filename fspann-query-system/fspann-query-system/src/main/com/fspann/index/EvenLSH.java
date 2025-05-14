@@ -1,5 +1,7 @@
 package com.fspann.index;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.security.SecureRandom;
 import java.util.*;
 
@@ -11,6 +13,7 @@ import java.util.*;
  *  • criticalAngles[] stores the quantile cut-points (cosθ values)
  */
 public class EvenLSH {
+    private static final Logger logger = LoggerFactory.getLogger(EvenLSH.class);
 
     private double[] projectionVector;      // random unit vector
     private double[] criticalAngles;        // quantile cut-points
@@ -45,19 +48,40 @@ public class EvenLSH {
 
     /** Recompute quantile cut-points from the whole dataset (dynamic N) */
     public void updateCriticalValues(List<double[]> data) {
-        if (data == null || data.isEmpty())
+        if (data == null || data.isEmpty()) {
+            logger.warn("Cannot update critical values: dataset is null or empty");
             throw new IllegalArgumentException("Dataset must not be empty");
+        }
+        if (numBuckets <= 0) {
+            logger.error("Invalid number of buckets: {}", numBuckets);
+            throw new IllegalArgumentException("Number of buckets must be positive");
+        }
 
-        // keep caller-provided numBuckets unchanged  ⬇
-        this.criticalAngles = new double[numBuckets];
+        try {
+            this.criticalAngles = new double[numBuckets];
+            List<Double> proj = new ArrayList<>(data.size());
+            for (double[] v : data) {
+                if (v == null || v.length == 0) {
+                    logger.warn("Skipping invalid vector in projection: {}", Arrays.toString(v));
+                    continue;
+                }
+                proj.add(project(v));
+            }
 
-        List<Double> proj = new ArrayList<>(data.size());
-        for (double[] v : data) proj.add(project(v));
-        Collections.sort(proj);
+            if (proj.isEmpty()) {
+                logger.error("No valid projections computed from dataset");
+                throw new IllegalArgumentException("No valid projections computed");
+            }
 
-        for (int k = 1; k <= numBuckets; k++) {
-            int idx = (int) Math.floor(k * proj.size() / (double)(numBuckets + 1));
-            criticalAngles[k - 1] = proj.get(Math.min(idx, proj.size() - 1));
+            Collections.sort(proj);
+            for (int k = 1; k <= numBuckets; k++) {
+                int idx = (int) Math.floor(k * proj.size() / (double)(numBuckets + 1));
+                criticalAngles[k - 1] = proj.get(Math.min(idx, proj.size() - 1));
+            }
+            logger.debug("Updated critical values with {} projections", proj.size());
+        } catch (Exception e) {
+            logger.error("Error updating critical values: {}", e.getMessage(), e);
+            throw new RuntimeException("Error updating critical values", e);
         }
     }
 

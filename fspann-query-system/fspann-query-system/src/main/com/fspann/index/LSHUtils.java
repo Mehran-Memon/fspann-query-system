@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.fspann.encryption.EncryptionUtils;
 import javax.crypto.SecretKey;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -22,7 +23,20 @@ public class LSHUtils {
     public static double[] computeCriticalValues(List<byte[]> encryptedData, EvenLSH lsh, int numBuckets, SecretKey key) throws Exception {
         List<Double> projections = new ArrayList<>();
         for (byte[] encryptedPoint : encryptedData) {
-            double[] decryptedPoint = key != null ? EncryptionUtils.decryptVector(encryptedPoint, key) : BucketConstructor.byteToDoubleArray(encryptedPoint);
+            double[] decryptedPoint;
+            if (key != null) {
+                // Split into IV and ciphertext (assuming IV is prepended to ciphertext)
+                ByteBuffer buffer = ByteBuffer.wrap(encryptedPoint);
+                byte[] iv = new byte[EncryptionUtils.GCM_IV_LENGTH];
+                buffer.get(iv);
+                byte[] ciphertext = new byte[buffer.remaining()];
+                buffer.get(ciphertext);
+
+                decryptedPoint = EncryptionUtils.decryptVector(ciphertext, iv, key);
+            } else {
+                decryptedPoint = BucketConstructor.byteToDoubleArray(encryptedPoint);
+            }
+
             double projection = lsh.project(decryptedPoint);
             projections.add(projection);
         }
