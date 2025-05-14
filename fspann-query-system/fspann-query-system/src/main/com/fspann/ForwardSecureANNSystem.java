@@ -2,326 +2,444 @@ package com.fspann;
 
 import com.fspann.data.DataLoader;
 import com.fspann.encryption.EncryptionUtils;
+import com.fspann.evaluation.EvaluationEngine;
+import com.fspann.index.ANN;
+import com.fspann.index.DimensionContext;
 import com.fspann.index.EvenLSH;
 import com.fspann.index.SecureLSHIndex;
-import com.fspann.keymanagement.KeyManager;
-import com.fspann.keymanagement.KeyVersionManager;
-import com.fspann.keymanagement.ReEncryptor;
+import com.fspann.keymanagement.*;
 import com.fspann.query.EncryptedPoint;
 import com.fspann.query.QueryGenerator;
 import com.fspann.query.QueryProcessor;
 import com.fspann.query.QueryToken;
 import com.fspann.utils.LRUCache;
 import com.fspann.utils.Profiler;
-import com.fspann.index.ANN;
-import com.fspann.keymanagement.MetadataManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.File;
-import java.nio.ByteBuffer;
-import java.util.Set;
-
-import java.io.IOException;
 import javax.crypto.SecretKey;
+import java.io.File;
+import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
-import static org.apache.commons.math3.util.MathArrays.distance;
-
+/**
+ * Main entry for the Forward-Secure ANN System.
+ * Supports dynamic insertion, querying, and forward-secure rehashing
+ * across multiple dimensions with LSH-backed encrypted indexing.
+ */
 public class ForwardSecureANNSystem {
     private static final Logger logger = LoggerFactory.getLogger(ForwardSecureANNSystem.class);
 
-    private final SecureLSHIndex index;
+    /* ---------- Core Components ---------- */
     private final KeyManager keyManager;
     private final KeyVersionManager keyVersionManager;
-    private final QueryProcessor queryProcessor;
-    private final LRUCache<QueryToken, List<EncryptedPoint>> queryCache;
-    public final Map<String, EncryptedPoint> encryptedDataStore;
-    private final Profiler profiler;
-    private final AtomicInteger operationCount;
-    private List<double[]> baseVectors;
-    private List<int[]> groundTruth;
-    private List<double[]> queryVectors;
     private final MetadataManager metadataManager;
-    private final ANN ann;
     private final ReEncryptor reEncryptor;
     private final Thread reEncryptThread;
-    private final int numIntervals;
-    private final Set<Integer> uniqueHashes = ConcurrentHashMap.newKeySet();
-    String metadataFilePath = "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\index_backup\\metadata.ser";
-    String keysFilePath = "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\index_backup\\keys.ser";
+    private final QueryProcessor queryProcessor;
+    private final LRUCache<QueryToken, List<EncryptedPoint>> queryCache;
+    private final Profiler profiler;
 
-    private long totalInsertTimeMs = 0;
-    private int totalRehashes = 0;
+    /* ---------- Data & Index Stores ---------- */
+    private final ConcurrentHashMap<String, EncryptedPoint> encryptedDataStore = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, DimensionContext> dimensionContexts = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, Set<List<Double>>> uniqueHashes = new ConcurrentHashMap<>();
+
+    /* ---------- Synchronization ---------- */
+    private final ReadWriteLock indexLock = new ReentrantReadWriteLock();
+
+    /* ---------- Configuration ---------- */
+    private final int numHashTables;
+    private final int numIntervals;
+    private final AtomicInteger operationCount = new AtomicInteger(0);
+
+    /* ---------- Statistics ---------- */
+    private long totalInsertTimeNanos = 0;
     private int totalFakePoints = 0;
 
-    public ForwardSecureANNSystem(String basePath, String queryPath, String groundTruthPath,
-                                  int numHashTables, int numIntervals,
-                                  int maxBucketSize, int targetBucketSize, boolean useFakePoints, boolean useForwardSecurity,
-                                  String keysFilePath) throws IOException {
+    /* ---------- I/O Paths ---------- */
+    private final String metadataFilePath;
+    private final String keysFilePath;
 
-        // Initialize keyManager first
-        this.keyManager = new KeyManager(keysFilePath, 1000);  // Pass the keysFilePath here
-        MetadataManager metadataManager = new MetadataManager(keyManager);
-        try {
-            metadataManager.loadMetadata(metadataFilePath); // Ensure metadata is loaded
-            metadataManager.loadKeys(keysFilePath);         // Ensure keys are loaded
-        } catch (IOException | ClassNotFoundException e) {
-            System.out.println("Error loading metadata or keys, initializing new manager.");
-            // Handle the issue if loading fails, perhaps creating a fresh MetadataManager
-            createNewMetadata(); // This can be a method to handle fresh creation
-        }
-        this.encryptedDataStore = new HashMap<>();
-        // Now initialize other components
-        this.keyVersionManager = new KeyVersionManager(keyManager, 1000);
-        this.queryCache = new LRUCache<>(1000);
-        this.operationCount = new AtomicInteger(0);
-        this.profiler = new Profiler();
+    /* ---------- Constructor ---------- */
+    public ForwardSecureANNSystem(String basePath,
+                                  String queryPath,
+                                  String groundTruthPath,
+                                  int numHashTables,
+                                  int numIntervals,
+                                  int maxOperations,
+                                  boolean useForwardSecurity,
+                                  String metadataFilePath,
+                                  String keysFilePath) throws Exception {
+
+        // Core setup
+        this.numHashTables = numHashTables;
+        this.numIntervals  = numIntervals;
+        this.metadataFilePath = metadataFilePath;
+        this.keysFilePath = keysFilePath;
+
+        // Initialize KeyManager and metadata
+        int maxKeyUsage = 5000;
+        KeyRotationPolicy rotationPolicy = new KeyRotationPolicy(
+                maxOperations,
+                TimeUnit.HOURS.toMillis(1),     // rotate at least every hour
+                TimeUnit.SECONDS.toMillis(30),  // shard rotation timeout
+                maxKeyUsage                   // max key usage same as operations threshold
+        );
+        this.keyManager = new KeyManager(keysFilePath, rotationPolicy);
         this.metadataManager = new MetadataManager(keyManager);
-        this.numIntervals = numIntervals;
-        metadataManager.addMetadata("version", "1.0", metadataFilePath);
-        String version = metadataManager.getMetadata("version");
-
-        // Check if metadata file exists, if not, create it
-        File metadataFile = new File("C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\index_backup\\metadata.ser");
-        if (!metadataFile.exists()) {
-            // Create new metadata if not found
+        try {
+            metadataManager.loadMetadata(metadataFilePath);
+            metadataManager.loadKeys(keysFilePath);
+        } catch (Exception e) {
+            logger.info("Metadata or keys not found; initializing new metadata.");
             createNewMetadata();
         }
 
-        // Load datasets
-        logger.info("Loading Datasets");
-        DataLoader dataLoader = new DataLoader();
-        baseVectors = dataLoader.loadData(basePath, 1000);
-        queryVectors = dataLoader.loadData(queryPath, 1000);
-        groundTruth = dataLoader.loadGroundTruth(groundTruthPath, 1000);
-        logger.info("Base Vectors Size: {}", baseVectors.size());
-        logger.info("Query Vectors Size: {}", queryVectors.size());
-        logger.info("Ground Truth Size: {}", groundTruth.size());
-        logger.info("Dataset loading complete.");
+        // Auxiliary services
+        this.keyVersionManager = new KeyVersionManager(keyManager, maxOperations);
+        this.queryCache = new LRUCache<>(maxOperations);
+        this.profiler = new Profiler();
+        this.queryProcessor = new QueryProcessor(new HashMap<>(), keyManager, maxOperations);
 
-        EvenLSH initialLsh = new EvenLSH(baseVectors.get(0).length, numIntervals);
-        this.index = new SecureLSHIndex(numHashTables, keyManager.getCurrentKey(), baseVectors);
-        QueryGenerator queryGenerator = new QueryGenerator(initialLsh, keyManager);
-        this.queryProcessor = new QueryProcessor(new HashMap<>(), keyManager, 1000);
-
-        // Initialize ANN
-        logger.info("Initializing ANN index");
-        ann = new ANN(baseVectors.get(0).length, numIntervals, keyManager, baseVectors );
-        ann.buildIndex(baseVectors);  // Build the index with the base data
-        this.reEncryptor = new ReEncryptor(index, keyManager);
+        // Start background re-encryption if enabled
+        this.reEncryptor = new ReEncryptor(dimensionContexts, keyManager);
         this.reEncryptThread = new Thread(reEncryptor, "ReEncryptor");
-        reEncryptThread.setDaemon(true);
-        reEncryptThread.start();
+        this.reEncryptThread.setDaemon(true);
+        if (useForwardSecurity) reEncryptThread.start();
 
+        // Load data
+        logger.info("Loading datasets...");
+        DataLoader loader = new DataLoader();
+        List<double[]> baseVectors   = loader.loadData(basePath, 1000);
+        List<double[]> queryVectors  = loader.loadData(queryPath, 1000);
+        List<int[]>   groundTruth    = loader.loadGroundTruth(groundTruthPath, 1000);
+        logger.info("Datasets loaded: base={}, queries={}, groundTruth={}",
+                baseVectors.size(), queryVectors.size(), groundTruth.size());
+
+        // (Optionally) warm-up each dimension context
+        for (double[] vec : baseVectors) {
+            insert(UUID.randomUUID().toString(), vec);
+        }
     }
 
-    public List<double[]> query(double[] queryVector, int topK) throws Exception {
-        logger.info("[STEP] 📤 Querying with vector: {}", Arrays.toString(queryVector));
-
-        SecretKey currentKey = keyManager.getCurrentKey();
-
-        if (currentKey == null) {
-            logger.error("Failed to get the current session key. KeyManager might not be initialized correctly.");
-            throw new IllegalStateException("Current session key is null");
-        }
-
-        EvenLSH lsh = new EvenLSH(queryVector.length, numIntervals);  // Ensure lsh can handle multi-dimensional vectors
-        QueryToken queryToken = QueryGenerator.generateQueryToken(queryVector, topK, 1, lsh, keyManager);
-        logger.info("[STEP] 📦 Generated query token: {}", queryToken);
-
-        List<EncryptedPoint> result = queryCache.get(queryToken);
-        if (result != null) {
-            logger.info("Cache hit for query: {}", queryToken);
-            return decryptEncryptedPoints(result);
-        }
-
-        logger.info("Processing query...");
-        result = queryProcessor.processQuery(queryToken, index.findNearestNeighborsEncrypted(queryToken));
-        queryCache.put(queryToken, result);
-        return decryptEncryptedPoints(result);
-    }
+    /**
+     * Insert a new vector into the appropriate dimension index.
+     */
+//    public void insert(String id, double[] vec) throws Exception {
+//        indexLock.writeLock().lock();
+//        try {
+//            int dims = vec.length;
+//            DimensionContext ctx = dimensionContexts.computeIfAbsent(dims, this::createContext);
+//            ANN ann   = ctx.getAnn();
+//            EvenLSH lsh = ctx.getLsh();
+//            SecureLSHIndex idx = ctx.getIndex();
+//
+//            // Duplicate suppression (skip if seen)
+//            Set<Integer> seen = uniqueHashes.computeIfAbsent(dims, d -> ConcurrentHashMap.newKeySet());
+//            int h = Arrays.hashCode(vec);
+//            if (!seen.add(h)) {
+//                logger.debug("Skipping duplicate vector {} for dim {}", id, dims);
+//                return;
+//            }
+//
+//            // Update ANN and baseVectors
+//            List<double[]> base = ctx.getBaseVectors();
+//            base.add(vec);
+//            ann.updateIndex(vec);
+//
+//            // Encrypt
+//            SecretKey key = keyManager.getCurrentKey();
+//            byte[] iv     = EncryptionUtils.generateIV();
+//            byte[] ct = EncryptionUtils.encryptVector(vec, iv, key);  // Pass IV explicitly
+//            int bucket    = ann.getBucketId(vec);
+//            EncryptedPoint ep = new EncryptedPoint(ct, "bucket_"+bucket, id, base.size()-1, iv, id);
+//
+//            // Store
+//            encryptedDataStore.put(id, ep);
+//            totalFakePoints += idx.add(id, vec, bucket, true, base);
+//
+//            // Rotation & rehash trigger
+//            int before = keyManager.getTimeVersion();
+//            keyManager.rotateKeysIfNeeded();
+//            int after = keyManager.getTimeVersion();
+//            if (after > before) rehashIndex();
+//
+//            // Stats
+//            profiler.stop("insert");
+//        } finally {
+//            indexLock.writeLock().unlock();
+//        }
+//    }
 
     public void insert(String id, double[] vec) throws Exception {
-        long t0 = System.nanoTime();
+        indexLock.writeLock().lock();
+        try {
+            int dims = vec.length;
+            DimensionContext ctx = dimensionContexts.computeIfAbsent(dims, this::createContext);
+            ANN ann   = ctx.getAnn();
+            EvenLSH lsh = ctx.getLsh();
+            SecureLSHIndex idx = ctx.getIndex();
 
-        // Check if key rotation is needed after an insert
-        keyManager.rotateKeysIfNeeded(); // Rotate the keys if the operation count exceeds the threshold
+            // Duplicate suppression (skip if seen)
+            Set<List<Double>> seen = uniqueHashes.computeIfAbsent(dims, d -> ConcurrentHashMap.newKeySet());
+            // Compare the vectors directly by checking if they are equal
+            List<Double> vectorList = Arrays.stream(vec).boxed().collect(Collectors.toList());
+            if (!seen.add(vectorList)) {
+                logger.debug("Skipping duplicate vector {} for dim {}", id, dims);
+                return;
+            }
 
-        // Continue with the insert process
-        int hash = Arrays.hashCode(vec);
-        if (!uniqueHashes.add(hash)) return; // Skip if already processed
 
-        int vecIdx = baseVectors.size();
-        baseVectors.add(vec);
 
-        // Encrypt the new vector
-        SecretKey key  = keyManager.getCurrentKey();
-        byte[] cipher  = EncryptionUtils.encryptVector(vec, key);
-        int bucketId   = ann.getBucketId(vec);
+            // Update ANN and baseVectors
+            List<double[]> base = ctx.getBaseVectors();
+            base.add(vec);
+            ann.updateIndex(vec);
 
-        // Book-keeping
-        EncryptedPoint ep = new EncryptedPoint(cipher, "bucket_v"+bucketId, id, vecIdx);
-        encryptedDataStore.put(id, ep);
+            // Encrypt
+            SecretKey key = keyManager.getCurrentKey();
+            byte[] iv = EncryptionUtils.generateIV();  // Generate IV
+            byte[] ct = EncryptionUtils.encryptVector(vec, iv, key);  // Pass IV explicitly
 
-        // Update index with the encrypted point
-        totalFakePoints += index.add(id, vec, bucketId, true, baseVectors);
-        ann.updateIndex(vec);
+            int bucket = ann.getBucketId(vec);
+            EncryptedPoint ep = new EncryptedPoint(ct, "bucket_" + bucket, id, base.size() - 1, iv, id);
 
-        // Rehash the index with new keys if necessary
-        keyManager.rehashIndexForNewKeys();
+            // Store
+            encryptedDataStore.put(id, ep);
+            totalFakePoints += idx.add(id, vec, bucket, true, base);
 
-        totalInsertTimeMs += (System.nanoTime() - t0) / 1_000_000.0;
+            // Rotation & rehash trigger
+            int before = keyManager.getTimeVersion();
+            keyManager.rotateKeysIfNeeded();
+            int after = keyManager.getTimeVersion();
+            if (after > before) rehashIndex();
+
+            // Stats
+            profiler.stop("insert");
+        } finally {
+            indexLock.writeLock().unlock();
+        }
     }
 
+    /**
+     * Perform full index rehash under write lock.
+     */
+    public void rehashIndex() {
+        indexLock.writeLock().lock();
+        try {
+            logger.info("Rehashing entire index due to key rotation...");
+            // Get all points from encryptedDataStore
+            List<EncryptedPoint> points = new ArrayList<>(encryptedDataStore.values());
+            // Build a list containing at most the single previous key
+            SecretKey prevKey = keyManager.getPreviousKey();
+            List<SecretKey> previousKeys = prevKey == null
+                    ? Collections.emptyList()
+                    : Collections.singletonList(prevKey);
+
+            // Re-encrypt points
+            for (EncryptedPoint p : points) {
+                try {
+                    p.reEncrypt(keyManager, previousKeys);
+                } catch (Exception ex) {
+                    logger.warn("Failed to re-encrypt {}: {}", p.getId(), ex.getMessage());
+                }
+            }
+
+            // Rebuild each dimension context
+            for (Map.Entry<Integer, DimensionContext> entry : dimensionContexts.entrySet()) {
+                int dims = entry.getKey();
+                DimensionContext context = entry.getValue();
+                ANN ann = context.getAnn();
+                SecureLSHIndex idx = context.getIndex();
+                List<double[]> base = context.getBaseVectors();
+                base.clear();
+                idx.clear();
+                for (EncryptedPoint p : points) {
+                    double[] v = p.decrypt(keyManager.getCurrentKey(), previousKeys);
+                    if (v != null && v.length == dims) {
+                        base.add(v);
+                        int bucketId = ann.getBucketId(v);
+                        idx.add(p.getId(), v, bucketId, true, base);
+                        ann.updateIndex(v);
+                    }
+                }
+            }
+
+            logger.info("Rehash complete: reinserted {} points", encryptedDataStore.size());
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        } finally {
+            indexLock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * Create new metadata entries and persist them.
+     */
     private void createNewMetadata() {
-        // Implement logic to generate new metadata
-        // This could be any default or initial configuration that your system needs
-        System.out.println("Creating new metadata...");
-        metadataManager.addMetadata("version", "1.0", "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\index_backup");
-        metadataManager.saveMetadata("C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\index_backup");
+        // Initialize version metadata
+        metadataManager.addMetadata("version", "1.0", metadataFilePath);
+        metadataManager.saveMetadata(metadataFilePath);
     }
 
-    private List<double[]> decryptEncryptedPoints(List<EncryptedPoint> encryptedPoints) throws Exception {
-        List<double[]> decryptedVectors = new ArrayList<>();
-        SecretKey currentKey = keyManager.getSessionKey(keyVersionManager.getTimeVersion());
-
-        for (EncryptedPoint point : encryptedPoints) {
-            double[] decryptedVector = point.decrypt(currentKey);
-            decryptedVectors.add(decryptedVector);
-        }
-        return decryptedVectors;
+    /**
+     * Generate a reader-friendly context for the given dimension.
+     */
+    private DimensionContext createContext(int dims) {
+        List<double[]> base = new CopyOnWriteArrayList<>();
+        DimensionContext ctx = new DimensionContext(dims, numIntervals, numHashTables, keyManager, base);
+        try { ctx.getAnn().buildIndex(base); }
+        catch (Exception ex) { throw new RuntimeException("ANN init failed", ex); }
+        return ctx;
     }
 
-    public void delete(String id) throws Exception {
-        encryptedDataStore.remove(id);
-        index.remove(id);
-        logger.info("Deleted point with ID: {}", id);
-    }
-
-    public void saveIndex(String path) {
+    /**
+     * Query for the top-K nearest neighbors of the given vector.
+     */
+    public List<double[]> query(double[] vec, int topK) throws Exception {
+        indexLock.readLock().lock();
         try {
-            index.saveIndex(path);
-            logger.info("Encrypted index saved to: {}", path);
-        } catch (Exception e) {
-            logger.error("Failed to save index to: {}", path, e);
-            throw new RuntimeException("Failed to save index", e);
+            int dims = vec.length;
+            DimensionContext ctx = dimensionContexts.get(dims);
+            if (ctx == null) {
+                throw new IllegalArgumentException("No index for dims=" + dims);
+            }
+
+            // Prepare query token
+            QueryToken token = QueryGenerator.generateQueryToken(
+                    vec, topK, numHashTables, ctx.getLsh(), keyManager
+            );
+
+            // Check cache first
+            List<EncryptedPoint> encResults = queryCache.get(token);
+            if (encResults != null) {
+                logger.debug("Cache hit for {}", token);
+            } else {
+                // Execute encrypted LSH search directly
+                SecureLSHIndex idx = ctx.getIndex();
+                encResults = idx.findNearestNeighborsEncrypted(token);
+                queryCache.put(token, encResults);
+            }
+
+            // Decrypt and return
+            return decryptPoints(encResults);
+        } finally {
+            indexLock.readLock().unlock();
         }
     }
 
-    public List<double[]> getQueryVectors() {
-        return queryVectors;  // Return the query vectors
-    }
-
-    public List<int[]> getGroundTruth() {
-        return groundTruth;  // Return the ground truth data
-    }
-
-    public List<double[]> getBaseVectors() {
-        return baseVectors;  // Return the base vectors
-    }
-
-    public ANN getANN() {
-        return ann;  // Return the ANN instance
-    }
-
-    public void loadIndex(String path) {
-        try {
-            index.loadIndex(path);
-            logger.info("Encrypted index loaded from: {}", path);
-        } catch (Exception e) {
-            logger.error("Failed to load index", e);
-        }
-    }
-
-    public void shutdown() {
-        logger.info("Shutting down ForwardSecureANNSystem...");
-        reEncryptor.shutdown();
-        try {
-            reEncryptThread.join();
-        } catch (InterruptedException ignored) {
-        }
-    }
-
-    private static byte[] convertVectorToByteArray(double[] vec) {
-        // Convert the vector into a byte array (this is just a simple example, adjust based on your encryption logic)
-        ByteBuffer buffer = ByteBuffer.allocate(vec.length * Double.BYTES);
-        for (double d : vec) {
-            buffer.putDouble(d); // Put each double value in the byte buffer
-        }
-        return buffer.array(); // Return the byte array
-    }
-
-    public static void main(String[] args) throws Exception {
-        // Initialize the ForwardSecureANNSystem with proper file paths and parameters
-        var sys = new ForwardSecureANNSystem(
-                "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\sift_dataset\\sift\\sift_base.fvecs",
-                "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\sift_dataset\\sift\\sift_query.fvecs",
-                "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\sift_dataset\\sift\\sift_groundtruth.ivecs",
-                3,               // hash tables
-                10,              // numIntervals
-                1_000, 1_500,    // bucket sizes
-                true, true, "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\index_backup\\keys.ser");     // forward security enabled
-
-        // Check if base vectors are loaded properly
-        if (sys.getBaseVectors() == null || sys.getBaseVectors().isEmpty()) {
-            System.err.println("Base vectors are empty or not loaded correctly.");
-            return;
-        }
-
-        // Using a ConcurrentHashMap to handle UUIDs and other modifications safely
-        Map<String, EncryptedPoint> insertedUUIDs = new ConcurrentHashMap<>();
-        System.out.println("Starting batch insertion");
-        int batchSize = 0;
-
-        for (double[] vec : sys.getBaseVectors()) {
-            batchSize++;
+    // Decrypt a list of encrypted points
+    private List<double[]> decryptPoints(List<EncryptedPoint> eps) {
+        List<double[]> res = new ArrayList<>();
+        SecretKey key = keyManager.getCurrentKey();
+        SecretKey prevKey = keyManager.getPreviousKey();
+        List<SecretKey> prevKeys = prevKey == null
+                ? Collections.emptyList()
+                : Collections.singletonList(prevKey);
+        for (EncryptedPoint p : eps) {
             try {
-                String uuid = UUID.randomUUID().toString();
-                String pointId = uuid;  // Use uuid as the pointId
-                byte[] ciphertext = convertVectorToByteArray(vec);  // Use the static method here
-                String bucketId = "defaultBucket";  // You might derive this from some logic in your code
-                int index = batchSize;
-                EncryptedPoint encryptedPoint = new EncryptedPoint(ciphertext, bucketId, pointId, index);
-                insertedUUIDs.put(uuid, encryptedPoint);
-                sys.insert(uuid, vec);
+                double[] v = p.decrypt(key, prevKeys);
+                if (v != null) {
+                    res.add(v);
+                }
             } catch (Exception e) {
-                System.err.println("Error during insertion of vector: " + Arrays.toString(vec) + " at batch #" + batchSize);
-                continue; // Continue processing the next vector
-            }
-
-            if (batchSize % 1000 == 0) {
-                System.out.println("Processed " + batchSize + " vectors.");
+                logger.error("Decrypt failed for {}", p.getId(), e);
             }
         }
-        System.out.println("Batch insertion completed. Total inserted UUIDs: " + insertedUUIDs.size());
-
-        // *** Query Sample ***
-        System.out.println("Performing a sample query");
-        List<double[]> result = sys.query(sys.getQueryVectors().get(0), 10);
-        if (result == null || result.isEmpty()) {
-            System.err.println("Query returned no results.");
-            return;
-        }
-        System.out.println("Top-1 distance = " + java.util.Arrays.toString(result.get(0)));
-
-        // *** Save Index ***
-        String backupDirectory = "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\index_backup";
-        File dir = new File(backupDirectory);
-        if (!dir.exists()) {
-            dir.mkdirs();
-        }
-
-        System.out.println("Saving the index");
-        sys.saveIndex(backupDirectory);
-        System.out.println("Index saved successfully.");
-
-        // *** Shutdown System ***
-        System.out.println("Shutting down system");
-        sys.shutdown();
-        System.out.println("System shutdown complete.");
+        return res;
     }
- }
+
+    /**
+     * Persist all dimension‐specific SecureLSHIndex instances.
+     *
+     * @param baseDir  directory under which each index will be saved
+     */
+    public void saveIndex(String baseDir) {
+        for (Map.Entry<Integer, DimensionContext> entry : dimensionContexts.entrySet()) {
+            int dims = entry.getKey();
+            SecureLSHIndex idx = entry.getValue().getIndex();
+            String dirForDim = baseDir + "/index_dim_" + dims;
+            // ensure the directory exists
+            new File(dirForDim).mkdirs();
+            idx.saveIndex(dirForDim);
+            logger.info("Saved index for dim {} to {}", dims, dirForDim);
+        }
+    }
+
+    /**
+     * Shutdown background services and persist state.
+     */
+    public void shutdown() {
+        logger.info("Shutting down...");
+        reEncryptor.shutdown();
+        try { reEncryptThread.join(); } catch (InterruptedException ignored) {}
+        logger.info("Total inserts: {}, avg insert time(ms): {}", operationCount.get(),
+                totalInsertTimeNanos/1_000_000.0/operationCount.get());
+    }
+
+    /**
+     * Entry point for demo and evaluation.
+     */
+    public static void main(String[] args) throws Exception {
+        // === Data file paths ===
+        String basePath   = "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\sift_dataset\\sift\\sift_base.fvecs";
+        String queryPath  = "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\sift_dataset\\sift\\sift_query.fvecs";
+        String truthPath  = "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\sift_dataset\\sift\\sift_groundtruth.ivecs";
+        String learnPath  = "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\sift_dataset\\sift\\sift_learn.fvecs";
+
+        logger.info("=== Initializing Forward-Secure ANN System ===");
+        ForwardSecureANNSystem sys = new ForwardSecureANNSystem(
+                basePath, queryPath, truthPath,
+                3,                  // numHashTables
+                10,                 // numIntervals
+                10000,              // maxOperations
+                true,               // useForwardSecurity
+                "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\index_backup\\metadata.ser",
+                "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\fspann-query-system\\data\\index_backup\\keys.ser"
+        );
+        logger.info("System initialized successfully.");
+
+        // === Step 1: Batch Insert ===
+        int totalVectors = sys.dimensionContexts.values().stream()
+                .mapToInt(ctx -> ctx.getBaseVectors().size())
+                .sum();
+        logger.info("Starting batch insertion of {} vectors...", totalVectors);
+        for (Map.Entry<Integer, DimensionContext> entry : sys.dimensionContexts.entrySet()) {
+            int dim = entry.getKey();
+            DimensionContext ctx = entry.getValue();
+            logger.info(" Inserting {} vectors for dimension {}...", ctx.getBaseVectors().size(), dim);
+            for (double[] vec : ctx.getBaseVectors()) {
+                sys.insert(UUID.randomUUID().toString(), vec);
+            }
+            logger.info(" Completed insertion for dimension {}", dim);
+        }
+        logger.info("Batch insertion complete.");
+
+        // === Step 2: Sample Query ===
+        int demoDim = sys.dimensionContexts.keySet().iterator().next();
+        double[] demoVec = sys.dimensionContexts.get(demoDim).getBaseVectors().get(0);
+        logger.info("Performing sample query (dim={}, topK=10)...", demoDim);
+        List<double[]> sampleRes = sys.query(demoVec, 10);
+        logger.info("Sample query returned {} results.", sampleRes.size());
+
+        // === Step 3: Save Index ===
+        String backupDir = "data/index_backup";
+        logger.info("Saving encrypted indexes to {}", backupDir);
+        sys.saveIndex(backupDir);
+        logger.info("Indexes saved successfully.");
+
+        // === Shutdown ===
+        logger.info("Shutting down system...");
+        sys.shutdown();
+        logger.info("System shutdown complete.");
+    }
+
+}

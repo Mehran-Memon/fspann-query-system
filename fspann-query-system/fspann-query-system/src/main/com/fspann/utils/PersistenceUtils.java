@@ -2,6 +2,8 @@ package com.fspann.utils;
 
 import java.io.*;
 import java.nio.file.*;
+
+import com.fasterxml.jackson.core.type.TypeReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -41,13 +43,14 @@ public class    PersistenceUtils {
      * Loads an object from a specified file path.
      *
      * @param path The file path from which to load the object.
-     * @param type The class type of the object to load.
      * @return The loaded object.
      * @throws IOException If an I/O error occurs.
      * @throws ClassNotFoundException If the class of the object cannot be found.
      */
     @SuppressWarnings("unchecked")
-    public static <T> T loadObject(String path, Class<T> type) throws IOException, ClassNotFoundException {
+    public static <T> T loadObject(String path, TypeReference<T> typeRef)
+            throws IOException, ClassNotFoundException
+    {
         Path filePath = Paths.get(path);
         if (!Files.exists(filePath)) {
             logger.error("File not found: {}", path);
