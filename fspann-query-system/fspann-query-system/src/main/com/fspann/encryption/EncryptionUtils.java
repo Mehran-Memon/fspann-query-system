@@ -1,73 +1,154 @@
 package com.fspann.encryption;
 
-import com.fspann.index.BucketConstructor;
-
 import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.IvParameterSpec;
 import java.nio.ByteBuffer;
 import java.security.SecureRandom;
+import java.util.Arrays;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.apache.commons.lang3.tuple.Pair;
 
-public class EncryptionUtils {
+public final class EncryptionUtils {
+    private static final Logger logger = LoggerFactory.getLogger(EncryptionUtils.class);
 
-    private static final String ALGORITHM = "AES/GCM/NoPadding"; // AES with GCM for authenticated encryption
-    private static final int GCM_TAG_LENGTH = 128; // Authentication tag length for GCM (128 bits)
-    // Method to generate a random IV for AES GCM mode (12-byte for GCM)
+    // Constants
+    public static final String TRANSFORMATION = "AES/GCM/NoPadding";
+    public static final int GCM_IV_LENGTH = 12; // Standard IV length for GCM
+    public static final int GCM_TAG_LENGTH = 128; // 128-bit authentication tag
+    public static final int DOUBLE_BYTES = Double.BYTES;
 
-    private static byte[] generateIV() {
-        byte[] iv = new byte[12]; // GCM requires a 12-byte IV
-        new SecureRandom().nextBytes(iv);
+    // Thread-local cipher instances
+    private static final ThreadLocal<Cipher> cipherThreadLocal = ThreadLocal.withInitial(() -> {
+        try {
+            return Cipher.getInstance(TRANSFORMATION);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to create Cipher instance", e);
+        }
+    });
+    private EncryptionUtils() {} // Prevent instantiation
+
+    // Method to generate a random Initialization Vector (IV)
+    public static byte[] generateIV() {
+        byte[] iv = new byte[12]; // AES-GCM requires 12-byte IV
+        new java.security.SecureRandom().nextBytes(iv); // Fill the IV with random bytes
         return iv;
     }
 
-    // Method to encrypt the vector using AES-GCM and return the IV + encrypted data
-    public static byte[] encryptVector(double[] vec, SecretKey key) throws Exception {
-        // Convert the vector to a byte array (multi-dimensional handling)
-        byte[] vectorBytes = new byte[vec.length * Double.BYTES];
-        ByteBuffer byteBuffer = ByteBuffer.wrap(vectorBytes);
-
-        for (double value : vec) {
-            byteBuffer.putDouble(value);
-        }
-
-        // Encrypt the byte array
-        return encryptData(vectorBytes, key);  // Encrypting the byte representation of the vector
-    }
-
-    private static byte[] encryptData(byte[] data, SecretKey key) throws Exception {
-        // Encrypt the data using AES, for example
+    // Method to encrypt a vector with AES/GCM/NoPadding
+// Method to encrypt a vector with AES/GCM/NoPadding
+    public static byte[] encryptVector(double[] vector, byte[] iv, SecretKey key) throws Exception {
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-        cipher.init(Cipher.ENCRYPT_MODE, key);
-        return cipher.doFinal(data);
+        GCMParameterSpec gcmSpec = new GCMParameterSpec(128, iv); // 128-bit authentication tag
+        cipher.init(Cipher.ENCRYPT_MODE, key, gcmSpec);
+
+        // Convert the vector into bytes
+        byte[] data = Arrays.toString(vector).getBytes("UTF-8"); // Example conversion
+
+        byte[] encryptedData = cipher.doFinal(data);
+        byte[] result = new byte[iv.length + encryptedData.length];
+        System.arraycopy(iv, 0, result, 0, iv.length); // Add the IV at the beginning
+        System.arraycopy(encryptedData, 0, result, iv.length, encryptedData.length); // Add encrypted data after the IV
+        return result;
     }
 
-    // Method to decrypt the encrypted data using AES-GCM
-    public static double[] decryptVector(byte[] encryptedData, SecretKey key) throws Exception {
-        Cipher cipher = Cipher.getInstance(ALGORITHM);
+    // Method to decrypt a vector with AES/GCM/NoPadding
+    public static double[] decryptVector(byte[] encryptedData, byte[] iv, SecretKey key) throws Exception {
+        byte[] cipherText = Arrays.copyOfRange(encryptedData, iv.length, encryptedData.length);
 
-        // Extract IV from the encrypted data (first 12 bytes are the IV)
-        byte[] iv = new byte[12];
-        byte[] cipherText = new byte[encryptedData.length - iv.length];
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        GCMParameterSpec gcmSpec = new GCMParameterSpec(128, iv); // 128-bit authentication tag
+        cipher.init(Cipher.DECRYPT_MODE, key, gcmSpec);
 
-        System.arraycopy(encryptedData, 0, iv, 0, iv.length); // Extract the IV
-        System.arraycopy(encryptedData, iv.length, cipherText, 0, cipherText.length); // Extract the cipherText
-
-        GCMParameterSpec spec = new GCMParameterSpec(GCM_TAG_LENGTH, iv);
-        cipher.init(Cipher.DECRYPT_MODE, key, spec);
-
-        // Perform the decryption
         byte[] decryptedData = cipher.doFinal(cipherText);
 
-        // Convert the decrypted byte array back into a double array (Vector)
-        return BucketConstructor.byteToDoubleArray(decryptedData);
+        // Convert the decrypted data back into the original vector (e.g., converting from a string)
+        String dataString = new String(decryptedData, "UTF-8"); // Example conversion
+        String[] vectorString = dataString.substring(1, dataString.length() - 1).split(", ");
+        double[] vector = new double[vectorString.length];
+        for (int i = 0; i < vectorString.length; i++) {
+            vector[i] = Double.parseDouble(vectorString[i]);
+        }
+        return vector;
     }
 
-    // Method to perform re-encryption with a new key after key rotation
-    public static byte[] reEncryptData(byte[] encryptedData, SecretKey oldKey, SecretKey newKey) throws Exception {
-        // Step 1: Decrypt the data using the old key
-        double[] decryptedData = decryptVector(encryptedData, oldKey);
+    public static Pair<byte[], byte[]> reEncryptData(byte[] encryptedData, byte[] iv,
+                                                     SecretKey oldKey, SecretKey newKey) throws Exception {
+        validateEncryptionInputs(encryptedData, iv, oldKey);
 
-        // Step 2: Re-encrypt the decrypted data with the new key
-        return encryptVector(decryptedData, newKey);
+        if (newKey == null) {
+            throw new IllegalArgumentException("New key cannot be null");
+        }
+
+        // Decrypt data using the old key with the provided IV
+        double[] decrypted = decryptVector(encryptedData, iv, oldKey);
+
+        if (decrypted == null) {
+            throw new Exception("Decryption failed with the old key.");
+        }
+
+        // Generate new IV for re-encryption
+        byte[] newIv = generateIV();
+
+        // Re-encrypt with the new key and the newly generated IV
+        byte[] newCiphertext = encryptVector(decrypted, iv, newKey);
+
+        // Return re-encrypted data and new IV
+        return Pair.of(newCiphertext, newIv);
+    }
+
+    private static byte[] doubleArrayToByteArray(double[] vector) {
+        ByteBuffer buffer = ByteBuffer.allocate(vector.length * DOUBLE_BYTES);
+        try {
+            for (double d : vector) {
+                buffer.putDouble(d);
+            }
+            return buffer.array();
+        } finally {
+            if (buffer != null && buffer.hasArray()) {
+                Arrays.fill(buffer.array(), (byte) 0);
+            }
+        }
+    }
+
+    private static double[] byteArrayToDoubleArray(byte[] bytes) {
+        ByteBuffer buffer = ByteBuffer.wrap(bytes);
+        double[] vector = new double[bytes.length / DOUBLE_BYTES];
+        for (int i = 0; i < vector.length; i++) {
+            vector[i] = buffer.getDouble();
+        }
+        return vector;
+    }
+
+    private static void validateEncryptionInputs(byte[] data, byte[] iv, SecretKey key) {
+        if (data == null || data.length == 0) {
+            throw new IllegalArgumentException("Data cannot be null or empty");
+        }
+        if (iv == null || iv.length != GCM_IV_LENGTH) {
+            throw new IllegalArgumentException("IV must be exactly " + GCM_IV_LENGTH + " bytes");
+        }
+        if (key == null) {
+            throw new IllegalArgumentException("Key cannot be null");
+        }
+    }
+
+    // Additional utility methods
+    public static boolean isEncryptedWith(byte[] ciphertext, byte[] iv, SecretKey key) {
+        try {
+            // Decrypt the ciphertext with the provided IV and key
+            decryptVector(ciphertext, iv, key);  // This now includes both ciphertext and iv
+            return true;  // If decryption is successful, it was encrypted with the provided key
+        } catch (Exception e) {
+            return false;  // If decryption fails, the data was not encrypted with the given key
+        }
+    }
+
+
+    public static int getEncryptedSize(int vectorLength) {
+        return vectorLength * DOUBLE_BYTES + GCM_TAG_LENGTH/8;
     }
 }

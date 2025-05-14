@@ -14,6 +14,7 @@ public final class BucketConstructor {
     private static final double FAKE_MARK = -1.0;           // recognise fake points
     private static final double TAU_ANGLE = 0.07;            // cosθ gap threshold
     private static final int    FAKE_CAP  = 10;             // ψ
+    byte[] iv = EncryptionUtils.generateIV();
 
     private BucketConstructor() {}  // util class
 
@@ -80,9 +81,39 @@ public final class BucketConstructor {
 
 
     /* ----------------------------------------------------------- helpers */
+
     private static byte[] enc(double[] v, SecretKey k) throws Exception {
-        return (k == null) ? doublesToBytes(v) : EncryptionUtils.encryptVector(v, k);
+        if (k == null) {
+            return doublesToBytes(v);
+        } else {
+            // Generate a new IV for each encryption
+            byte[] iv = EncryptionUtils.generateIV();
+
+            // Encrypt with the new IV and the session key
+            byte[] ciphertext = EncryptionUtils.encryptVector(v, iv, k);
+
+            // Combine IV and ciphertext for storage (IV needed for decryption)
+            return ByteBuffer.allocate(iv.length + ciphertext.length)
+                    .put(iv)
+                    .put(ciphertext)
+                    .array();
+        }
     }
+
+//    public static double[] dec(byte[] encryptedData, SecretKey k) throws Exception {
+//        if (k == null) {
+//            return bytesToDoubles(encryptedData);
+//        }
+//
+//        ByteBuffer buffer = ByteBuffer.wrap(encryptedData);
+//        byte[] iv = new byte[EncryptionUtils.GCM_IV_LENGTH];
+//        buffer.get(iv);
+//        byte[] ciphertext = new byte[buffer.remaining()];
+//        buffer.get(ciphertext);
+//
+//        return EncryptionUtils.decryptVector(ciphertext, iv, k);
+//    }
+
     private static double dot(double[] a, double[] b) {
         double s = 0; for (int i = 0; i < a.length; i++) s += a[i] * b[i]; return s;
     }
