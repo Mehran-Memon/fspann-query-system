@@ -1,102 +1,81 @@
 package com.fspann.evaluation;
 
-import com.fspann.ForwardSecureANNSystem;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Set;
-import java.util.HashSet;
 import com.fspann.index.ANN;
+import com.fspann.index.DimensionContext;
 import com.fspann.query.EncryptedPoint;
-
-import static org.apache.commons.math3.util.MathArrays.distance;
+import javax.crypto.SecretKey;
+import java.util.*;
 
 public class EvaluationEngine {
 
-        // Utility method to compute Recall@K
-    public static double computeRecallAtK(List<int[]> groundTruth, List<List<Integer>> predictions, int topK) {
-        int totalCorrect = 0;
-        int totalQueries = predictions.size();
-
-        for (int i = 0; i < totalQueries; i++) {
-            List<Integer> predicted = predictions.get(i);
-            int[] truth = groundTruth.get(i);
-
-            // Count correct predictions within the top K
-            Set<Integer> truthSet = new HashSet<>();
-            for (int t : truth) {
-                truthSet.add(t);
-            }
-
-            int correct = 0;
-            for (int j = 0; j < Math.min(topK, predicted.size()); j++) {
-                if (truthSet.contains(predicted.get(j))) {
-                    correct++;
-                }
-            }
-            totalCorrect += correct;
-        }
-
-        return (double) totalCorrect / totalQueries;  // Fix: Normalize recall by totalQueries
-    }
-
-    // Evaluate method with range or k-NN query
-    public static void evaluate(ForwardSecureANNSystem system, int topK, int numQueries, double range) throws Exception {
-        List<double[]> queryVectors = system.getQueryVectors();
-        List<int[]> groundTruth = system.getGroundTruth();
+    /**
+     * Evaluate using an external supply of query vectors, ground truth, and contexts.
+     *
+     * @param queryVectors   the list of query vectors to test
+     * @param groundTruth    the corresponding ground truth nearest‐neighbor indices
+     * @param contexts       a map from dimensionality to its DimensionContext
+     * @param topK           the K in “Recall@K”
+     * @param numQueries     how many of the vectors to run (e.g. Math.min(numQueries, queryVectors.size()))
+     */
+    public static void evaluate(
+            List<double[]> queryVectors,
+            List<int[]> groundTruth,
+            Map<Integer, DimensionContext> contexts,
+            int topK,
+            int numQueries
+    ) throws Exception {
         if (queryVectors.size() != groundTruth.size()) {
-            throw new IllegalArgumentException("The number of queries does not match the number of ground truth entries.");
+            throw new IllegalArgumentException(
+                    "Number of queries and groundTruth entries must match"
+            );
         }
+
         List<List<Integer>> predictions = new ArrayList<>();
-        long totalTime = 0;
-        for (int i = 0; i < Math.min(numQueries, queryVectors.size()); i++) {
-            double[] q = queryVectors.get(i);
+        long totalTimeNanos = 0;
+
+        int limit = Math.min(numQueries, queryVectors.size());
+        for (int i = 0; i < limit; i++) {
+            double[] q      = queryVectors.get(i);
+            int dims        = q.length;
+            DimensionContext ctx = contexts.get(dims);
+            if (ctx == null) {
+                throw new IllegalStateException("No context for dimension: " + dims);
+            }
+
+            // time the query()
             long start = System.nanoTime();
-            List<double[]> result = system.query(q, topK);
+            List<EncryptedPoint> encResults =
+                    ctx.getIndex().findNearestNeighborsEncrypted(
+                            com.fspann.query.QueryGenerator.generateQueryToken(
+                                    q, topK, ctx.getIndex().getNumHashTables(), ctx.getLsh(), ctx.getAnn().getKeyManager()
+                            )
+                    );
             long end = System.nanoTime();
-            totalTime += (end - start);
-            List<Integer> predictedIndices = new ArrayList<>();
-            for (double[] neighbor : result) {
-                int bestIndex = findClosestIndex(neighbor, system.getBaseVectors(), system.getANN(), topK);
-                predictedIndices.add(bestIndex);
-            }
-            predictions.add(predictedIndices);
-        }
-        double recall = computeRecallAtK(groundTruth, predictions, topK);
-        double avgTimeMs = totalTime / 1_000_000.0 / numQueries;
-        System.out.printf("✅ Recall@%d: %.4f%n", topK, recall);
-        System.out.printf("⚡ Avg Query Time: %.2f ms%n", avgTimeMs);
-    }
+            totalTimeNanos += (end - start);
 
-    // Utility method to find the closest index to a given vector
-    public static int findClosestIndex(double[] vector, List<double[]> baseVectors, ANN ann, int k) {
-        List<EncryptedPoint> neighbors = ann.getApproximateNearestNeighbors(vector, k);
-        double minDistance = Double.MAX_VALUE;
-        int bestIndex = -1;
-        for (EncryptedPoint neighbor : neighbors) {
-            try {
-                double[] decrypted = neighbor.decrypt(ann.getKeyManager().getCurrentKey());
-                int index = neighbor.getIndex();
-                if (index != -1 && index < baseVectors.size()) {
-                    double dist = distance(vector, decrypted);
-                    if (dist < minDistance) {
-                        minDistance = dist;
-                        bestIndex = index;
-                    }
+            // map encrypted results back to indices
+            List<Integer> preds = new ArrayList<>();
+            for (EncryptedPoint ep : encResults) {
+                preds.add(ep.getIndex());
+            }
+            predictions.add(preds);
+        }
+
+        // compute recall
+        int totalCorrect = 0;
+        for (int i = 0; i < predictions.size(); i++) {
+            Set<Integer> truthSet = new HashSet<>();
+            for (int t : groundTruth.get(i)) truthSet.add(t);
+            for (int j = 0; j < Math.min(topK, predictions.get(i).size()); j++) {
+                if (truthSet.contains(predictions.get(i).get(j))) {
+                    totalCorrect++;
                 }
-            } catch (Exception e) {
-                System.err.println("Error decrypting neighbor: " + e.getMessage());
             }
         }
-        return bestIndex;
-    }
+        double recall = (double) totalCorrect / predictions.size();
+        double avgMs  = totalTimeNanos / 1_000_000.0 / predictions.size();
 
-    // Utility method to compute Euclidean distance
-    private static double distance(double[] v1, double[] v2) {
-        double sum = 0.0;
-        for (int i = 0; i < v1.length; i++) {
-            double diff = v1[i] - v2[i];
-            sum += diff * diff;
-        }
-        return Math.sqrt(sum);
+        System.out.printf("✅ Recall@%d = %.4f%n", topK, recall);
+        System.out.printf("⚡ Avg Query Time = %.2f ms%n", avgMs);
     }
 }
