@@ -1,15 +1,12 @@
 package com.fspann.query;
 
-import com.fspann.ForwardSecureANNSystem;
 import com.fspann.config.SystemConfig;
 import com.fspann.encryption.EncryptionUtils;
 import com.fspann.keymanagement.KeyManager;
 import com.fspann.utils.Profiler;
 import javax.crypto.SecretKey;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.fspann.utils.LRUCache;
@@ -69,29 +66,37 @@ public class QueryProcessor {
         for (EncryptedPoint point : candidates) {
             SecretKey previousKey = keyManager.getPreviousKey();
             if (previousKey != null) {
+                // Decryption under the old key
                 if (SystemConfig.PROFILER_ENABLED) profiler.start("decryption");
-                double[] decrypted = point.decrypt(previousKey);
+                double[] decrypted = point.decrypt(previousKey, Collections.emptyList());
                 if (SystemConfig.PROFILER_ENABLED) profiler.stop("decryption");
 
+                // Re‑encrypt under the current key with a fresh IV
                 if (SystemConfig.PROFILER_ENABLED) profiler.start("encryption");
-                byte[] reEncrypted = EncryptionUtils.encryptVector(decrypted, currentKey);
-                EncryptedPoint newEncryptedPoint = new EncryptedPoint(reEncrypted, point.getBucketId(), point.getPointId(), point.getIndex());
-                result.add(newEncryptedPoint);  // Add to result
+                byte[] ivRe = EncryptionUtils.generateIV();
+                byte[] reEncrypted = EncryptionUtils.encryptVector(decrypted, ivRe, currentKey);
+                EncryptedPoint newEncryptedPoint = new EncryptedPoint(
+                        reEncrypted,
+                        point.getBucketId(),
+                        point.getPointId(),
+                        point.getIndex(),
+                        ivRe,
+                        point.getPointId()
+                );
+                result.add(newEncryptedPoint);
                 if (SystemConfig.PROFILER_ENABLED) profiler.stop("encryption");
             } else {
-                logger.warn("No previous key available for point {}. Skipping re-encryption.", point.getPointId());
-                result.add(point);  // Optionally add the original point if no re-encryption occurs
+                logger.warn("No previous key available for point {}. Skipping re‑encryption.", point.getPointId());
+                result.add(point);
             }
         }
 
         if (SystemConfig.PROFILER_ENABLED) profiler.stop("query");
 
-        // Use queryToken for cache key to ensure uniqueness
-        String cacheKey = generateCacheKey(queryToken);  // Use queryToken to generate the cache key
-        cache.put(cacheKey, result);  // Store the result in the cache using the generated key
+        String cacheKey = generateCacheKey(queryToken);
+        cache.put(cacheKey, result);
         return result;
     }
-
     /**
      * Generates a cache key based on the query candidates.
      * @param candidates The query candidates.
