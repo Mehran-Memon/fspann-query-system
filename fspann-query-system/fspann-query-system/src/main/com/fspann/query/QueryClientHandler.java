@@ -4,6 +4,7 @@ import com.fspann.index.EvenLSH;
 import com.fspann.keymanagement.KeyManager;
 import com.fspann.encryption.EncryptionUtils;
 import javax.crypto.SecretKey;
+import java.util.Arrays;
 import java.util.List;
 
 public class QueryClientHandler {
@@ -26,8 +27,10 @@ public class QueryClientHandler {
             throw new IllegalStateException("No session key available.");
         }
 
-        return EncryptionUtils.encryptVector(queryVector, sessionKey);
+        byte[] iv = EncryptionUtils.generateIV();  // Generate IV for encryption
+        return EncryptionUtils.encryptVector(queryVector, iv, sessionKey);  // Pass IV to encryptVector
     }
+
 
     /**
      * Decrypts the encrypted query vector using the current key.
@@ -41,8 +44,11 @@ public class QueryClientHandler {
             throw new IllegalStateException("No session key available.");
         }
 
-        return EncryptionUtils.decryptVector(encryptedQuery, sessionKey);
+        // The IV is usually stored in the first 16 bytes of the encrypted data
+        byte[] iv = Arrays.copyOfRange(encryptedQuery, 0, 16);  // Extract the IV from the encrypted data
+        return EncryptionUtils.decryptVector(encryptedQuery, iv, sessionKey);  // Pass IV to decryptVector
     }
+
 
     /**
      * Generate a query token for the provided query vector, used for querying the index.

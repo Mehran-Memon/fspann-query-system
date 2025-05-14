@@ -8,6 +8,7 @@ public class QueryToken {
     private final List<Integer> candidateBuckets;
     private final byte[] encryptedQuery;
     private final int topK;
+
     private final int numTables;
     private final String encryptionContext;
 

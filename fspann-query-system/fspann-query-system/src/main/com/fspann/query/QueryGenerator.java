@@ -31,8 +31,23 @@ public class QueryGenerator {
         List<Integer> candidateBuckets = new ArrayList<>();
         int bucketId = lsh.getBucketId(queryVector);
         candidateBuckets.add(bucketId);
-        byte[] encryptedQuery = EncryptionUtils.encryptVector(queryVector, keyManager.getCurrentKey());
-        String encryptionContext = "epoch_0";
-        return new QueryToken(candidateBuckets, encryptedQuery, k, numTables, encryptionContext);
+        // Generate fresh IV for each encryption
+        byte[] iv = EncryptionUtils.generateIV();
+        // Encrypt with IV + key
+        byte[] encryptedQuery = EncryptionUtils.encryptVector(
+                queryVector,
+                iv, // Include IV
+                keyManager.getCurrentKey()
+        );
+
+        return new QueryToken(
+                candidateBuckets,
+                encryptedQuery,
+                // Pass IV to token
+                k,
+                numTables,
+                "epoch_0"
+        );
+
     }
 }
