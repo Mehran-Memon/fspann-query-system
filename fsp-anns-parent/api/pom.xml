@@ -32,6 +32,10 @@
             <groupId>com.fspann</groupId>
             <artifactId>keymanagement</artifactId>
         </dependency>
+        <dependency>
+            <groupId>com.fspann</groupId>
+            <artifactId>config</artifactId>
+        </dependency>
         <!-- SLF4J & Logback for logging -->
         <dependency>
             <groupId>org.slf4j</groupId>

@@ -2,15 +2,16 @@ package com.fspann.api;
 
 import com.fspann.common.QueryResult;
 import com.fspann.common.QueryToken;
+import com.fspann.api.ApiSystemConfig;
 import com.fspann.config.SystemConfig;
-import com.fspann.crypto.CryptoService;
 import com.fspann.crypto.AesGcmCryptoService;
-import com.fspann.index.core.SecureLSHIndex;
+import com.fspann.crypto.CryptoService;
 import com.fspann.index.core.EvenLSH;
+import com.fspann.index.core.SecureLSHIndex;
 import com.fspann.index.service.SecureLSHIndexService;
+import com.fspann.common.KeyLifeCycleService;
 import com.fspann.key.KeyManager;
 import com.fspann.key.KeyRotationPolicy;
-import com.fspann.key.KeyLifeCycleService;
 import com.fspann.key.KeyRotationServiceImpl;
 import com.fspann.query.core.QueryTokenFactory;
 import com.fspann.query.service.QueryService;
@@ -19,6 +20,7 @@ import com.fspann.common.Profiler;
 import com.fspann.common.LRUCache;
 import com.fspann.loader.DefaultDataLoader;
 
+import javax.crypto.SecretKey;
 import java.util.List;
 import java.util.UUID;
 
@@ -36,10 +38,10 @@ public class ForwardSecureANNSystem {
     private final LRUCache<QueryToken, List<QueryResult>> cache;
 
     /**
-     * @param configPath   Path to JSON/YAML config file
-     * @param dataPath     Path to feature data file
-     * @param keysFilePath Path where keys are persisted
-     * @param dimensions   Dimensionality of vectors
+     * @param configPath    Path to JSON/YAML config file
+     * @param dataPath      Path to feature data file
+     * @param keysFilePath  Path to serialized keys file for KeyManager
+     * @param dimensions    Dimensionality of vectors
      */
     public ForwardSecureANNSystem(
             String configPath,
@@ -47,11 +49,12 @@ public class ForwardSecureANNSystem {
             String keysFilePath,
             int dimensions
     ) throws Exception {
+
         // Load configuration
         ApiSystemConfig apiConfig = new ApiSystemConfig(configPath);
         SystemConfig cfg = apiConfig.getConfig();
 
-        // Setup key management
+        // Setup key management using explicit keysFilePath
         KeyRotationPolicy policy = new KeyRotationPolicy(
                 (int) cfg.getOpsThreshold(),
                 cfg.getAgeThresholdMs()
@@ -59,12 +62,19 @@ public class ForwardSecureANNSystem {
         this.keyManager = new KeyManager(keysFilePath);
         this.keyService = new KeyRotationServiceImpl(keyManager, policy);
 
-        // Crypto service (no-arg constructor)
+        // Crypto service (stateless)
         this.cryptoService = new AesGcmCryptoService();
 
-        // Build core index
-        SecureLSHIndex coreIndex = new SecureLSHIndex(1, cfg.getNumShards());
-        this.indexService = new SecureLSHIndexService(coreIndex, cryptoService, keyService);
+        // Build core index and LSH helper
+        int numShards = cfg.getNumShards();
+        SecureLSHIndex coreIndex = new SecureLSHIndex(1, numShards);
+        EvenLSH lshHelper = new EvenLSH(dimensions, numShards);
+        this.indexService = new SecureLSHIndexService(
+                coreIndex,
+                cryptoService,
+                keyService,
+                lshHelper
+        );
 
         // Load and insert base data
         DefaultDataLoader loader = new DefaultDataLoader();
@@ -74,23 +84,23 @@ public class ForwardSecureANNSystem {
         }
 
         // Setup query pipeline
-        EvenLSH lsh = new EvenLSH(dimensions, cfg.getNumShards());
+        EvenLSH queryLsh = new EvenLSH(dimensions, numShards);
         this.tokenFactory = new QueryTokenFactory(
                 cryptoService,
                 keyService,
-                lsh,
-                1,   // expansion range
-                1    // numTables
+                queryLsh,
+                /* expansionRange= */ 1,
+                /* numTables=     */ 1
         );
         this.queryService = new QueryServiceImpl(indexService, cryptoService, keyService);
 
         // Utilities
         this.profiler = new Profiler();
-        this.cache = new LRUCache<>(1000);
+        this.cache    = new LRUCache<>(1000);
     }
 
     /** Insert a new vector into the index */
-    public void insert(String id, double[] vector) throws Exception {
+    public void insert(String id, double[] vector) {
         profiler.start("insert");
         indexService.insert(id, vector);
         profiler.stop("insert");
@@ -110,22 +120,28 @@ public class ForwardSecureANNSystem {
 
     /** Clean up resources, persist state as needed. */
     public void shutdown() {
+        // optionally save index, keys, metadata
     }
 
     public static void main(String[] args) throws Exception {
         if (args.length < 4) {
-            System.err.println("Usage: <config> <data> <keysFile> <dimensions>");
+            System.err.println("Usage: <configPath> <dataPath> <keysFilePath> <dimensions>");
             System.exit(1);
         }
-        String configFile = args[0];
-        String dataPath   = args[1];
-        String keysFile   = args[2];
-        int dimensions    = Integer.parseInt(args[3]);
+        String configFile  = args[0];
+        String dataPath    = args[1];
+        String keysFile    = args[2];
+        int dimensions     = Integer.parseInt(args[3]);
 
         ForwardSecureANNSystem sys = new ForwardSecureANNSystem(
-                configFile, dataPath, keysFile, dimensions
+                configFile,
+                dataPath,
+                keysFile,
+                dimensions
         );
-        // Example: List<QueryResult> res = sys.query(new double[dimensions], 10);
+
+        // Example usage
+        List<QueryResult> res = sys.query(new double[dimensions], 10);
         sys.shutdown();
     }
 }

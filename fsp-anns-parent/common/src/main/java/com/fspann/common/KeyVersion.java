@@ -1,4 +1,4 @@
-package com.fspann.key;
+package com.fspann.common;
 
 import javax.crypto.SecretKey;
 import java.io.Serializable;

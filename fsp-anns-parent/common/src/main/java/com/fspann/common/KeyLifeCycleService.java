@@ -1,4 +1,4 @@
-package com.fspann.key;
+package com.fspann.common;
 
 /**
  * Manages forward‑secure key lifecycle: retrieval and rotation trigger.
