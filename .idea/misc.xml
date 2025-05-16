@@ -5,10 +5,12 @@
     <option name="originalFiles">
       <list>
         <option value="$PROJECT_DIR$/pom.xml" />
+        <option value="$PROJECT_DIR$/fspann-parent/pom.xml" />
+        <option value="$PROJECT_DIR$/fsp-anns-parent/pom.xml" />
       </list>
     </option>
   </component>
   <component name="ProjectRootManager" version="2" languageLevel="JDK_23" project-jdk-name="23" project-jdk-type="JavaSDK">
-    <output url="file://$PROJECT_DIR$/../../../../../Program Files/Java/jdk-23" />
+    <output url="file://$PROJECT_DIR$/../../../../Program Files/Java/jdk-23" />
   </component>
 </project>
