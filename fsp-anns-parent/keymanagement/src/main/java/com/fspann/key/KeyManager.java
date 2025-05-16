@@ -1,5 +1,6 @@
 package com.fspann.key;
 
+import com.fspann.common.KeyVersion;
 import com.fspann.common.PersistenceUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,7 +18,7 @@ import java.util.NavigableMap;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.Base64;
+import com.fasterxml.jackson.core.type.TypeReference;
 
 /**
  * Core provider of master and session keys, with load/save support.
@@ -54,8 +55,11 @@ public class KeyManager {
 
     private void loadKeys(Path path) throws IOException {
         try {
-            KeyStoreBlob blob = PersistenceUtils.loadObject(path.toString());
-            this.masterKey    = blob.getMasterKey();
+            KeyStoreBlob blob = PersistenceUtils.loadObject(
+                    path.toString(),
+                    new TypeReference<KeyStoreBlob>() {}
+            );
+            this.masterKey = blob.getMasterKey();
             this.sessionKeys.putAll(blob.getSessionKeys());
             this.currentVersion = blob.getSessionKeys().keySet().stream()
                     .max(Integer::compare)
@@ -65,7 +69,6 @@ public class KeyManager {
             throw new IOException("Failed to load keys, class not found: " + path, e);
         }
     }
-
 
     /** Rotate and return the new KeyVersion */
     public KeyVersion rotateKey() {

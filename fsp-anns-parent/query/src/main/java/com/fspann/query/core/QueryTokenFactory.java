@@ -3,8 +3,8 @@ package com.fspann.query.core;
 import com.fspann.common.QueryToken;
 import com.fspann.common.EncryptedPoint;
 import com.fspann.crypto.CryptoService;
-import com.fspann.key.KeyLifeCycleService;
-import com.fspann.key.KeyVersion;
+import com.fspann.common.KeyLifeCycleService;
+import com.fspann.common.KeyVersion;
 import com.fspann.index.core.EvenLSH;
 
 import javax.crypto.SecretKey;
