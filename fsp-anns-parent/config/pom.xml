@@ -1,0 +1,30 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="
+           http://maven.apache.org/POM/4.0.0
+           http://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.fspann</groupId>
+        <artifactId>fsp-anns-parent</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>config</artifactId>
+    <name>FSP‑ANN Configuration</name>
+
+    <dependencies>
+        <!-- If you bind SystemConfig from JSON/YAML -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+
+        <!-- Common types (if SystemConfig references any DTOs) -->
+        <dependency>
+            <groupId>com.fspann</groupId>
+            <artifactId>common</artifactId>
+        </dependency>
+    </dependencies>
+</project>

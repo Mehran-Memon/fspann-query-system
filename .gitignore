@@ -2,7 +2,7 @@
 .idea/
 *.iml
 
-# IDE workspace settings
+# IDE workspace settings (already included)
 workspace.xml
 /shelf/
 
@@ -12,3 +12,7 @@ workspace.xml
 # Datasource and DB tool config
 /dataSources/
 /dataSources.local.xml
+
+# Maven build directory
+/target/
+**/target/
