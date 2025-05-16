@@ -1,0 +1,172 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="
+           http://maven.apache.org/POM/4.0.0
+           http://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.fspann</groupId>
+  <artifactId>fsp-anns-parent</artifactId>
+  <version>0.0.1-SNAPSHOT</version>
+  <packaging>pom</packaging>
+  <name>FSP‑ANN Parent</name>
+
+  <!-- 1. Modules -->
+  <modules>
+    <module>common</module>
+    <module>config</module>
+    <module>loader</module>
+    <module>crypto</module>
+    <module>keymanagement</module>
+    <module>index</module>
+    <module>query</module>
+    <module>api</module>
+  </modules>
+
+  <!-- 2. Versions & Properties -->
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <maven.compiler.release>23</maven.compiler.release>
+    <commons-compress.version>1.26.1</commons-compress.version>
+    <commons-lang3.version>3.17.0</commons-lang3.version>
+
+    <!-- Third‑party versions -->
+    <slf4j.version>2.0.13</slf4j.version>
+    <logback.version>1.5.13</logback.version>
+    <bcprov.version>1.78</bcprov.version>
+    <commons-math.version>3.6.1</commons-math.version>
+    <gson.version>2.11.0</gson.version>
+    <jackson.version>2.17.2</jackson.version>
+    <commons-compress.version>1.26.1</commons-compress.version>
+    <junit.version>5.11.0</junit.version>
+  </properties>
+
+  <!-- 3. Dependency Management -->
+  <dependencyManagement>
+    <dependencies>
+
+      <!-- Third‑party BOMs & libs -->
+      <dependency>
+        <groupId>org.junit</groupId>
+        <artifactId>junit-bom</artifactId>
+        <version>${junit.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+
+      <dependency>
+        <groupId>org.slf4j</groupId>
+        <artifactId>slf4j-api</artifactId>
+        <version>${slf4j.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>ch.qos.logback</groupId>
+        <artifactId>logback-classic</artifactId>
+        <version>${logback.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.bouncycastle</groupId>
+        <artifactId>bcprov-jdk18on</artifactId>
+        <version>${bcprov.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.commons</groupId>
+        <artifactId>commons-math3</artifactId>
+        <version>${commons-math.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.google.code.gson</groupId>
+        <artifactId>gson</artifactId>
+        <version>${gson.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.fasterxml.jackson.core</groupId>
+        <artifactId>jackson-databind</artifactId>
+        <version>${jackson.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.commons</groupId>
+        <artifactId>commons-compress</artifactId>
+        <version>${commons-compress.version}</version>
+      </dependency>
+
+      <!-- Apache Commons Lang3 (new) -->
+      <dependency>
+        <groupId>org.apache.commons</groupId>
+        <artifactId>commons-lang3</artifactId>
+        <version>${commons-lang3.version}</version>
+      </dependency>
+
+      <!-- Internal modules -->
+      <dependency>
+        <groupId>com.fspann</groupId>
+        <artifactId>common</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.fspann</groupId>
+        <artifactId>config</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.fspann</groupId>
+        <artifactId>loader</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.fspann</groupId>
+        <artifactId>crypto</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.fspann</groupId>
+        <artifactId>keymanagement</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.fspann</groupId>
+        <artifactId>index</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.fspann</groupId>
+        <artifactId>query</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.fspann</groupId>
+        <artifactId>api</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+
+    </dependencies>
+  </dependencyManagement>
+
+  <!-- 4. Plugin Management -->
+  <build>
+    <pluginManagement>
+      <plugins>
+        <!-- Compiler -->
+        <plugin>
+          <artifactId>maven-compiler-plugin</artifactId>
+          <version>3.13.0</version>
+          <configuration>
+            <release>${maven.compiler.release}</release>
+          </configuration>
+        </plugin>
+
+        <!-- Surefire -->
+        <plugin>
+          <artifactId>maven-surefire-plugin</artifactId>
+          <version>3.0.0-M5</version>
+        </plugin>
+
+        <!-- Assembly (for API fat‑jar) -->
+        <plugin>
+          <artifactId>maven-assembly-plugin</artifactId>
+          <version>3.1.0</version>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+  </build>
+</project>
