@@ -23,6 +23,9 @@ public class SystemConfig {
     @JsonProperty("reEncBatchSize")
     private int reEncBatchSize = 2_000;
 
+    //    @JsonProperty("getCacheCapacity")
+//    public static final int DEFAULT_CACHE_CAPACITY = 10_000;
+
     @JsonProperty("profilerEnabled")
     private boolean profilerEnabled = true;
 
@@ -38,6 +41,7 @@ public class SystemConfig {
     public long getOpsThreshold() {
         return opsThreshold;
     }
+
 
     public long getAgeThresholdMs() {
         return ageThresholdMs;

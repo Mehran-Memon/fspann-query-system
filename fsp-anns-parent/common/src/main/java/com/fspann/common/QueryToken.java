@@ -10,11 +10,13 @@ import java.util.ArrayList;
 public class QueryToken {
     private final List<Integer> candidateBuckets;
     private final byte[] encryptedQuery;
+    private final byte[] iv;
     private final int topK;
     private final int numTables;
     private final String encryptionContext;
 
     public QueryToken(List<Integer> candidateBuckets,
+                      byte[] iv,
                       byte[] encryptedQuery,
                       int topK,
                       int numTables,
@@ -31,13 +33,31 @@ public class QueryToken {
         this.candidateBuckets = Collections.unmodifiableList(new ArrayList<>(candidateBuckets));
         this.encryptedQuery = encryptedQuery != null ? encryptedQuery.clone() : null;
         this.topK = topK;
+        this.iv = iv.clone();
         this.numTables = numTables;
         this.encryptionContext = (encryptionContext != null && !encryptionContext.isEmpty())
                 ? encryptionContext : "epoch_0";
     }
 
+    /*** @deprecated use the constructor that takes iv + encryptedQuery
+     */
+@Deprecated
+public QueryToken(List<Integer> candidateBuckets,
+                      byte[] encryptedQuery,
+                      int topK,
+                      int numTables,
+                      String encryptionContext) {
+        this(candidateBuckets,
+             new byte[0],            // placeholder IV
+             encryptedQuery,
+             topK,
+             numTables,
+              encryptionContext);
+}
+
     public List<Integer> getCandidateBuckets() { return candidateBuckets; }
-    public byte[] getEncryptedQuery() { return encryptedQuery != null ? encryptedQuery.clone() : null; }
+    public byte[] getIv() { return iv.clone(); }
+    public byte[] getEncryptedQuery() { return encryptedQuery.clone(); }
     public int getTopK() { return topK; }
     public int getNumTables() { return numTables; }
     public String getEncryptionContext() { return encryptionContext; }

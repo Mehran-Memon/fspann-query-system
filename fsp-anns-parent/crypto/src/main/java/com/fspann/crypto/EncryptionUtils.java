@@ -12,7 +12,7 @@ import java.util.Arrays;
  */
 public final class EncryptionUtils {
     private static final String TRANSFORMATION = "AES/GCM/NoPadding";
-    private static final int GCM_IV_LENGTH = 12;
+    public static final int GCM_IV_LENGTH = 12;
     private static final int GCM_TAG_LENGTH = 16; // bytes
     private static final SecureRandom RANDOM = new SecureRandom();
 

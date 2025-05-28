@@ -7,13 +7,13 @@ public class KeyVersion implements Serializable {
     private static final long serialVersionUID = 1L;
 
     private final int version;
-    private final SecretKey key;
+    private final SecretKey secretkey;
 
     public KeyVersion(int version, SecretKey key) {
         this.version = version;
-        this.key = key;
+        this.secretkey = key;
     }
 
     public int getVersion() { return version; }
-    public SecretKey getSecretKey() { return key; }
+    public SecretKey getSecretKey() { return secretkey; }
 }

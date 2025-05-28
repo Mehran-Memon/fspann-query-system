@@ -1,87 +1,66 @@
+// com/fspann/query/service/QueryServiceImpl.java
 package com.fspann.query.service;
 
-import com.fspann.common.QueryResult;
-import com.fspann.common.QueryToken;
-import com.fspann.common.EncryptedPoint;
+import com.fspann.common.*;
 import com.fspann.crypto.CryptoService;
-import com.fspann.crypto.EncryptionUtils;
-import com.fspann.config.SystemConfig;
 import com.fspann.index.service.IndexService;
-import com.fspann.common.KeyLifeCycleService;
-import com.fspann.common.KeyVersion;
-
-import javax.crypto.SecretKey;
-import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Collectors;
 
-/**
- * Default implementation of QueryService: decrypts, ranks, and returns top-K results.
- */
 public class QueryServiceImpl implements QueryService {
-    private final IndexService indexService;
-    private final CryptoService cryptoService;
+    private final IndexService    indexService;
+    private final CryptoService   cryptoService;
     private final KeyLifeCycleService keyService;
 
-    public QueryServiceImpl(IndexService indexService,
-                            CryptoService cryptoService,
-                            KeyLifeCycleService keyService) {
-        this.indexService  = indexService;
-        this.cryptoService = cryptoService;
-        this.keyService    = keyService;
+    public QueryServiceImpl(IndexService idx,
+                            CryptoService crypto,
+                            KeyLifeCycleService ks) {
+        this.indexService  = idx;
+        this.cryptoService = crypto;
+        this.keyService    = ks;
     }
 
     @Override
     public List<QueryResult> search(QueryToken token) {
-        // Rotate keys if needed
+        // rotate if needed
         keyService.rotateIfNeeded();
-        KeyVersion version = keyService.getCurrentVersion();
-        SecretKey key = version.getSecretKey();
+        KeyVersion ver = keyService.getCurrentVersion();
 
-        // Decrypt the raw query vector
-        byte[] raw = token.getEncryptedQuery();
-        int ivLen = EncryptionUtils.generateIV()[12];
-        byte[] iv = Arrays.copyOfRange(raw, 0, ivLen);
-        byte[] ciphertext = Arrays.copyOfRange(raw, ivLen, raw.length);
-        double[] queryVec;
+        // 1) decrypt *the query* itself, using the IV from the token
+        final double[] queryVec;
         try {
-            queryVec = EncryptionUtils.decryptVector(ciphertext, iv, key);
+            queryVec = cryptoService.decryptQuery(
+                    token.getEncryptedQuery(),
+                    token.getIv(),
+                    ver.getSecretKey()
+            );
         } catch (Exception e) {
             throw new RuntimeException("Failed to decrypt query vector", e);
         }
 
-        // Lookup encrypted candidates
-        List<EncryptedPoint> candidates = indexService.lookup(token);
+        // 2) fetch encrypted candidates
+        List<EncryptedPoint> cands = indexService.lookup(token);
 
-        // Decrypt candidates, compute distances, sort, and return top-K
-        return candidates.stream()
-                .map(pt -> {
-                    double[] vec;
-                    try {
-                        vec = cryptoService.decryptFromPoint(pt, key);
-                    } catch (Exception e) {
-                        throw new RuntimeException("Failed to decrypt candidate: " + pt.getId(), e);
-                    }
-                    double dist = computeDistance(queryVec, vec);
-                    return new QueryResult(pt.getId(), dist);
-                })
-                .sorted()
-                .limit(token.getTopK())
-                .collect(Collectors.toList());
+        // 3) decrypt each point with its own IV + ciphertext
+        return cands.stream()
+        .map(pt -> {
+            // decrypt *this point* under the same key version
+            double[] ptVec = cryptoService.decryptFromPoint(pt, ver.getSecretKey());;
+            double dist   = computeDistance(queryVec, ptVec);
+            return new QueryResult(pt.getId(), dist);
+            })
+            .sorted()                      // sort by distance
+            .limit(token.getTopK())        // top-K
+            .collect(Collectors.toList());
     }
 
-    /**
-     * Euclidean distance between two vectors.
-     */
     private double computeDistance(double[] a, double[] b) {
-        if (a.length != b.length) {
-            throw new IllegalArgumentException("Vector lengths do not match");
+        if (a.length != b.length) throw new IllegalArgumentException("Dim mismatch");
+        double s=0;
+        for (int i=0; i<a.length; i++) {
+            double d = a[i]-b[i];
+            s += d*d;
         }
-        double sum = 0;
-        for (int i = 0; i < a.length; i++) {
-            double d = a[i] - b[i];
-            sum += d * d;
-        }
-        return Math.sqrt(sum);
+        return Math.sqrt(s);
     }
 }
