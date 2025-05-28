@@ -1,2 +1,3 @@
 com\fspann\api\ApiSystemConfig.class
+com\fspann\api\MicrometerProfiler.class
 com\fspann\api\ForwardSecureANNSystem.class

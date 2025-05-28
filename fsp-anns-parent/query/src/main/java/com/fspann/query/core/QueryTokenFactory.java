@@ -40,27 +40,23 @@ public class QueryTokenFactory {
      * @return QueryToken for secure ANN lookup
      */
     public QueryToken create(double[] queryVector, int topK) {
-        // Rotate key if needed
         keyService.rotateIfNeeded();
+        KeyVersion ver = keyService.getCurrentVersion();
 
-        // Fetch current key version and extract SecretKey
-        KeyVersion version = keyService.getCurrentVersion();
-        SecretKey key = version.getSecretKey();
+        EncryptedPoint ep = cryptoService.encryptToPoint(
+                "query", queryVector, ver.getSecretKey()
+        );
 
-        // Encrypt the query vector
-        EncryptedPoint ep = cryptoService.encryptToPoint("query", queryVector, key);
-
-        // Determine primary bucket and its neighbors
         int mainBucket = lsh.getBucketId(queryVector);
         List<Integer> buckets = lsh.expandBuckets(mainBucket, expansionRange);
 
-        // Build and return token (ciphertext includes IV)
         return new QueryToken(
                 buckets,
+                ep.getIv(),
                 ep.getCiphertext(),
                 topK,
                 numTables,
-                "epoch_v" + version.getVersion()
+                "epoch_v" + ver.getVersion()
         );
     }
 }
