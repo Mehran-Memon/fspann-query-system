@@ -1,4 +1,8 @@
 -------------------------------------------------------------------------------
 Test set: com.fspann.common.EncryptedPointTest
 -------------------------------------------------------------------------------
-Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.038 s - in com.fspann.common.EncryptedPointTest
+Tests run: 3, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 0.04 s <<< FAILURE! - in com.fspann.common.EncryptedPointTest
+com.fspann.common.EncryptedPointTest.nullIvOrCiphertextThrows  Time elapsed: 0.02 s  <<< FAILURE!
+org.opentest4j.AssertionFailedError: Expected java.lang.NullPointerException to be thrown, but nothing was thrown.
+	at com.fspann.common.EncryptedPointTest.nullIvOrCiphertextThrows(EncryptedPointTest.java:49)
+
