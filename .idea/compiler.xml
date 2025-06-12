@@ -20,4 +20,9 @@
       <module name="key" target="23" />
     </bytecodeTargetLevel>
   </component>
+  <component name="JavacSettings">
+    <option name="ADDITIONAL_OPTIONS_OVERRIDE">
+      <module name="query" options="" />
+    </option>
+  </component>
 </project>
