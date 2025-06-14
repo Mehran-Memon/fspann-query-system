@@ -1,4 +1,3 @@
 com\fspann\query\service\QueryService.class
 com\fspann\query\service\QueryServiceImpl.class
 com\fspann\query\core\QueryTokenFactory.class
-com\fspann\query\service\QueryServiceImpl$QueryException.class
