@@ -19,14 +19,18 @@ public class FvecsLoader implements FormatLoader {
                 int read = fis.read(vecBuf);
                 if (read != dim * 4) break;
                 float[] tmp = new float[dim];
-                ByteBuffer.wrap(vecBuf).order(ByteOrder.LITTLE_ENDIAN)
-                        .asFloatBuffer().get(tmp);
+                ByteBuffer.wrap(vecBuf).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer().get(tmp);
                 double[] vec = new double[dim];
                 for (int i = 0; i < dim; i++) vec[i] = tmp[i];
                 data.add(vec);
+                if (batchSize > 0 && data.size() >= batchSize) {
+                    List<double[]> batch = new ArrayList<>(data);
+                    data.clear();
+                    return batch;
+                }
             }
         }
-        return data;
+        return data; // Return remaining data if < batchSize
     }
 
     @Override

@@ -47,8 +47,9 @@
             <artifactId>config</artifactId>
         </dependency>
         <dependency>
-            <groupId>com.fspann</groupId>
-            <artifactId>config</artifactId>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>

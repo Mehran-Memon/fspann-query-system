@@ -13,7 +13,7 @@ class EncryptedPointTest {
         int shardId = 5;
         byte[] iv = new byte[]{1, 2, 3};
         byte[] ct = new byte[]{4, 5, 6, 7};
-        EncryptedPoint ep = new EncryptedPoint(id, shardId, iv, ct);
+        EncryptedPoint ep = new EncryptedPoint(id, shardId, iv, ct, 1);
 
         assertEquals(id, ep.getId());
         assertEquals(shardId, ep.getShardId());
@@ -34,7 +34,7 @@ class EncryptedPointTest {
     void constructorClonesInputArrays() {
         byte[] iv = new byte[]{7, 8};
         byte[] ct = new byte[]{9, 10};
-        EncryptedPoint ep = new EncryptedPoint("id", 0, iv, ct);
+        EncryptedPoint ep = new EncryptedPoint("id", 0, iv, ct, 1);
         // modify original arrays
         iv[0] = 0;
         ct[0] = 0;
@@ -46,8 +46,8 @@ class EncryptedPointTest {
     @Test
     void nullIvOrCiphertextThrows() {
         // Passing null for iv should throw NPE
-        assertThrows(NullPointerException.class, () -> new EncryptedPoint("id", 0, null, new byte[]{1}));
+        assertThrows(NullPointerException.class, () -> new EncryptedPoint("id", 0, null, new byte[]{1}, 1));
         // Passing null for ciphertext should throw NPE
-        assertThrows(NullPointerException.class, () -> new EncryptedPoint("id", 0, new byte[]{1}, null));
+        assertThrows(NullPointerException.class, () -> new EncryptedPoint("id", 0, new byte[]{1}, null, 1));
     }}
 

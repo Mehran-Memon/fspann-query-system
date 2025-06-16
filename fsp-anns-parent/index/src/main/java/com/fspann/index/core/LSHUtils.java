@@ -8,6 +8,7 @@ import java.util.*;
 
 /**
  * Utility methods for LSH operations in encrypted domain.
+ * @deprecated This class is not currently used in the system. Consider removal if no use case is identified.
  */
 public class LSHUtils {
 
@@ -19,7 +20,9 @@ public class LSHUtils {
      * @param crypto crypto service for decryption
      * @param key   secret key for decryption
      * @return list of projection values
+     * @deprecated May be removed if not integrated into the workflow.
      */
+    @Deprecated
     public static List<Double> computeProjections(
             List<EncryptedPoint> pts,
             EvenLSH lsh,
@@ -42,7 +45,9 @@ public class LSHUtils {
      * @param data       sorted or unsorted list of projection values
      * @param numBuckets number of buckets
      * @return array of quantile boundary values
+     * @deprecated May be removed if not integrated into the workflow.
      */
+    @Deprecated
     public static double[] quantiles(List<Double> data, int numBuckets) {
         if (data == null || data.isEmpty()) {
             throw new IllegalArgumentException("Data list must not be null or empty");

@@ -8,8 +8,10 @@ public class EncryptedVector {
     private final String id;
 
     public EncryptedVector(byte[] encryptedData, String id) {
+        if (encryptedData == null || encryptedData.length == 0)
+            throw new IllegalArgumentException("encryptedData cannot be null or empty");
         this.encryptedData = encryptedData.clone();
-        this.id = id;
+        this.id = (id != null) ? id : "";
     }
 
     public byte[] getEncryptedData() {

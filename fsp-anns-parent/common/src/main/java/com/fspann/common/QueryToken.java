@@ -10,6 +10,7 @@ import java.util.ArrayList;
 public class QueryToken {
     private final List<Integer> candidateBuckets;
     private final byte[] encryptedQuery;
+    private final double[] plaintextQuery;
     private final byte[] iv;
     private final int topK;
     private final int numTables;
@@ -18,12 +19,16 @@ public class QueryToken {
     public QueryToken(List<Integer> candidateBuckets,
                       byte[] iv,
                       byte[] encryptedQuery,
+                      double[] plaintextQuery,
                       int topK,
                       int numTables,
                       String encryptionContext) {
         if (candidateBuckets == null || candidateBuckets.isEmpty()) {
             throw new IllegalArgumentException("candidateBuckets cannot be null or empty");
         }
+        if (encryptedQuery == null) throw new NullPointerException("encryptedQuery");
+        if (plaintextQuery == null)
+            throw new IllegalArgumentException("plaintextQuery cannot be null");
         if (topK < 0) {
             throw new IllegalArgumentException("topK cannot be negative: " + topK);
         }
@@ -32,6 +37,7 @@ public class QueryToken {
         }
         this.candidateBuckets = Collections.unmodifiableList(new ArrayList<>(candidateBuckets));
         this.encryptedQuery = encryptedQuery != null ? encryptedQuery.clone() : null;
+        this.plaintextQuery = plaintextQuery.clone(); // store a copy
         this.topK = topK;
         this.iv = iv.clone();
         this.numTables = numTables;
@@ -39,28 +45,36 @@ public class QueryToken {
                 ? encryptionContext : "epoch_0";
     }
 
-    /*** @deprecated use the constructor that takes iv + encryptedQuery
-     */
-@Deprecated
-public QueryToken(List<Integer> candidateBuckets,
-                      byte[] encryptedQuery,
-                      int topK,
-                      int numTables,
-                      String encryptionContext) {
-        this(candidateBuckets,
-             new byte[0],            // placeholder IV
-             encryptedQuery,
-             topK,
-             numTables,
-              encryptionContext);
-}
+    public List<Integer> getBuckets() {
+        return candidateBuckets;
+    }
 
-    public List<Integer> getCandidateBuckets() { return candidateBuckets; }
-    public byte[] getIv() { return iv.clone(); }
-    public byte[] getEncryptedQuery() { return encryptedQuery.clone(); }
-    public int getTopK() { return topK; }
-    public int getNumTables() { return numTables; }
-    public String getEncryptionContext() { return encryptionContext; }
+    public List<Integer> getCandidateBuckets() {
+        return new ArrayList<>(candidateBuckets); // Return copy
+    }
+    public byte[] getIv() {
+        return iv.clone();
+    }
+
+    public byte[] getEncryptedQuery() {
+        return encryptedQuery.clone();
+    }
+
+    public double[] getPlaintextQuery() {
+        return plaintextQuery.clone();
+    }
+
+    public int getTopK() {
+        return topK;
+    }
+
+    public int getNumTables() {
+        return numTables;
+    }
+
+    public String getEncryptionContext() {
+        return encryptionContext;
+    }
 
     @Override
     public String toString() {

@@ -26,9 +26,14 @@ public class JsonLoader implements FormatLoader {
                     vec[i] = node.get(i).asDouble();
                 }
                 data.add(vec);
+                if (batchSize > 0 && data.size() >= batchSize) {
+                    List<double[]> batch = new ArrayList<>(data);
+                    data.clear();
+                    return batch;
+                }
             }
         }
-        return data;
+        return data; // Return remaining data if < batchSize
     }
 
     @Override

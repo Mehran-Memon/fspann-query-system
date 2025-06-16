@@ -12,40 +12,22 @@ public class EncryptedPoint {
     private final int shardId;
     private final byte[] iv;
     private final byte[] ciphertext;
+    private final int version; // Added version field
 
-    public EncryptedPoint(String id, int shardId, byte[] iv, byte[] ciphertext) {
-        this.id = Objects.requireNonNull(id, "id");
+    public EncryptedPoint(String id, int shardId, byte[] iv, byte[] ciphertext, int version) {
+        if (id == null || iv == null || ciphertext == null) {
+            throw new NullPointerException("id, iv, and ciphertext must not be null");
+        }
+        this.id = id;
         this.shardId = shardId;
-        this.iv = Objects.requireNonNull(iv, "iv").clone();
-        this.ciphertext = Objects.requireNonNull(ciphertext, "ciphertext").clone();
+        this.iv = iv.clone();
+        this.ciphertext = ciphertext.clone();
+        this.version = version;
     }
 
-    public String getId() {
-        return id;
-    }
-
-    /**
-     * @return the bucket (shard) this point belongs to
-     */
-    public int getShardId() {
-        return shardId;
-    }
-
-    public byte[] getIv() {
-        return iv.clone();
-    }
-
-    public byte[] getCiphertext() {
-        return ciphertext.clone();
-    }
-
-    @Override
-    public String toString() {
-        return "EncryptedPoint{" +
-                "id='" + id + '\'' +
-                ", shardId=" + shardId +
-                ", iv=" + Arrays.toString(iv) +
-                ", ciphertext=" + Arrays.toString(ciphertext) +
-                '}';
-    }
+    public String getId() { return id; }
+    public int getShardId() { return shardId; }
+    public byte[] getIv() { return iv.clone(); }
+    public byte[] getCiphertext() { return ciphertext.clone(); }
+    public int getVersion() { return version; } // Added getter
 }

@@ -24,11 +24,15 @@ public class IvecsLoader implements FormatLoader {
                 int read = fis.read(vecBuf);
                 if (read != dim * 4) break;
                 int[] vec = new int[dim];
-                ByteBuffer.wrap(vecBuf).order(ByteOrder.LITTLE_ENDIAN)
-                        .asIntBuffer().get(vec);
+                ByteBuffer.wrap(vecBuf).order(ByteOrder.LITTLE_ENDIAN).asIntBuffer().get(vec);
                 data.add(vec);
+                if (batchSize > 0 && data.size() >= batchSize) {
+                    List<int[]> batch = new ArrayList<>(data);
+                    data.clear();
+                    return batch;
+                }
             }
         }
-        return data;
+        return data; // Return remaining data if < batchSize
     }
 }
