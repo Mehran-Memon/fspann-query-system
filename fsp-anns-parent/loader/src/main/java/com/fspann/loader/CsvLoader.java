@@ -21,12 +21,21 @@ public class CsvLoader implements FormatLoader {
                 String[] tokens = line.split(",");
                 double[] vec = new double[tokens.length];
                 for (int i = 0; i < tokens.length; i++) {
-                    vec[i] = Double.parseDouble(tokens[i]);
+                    try {
+                        vec[i] = Double.parseDouble(tokens[i].trim());
+                    } catch (NumberFormatException e) {
+                        throw new IOException("Invalid number at line: " + line, e);
+                    }
                 }
                 data.add(vec);
+                if (batchSize > 0 && data.size() >= batchSize) {
+                    List<double[]> batch = new ArrayList<>(data);
+                    data.clear();
+                    return batch;
+                }
             }
         }
-        return data;
+        return data; // Return remaining data if < batchSize
     }
 
     @Override

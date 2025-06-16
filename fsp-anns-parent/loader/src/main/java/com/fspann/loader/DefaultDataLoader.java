@@ -1,19 +1,15 @@
 package com.fspann.loader;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.IOException;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Default implementation of DataLoader that delegates to format-specific loaders.
  */
 public class DefaultDataLoader implements DataLoader {
-    private static final Logger logger = LoggerFactory.getLogger(DefaultDataLoader.class);
-    private final Map<String, FormatLoader> registry = new HashMap<>();
+    private final Map<String, FormatLoader> registry = new ConcurrentHashMap<>();
 
     public DefaultDataLoader() {
         // Register built-in format loaders
@@ -46,4 +42,5 @@ public class DefaultDataLoader implements DataLoader {
         if (idx <= 0 || idx >= path.length()) return "";
         return path.substring(idx).toUpperCase();
     }
+
 }
