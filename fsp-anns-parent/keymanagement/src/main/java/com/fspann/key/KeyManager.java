@@ -41,6 +41,9 @@ public class KeyManager {
     private volatile int currentVersion = 1;
 
     public KeyManager(String storagePath) throws IOException {
+        if (storagePath == null) {
+            throw new IllegalArgumentException("Key path and rotation policy must not be null");
+        }
         this.storagePath = storagePath;
         Path p = Paths.get(storagePath);
         if (Files.exists(p)) {

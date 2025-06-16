@@ -5,6 +5,7 @@ import com.fspann.key.KeyManager;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 
+import javax.crypto.SecretKey;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -102,4 +103,28 @@ class KeyManagerTest {
         Thread.sleep(150);
     }
 
+    @Test
+    void testNullKeyFilePathThrowsException() {
+        assertThrows(IllegalArgumentException.class, () -> new KeyManager(null));
+    }
+
+
+    @Test
+    void testFileMissingOnDeserialization() throws IOException {
+        Path missingPath = keyFile.resolveSibling("nonexistent.ser");
+        assertFalse(Files.exists(missingPath));
+        KeyManager fresh = new KeyManager(missingPath.toString());
+        assertNotNull(fresh.getCurrentVersion());
+    }
+
+    @Test
+    void testMultipleRotationsProduceDifferentKeys() {
+        SecretKey k1 = keyManager.getCurrentVersion().getKey();
+        SecretKey k2 = keyManager.rotateKey().getKey();
+        SecretKey k3 = keyManager.rotateKey().getKey();
+
+        assertNotEquals(new String(k1.getEncoded()), new String(k2.getEncoded()));
+        assertNotEquals(new String(k2.getEncoded()), new String(k3.getEncoded()));
+        assertNotEquals(new String(k1.getEncoded()), new String(k3.getEncoded()));
+    }
 }
