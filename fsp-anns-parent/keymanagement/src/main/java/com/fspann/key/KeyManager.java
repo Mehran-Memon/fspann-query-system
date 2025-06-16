@@ -10,6 +10,7 @@ import javax.crypto.Mac;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -118,10 +119,15 @@ public class KeyManager {
         SecureRandom.getInstanceStrong().nextBytes(salt);
         Mac mac = Mac.getInstance(KDF_ALGORITHM);
         mac.init(masterKey);
-        byte[] derived = mac.doFinal(("session-" + version + Arrays.toString(salt)).getBytes());
+        ByteBuffer buffer = ByteBuffer.allocate(4 + salt.length);
+        buffer.putInt(version);
+        logger.debug("Derived session key for version {} ({} total versions)", version, sessionKeys.size());
+        buffer.put(salt);
+        byte[] derived = mac.doFinal(buffer.array());
         byte[] keyBytes = new byte[KEY_SIZE / 8];
         System.arraycopy(derived, 0, keyBytes, 0, keyBytes.length);
         return new SecretKeySpec(keyBytes, KEY_ALGORITHM);
+
     }
 
     private SecretKey generateMasterKey() throws NoSuchAlgorithmException {

@@ -1,6 +1,5 @@
-package com.key;
+package com.fspann.common;
 
-import com.fspann.common.MetadataManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
