@@ -1,0 +1,4 @@
+Label,AvgTime(ms),Runs
+insertFakePoints,3738.9338,1
+insert,29.0576,1113
+cloakQuery,0.1366,2
