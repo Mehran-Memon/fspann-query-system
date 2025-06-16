@@ -27,4 +27,11 @@ class DefaultDataLoaderTest {
         executor.awaitTermination(5, TimeUnit.SECONDS);
         assertTrue(true); // No exceptions indicate success
     }
+
+    @Test
+    void testInvalidFormatExtension() {
+        DefaultDataLoader loader = new DefaultDataLoader();
+        String path = "dataset.unknown";
+        assertThrows(UnsupportedOperationException.class, () -> loader.loadData(path, 100));
+    }
 }
