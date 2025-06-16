@@ -4,6 +4,7 @@ import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
 import java.nio.ByteBuffer;
+import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
 import java.util.Arrays;
 
@@ -24,14 +25,17 @@ public final class EncryptionUtils {
         return iv;
     }
 
-    public static byte[] encryptVector(double[] vector, byte[] iv, SecretKey key) throws Exception {
+
+    public static byte[] encryptVector(double[] vector, byte[] iv, SecretKey key) throws GeneralSecurityException {
+        if (iv.length != GCM_IV_LENGTH) throw new IllegalArgumentException("IV length must be " + GCM_IV_LENGTH);
         Cipher cipher = Cipher.getInstance(TRANSFORMATION);
         cipher.init(Cipher.ENCRYPT_MODE, key, new GCMParameterSpec(GCM_TAG_LENGTH * 8, iv));
-
         byte[] plaintext = doubleArrayToBytes(vector);
-        byte[] ciphertext = cipher.doFinal(plaintext);
-        Arrays.fill(plaintext, (byte) 0);
-        return ciphertext;
+        try {
+            return cipher.doFinal(plaintext);
+        } finally {
+            Arrays.fill(plaintext, (byte) 0);
+        }
     }
 
     public static double[] decryptVector(byte[] ciphertext, byte[] iv, SecretKey key) throws Exception {

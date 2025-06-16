@@ -1,18 +1,16 @@
 package com.fspann.query.core;
 
-import com.fspann.common.QueryToken;
 import com.fspann.common.EncryptedPoint;
+import com.fspann.common.QueryToken;
 import com.fspann.crypto.CryptoService;
+import com.fspann.crypto.EncryptionUtils; // Added for generateIV
+import com.fspann.index.core.EvenLSH;
 import com.fspann.common.KeyLifeCycleService;
 import com.fspann.common.KeyVersion;
-import com.fspann.index.core.EvenLSH;
 
 import javax.crypto.SecretKey;
 import java.util.List;
 
-/**
- * Factory for generating QueryToken from raw query vectors.
- */
 public class QueryTokenFactory {
     private final CryptoService cryptoService;
     private final KeyLifeCycleService keyService;
@@ -20,43 +18,26 @@ public class QueryTokenFactory {
     private final int expansionRange;
     private final int numTables;
 
-    public QueryTokenFactory(CryptoService cryptoService,
-                             KeyLifeCycleService keyService,
-                             EvenLSH lsh,
-                             int expansionRange,
-                             int numTables) {
-        this.cryptoService  = cryptoService;
-        this.keyService     = keyService;
-        this.lsh            = lsh;
+    public QueryTokenFactory(CryptoService cryptoService, KeyLifeCycleService keyService,
+                             EvenLSH lsh, int expansionRange, int numTables) {
+        this.cryptoService = cryptoService;
+        this.keyService = keyService;
+        this.lsh = lsh;
         this.expansionRange = expansionRange;
-        this.numTables      = numTables;
+        this.numTables = numTables;
     }
 
-    /**
-     * Create a QueryToken by encrypting the query vector and computing bucket candidates.
-     *
-     * @param queryVector raw feature vector
-     * @param topK number of neighbors to retrieve
-     * @return QueryToken for secure ANN lookup
-     */
-    public QueryToken create(double[] queryVector, int topK) {
+    public QueryToken create(double[] vector, int topK) {
         keyService.rotateIfNeeded();
-        KeyVersion ver = keyService.getCurrentVersion();
+        KeyVersion currentVersion = keyService.getCurrentVersion();
+        SecretKey key = currentVersion.getKey(); // Changed from getSecretKey() to getKey()
+        String encryptionContext = "epoch_v" + currentVersion.getVersion();
 
-        EncryptedPoint ep = cryptoService.encryptToPoint(
-                "query", queryVector, ver.getSecretKey()
-        );
+        byte[] iv = EncryptionUtils.generateIV();
+        EncryptedPoint encrypted = cryptoService.encryptToPoint("query", vector, key);
+        byte[] encryptedQuery = encrypted.getCiphertext();
 
-        int mainBucket = lsh.getBucketId(queryVector);
-        List<Integer> buckets = lsh.expandBuckets(mainBucket, expansionRange);
-
-        return new QueryToken(
-                buckets,
-                ep.getIv(),
-                ep.getCiphertext(),
-                topK,
-                numTables,
-                "epoch_v" + ver.getVersion()
-        );
+        List<Integer> buckets = lsh.getBuckets(vector);
+        return new QueryToken(buckets, iv, encryptedQuery, vector.clone(), topK, numTables, encryptionContext);
     }
 }

@@ -47,4 +47,8 @@ public class Profiler {
             System.err.println("Failed to write profiler CSV: " + ex.getMessage());
         }
     }
+
+    public List<Long> getTimings(String operation) {
+        return timings.getOrDefault(operation, Collections.emptyList());
+    }
 }

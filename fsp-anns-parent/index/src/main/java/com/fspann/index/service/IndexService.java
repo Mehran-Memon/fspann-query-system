@@ -12,4 +12,6 @@ public interface IndexService {
     void delete(String id);
     List<EncryptedPoint> lookup(QueryToken token);
     void markDirty(int shardId);
+    int getIndexedVectorCount();
+
 }
