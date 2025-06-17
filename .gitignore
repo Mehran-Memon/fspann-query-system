@@ -1,35 +1,8 @@
-# 🔧 JetBrains IDE config (safe to ignore)
-.idea/
-*.iml
-
-# IDE workspace and local settings
-workspace.xml
-/shelf/
-httpRequests/
-dataSources/
-dataSources.local.xml
-
-# Maven build output
-/target/
-**/target/
 *.class
-
-# Maven test output
 *.lst
-*.txt
 *.csv
-*.iml
-*.class
-**/target/
-*.class
-*.lst
+*.txt
 target/
 **/target/
 **/maven-status/
 *.ser
-
-# Build artifacts
-*.class
-target/
-**/target/
-**/maven-status/

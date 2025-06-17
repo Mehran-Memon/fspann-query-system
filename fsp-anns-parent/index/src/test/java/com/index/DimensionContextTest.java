@@ -12,7 +12,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
-import org.mockito.Spy;
 
 import javax.crypto.spec.SecretKeySpec;
 import javax.crypto.SecretKey;
@@ -28,7 +27,7 @@ class DimensionContextTest {
 
     @Mock private CryptoService crypto;
     @Mock private KeyLifeCycleService keyService;
-    @Spy  private SecureLSHIndex index;
+    @Mock private SecureLSHIndex index;
     @Mock private EvenLSH lsh;
 
     private DimensionContext context;
@@ -41,34 +40,36 @@ class DimensionContextTest {
     @BeforeEach
     void setUp() {
         MockitoAnnotations.openMocks(this);
-
         KeyVersion vOld = new KeyVersion(0, dummyKey);
         KeyVersion vNew = new KeyVersion(1, dummyKey);
         when(keyService.getPreviousVersion()).thenReturn(vOld);
         when(keyService.getCurrentVersion()).thenReturn(vNew);
+        when(lsh.getDimensions()).thenReturn(2);
+        when(lsh.getNumBuckets()).thenReturn(32);
+        when(index.getNumHashTables()).thenReturn(1);
 
-        // Make sure index is mocked to return dirty shards and query results
-        when(index.getDirtyShards()).thenReturn(Set.of(5));
-        when(index.queryEncrypted(any(QueryToken.class))).thenReturn(List.of(new EncryptedPoint("test", 5, oldIv, oldQ, vOld.getVersion(), 2)));
+        when(crypto.encrypt(any(double[].class), any(SecretKey.class), any(byte[].class)))
+                .thenReturn(new byte[32]);
+        when(crypto.generateIV()).thenReturn(oldIv);
 
-        // Mocking crypto service methods
-        when(crypto.reEncrypt(any(), eq(dummyKey))).thenReturn(new EncryptedPoint("test", 5, newIv, newQ, vNew.getVersion(), 2));
+        when(crypto.reEncrypt(any(EncryptedPoint.class), any(SecretKey.class)))
+                .thenReturn(new EncryptedPoint("test", 5, newIv, newQ, 1, 2));
 
-        // Create the context with mocked dependencies
         context = new DimensionContext(index, crypto, keyService, lsh);
     }
-
 
     @Test
     void testReEncryptAll() {
         EncryptedPoint pt = new EncryptedPoint("test", 5, oldIv, oldQ, 0, 2);
         EncryptedPoint rePt = new EncryptedPoint("test", 5, newIv, newQ, 1, 2);
 
-        // Make sure queryEncrypted returns the mock point
-        when(index.queryEncrypted(any(QueryToken.class))).thenReturn(List.of(pt));
+        when(index.getDirtyShards()).thenReturn(Set.of(5));
+        when(index.queryEncrypted(argThat(token ->
+                token.getBuckets().equals(List.of(5)) &&
+                        token.getEncryptionContext().equals("epoch_0")
+        ))).thenReturn(List.of(pt));
         when(crypto.reEncrypt(eq(pt), eq(dummyKey))).thenReturn(rePt);
 
-        // Ensure that the method calls removePoint, addPoint, and clearDirtyShard
         context.reEncryptAll();
 
         verify(index, times(1)).removePoint("test");
@@ -83,7 +84,6 @@ class DimensionContextTest {
         verify(index, times(1)).clearDirtyShard(5);
     }
 
-
     @Test
     void testReEncryptAll_NoDirtyShards() {
         when(index.getDirtyShards()).thenReturn(Set.of());
@@ -96,6 +96,7 @@ class DimensionContextTest {
 
     @Test
     void testReEncryptAll_EmptyResult() {
+        when(index.getDirtyShards()).thenReturn(Set.of(5));
         when(index.queryEncrypted(any(QueryToken.class))).thenReturn(List.of());
         context.reEncryptAll();
 
@@ -111,7 +112,11 @@ class DimensionContextTest {
         EncryptedPoint rePt1 = new EncryptedPoint("pt1", 5, newIv, newQ, 1, 2);
         EncryptedPoint rePt2 = new EncryptedPoint("pt2", 5, newIv, newQ, 1, 2);
 
-        when(index.queryEncrypted(any(QueryToken.class))).thenReturn(List.of(pt1, pt2));
+        when(index.getDirtyShards()).thenReturn(Set.of(5));
+        when(index.queryEncrypted(argThat(token ->
+                token.getBuckets().equals(List.of(5)) &&
+                        token.getEncryptionContext().equals("epoch_0")
+        ))).thenReturn(List.of(pt1, pt2));
         when(crypto.reEncrypt(eq(pt1), eq(dummyKey))).thenReturn(rePt1);
         when(crypto.reEncrypt(eq(pt2), eq(dummyKey))).thenReturn(rePt2);
 

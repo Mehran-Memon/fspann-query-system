@@ -35,7 +35,7 @@ class QueryTokenFactoryTest {
         when(keyService.getCurrentVersion()).thenReturn(new KeyVersion(7, mockKey));
         when(lsh.getBuckets(any(double[].class))).thenReturn(List.of(1, 2, 3));
         when(cryptoService.encryptToPoint(eq("query"), any(double[].class), any(SecretKey.class)))
-                .thenReturn(new EncryptedPoint("query", 0, new byte[12], new byte[32], 7));
+                .thenReturn(new EncryptedPoint("query", 0, new byte[12], new byte[32], 7, 2));
 
         factory = new QueryTokenFactory(cryptoService, keyService, lsh, 2, 3);
     }
@@ -49,10 +49,11 @@ class QueryTokenFactoryTest {
         assertEquals(3, token.getBuckets().size());
         assertArrayEquals(vector, token.getPlaintextQuery());
         assertEquals(5, token.getTopK());
-        assertEquals("epoch_v7", token.getEncryptionContext());
-        assertNotNull(token.getIv());
-        assertNotNull(token.getEncryptedQuery());
+        assertEquals("epoch_v7", token.getEncryptionContext());  // Check encryption context
+        assertNotNull(token.getIv());  // Ensure IV is set
+        assertNotNull(token.getEncryptedQuery());  // Ensure encrypted query is set
     }
+
 
     @Test
     void testNullVectorThrowsException() {

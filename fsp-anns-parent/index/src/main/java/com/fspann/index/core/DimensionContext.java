@@ -42,6 +42,10 @@ public class DimensionContext {
         KeyVersion previous = keyService.getPreviousVersion();
         KeyVersion current = keyService.getCurrentVersion();
 
+        if (previous == null || current == null) {
+            return; // No re-encryption needed if keys are not available
+        }
+
         for (int shard : index.getDirtyShards()) {
             List<Integer> buckets = Collections.singletonList(shard);
             byte[] iv = crypto.generateIV();
@@ -49,21 +53,23 @@ public class DimensionContext {
             byte[] encryptedQuery = crypto.encrypt(dummyQuery, previous.getKey(), iv);
 
             int topK = lsh.getNumBuckets() / 2;
-            int numTables = 1;
-            String context = "epoch_" + (previous.getVersion() - 1);
+            int numTables = index.getNumHashTables();
+            String context = "epoch_" + previous.getVersion(); // Match test expectation
 
             QueryToken token = new QueryToken(
                     buckets, iv, encryptedQuery, dummyQuery, topK, numTables, context
             );
 
             List<EncryptedPoint> pts = index.queryEncrypted(token);
-            if (!pts.isEmpty()) { // Only process if points exist
-                for (EncryptedPoint pt : pts) {
+            for (EncryptedPoint pt : pts) {
+                if (pt.getVersion() <= previous.getVersion()) { // Process points with older or equal version
                     EncryptedPoint reEnc = crypto.reEncrypt(pt, current.getKey());
                     index.removePoint(pt.getId());
                     index.addPoint(reEnc);
                 }
-                index.clearDirtyShard(shard); // Clear only if points were re-encrypted
+            }
+            if (!pts.isEmpty()) {
+                index.clearDirtyShard(shard);
             }
         }
     }

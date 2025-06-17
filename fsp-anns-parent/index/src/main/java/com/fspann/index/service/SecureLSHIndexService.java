@@ -18,26 +18,36 @@ import javax.crypto.SecretKey;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * Service layer: encrypts vectors, delegates to core index, handles forward-secure rotation.
- * Refactored to support dynamic multi-dimensional indexing.
- */
 public class SecureLSHIndexService implements IndexService {
     private static final Logger logger = LoggerFactory.getLogger(SecureLSHIndexService.class);
 
     private final CryptoService crypto;
     private final KeyLifeCycleService keyService;
     private final MetadataManager metadataManager;
+    private final SecureLSHIndex index; // For testing
+    private final EvenLSH lsh; // For testing
 
     private final Map<Integer, DimensionContext> dimensionContexts = new ConcurrentHashMap<>();
     private final Map<String, EncryptedPoint> indexedPoints = new ConcurrentHashMap<>();
 
+    // Constructor for production
     public SecureLSHIndexService(CryptoService crypto,
                                  KeyLifeCycleService keyService,
                                  MetadataManager metadataManager) {
+        this(crypto, keyService, metadataManager, null, null);
+    }
+
+    // Constructor for testing with mocked index and lsh
+    public SecureLSHIndexService(CryptoService crypto,
+                                 KeyLifeCycleService keyService,
+                                 MetadataManager metadataManager,
+                                 SecureLSHIndex index,
+                                 EvenLSH lsh) {
         this.crypto = crypto != null ? crypto : new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
         this.keyService = keyService;
         this.metadataManager = metadataManager;
+        this.index = index;
+        this.lsh = lsh;
 
         try {
             metadataManager.load("metadata.ser");
@@ -48,10 +58,10 @@ public class SecureLSHIndexService implements IndexService {
 
     private DimensionContext getOrCreateContext(int dimension) {
         return dimensionContexts.computeIfAbsent(dimension, dim -> {
-            int buckets = 32; // Default bucket count, can be dynamic
-            EvenLSH lsh = new EvenLSH(dim, buckets);
-            SecureLSHIndex index = new SecureLSHIndex(1, buckets, lsh);
-            return new DimensionContext(index, crypto, keyService, lsh);
+            int buckets = 32;
+            EvenLSH lshInstance = (lsh != null) ? lsh : new EvenLSH(dim, buckets);
+            SecureLSHIndex idx = (index != null) ? index : new SecureLSHIndex(1, buckets, lshInstance);
+            return new DimensionContext(idx, crypto, keyService, lshInstance);
         });
     }
 
@@ -60,9 +70,10 @@ public class SecureLSHIndexService implements IndexService {
         int dimension = pt.getVectorLength();
         DimensionContext ctx = getOrCreateContext(dimension);
         indexedPoints.put(pt.getId(), pt);
-        ctx.getIndex().addPoint(pt);
-        ctx.getIndex().markShardDirty(pt.getShardId());
-        metadataManager.putVectorMetadata(pt.getId(), String.valueOf(pt.getShardId()), String.valueOf(keyService.getCurrentVersion().getVersion()));
+        SecureLSHIndex idx = ctx.getIndex();
+        idx.addPoint(pt);
+        idx.markShardDirty(pt.getShardId());
+        metadataManager.putVectorMetadata(pt.getId(), String.valueOf(pt.getShardId()), String.valueOf(pt.getVersion()));
         try {
             metadataManager.save("metadata.ser");
         } catch (MetadataManager.MetadataException e) {
@@ -79,24 +90,22 @@ public class SecureLSHIndexService implements IndexService {
         KeyVersion version = keyService.getCurrentVersion();
         SecretKey key = version.getKey();
 
-        EncryptedPoint encryptedPoint;
         try {
-            encryptedPoint = crypto.encryptToPoint(id, vector, key);
+            int shardId = ctx.getLsh().getBucketId(vector);
+            EncryptedPoint encryptedPoint = crypto.encryptToPoint(id, vector, key);
+            EncryptedPoint withShard = new EncryptedPoint(
+                    encryptedPoint.getId(),
+                    shardId,
+                    encryptedPoint.getIv(),
+                    encryptedPoint.getCiphertext(),
+                    version.getVersion(),
+                    vector.length
+            );
+            insert(withShard);
         } catch (Exception e) {
             logger.error("Failed to encrypt vector id={}", id, e);
             throw new RuntimeException("Encryption failed for id=" + id, e);
         }
-
-        EncryptedPoint withShard = new EncryptedPoint(
-                encryptedPoint.getId(),
-                encryptedPoint.getShardId(),
-                encryptedPoint.getIv(),
-                encryptedPoint.getCiphertext(),
-                version.getVersion(),
-                vector.length
-        );
-
-        insert(withShard);
     }
 
     @Override

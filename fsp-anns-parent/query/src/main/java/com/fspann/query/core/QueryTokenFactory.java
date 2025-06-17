@@ -48,9 +48,9 @@ public class QueryTokenFactory {
         EncryptedPoint encrypted = cryptoService.encryptToPoint("query", vector, key);
         byte[] encryptedQuery = encrypted.getCiphertext();
 
-        List<Integer> buckets = lsh.getBuckets(vector);
+        // Using the getBuckets method of EvenLSH
+        List<Integer> buckets = lsh.getBuckets(vector);  // This will now work as expected
+
         return new QueryToken(buckets, iv, encryptedQuery, vector.clone(), topK, numTables, encryptionContext);
     }
-
-
 }
