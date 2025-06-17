@@ -27,3 +27,9 @@ target/
 **/target/
 **/maven-status/
 *.ser
+
+# Build artifacts
+*.class
+target/
+**/target/
+**/maven-status/

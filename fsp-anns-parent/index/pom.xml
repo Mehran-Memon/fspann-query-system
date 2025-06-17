@@ -15,6 +15,7 @@
     <name>FSP‑ANN Index Service</name>
 
     <dependencies>
+
         <!-- LSH and ANN math -->
         <dependency>
             <groupId>org.apache.commons</groupId>
@@ -61,5 +62,28 @@
             <version>5.12.0</version> <!-- Use the latest version -->
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>net.bytebuddy</groupId>
+            <artifactId>byte-buddy</artifactId>
+            <version>1.14.15</version> <!-- Latest stable version -->
+            <scope>test</scope>
+        </dependency>
+
     </dependencies>
+
+    <!-- 4. Plugin Management -->
+    <build>
+        <pluginManagement>
+<plugins>
+    <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.0.0-M5</version>
+        <configuration>
+            <argLine>-XX:+EnableDynamicAgentLoading</argLine>
+        </configuration>
+    </plugin>
+</plugins>
+        </pluginManagement>
+    </build>
 </project>

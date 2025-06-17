@@ -52,6 +52,7 @@ public class QueryToken {
     public List<Integer> getCandidateBuckets() {
         return new ArrayList<>(candidateBuckets); // Return copy
     }
+
     public byte[] getIv() {
         return iv.clone();
     }
@@ -62,6 +63,14 @@ public class QueryToken {
 
     public double[] getPlaintextQuery() {
         return plaintextQuery.clone();
+    }
+
+    public double[] getQueryVector() {
+        return getPlaintextQuery();
+    }
+
+    public int getQueryVectorLength() {
+        return plaintextQuery != null ? plaintextQuery.length : 0;
     }
 
     public int getTopK() {

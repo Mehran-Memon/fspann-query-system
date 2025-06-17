@@ -3,11 +3,11 @@ package com.fspann.index.core;
 import com.fspann.common.EncryptedPoint;
 import com.fspann.common.QueryToken;
 import com.fspann.crypto.CryptoService;
+import javax.crypto.SecretKey;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-import javax.crypto.SecretKey;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -109,21 +109,37 @@ public class SecureLSHIndex {
         return numHashTables;
     }
 
+    public int getDimensions() {
+        return lsh.getDimensions();
+    }
+
+    public EvenLSH getLsh() {
+        return lsh;
+    }
+
     public void recomputeBuckets(List<EncryptedPoint> points, CryptoService crypto, SecretKey key) {
         lock.writeLock().lock();
         try {
-            List<Double> projections = LSHUtils.computeProjections(points, lsh, crypto, key);
-            double[] boundaries = LSHUtils.quantiles(projections, numShards);
+            List<Double> projections = new ArrayList<>(points.size());
+            Map<String, Double> idToProjection = new HashMap<>();
 
             for (EncryptedPoint pt : points) {
                 double[] vec = crypto.decryptFromPoint(pt, key);
                 double projection = lsh.project(vec);
+                projections.add(projection);
+                idToProjection.put(pt.getId(), projection);
+            }
+
+            double[] boundaries = LSHUtils.quantiles(projections, numShards);
+
+            for (EncryptedPoint pt : points) {
+                double projection = idToProjection.get(pt.getId());
                 int newShardId = findBucket(projection, boundaries);
                 if (newShardId != pt.getShardId()) {
                     for (Map<Integer, CopyOnWriteArrayList<EncryptedPoint>> table : tables) {
                         table.getOrDefault(pt.getShardId(), new CopyOnWriteArrayList<>()).remove(pt);
                     }
-                    EncryptedPoint updatedPt = new EncryptedPoint(pt.getId(), newShardId, pt.getIv(), pt.getCiphertext(), pt.getVersion());
+                    EncryptedPoint updatedPt = new EncryptedPoint(pt.getId(), newShardId, pt.getIv(), pt.getCiphertext(), pt.getVersion(), pt.getVectorLength());
                     this.points.put(updatedPt.getId(), updatedPt);
                     List<Future<?>> futures = new ArrayList<>();
                     for (Map<Integer, CopyOnWriteArrayList<EncryptedPoint>> table : tables) {
@@ -158,4 +174,9 @@ public class SecureLSHIndex {
         }
         return boundaries.length;
     }
+
+    public int getPointCount() {
+        return points.size();
+    }
+
 }

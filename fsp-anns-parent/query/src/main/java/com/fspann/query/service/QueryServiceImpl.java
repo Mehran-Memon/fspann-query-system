@@ -10,81 +10,86 @@ import com.fspann.index.service.IndexService;
 
 import javax.crypto.SecretKey;
 import java.util.List;
+import java.util.Objects;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/**
- * Default implementation of QueryService: decrypts the encrypted query, looks up candidates,
- * decrypts each point, computes distances, sorts, and returns the top-K results.
- */
 public class QueryServiceImpl implements QueryService {
+
+    private static final Logger logger = LoggerFactory.getLogger(QueryServiceImpl.class);
+    private static final Pattern VERSION_PATTERN = Pattern.compile(".*_v(\\d+)$");
+
     private final IndexService indexService;
     private final CryptoService cryptoService;
     private final KeyLifeCycleService keyService;
-    private static final Logger logger = LoggerFactory.getLogger(QueryServiceImpl.class);
 
     public QueryServiceImpl(IndexService indexService,
                             CryptoService cryptoService,
                             KeyLifeCycleService keyService) {
-        this.indexService = indexService;
-        this.cryptoService = cryptoService;
-        this.keyService = keyService;
+        this.indexService = Objects.requireNonNull(indexService);
+        this.cryptoService = Objects.requireNonNull(cryptoService);
+        this.keyService = Objects.requireNonNull(keyService);
     }
 
     @Override
     public List<QueryResult> search(QueryToken token) {
-        // 1) Ensure key rotation
-        keyService.rotateIfNeeded();
-
-        // 2) Determine the key version from the token's context, e.g. "epoch_v7" -> 7
-        String ctx = token.getEncryptionContext();
-        int versionNum = Integer.parseInt(ctx.substring(ctx.lastIndexOf("_v") + 2));
-        KeyVersion queryVersion = keyService.getVersion(versionNum);
-        SecretKey key = queryVersion.getKey(); // Changed from getSecretKey() to getKey()
-
-        // 3) Decrypt the query vector
-        double[] queryVec;
-        try {
-            queryVec = cryptoService.decryptQuery(
-                    token.getEncryptedQuery(),
-                    token.getIv(),
-                    key
-            );
-        } catch (Exception e) {
-            logger.error("Failed to decrypt query vector", e);
-            throw new RuntimeException("Failed to decrypt query vector", e);
+        Objects.requireNonNull(token, "QueryToken cannot be null");
+        if (token.getTopK() <= 0 || token.getEncryptedQuery() == null || token.getIv() == null) {
+            throw new IllegalArgumentException("Invalid or incomplete QueryToken.");
         }
 
-        // 4) Retrieve encrypted candidates
-        List<EncryptedPoint> candidates = indexService.lookup(token);
+        keyService.rotateIfNeeded();
 
-        // 5) Decrypt, compute distance, sort, and limit to top-K
+        KeyVersion queryVersion = resolveKeyVersion(token.getEncryptionContext());
+        SecretKey key = queryVersion.getKey();
+
+        double[] queryVec;
+        try {
+            queryVec = cryptoService.decryptQuery(token.getEncryptedQuery(), token.getIv(), key);
+        } catch (Exception e) {
+            logger.error("❌ Failed to decrypt query vector", e);
+            throw new RuntimeException("Decryption error: query vector", e);
+        }
+
+        List<EncryptedPoint> candidates = indexService.lookup(token);
+        if (candidates.isEmpty()) {
+            logger.warn("No candidates retrieved for the query token");
+            return List.of(); // Return empty, not null
+        }
+
         return candidates.stream()
                 .map(pt -> {
-                    double[] ptVec;
                     try {
-                        ptVec = cryptoService.decryptFromPoint(pt, key);
+                        double[] ptVec = cryptoService.decryptFromPoint(pt, key);
+                        double dist = computeDistance(queryVec, ptVec);
+                        return new QueryResult(pt.getId(), dist);
                     } catch (Exception e) {
-                        logger.error("Failed to decrypt point {}", pt.getId(), e);
-                        throw new RuntimeException("Failed to decrypt point " + pt.getId(), e);
+                        logger.warn("Skipped corrupt candidate point ID {} due to decryption failure", pt.getId(), e);
+                        return null;
                     }
-                    double dist = computeDistance(queryVec, ptVec);
-                    return new QueryResult(pt.getId(), dist);
                 })
-                .sorted()                           // sort by distance ascending (QueryResult implements Comparable)
-                .limit(token.getTopK())             // take top-K
+                .filter(Objects::nonNull)
+                .sorted()
+                .limit(token.getTopK())
                 .collect(Collectors.toList());
     }
 
-    /**
-     * Euclidean distance metric.
-     */
+    private KeyVersion resolveKeyVersion(String context) {
+        Matcher matcher = VERSION_PATTERN.matcher(context);
+        if (!matcher.matches()) {
+            throw new IllegalArgumentException("Invalid encryption context format: " + context);
+        }
+        int version = Integer.parseInt(matcher.group(1));
+        return keyService.getVersion(version);
+    }
+
     private double computeDistance(double[] a, double[] b) {
         if (a.length != b.length) {
-            throw new IllegalArgumentException(
-                    "Vector dimension mismatch: " + a.length + " vs " + b.length
-            );
+            throw new IllegalArgumentException("Vector dimension mismatch: " + a.length + " vs " + b.length);
         }
         double sum = 0;
         for (int i = 0; i < a.length; i++) {

@@ -22,20 +22,20 @@ import static org.mockito.Mockito.*;
 
 class QueryServiceImplTest {
     @Mock
-    private IndexService indexSvc;
+    private IndexService indexService;
 
     @Mock
-    private CryptoService crypto;
+    private CryptoService cryptoService;
 
     @Mock
-    private com.fspann.common.KeyLifeCycleService keySvc;
+    private com.fspann.common.KeyLifeCycleService keyService;
 
     private QueryServiceImpl service;
 
     @BeforeEach
     void setUp() {
         MockitoAnnotations.openMocks(this);
-        service = new QueryServiceImpl(indexSvc, crypto, keySvc);
+        service = new QueryServiceImpl(indexService, cryptoService, keyService);
     }
 
     @Test
@@ -49,33 +49,31 @@ class QueryServiceImplTest {
         double[] plaintextQuery = new double[]{1.0, 2.0};
         QueryToken token = new QueryToken(List.of(1, 2), iv, encQuery, plaintextQuery, 2, 1, "epoch_v7");
 
-        SecretKey qKey = new SecretKeySpec(new byte[32], "AES");
-        // Use same iv/encQuery for versioned KeyVersion
-        KeyVersion queryVer = new KeyVersion(7, qKey, iv, encQuery);
-        KeyVersion currentVer = new KeyVersion(8, qKey, iv, encQuery);
+        SecretKey queryKey = new SecretKeySpec(new byte[32], "AES");
+        KeyVersion queryVersion = new KeyVersion(7, queryKey);
+        KeyVersion currentVersion = new KeyVersion(8, queryKey);
 
-        doNothing().when(keySvc).rotateIfNeeded();
-        when(keySvc.getVersion(7)).thenReturn(queryVer);
-        when(keySvc.getCurrentVersion()).thenReturn(currentVer);
+        doNothing().when(keyService).rotateIfNeeded();
+        when(keyService.getVersion(7)).thenReturn(queryVersion);
+        when(keyService.getCurrentVersion()).thenReturn(currentVersion);
 
-        double[] qv = new double[]{1, 0, 0};
-        when(crypto.decryptQuery(eq(encQuery), eq(iv), eq(currentVer.getSecretKey())))
-                .thenReturn(qv);
+        double[] queryVector = new double[]{1, 0, 0};
+        when(cryptoService.decryptQuery(eq(encQuery), eq(iv), eq(queryKey))).thenReturn(queryVector);
 
-        EncryptedPoint p1 = new EncryptedPoint("id1", 0, iv, encQuery, queryVer.getVersion());
-        EncryptedPoint p2 = new EncryptedPoint("id2", 0, iv, encQuery, queryVer.getVersion());
-        when(indexSvc.lookup(token)).thenReturn(List.of(p1, p2));
+        EncryptedPoint p1 = new EncryptedPoint("id1", 0, iv, encQuery, queryVersion.getVersion());
+        EncryptedPoint p2 = new EncryptedPoint("id2", 0, iv, encQuery, queryVersion.getVersion());
+        when(indexService.lookup(token)).thenReturn(List.of(p1, p2));
 
-        when(crypto.decryptFromPoint(p1, currentVer.getSecretKey())).thenReturn(new double[]{0, 0, 0});
-        when(crypto.decryptFromPoint(p2, currentVer.getSecretKey())).thenReturn(new double[]{1, 0, 0});
+        when(cryptoService.decryptFromPoint(p1, queryKey)).thenReturn(new double[]{0, 0, 0});
+        when(cryptoService.decryptFromPoint(p2, queryKey)).thenReturn(new double[]{1, 0, 0});
 
         List<QueryResult> results = service.search(token);
 
-        verify(keySvc).rotateIfNeeded();
-        verify(crypto).decryptQuery(eq(encQuery), eq(iv), eq(currentVer.getSecretKey()));
-        verify(indexSvc).lookup(token);
-        verify(crypto).decryptFromPoint(p1, currentVer.getSecretKey());
-        verify(crypto).decryptFromPoint(p2, currentVer.getSecretKey());
+        verify(keyService).rotateIfNeeded();
+        verify(cryptoService).decryptQuery(eq(encQuery), eq(iv), eq(queryKey));
+        verify(indexService).lookup(token);
+        verify(cryptoService).decryptFromPoint(p1, queryKey);
+        verify(cryptoService).decryptFromPoint(p2, queryKey);
 
         assertEquals("id2", results.get(0).getId());
         assertEquals(0.0, results.get(0).getDistance(), 1e-9);
@@ -86,38 +84,97 @@ class QueryServiceImplTest {
     @Test
     void searchLimitsToTopK() throws Exception {
         byte[] iv = new byte[12];
-        Arrays.fill(iv, (byte) 1);
-
         byte[] encQuery = new byte[32];
-        Arrays.fill(encQuery, (byte) 2);
-
         double[] plaintextQuery = new double[]{1.0, 2.0, 3.0};
         QueryToken token = new QueryToken(List.of(1, 2), iv, encQuery, plaintextQuery, 2, 1, "epoch_v7");
 
-        SecretKey qKey = new SecretKeySpec(new byte[32], "AES");
-        KeyVersion queryVer = new KeyVersion(7, qKey, iv, encQuery);
-        doNothing().when(keySvc).rotateIfNeeded();
-        when(keySvc.getVersion(7)).thenReturn(queryVer);
-        when(keySvc.getCurrentVersion()).thenReturn(queryVer);
+        SecretKey queryKey = new SecretKeySpec(new byte[32], "AES");
+        KeyVersion queryVersion = new KeyVersion(7, queryKey);
+        doNothing().when(keyService).rotateIfNeeded();
+        when(keyService.getVersion(7)).thenReturn(queryVersion);
+        when(keyService.getCurrentVersion()).thenReturn(queryVersion);
 
-        EncryptedPoint p1 = new EncryptedPoint("id1", 0, iv, encQuery, queryVer.getVersion());
-        EncryptedPoint p2 = new EncryptedPoint("id2", 0, iv, encQuery, queryVer.getVersion());
-        EncryptedPoint p3 = new EncryptedPoint("id3", 0, iv, encQuery, queryVer.getVersion());
-        when(indexSvc.lookup(token)).thenReturn(List.of(p1, p2, p3));
+        EncryptedPoint p1 = new EncryptedPoint("id1", 0, iv, encQuery, queryVersion.getVersion());
+        EncryptedPoint p2 = new EncryptedPoint("id2", 0, iv, encQuery, queryVersion.getVersion());
+        EncryptedPoint p3 = new EncryptedPoint("id3", 0, iv, encQuery, queryVersion.getVersion());
+        when(indexService.lookup(token)).thenReturn(List.of(p1, p2, p3));
 
-        when(crypto.decryptQuery(eq(encQuery), eq(iv), eq(queryVer.getSecretKey())))
-                .thenReturn(plaintextQuery);
-
-        // Adjust vectors to ensure correct order: id1, id3, id2
-        when(crypto.decryptFromPoint(p1, queryVer.getSecretKey())).thenReturn(new double[]{1.0, 2.0, 3.0}); // Distance = 0
-        when(crypto.decryptFromPoint(p3, queryVer.getSecretKey())).thenReturn(new double[]{1.1, 2.1, 3.1}); // Distance ≈ 0.173
-        when(crypto.decryptFromPoint(p2, queryVer.getSecretKey())).thenReturn(new double[]{0.0, 0.0, 0.0}); // Distance = sqrt(14) ≈ 3.741
+        when(cryptoService.decryptQuery(eq(encQuery), eq(iv), eq(queryKey))).thenReturn(plaintextQuery);
+        when(cryptoService.decryptFromPoint(p1, queryKey)).thenReturn(new double[]{1.0, 2.0, 3.0});
+        when(cryptoService.decryptFromPoint(p3, queryKey)).thenReturn(new double[]{1.1, 2.1, 3.1});
+        when(cryptoService.decryptFromPoint(p2, queryKey)).thenReturn(new double[]{0.0, 0.0, 0.0});
 
         List<QueryResult> results = service.search(token);
 
-        assertEquals(2, results.size(), "Should limit to topK=2");
-        assertEquals("id1", results.get(0).getId(), "First result should be closest");
-        assertEquals(0.0, results.get(0).getDistance(), 1e-9, "Distance for id1");
-        assertEquals("id3", results.get(1).getId(), "Second result");
-        assertEquals(0.17320508075688773, results.get(1).getDistance(), 1e-9, "Distance for id3");
-    }}
+        assertEquals(2, results.size());
+        assertEquals("id1", results.get(0).getId());
+        assertEquals(0.0, results.get(0).getDistance(), 1e-9);
+        assertEquals("id3", results.get(1).getId());
+        assertEquals(0.17320508075688773, results.get(1).getDistance(), 1e-9);
+    }
+
+    @Test
+    void testMismatchedVectorDimensionsThrows() throws Exception {
+        byte[] iv = new byte[12];
+        byte[] encQuery = new byte[32];
+        double[] plaintextQuery = new double[]{1.0, 2.0};
+
+        QueryToken token = new QueryToken(List.of(1, 2), iv, encQuery, plaintextQuery, 1, 1, "epoch_v7");
+        SecretKey key = new SecretKeySpec(new byte[32], "AES");
+        KeyVersion version = new KeyVersion(7, key);
+
+        when(keyService.getVersion(7)).thenReturn(version);
+        when(keyService.getCurrentVersion()).thenReturn(version);
+        when(cryptoService.decryptQuery(eq(encQuery), eq(iv), eq(key))).thenReturn(plaintextQuery);
+
+        EncryptedPoint p = new EncryptedPoint("idX", 0, iv, encQuery, 7);
+        when(indexService.lookup(token)).thenReturn(List.of(p));
+        when(cryptoService.decryptFromPoint(p, key)).thenReturn(new double[]{1.0, 2.0, 3.0});
+
+        assertThrows(IllegalArgumentException.class, () -> service.search(token));
+    }
+
+    @Test
+    void testInvalidEncryptionContextFormat() {
+        QueryToken token = new QueryToken(List.of(1), new byte[12], new byte[32], new double[]{1, 2}, 1, 1, "bad_context");
+
+        assertThrows(NumberFormatException.class, () -> service.search(token));
+    }
+
+    @Test
+    void testDecryptionFailureThrowsRuntime() throws Exception {
+        byte[] iv = new byte[12];
+        byte[] encQuery = new byte[32];
+        double[] vector = new double[]{1, 2};
+
+        QueryToken token = new QueryToken(List.of(1), iv, encQuery, vector, 1, 1, "epoch_v7");
+        SecretKey key = new SecretKeySpec(new byte[32], "AES");
+        KeyVersion version = new KeyVersion(7, key);
+
+        when(keyService.getVersion(7)).thenReturn(version);
+        when(keyService.getCurrentVersion()).thenReturn(version);
+        when(cryptoService.decryptQuery(eq(encQuery), eq(iv), eq(key))).thenThrow(new RuntimeException("Decryption failed"));
+
+        assertThrows(RuntimeException.class, () -> service.search(token));
+    }
+
+    @Test
+    void testEmptyCandidateListReturnsEmptyResults() throws Exception {
+        byte[] iv = new byte[12];
+        byte[] encQuery = new byte[32];
+        double[] query = new double[]{0.5, 0.6};
+
+        QueryToken token = new QueryToken(List.of(5), iv, encQuery, query, 10, 1, "epoch_v1");
+        SecretKey key = new SecretKeySpec(new byte[32], "AES");
+        KeyVersion version = new KeyVersion(1, key);
+
+        when(keyService.getVersion(1)).thenReturn(version);
+        when(keyService.getCurrentVersion()).thenReturn(version);
+        when(cryptoService.decryptQuery(eq(encQuery), eq(iv), eq(key))).thenReturn(query);
+        when(indexService.lookup(token)).thenReturn(List.of());
+
+        List<QueryResult> results = service.search(token);
+        assertNotNull(results);
+        assertTrue(results.isEmpty(), "Expected empty result list when no candidates returned");
+    }
+}
