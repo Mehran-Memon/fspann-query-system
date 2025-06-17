@@ -21,3 +21,9 @@ dataSources.local.xml
 *.iml
 *.class
 **/target/
+*.class
+*.lst
+target/
+**/target/
+**/maven-status/
+*.ser
