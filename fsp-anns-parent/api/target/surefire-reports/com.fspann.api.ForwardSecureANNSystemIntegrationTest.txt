@@ -1,0 +1,16 @@
+-------------------------------------------------------------------------------
+Test set: com.fspann.api.ForwardSecureANNSystemIntegrationTest
+-------------------------------------------------------------------------------
+Tests run: 3, Failures: 0, Errors: 3, Skipped: 0, Time elapsed: 0.081 s <<< FAILURE! - in com.fspann.api.ForwardSecureANNSystemIntegrationTest
+com.fspann.api.ForwardSecureANNSystemIntegrationTest.testMultipleDimensions(Path)  Time elapsed: 0.062 s  <<< ERROR!
+java.lang.NullPointerException: KeyLifeCycleService must not be null
+	at com.fspann.api.ForwardSecureANNSystemIntegrationTest.testMultipleDimensions(ForwardSecureANNSystemIntegrationTest.java:84)
+
+com.fspann.api.ForwardSecureANNSystemIntegrationTest.simpleEndToEndNearestNeighbor(Path)  Time elapsed: 0.008 s  <<< ERROR!
+java.lang.NullPointerException: KeyLifeCycleService must not be null
+	at com.fspann.api.ForwardSecureANNSystemIntegrationTest.simpleEndToEndNearestNeighbor(ForwardSecureANNSystemIntegrationTest.java:51)
+
+com.fspann.api.ForwardSecureANNSystemIntegrationTest.testVisualization(Path)  Time elapsed: 0.008 s  <<< ERROR!
+java.lang.NullPointerException: KeyLifeCycleService must not be null
+	at com.fspann.api.ForwardSecureANNSystemIntegrationTest.testVisualization(ForwardSecureANNSystemIntegrationTest.java:114)
+

@@ -1,0 +1,8 @@
+-------------------------------------------------------------------------------
+Test set: com.fspann.api.ForwardSecureANNSystemPerformanceIntegrationTest
+-------------------------------------------------------------------------------
+Tests run: 1, Failures: 0, Errors: 1, Skipped: 0, Time elapsed: 0.022 s <<< FAILURE! - in com.fspann.api.ForwardSecureANNSystemPerformanceIntegrationTest
+com.fspann.api.ForwardSecureANNSystemPerformanceIntegrationTest  Time elapsed: 0.022 s  <<< ERROR!
+java.lang.NullPointerException: KeyLifeCycleService must not be null
+	at com.fspann.api.ForwardSecureANNSystemPerformanceIntegrationTest.setup(ForwardSecureANNSystemPerformanceIntegrationTest.java:50)
+
