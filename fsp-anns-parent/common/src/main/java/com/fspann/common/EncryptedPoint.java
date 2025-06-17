@@ -1,10 +1,8 @@
 package com.fspann.common;
 
-import java.util.Arrays;
-import java.util.Objects;
 
 /**
- * Represents an encrypted data point with its identifier, shard (bucket) ID, IV, and ciphertext.
+ * Represents an encrypted data point with its identifier, shard (bucket) ID, IV, ciphertext, and dimension.
  * This is a pure DTO and does not contain any crypto logic.
  */
 public class EncryptedPoint {
@@ -13,8 +11,9 @@ public class EncryptedPoint {
     private final byte[] iv;
     private final byte[] ciphertext;
     private final int version; // Added version field
+    private final int vectorLength; // New field for dimension tracking
 
-    public EncryptedPoint(String id, int shardId, byte[] iv, byte[] ciphertext, int version) {
+    public EncryptedPoint(String id, int shardId, byte[] iv, byte[] ciphertext, int version, int vectorLength) {
         if (id == null || iv == null || ciphertext == null) {
             throw new NullPointerException("id, iv, and ciphertext must not be null");
         }
@@ -23,11 +22,13 @@ public class EncryptedPoint {
         this.iv = iv.clone();
         this.ciphertext = ciphertext.clone();
         this.version = version;
+        this.vectorLength = vectorLength;
     }
 
     public String getId() { return id; }
     public int getShardId() { return shardId; }
     public byte[] getIv() { return iv.clone(); }
     public byte[] getCiphertext() { return ciphertext.clone(); }
-    public int getVersion() { return version; } // Added getter
+    public int getVersion() { return version; }
+    public int getVectorLength() { return vectorLength; } // New getter
 }

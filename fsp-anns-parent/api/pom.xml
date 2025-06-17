@@ -22,10 +22,6 @@
         </dependency>
         <dependency>
             <groupId>com.fspann</groupId>
-            <artifactId>config</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.fspann</groupId>
             <artifactId>common</artifactId>
         </dependency>
         <dependency>

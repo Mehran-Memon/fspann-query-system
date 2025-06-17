@@ -7,47 +7,48 @@ import javax.crypto.SecretKey;
 import java.util.*;
 
 /**
- * Utility methods for LSH operations in encrypted domain.
- * @deprecated This class is not currently used in the system. Consider removal if no use case is identified.
+ * Utility methods for LSH operations in the encrypted domain.
+ * Supports projection computation and quantile-based bucket boundary estimation.
+ * These methods assist in secure re-indexing and adaptive partitioning.
  */
 public class LSHUtils {
 
     /**
-     * Decrypts each EncryptedPoint with the provided SecretKey and computes its projection.
+     * Decrypts each EncryptedPoint using the provided CryptoService and SecretKey,
+     * then computes the projection of the decrypted vector using the EvenLSH instance.
      *
-     * @param pts   list of encrypted points
-     * @param lsh   LSH instance for projections
-     * @param crypto crypto service for decryption
-     * @param key   secret key for decryption
-     * @return list of projection values
-     * @deprecated May be removed if not integrated into the workflow.
+     * @param points  list of encrypted points
+     * @param lsh     EvenLSH instance used for projection
+     * @param crypto  CryptoService for decryption
+     * @param key     SecretKey used for decryption
+     * @return        list of projection values for each point
      */
-    @Deprecated
     public static List<Double> computeProjections(
-            List<EncryptedPoint> pts,
+            List<EncryptedPoint> points,
             EvenLSH lsh,
             CryptoService crypto,
             SecretKey key) {
-        if (pts == null || lsh == null || crypto == null || key == null) {
+
+        if (points == null || lsh == null || crypto == null || key == null) {
             throw new IllegalArgumentException("Arguments must not be null");
         }
-        List<Double> projections = new ArrayList<>(pts.size());
-        for (EncryptedPoint ep : pts) {
-            double[] vec = crypto.decryptFromPoint(ep, key);
-            projections.add(lsh.project(vec));
+
+        List<Double> projections = new ArrayList<>(points.size());
+        for (EncryptedPoint pt : points) {
+            double[] vector = crypto.decryptFromPoint(pt, key);
+            projections.add(lsh.project(vector));
         }
         return projections;
     }
 
     /**
-     * Computes quantile cut-points for dynamic bucket boundaries.
+     * Computes quantile-based boundaries to divide data into nearly equal-sized buckets.
+     * Can be used for dynamic, data-driven partitioning of projection values.
      *
-     * @param data       sorted or unsorted list of projection values
-     * @param numBuckets number of buckets
-     * @return array of quantile boundary values
-     * @deprecated May be removed if not integrated into the workflow.
+     * @param data        list of numeric projections (unsorted or sorted)
+     * @param numBuckets  desired number of buckets
+     * @return            array of bucket boundary values (length = numBuckets)
      */
-    @Deprecated
     public static double[] quantiles(List<Double> data, int numBuckets) {
         if (data == null || data.isEmpty()) {
             throw new IllegalArgumentException("Data list must not be null or empty");
@@ -55,14 +56,20 @@ public class LSHUtils {
         if (numBuckets <= 0) {
             throw new IllegalArgumentException("numBuckets must be positive");
         }
+
         List<Double> sorted = new ArrayList<>(data);
         Collections.sort(sorted);
+
         int n = sorted.size();
-        double[] q = new double[numBuckets];
+        double[] boundaries = new double[numBuckets];
         for (int i = 1; i <= numBuckets; i++) {
             int idx = (int) Math.floor(i * n / (double) (numBuckets + 1));
-            q[i - 1] = sorted.get(Math.min(idx, n - 1));
+            boundaries[i - 1] = sorted.get(Math.min(idx, n - 1));
         }
-        return q;
+        return boundaries;
+    }
+
+    private LSHUtils() {
+        // Utility class should not be instantiated
     }
 }

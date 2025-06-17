@@ -50,7 +50,7 @@ public class AesGcmCryptoService implements CryptoService {
                 byte[] iv = EncryptionUtils.generateIV();
                 byte[] ciphertext = EncryptionUtils.encryptVector(vector, iv, key);
                 int version = keyService.getCurrentVersion().getVersion();
-                EncryptedPoint point = new EncryptedPoint(id, 0, iv, ciphertext, version);
+                EncryptedPoint point = new EncryptedPoint(id, 0, iv, ciphertext, version, vector.length);
                 metadataManager.updateVectorMetadata(id, Map.of("version", String.valueOf(version)));
                 return point;
             } catch (Exception e) {
@@ -105,7 +105,7 @@ public class AesGcmCryptoService implements CryptoService {
                 byte[] newIv = EncryptionUtils.generateIV();
                 byte[] ciphertext = EncryptionUtils.encryptVector(plaintext, newIv, newKey);
                 int newVersion = keyService.getCurrentVersion().getVersion();
-                EncryptedPoint reEncrypted = new EncryptedPoint(pt.getId(), pt.getShardId(), newIv, ciphertext, newVersion);
+                EncryptedPoint reEncrypted = new EncryptedPoint(pt.getId(), pt.getShardId(), newIv, ciphertext, newVersion, pt.getVectorLength());
                 metadataManager.updateVectorMetadata(pt.getId(), Map.of("version", String.valueOf(newVersion)));
                 return reEncrypted;
             } catch (Exception e) {

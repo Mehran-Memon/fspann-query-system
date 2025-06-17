@@ -15,37 +15,30 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.crypto.SecretKey;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Service layer: encrypts vectors, delegates to core index, handles forward-secure rotation.
+ * Refactored to support dynamic multi-dimensional indexing.
  */
 public class SecureLSHIndexService implements IndexService {
     private static final Logger logger = LoggerFactory.getLogger(SecureLSHIndexService.class);
-    private final SecureLSHIndex index;
+
     private final CryptoService crypto;
     private final KeyLifeCycleService keyService;
-    private final EvenLSH lsh;
-    private final Map<String, EncryptedPoint> indexedPoints = new HashMap<>();
     private final MetadataManager metadataManager;
-    private final DimensionContext dimensionContext;
 
-    public SecureLSHIndexService(SecureLSHIndex index,
-                                 CryptoService crypto,
+    private final Map<Integer, DimensionContext> dimensionContexts = new ConcurrentHashMap<>();
+    private final Map<String, EncryptedPoint> indexedPoints = new ConcurrentHashMap<>();
+
+    public SecureLSHIndexService(CryptoService crypto,
                                  KeyLifeCycleService keyService,
-                                 EvenLSH lsh,
-                                 MetadataManager metadataManager,
-                                 int dims,
-                                 int buckets) {
-        this.index = index;
+                                 MetadataManager metadataManager) {
         this.crypto = crypto != null ? crypto : new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
         this.keyService = keyService;
-        this.lsh = lsh;
         this.metadataManager = metadataManager;
-        this.dimensionContext = new DimensionContext(dims, buckets, this.crypto, keyService);
+
         try {
             metadataManager.load("metadata.ser");
         } catch (MetadataManager.MetadataException e) {
@@ -53,19 +46,23 @@ public class SecureLSHIndexService implements IndexService {
         }
     }
 
-    /**
-     * Core interface method: insert an already-encrypted point.
-     */
+    private DimensionContext getOrCreateContext(int dimension) {
+        return dimensionContexts.computeIfAbsent(dimension, dim -> {
+            int buckets = 32; // Default bucket count, can be dynamic
+            EvenLSH lsh = new EvenLSH(dim, buckets);
+            SecureLSHIndex index = new SecureLSHIndex(1, buckets, lsh);
+            return new DimensionContext(index, crypto, keyService, lsh);
+        });
+    }
+
     @Override
     public void insert(EncryptedPoint pt) {
+        int dimension = pt.getVectorLength();
+        DimensionContext ctx = getOrCreateContext(dimension);
         indexedPoints.put(pt.getId(), pt);
-        index.addPoint(pt);
-        index.markShardDirty(pt.getShardId());
-        metadataManager.putVectorMetadata(
-                pt.getId(),
-                String.valueOf(pt.getShardId()),
-                String.valueOf(keyService.getCurrentVersion().getVersion())
-        );
+        ctx.getIndex().addPoint(pt);
+        ctx.getIndex().markShardDirty(pt.getShardId());
+        metadataManager.putVectorMetadata(pt.getId(), String.valueOf(pt.getShardId()), String.valueOf(keyService.getCurrentVersion().getVersion()));
         try {
             metadataManager.save("metadata.ser");
         } catch (MetadataManager.MetadataException e) {
@@ -73,20 +70,15 @@ public class SecureLSHIndexService implements IndexService {
         }
     }
 
-    /**
-     * Convenience overload: encrypt a raw vector and insert it.
-     */
+    @Override
     public void insert(String id, double[] vector) {
-        logger.debug("Inserting vector into index with id={} and vector={}", id, Arrays.toString(vector));
+        int dimension = vector.length;
+        DimensionContext ctx = getOrCreateContext(dimension);
 
-        // Rotate keys under forward-security policy
         keyService.rotateIfNeeded();
-
-        // Fetch current version and SecretKey
         KeyVersion version = keyService.getCurrentVersion();
-        SecretKey key = version.getKey(); // Changed from getSecretKey() to getKey()
+        SecretKey key = version.getKey();
 
-        // Encrypt the vector
         EncryptedPoint encryptedPoint;
         try {
             encryptedPoint = crypto.encryptToPoint(id, vector, key);
@@ -95,47 +87,62 @@ public class SecureLSHIndexService implements IndexService {
             throw new RuntimeException("Encryption failed for id=" + id, e);
         }
 
-        // Determine shard: honor the shardId from the EncryptedPoint
-        int shardId = encryptedPoint.getShardId();
-
-        // Wrap with version metadata
         EncryptedPoint withShard = new EncryptedPoint(
                 encryptedPoint.getId(),
-                shardId,
+                encryptedPoint.getShardId(),
                 encryptedPoint.getIv(),
                 encryptedPoint.getCiphertext(),
-                version.getVersion()
+                version.getVersion(),
+                vector.length
         );
 
-        // Delegate to core insertion
         insert(withShard);
     }
 
-    /**
-     * Remove a point by its ID.
-     */
     @Override
     public void delete(String id) {
-        index.removePoint(id);
+        EncryptedPoint pt = indexedPoints.remove(id);
+        if (pt != null) {
+            int dimension = pt.getVectorLength();
+            DimensionContext ctx = dimensionContexts.get(dimension);
+            if (ctx != null) {
+                ctx.getIndex().removePoint(id);
+            }
+        }
     }
 
-    /**
-     * Query encrypted points and return up to top-K from each table.
-     */
     @Override
     public List<EncryptedPoint> lookup(QueryToken token) {
-        return index.queryEncrypted(token);
+        int dimension = token.getQueryVector().length;
+        DimensionContext ctx = dimensionContexts.get(dimension);
+        if (ctx == null) {
+            logger.warn("No index found for dimension: {}", dimension);
+            return Collections.emptyList();
+        }
+        return ctx.getIndex().queryEncrypted(token);
     }
 
-    /**
-     * Mark a shard as dirty (pending re-encryption).
-     */
     @Override
     public void markDirty(int shardId) {
-        index.markShardDirty(shardId);
+        for (DimensionContext ctx : dimensionContexts.values()) {
+            ctx.getIndex().markShardDirty(shardId);
+        }
     }
 
+    @Override
     public int getIndexedVectorCount() {
         return indexedPoints.size();
+    }
+
+    @Override
+    public Set<Integer> getRegisteredDimensions() {
+        return dimensionContexts.keySet();
+    }
+
+    @Override
+    public int getVectorCountForDimension(int dimension) {
+        DimensionContext ctx = dimensionContexts.get(dimension);
+        if (ctx == null) return 0;
+        return ctx.getIndex().getPointCount();
     }
 }

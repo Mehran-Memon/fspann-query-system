@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.loader.DefaultDataLoaderTest" time="0.14" tests="2" errors="0" skipped="0" failures="0">
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.loader.DefaultDataLoaderTest" time="0.264" tests="2" errors="0" skipped="0" failures="0">
   <properties>
     <property name="java.specification.version" value="23"/>
     <property name="sun.cpu.isalist" value="amd64"/>
     <property name="sun.jnu.encoding" value="Cp1252"/>
-    <property name="java.class.path" value="C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\loader\target\test-classes;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\loader\target\classes;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\common\target\common-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\slf4j\slf4j-api\2.0.13\slf4j-api-2.0.13.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-lang3\3.17.0\commons-lang3-3.17.0.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-core\2.17.2\jackson-core-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-compress\1.26.1\commons-compress-1.26.1.jar;C:\Users\Mehran Memon\.m2\repository\commons-codec\commons-codec\1.16.1\commons-codec-1.16.1.jar;C:\Users\Mehran Memon\.m2\repository\commons-io\commons-io\2.15.1\commons-io-2.15.1.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-databind\2.17.2\jackson-databind-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-annotations\2.17.2\jackson-annotations-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-api\5.11.0\junit-jupiter-api-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\opentest4j\opentest4j\1.3.0\opentest4j-1.3.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\platform\junit-platform-commons\1.11.0\junit-platform-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\apiguardian\apiguardian-api\1.1.2\apiguardian-api-1.1.2.jar;"/>
+    <property name="java.class.path" value="C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\loader\target\test-classes;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\loader\target\classes;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\common\target\classes;C:\Users\Mehran Memon\.m2\repository\org\slf4j\slf4j-api\2.0.13\slf4j-api-2.0.13.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-lang3\3.17.0\commons-lang3-3.17.0.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-core\2.17.2\jackson-core-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\ch\qos\logback\logback-classic\1.4.11\logback-classic-1.4.11.jar;C:\Users\Mehran Memon\.m2\repository\ch\qos\logback\logback-core\1.4.11\logback-core-1.4.11.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-compress\1.26.1\commons-compress-1.26.1.jar;C:\Users\Mehran Memon\.m2\repository\commons-codec\commons-codec\1.16.1\commons-codec-1.16.1.jar;C:\Users\Mehran Memon\.m2\repository\commons-io\commons-io\2.15.1\commons-io-2.15.1.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-databind\2.17.2\jackson-databind-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-annotations\2.17.2\jackson-annotations-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-api\5.11.0\junit-jupiter-api-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\opentest4j\opentest4j\1.3.0\opentest4j-1.3.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\platform\junit-platform-commons\1.11.0\junit-platform-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\apiguardian\apiguardian-api\1.1.2\apiguardian-api-1.1.2.jar;"/>
     <property name="java.vm.vendor" value="Oracle Corporation"/>
     <property name="net.bytebuddy.experimental" value="true"/>
     <property name="sun.arch.data.model" value="64"/>
@@ -16,9 +16,9 @@
     <property name="sun.java.launcher" value="SUN_STANDARD"/>
     <property name="user.country" value="US"/>
     <property name="sun.boot.library.path" value="C:\Program Files\Java\jdk-23\bin"/>
-    <property name="sun.java.command" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire5711867921966995006\surefirebooter15050713342331918025.jar C:\Users\Mehran Memon\AppData\Local\Temp\surefire5711867921966995006 2025-06-17T06-01-52_731-jvmRun1 surefire7321884281328177185tmp surefire_210659260071107800016tmp"/>
+    <property name="sun.java.command" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire8082227528225807710\surefirebooter6490588445579832617.jar C:\Users\Mehran Memon\AppData\Local\Temp\surefire8082227528225807710 2025-06-17T21-00-03_864-jvmRun1 surefire17072319851642853318tmp surefire_210717447829884961147tmp"/>
     <property name="jdk.debug" value="release"/>
-    <property name="surefire.test.class.path" value="C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\loader\target\test-classes;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\loader\target\classes;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\common\target\common-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\slf4j\slf4j-api\2.0.13\slf4j-api-2.0.13.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-lang3\3.17.0\commons-lang3-3.17.0.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-core\2.17.2\jackson-core-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-compress\1.26.1\commons-compress-1.26.1.jar;C:\Users\Mehran Memon\.m2\repository\commons-codec\commons-codec\1.16.1\commons-codec-1.16.1.jar;C:\Users\Mehran Memon\.m2\repository\commons-io\commons-io\2.15.1\commons-io-2.15.1.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-databind\2.17.2\jackson-databind-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-annotations\2.17.2\jackson-annotations-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-api\5.11.0\junit-jupiter-api-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\opentest4j\opentest4j\1.3.0\opentest4j-1.3.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\platform\junit-platform-commons\1.11.0\junit-platform-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\apiguardian\apiguardian-api\1.1.2\apiguardian-api-1.1.2.jar;"/>
+    <property name="surefire.test.class.path" value="C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\loader\target\test-classes;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\loader\target\classes;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\common\target\classes;C:\Users\Mehran Memon\.m2\repository\org\slf4j\slf4j-api\2.0.13\slf4j-api-2.0.13.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-lang3\3.17.0\commons-lang3-3.17.0.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-core\2.17.2\jackson-core-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\ch\qos\logback\logback-classic\1.4.11\logback-classic-1.4.11.jar;C:\Users\Mehran Memon\.m2\repository\ch\qos\logback\logback-core\1.4.11\logback-core-1.4.11.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-compress\1.26.1\commons-compress-1.26.1.jar;C:\Users\Mehran Memon\.m2\repository\commons-codec\commons-codec\1.16.1\commons-codec-1.16.1.jar;C:\Users\Mehran Memon\.m2\repository\commons-io\commons-io\2.15.1\commons-io-2.15.1.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-databind\2.17.2\jackson-databind-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-annotations\2.17.2\jackson-annotations-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-api\5.11.0\junit-jupiter-api-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\opentest4j\opentest4j\1.3.0\opentest4j-1.3.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\platform\junit-platform-commons\1.11.0\junit-platform-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\apiguardian\apiguardian-api\1.1.2\apiguardian-api-1.1.2.jar;"/>
     <property name="sun.cpu.endian" value="little"/>
     <property name="user.home" value="C:\Users\Mehran Memon"/>
     <property name="user.language" value="en"/>
@@ -31,7 +31,7 @@
     <property name="line.separator" value="&#10;"/>
     <property name="java.vm.specification.vendor" value="Oracle Corporation"/>
     <property name="java.specification.name" value="Java Platform API Specification"/>
-    <property name="surefire.real.class.path" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire5711867921966995006\surefirebooter15050713342331918025.jar"/>
+    <property name="surefire.real.class.path" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire8082227528225807710\surefirebooter6490588445579832617.jar"/>
     <property name="user.script" value=""/>
     <property name="sun.management.compiler" value="HotSpot 64-Bit Tiered Compilers"/>
     <property name="java.runtime.version" value="23.0.2+7-58"/>
@@ -45,6 +45,7 @@
     <property name="localRepository" value="C:\Users\Mehran Memon\.m2\repository"/>
     <property name="java.vendor.url.bug" value="https://bugreport.java.com/bugreport/"/>
     <property name="java.io.tmpdir" value="C:\Users\MEHRAN~1\AppData\Local\Temp\"/>
+    <property name="idea.version" value="2024.3.5"/>
     <property name="java.version" value="23.0.2"/>
     <property name="user.dir" value="C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\loader"/>
     <property name="os.arch" value="amd64"/>
@@ -59,11 +60,42 @@
     <property name="sun.io.unicode.encoding" value="UnicodeLittle"/>
     <property name="java.class.version" value="67.0"/>
   </properties>
-  <testcase name="testConcurrentLoading" classname="com.loader.DefaultDataLoaderTest" time="0.121">
-    <system-err><![CDATA[SLF4J(W): No SLF4J providers were found.
-SLF4J(W): Defaulting to no-operation (NOP) logger implementation
-SLF4J(W): See https://www.slf4j.org/codes.html#noProviders for further details.
-]]></system-err>
+  <testcase name="testConcurrentLoading" classname="com.loader.DefaultDataLoaderTest" time="0.247">
+    <system-out><![CDATA[21:00:06,324 |-INFO in ch.qos.logback.classic.LoggerContext[default] - This is logback-classic version 1.4.11
+21:00:06,326 |-INFO in ch.qos.logback.classic.util.ContextInitializer@13df2a8c - No custom configurators were discovered as a service.
+21:00:06,326 |-INFO in ch.qos.logback.classic.util.ContextInitializer@13df2a8c - Trying to configure with ch.qos.logback.classic.joran.SerializedModelConfigurator
+21:00:06,326 |-INFO in ch.qos.logback.classic.util.ContextInitializer@13df2a8c - Constructed configurator of type class ch.qos.logback.classic.joran.SerializedModelConfigurator
+21:00:06,340 |-INFO in ch.qos.logback.classic.LoggerContext[default] - Could NOT find resource [logback-test.scmo]
+21:00:06,340 |-INFO in ch.qos.logback.classic.LoggerContext[default] - Could NOT find resource [logback.scmo]
+21:00:06,350 |-INFO in ch.qos.logback.classic.util.ContextInitializer@13df2a8c - ch.qos.logback.classic.joran.SerializedModelConfigurator.configure() call lasted 15 milliseconds. ExecutionStatus=INVOKE_NEXT_IF_ANY
+21:00:06,350 |-INFO in ch.qos.logback.classic.util.ContextInitializer@13df2a8c - Trying to configure with ch.qos.logback.classic.util.DefaultJoranConfigurator
+21:00:06,350 |-INFO in ch.qos.logback.classic.util.ContextInitializer@13df2a8c - Constructed configurator of type class ch.qos.logback.classic.util.DefaultJoranConfigurator
+21:00:06,351 |-INFO in ch.qos.logback.classic.LoggerContext[default] - Could NOT find resource [logback-test.xml]
+21:00:06,354 |-INFO in ch.qos.logback.classic.LoggerContext[default] - Found resource [logback.xml] at [file:/C:/Users/Mehran%20Memon/eclipse-workspace/fspann-query-system/fsp-anns-parent/loader/target/classes/logback.xml]
+21:00:06,355 |-WARN in ch.qos.logback.classic.util.DefaultJoranConfigurator@1ebea008 - Resource [logback.xml] occurs multiple times on the classpath.
+21:00:06,355 |-WARN in ch.qos.logback.classic.util.DefaultJoranConfigurator@1ebea008 - Resource [logback.xml] occurs at [file:/C:/Users/Mehran%20Memon/eclipse-workspace/fspann-query-system/fsp-anns-parent/loader/target/classes/logback.xml]
+21:00:06,355 |-WARN in ch.qos.logback.classic.util.DefaultJoranConfigurator@1ebea008 - Resource [logback.xml] occurs at [file:/C:/Users/Mehran%20Memon/eclipse-workspace/fspann-query-system/fsp-anns-parent/common/target/classes/logback.xml]
+21:00:06,416 |-INFO in ch.qos.logback.core.model.processor.AppenderModelHandler - Processing appender named [CONSOLE]
+21:00:06,416 |-INFO in ch.qos.logback.core.model.processor.AppenderModelHandler - About to instantiate appender of type [ch.qos.logback.core.ConsoleAppender]
+21:00:06,421 |-INFO in ch.qos.logback.core.model.processor.ImplicitModelHandler - Assuming default type [ch.qos.logback.classic.encoder.PatternLayoutEncoder] for [encoder] property
+21:00:06,441 |-INFO in ch.qos.logback.classic.model.processor.RootLoggerModelHandler - Setting level of ROOT logger to INFO
+21:00:06,441 |-INFO in ch.qos.logback.core.model.processor.AppenderRefModelHandler - Attaching appender named [CONSOLE] to Logger[ROOT]
+21:00:06,441 |-INFO in ch.qos.logback.core.model.processor.DefaultProcessor@72d6b3ba - End of configuration.
+21:00:06,442 |-INFO in ch.qos.logback.classic.joran.JoranConfigurator@1787f2a0 - Registering current configuration as safe fallback point
+21:00:06,442 |-INFO in ch.qos.logback.classic.util.ContextInitializer@13df2a8c - ch.qos.logback.classic.util.DefaultJoranConfigurator.configure() call lasted 92 milliseconds. ExecutionStatus=DO_NOT_INVOKE_NEXT_IF_ANY
+
+2025-06-17 21:00:06 [pool-2-thread-4] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\data\sift_dataset\sift\sift_base.fvecs using loader for FVECS
+2025-06-17 21:00:06 [pool-2-thread-2] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\data\sift_dataset\sift\sift_base.fvecs using loader for FVECS
+2025-06-17 21:00:06 [pool-2-thread-3] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\data\sift_dataset\sift\sift_base.fvecs using loader for FVECS
+2025-06-17 21:00:06 [pool-2-thread-1] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\data\sift_dataset\sift\sift_base.fvecs using loader for FVECS
+2025-06-17 21:00:06 [pool-2-thread-2] INFO  com.fspann.loader.FvecsLoader - Loaded 100 vectors from C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\data\sift_dataset\sift\sift_base.fvecs
+2025-06-17 21:00:06 [pool-2-thread-4] INFO  com.fspann.loader.FvecsLoader - Loaded 100 vectors from C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\data\sift_dataset\sift\sift_base.fvecs
+2025-06-17 21:00:06 [pool-2-thread-1] INFO  com.fspann.loader.FvecsLoader - Loaded 100 vectors from C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\data\sift_dataset\sift\sift_base.fvecs
+2025-06-17 21:00:06 [pool-2-thread-3] INFO  com.fspann.loader.FvecsLoader - Loaded 100 vectors from C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\data\sift_dataset\sift\sift_base.fvecs
+]]></system-out>
   </testcase>
-  <testcase name="testInvalidFormatExtension" classname="com.loader.DefaultDataLoaderTest" time="0.002"/>
+  <testcase name="testInvalidFormatExtension" classname="com.loader.DefaultDataLoaderTest" time="0.003">
+    <system-out><![CDATA[2025-06-17 21:00:06 [main] ERROR com.fspann.loader.DefaultDataLoader - Unsupported file extension 'UNKNOWN'
+]]></system-out>
+  </testcase>
 </testsuite>

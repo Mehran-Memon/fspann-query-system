@@ -70,7 +70,7 @@ public class ForwardSecureANNSystem {
                 config.getAgeThresholdMs()
         );
         KeyManager keyManager = new KeyManager(keysFilePath);
-        this.keyService = new KeyRotationServiceImpl(keyManager, policy);
+        this.keyService = new KeyRotationServiceImpl(keyManager, policy, "fsp-anns-parent/api/metadata/rotate.ser");
         logger.info("KeyManager initialized, using keys file at {}", keysFilePath);
 
         // Crypto service
@@ -83,7 +83,7 @@ public class ForwardSecureANNSystem {
         EvenLSH lshHelper = new EvenLSH(dimensions, numShards);
 
         // Initialize indexService
-        this.indexService = new SecureLSHIndexService(coreIndex, cryptoService, keyService, lshHelper, new MetadataManager(), 2, 10);
+        this.indexService = new SecureLSHIndexService(cryptoService, keyService, new MetadataManager());
         logger.info("SecureLSHIndexService initialized with {} shards", numShards);
 
         // Cache and profiler
