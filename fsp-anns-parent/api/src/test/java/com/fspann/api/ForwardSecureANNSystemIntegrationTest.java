@@ -49,7 +49,8 @@ class ForwardSecureANNSystemIntegrationTest {
                 configFile.toString(),
                 dataFile.toString(),
                 keys.toString(),
-                dimensions
+                dimensions,       // Pass dimensions here
+                Paths.get(tempDir.toString(), "metadata")  // Correct Path conversion for metadata
         );
 
         logger.info("Indexed vectors for dim=2: {}", localSys.getIndexedVectorCount(2));
@@ -82,7 +83,8 @@ class ForwardSecureANNSystemIntegrationTest {
                 configFile.toString(),
                 dataFile.toString(),
                 keys.toString(),
-                dimensions
+                dimensions,       // Pass dimensions here
+                Paths.get(tempDir.toString(), "metadata")  // Correct Path conversion for metadata
         );
 
         assertTrue(localSys.getIndexedVectorCount(2) >= 3, "Should have at least 3 vectors for 2D");
@@ -112,7 +114,8 @@ class ForwardSecureANNSystemIntegrationTest {
                 configFile.toString(),
                 dataFile.toString(),
                 keys.toString(),
-                dimensions
+                dimensions,       // Pass dimensions here
+                Paths.get(tempDir.toString(), "metadata")  // Correct Path conversion for metadata
         );
 
         localSys.visualizeEncryptionKeys();

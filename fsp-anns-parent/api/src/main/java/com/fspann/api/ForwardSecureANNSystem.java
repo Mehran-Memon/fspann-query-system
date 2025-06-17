@@ -16,6 +16,8 @@ import com.fspann.query.service.QueryService;
 import com.fspann.query.service.QueryServiceImpl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -53,15 +55,17 @@ public class ForwardSecureANNSystem {
      * @param dataPath      Path to feature data file
      * @param keysFilePath  Path to serialized keys file for KeyManager
      * @param dimensions    List of supported dimensionalities
+     * @param metadataPath  Path to metadata storage for key rotation
      */
     public ForwardSecureANNSystem(
             String configPath,
             String dataPath,
             String keysFilePath,
-            List<Integer> dimensions
+            List<Integer> dimensions,
+            Path metadataPath
     ) throws Exception {
         logger.info("Initializing ForwardSecureANNSystem with config={}, data={}, keys={}, dims={}",
-                configPath, dataPath, keysFilePath, dimensions);
+                configPath, dataPath, keysFilePath, dimensions, metadataPath);
 
         // Initialize collections
         this.dimensionDataMap = new ConcurrentHashMap<>();
@@ -379,9 +383,10 @@ public class ForwardSecureANNSystem {
         return Math.sqrt(sum);
     }
 
+
     public static void main(String[] args) throws Exception {
-        if (args.length < 4) {
-            System.err.println("Usage: <configPath> <dataPath> <keysFilePath> <dimensions>");
+        if (args.length < 5) {
+            System.err.println("Usage: <configPath> <dataPath> <keysFilePath> <dimensions> <metadataPath>");
             System.exit(1);
         }
 
@@ -391,8 +396,9 @@ public class ForwardSecureANNSystem {
         List<Integer> dimensions = Arrays.stream(args[3].split(","))
                 .map(Integer::parseInt)
                 .collect(Collectors.toList());
+        String metadataPath = args[4];  // The 5th argument: metadataPath
 
-        ForwardSecureANNSystem sys = new ForwardSecureANNSystem(configFile, dataPath, keysFile, dimensions);
+        ForwardSecureANNSystem sys = new ForwardSecureANNSystem(configFile, dataPath, keysFile, dimensions, Path.of(metadataPath));
         int dim = dimensions.get(0);
         double[] queryVector = new double[dim];
         Arrays.fill(queryVector, Math.random());

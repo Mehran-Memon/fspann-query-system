@@ -8,8 +8,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
+import java.nio.file.*;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -25,6 +24,7 @@ public class ForwardSecureANNSystemPerformanceIntegrationTest {
 
     @BeforeAll
     public static void setup(@TempDir Path tempDir) throws Exception {
+        // Paths for configuration, data, and keys
         Path cfg = tempDir.resolve("config.json");
         Files.writeString(cfg, "{\"numShards\":4, \"profilerEnabled\":true}");
 
@@ -47,7 +47,18 @@ public class ForwardSecureANNSystemPerformanceIntegrationTest {
         Files.writeString(data, sb.toString());
 
         Path keys = tempDir.resolve("keys.ser");
-        sys = new ForwardSecureANNSystem(cfg.toString(), data.toString(), keys.toString(), Arrays.asList(DIMS));
+
+        // Path to metadata
+        Path metadataPath = tempDir.resolve("metadata");
+
+        // Initialize ForwardSecureANNSystem with updated constructor
+        sys = new ForwardSecureANNSystem(
+                cfg.toString(),
+                data.toString(),
+                keys.toString(),
+                Arrays.asList(DIMS),
+                metadataPath  // Pass the correct Path for metadata
+        );
     }
 
     @AfterAll
