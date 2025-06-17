@@ -1,11 +1,7 @@
 package com.fspann.query.service;
 
-import com.fspann.common.QueryResult;
-import com.fspann.common.QueryToken;
-import com.fspann.common.EncryptedPoint;
+import com.fspann.common.*;
 import com.fspann.crypto.CryptoService;
-import com.fspann.common.KeyLifeCycleService;
-import com.fspann.common.KeyVersion;
 import com.fspann.index.service.IndexService;
 
 import javax.crypto.SecretKey;
@@ -38,12 +34,12 @@ public class QueryServiceImpl implements QueryService {
     @Override
     public List<QueryResult> search(QueryToken token) {
         Objects.requireNonNull(token, "QueryToken cannot be null");
+
         if (token.getTopK() <= 0 || token.getEncryptedQuery() == null || token.getIv() == null) {
             throw new IllegalArgumentException("Invalid or incomplete QueryToken.");
         }
 
         keyService.rotateIfNeeded();
-
         KeyVersion queryVersion = resolveKeyVersion(token.getEncryptionContext());
         SecretKey key = queryVersion.getKey();
 
@@ -55,12 +51,14 @@ public class QueryServiceImpl implements QueryService {
             throw new RuntimeException("Decryption error: query vector", e);
         }
 
+        // Retrieve candidates from the index service
         List<EncryptedPoint> candidates = indexService.lookup(token);
         if (candidates.isEmpty()) {
             logger.warn("No candidates retrieved for the query token");
             return List.of(); // Return empty, not null
         }
 
+        // Process candidates to compute distances and sort results
         return candidates.stream()
                 .map(pt -> {
                     try {
@@ -68,6 +66,9 @@ public class QueryServiceImpl implements QueryService {
                         double dist = computeDistance(queryVec, ptVec);
                         return new QueryResult(pt.getId(), dist);
                     } catch (Exception e) {
+                        if (e instanceof IllegalArgumentException) {
+                            throw (IllegalArgumentException) e; // Propagate dimension mismatch
+                        }
                         logger.warn("Skipped corrupt candidate point ID {} due to decryption failure", pt.getId(), e);
                         return null;
                     }
@@ -81,7 +82,7 @@ public class QueryServiceImpl implements QueryService {
     private KeyVersion resolveKeyVersion(String context) {
         Matcher matcher = VERSION_PATTERN.matcher(context);
         if (!matcher.matches()) {
-            throw new IllegalArgumentException("Invalid encryption context format: " + context);
+            throw new NumberFormatException("Invalid encryption context format: " + context);  // Reverted to NumberFormatException
         }
         int version = Integer.parseInt(matcher.group(1));
         return keyService.getVersion(version);
@@ -98,4 +99,5 @@ public class QueryServiceImpl implements QueryService {
         }
         return Math.sqrt(sum);
     }
+
 }

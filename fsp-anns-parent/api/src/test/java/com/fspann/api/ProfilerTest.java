@@ -13,10 +13,33 @@ class ProfilerTest {
         Profiler profiler = new Profiler();
         profiler.start("testOp");
         // Simulate some work
-        try { Thread.sleep(100); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        try {
+            Thread.sleep(100);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
         profiler.stop("testOp");
         List<Long> timings = profiler.getTimings("testOp");
-        assertFalse(timings.isEmpty());
-        assertTrue(timings.get(0) >= 100_000_000); // At least 100ms in nanoseconds
+        assertFalse(timings.isEmpty(), "Timings list should not be empty");
+        assertTrue(timings.get(0) >= 100_000_000, "Timing should be at least 100ms in nanoseconds");
+    }
+
+    @Test
+    void testMultipleTimings() {
+        Profiler profiler = new Profiler();
+        for (int i = 0; i < 3; i++) {
+            profiler.start("multiOp");
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            profiler.stop("multiOp");
+        }
+        List<Long> timings = profiler.getTimings("multiOp");
+        assertEquals(3, timings.size(), "Should have 3 timing entries");
+        for (Long timing : timings) {
+            assertTrue(timing >= 50_000_000, "Each timing should be at least 50ms in nanoseconds");
+        }
     }
 }
