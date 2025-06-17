@@ -1,0 +1,210 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.index.DimensionContextTest" time="0.676" tests="4" errors="4" skipped="0" failures="0">
+  <properties>
+    <property name="java.specification.version" value="23"/>
+    <property name="sun.cpu.isalist" value="amd64"/>
+    <property name="sun.jnu.encoding" value="Cp1252"/>
+    <property name="java.class.path" value="C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\index\target\test-classes;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\index\target\classes;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-math3\3.6.1\commons-math3-3.6.1.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\crypto\target\classes;C:\Users\Mehran Memon\.m2\repository\org\bouncycastle\bcprov-jdk18on\1.78\bcprov-jdk18on-1.78.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-registry-prometheus\1.11.0\micrometer-registry-prometheus-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-core\1.11.0\micrometer-core-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-commons\1.11.0\micrometer-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-observation\1.11.0\micrometer-observation-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\hdrhistogram\HdrHistogram\2.1.12\HdrHistogram-2.1.12.jar;C:\Users\Mehran Memon\.m2\repository\org\latencyutils\LatencyUtils\2.0.3\LatencyUtils-2.0.3.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_common\0.16.0\simpleclient_common-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient\0.16.0\simpleclient-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_otel\0.16.0\simpleclient_tracer_otel-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_common\0.16.0\simpleclient_tracer_common-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_otel_agent\0.16.0\simpleclient_tracer_otel_agent-0.16.0.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\keymanagement\target\classes;C:\Users\Mehran Memon\.m2\repository\org\jetbrains\annotations\26.0.2\annotations-26.0.2.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\common\target\classes;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-lang3\3.17.0\commons-lang3-3.17.0.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-core\2.17.2\jackson-core-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\org\slf4j\slf4j-api\2.0.13\slf4j-api-2.0.13.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-api\5.11.0\junit-jupiter-api-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\opentest4j\opentest4j\1.3.0\opentest4j-1.3.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\platform\junit-platform-commons\1.11.0\junit-platform-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\apiguardian\apiguardian-api\1.1.2\apiguardian-api-1.1.2.jar;C:\Users\Mehran Memon\.m2\repository\org\slf4j\slf4j-simple\2.0.13\slf4j-simple-2.0.13.jar;C:\Users\Mehran Memon\.m2\repository\org\mockito\mockito-core\5.12.0\mockito-core-5.12.0.jar;C:\Users\Mehran Memon\.m2\repository\net\bytebuddy\byte-buddy-agent\1.14.15\byte-buddy-agent-1.14.15.jar;C:\Users\Mehran Memon\.m2\repository\org\objenesis\objenesis\3.3\objenesis-3.3.jar;C:\Users\Mehran Memon\.m2\repository\net\bytebuddy\byte-buddy\1.14.15\byte-buddy-1.14.15.jar;"/>
+    <property name="java.vm.vendor" value="Oracle Corporation"/>
+    <property name="sun.arch.data.model" value="64"/>
+    <property name="user.variant" value=""/>
+    <property name="java.vendor.url" value="https://java.oracle.com/"/>
+    <property name="user.timezone" value="Asia/Shanghai"/>
+    <property name="os.name" value="Windows 11"/>
+    <property name="java.vm.specification.version" value="23"/>
+    <property name="sun.java.launcher" value="SUN_STANDARD"/>
+    <property name="user.country" value="US"/>
+    <property name="sun.boot.library.path" value="C:\Program Files\Java\jdk-23\bin"/>
+    <property name="sun.java.command" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire14009808425978929642\surefirebooter10437591991996908149.jar C:\Users\Mehran Memon\AppData\Local\Temp\surefire14009808425978929642 2025-06-17T21-00-03_864-jvmRun1 surefire8447499917806132307tmp surefire_51627501342258893542tmp"/>
+    <property name="jdk.debug" value="release"/>
+    <property name="surefire.test.class.path" value="C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\index\target\test-classes;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\index\target\classes;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-math3\3.6.1\commons-math3-3.6.1.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\crypto\target\classes;C:\Users\Mehran Memon\.m2\repository\org\bouncycastle\bcprov-jdk18on\1.78\bcprov-jdk18on-1.78.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-registry-prometheus\1.11.0\micrometer-registry-prometheus-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-core\1.11.0\micrometer-core-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-commons\1.11.0\micrometer-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-observation\1.11.0\micrometer-observation-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\hdrhistogram\HdrHistogram\2.1.12\HdrHistogram-2.1.12.jar;C:\Users\Mehran Memon\.m2\repository\org\latencyutils\LatencyUtils\2.0.3\LatencyUtils-2.0.3.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_common\0.16.0\simpleclient_common-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient\0.16.0\simpleclient-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_otel\0.16.0\simpleclient_tracer_otel-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_common\0.16.0\simpleclient_tracer_common-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_otel_agent\0.16.0\simpleclient_tracer_otel_agent-0.16.0.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\keymanagement\target\classes;C:\Users\Mehran Memon\.m2\repository\org\jetbrains\annotations\26.0.2\annotations-26.0.2.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\common\target\classes;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-lang3\3.17.0\commons-lang3-3.17.0.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-core\2.17.2\jackson-core-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\org\slf4j\slf4j-api\2.0.13\slf4j-api-2.0.13.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-api\5.11.0\junit-jupiter-api-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\opentest4j\opentest4j\1.3.0\opentest4j-1.3.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\platform\junit-platform-commons\1.11.0\junit-platform-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\apiguardian\apiguardian-api\1.1.2\apiguardian-api-1.1.2.jar;C:\Users\Mehran Memon\.m2\repository\org\slf4j\slf4j-simple\2.0.13\slf4j-simple-2.0.13.jar;C:\Users\Mehran Memon\.m2\repository\org\mockito\mockito-core\5.12.0\mockito-core-5.12.0.jar;C:\Users\Mehran Memon\.m2\repository\net\bytebuddy\byte-buddy-agent\1.14.15\byte-buddy-agent-1.14.15.jar;C:\Users\Mehran Memon\.m2\repository\org\objenesis\objenesis\3.3\objenesis-3.3.jar;C:\Users\Mehran Memon\.m2\repository\net\bytebuddy\byte-buddy\1.14.15\byte-buddy-1.14.15.jar;"/>
+    <property name="sun.cpu.endian" value="little"/>
+    <property name="user.home" value="C:\Users\Mehran Memon"/>
+    <property name="user.language" value="en"/>
+    <property name="java.specification.vendor" value="Oracle Corporation"/>
+    <property name="java.version.date" value="2025-01-21"/>
+    <property name="java.home" value="C:\Program Files\Java\jdk-23"/>
+    <property name="file.separator" value="\"/>
+    <property name="basedir" value="C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\index"/>
+    <property name="java.vm.compressedOopsMode" value="Zero based"/>
+    <property name="line.separator" value="&#10;"/>
+    <property name="java.vm.specification.vendor" value="Oracle Corporation"/>
+    <property name="java.specification.name" value="Java Platform API Specification"/>
+    <property name="surefire.real.class.path" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire14009808425978929642\surefirebooter10437591991996908149.jar"/>
+    <property name="user.script" value=""/>
+    <property name="sun.management.compiler" value="HotSpot 64-Bit Tiered Compilers"/>
+    <property name="java.runtime.version" value="23.0.2+7-58"/>
+    <property name="user.name" value="Mehran Memon"/>
+    <property name="stdout.encoding" value="Cp1252"/>
+    <property name="path.separator" value=";"/>
+    <property name="os.version" value="10.0"/>
+    <property name="java.runtime.name" value="Java(TM) SE Runtime Environment"/>
+    <property name="file.encoding" value="UTF-8"/>
+    <property name="java.vm.name" value="Java HotSpot(TM) 64-Bit Server VM"/>
+    <property name="localRepository" value="C:\Users\Mehran Memon\.m2\repository"/>
+    <property name="java.vendor.url.bug" value="https://bugreport.java.com/bugreport/"/>
+    <property name="java.io.tmpdir" value="C:\Users\MEHRAN~1\AppData\Local\Temp\"/>
+    <property name="idea.version" value="2024.3.5"/>
+    <property name="java.version" value="23.0.2"/>
+    <property name="user.dir" value="C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\index"/>
+    <property name="os.arch" value="amd64"/>
+    <property name="java.vm.specification.name" value="Java Virtual Machine Specification"/>
+    <property name="sun.os.patch.level" value=""/>
+    <property name="native.encoding" value="Cp1252"/>
+    <property name="java.library.path" value="C:\Program Files\Java\jdk-23\bin;C:\WINDOWS\Sun\Java\bin;C:\WINDOWS\system32;C:\WINDOWS;C:\Program Files\Common Files\Oracle\Java\javapath;C:\WINDOWS\system32;C:\WINDOWS;C:\WINDOWS\System32\Wbem;C:\WINDOWS\System32\WindowsPowerShell\v1.0\;C:\WINDOWS\System32\OpenSSH\;C:\Program Files\Git\cmd;C:\Program Files\Go\bin;C:\Program Files\Apache\apache-maven-3.9.9-bin\apache-maven-3.9.9\bin;C:\Program Files\dotnet\;C:\Users\Mehran Memon\AppData\Local\Microsoft\WindowsApps;C:\Users\Mehran Memon\AppData\Local\GitHubDesktop\bin;C:\Users\Mehran Memon\go\bin;C:\Users\Mehran Memon\AppData\Local\JetBrains\Toolbox\scripts;;C:\Users\Mehran Memon\.lmstudio\bin;%USERPROFILE%\AppData\Local\Microsoft\WindowsApps;."/>
+    <property name="java.vm.info" value="mixed mode, sharing"/>
+    <property name="stderr.encoding" value="Cp1252"/>
+    <property name="java.vendor" value="Oracle Corporation"/>
+    <property name="java.vm.version" value="23.0.2+7-58"/>
+    <property name="sun.io.unicode.encoding" value="UnicodeLittle"/>
+    <property name="java.class.version" value="67.0"/>
+  </properties>
+  <testcase name="testReEncryptAll" classname="com.index.DimensionContextTest" time="0.643">
+    <error type="org.mockito.exceptions.base.MockitoException"><![CDATA[org.mockito.exceptions.base.MockitoException: 
+
+Mockito cannot mock this class: interface com.fspann.crypto.CryptoService.
+
+If you're not sure why you're getting this error, please open an issue on GitHub.
+
+
+Java               : 23
+JVM vendor name    : Oracle Corporation
+JVM vendor version : 23.0.2+7-58
+JVM name           : Java HotSpot(TM) 64-Bit Server VM
+JVM version        : 23.0.2+7-58
+JVM info           : mixed mode, sharing
+OS name            : Windows 11
+OS version         : 10.0
+
+
+You are seeing this disclaimer because Mockito is configured to create inlined mocks.
+You can learn about inline mocks and their limitations under item #39 of the Mockito class javadoc.
+
+Underlying exception : org.mockito.exceptions.base.MockitoException: Could not modify all classes [interface com.fspann.crypto.CryptoService]
+	at com.index.DimensionContextTest.setUp(DimensionContextTest.java:43)
+Caused by: org.mockito.exceptions.base.MockitoException: Could not modify all classes [interface com.fspann.crypto.CryptoService]
+	at com.index.DimensionContextTest.setUp(DimensionContextTest.java:43)
+Caused by: java.lang.IllegalStateException: 
+
+Byte Buddy could not instrument all classes within the mock's type hierarchy
+
+This problem should never occur for javac-compiled classes. This problem has been observed for classes that are:
+ - Compiled by older versions of scalac
+ - Classes that are part of the Android distribution
+	at com.index.DimensionContextTest.setUp(DimensionContextTest.java:43)
+Caused by: java.lang.IllegalArgumentException: Java 23 (67) is not supported by the current version of Byte Buddy which officially supports Java 22 (66) - update Byte Buddy or set net.bytebuddy.experimental as a VM property
+	at com.index.DimensionContextTest.setUp(DimensionContextTest.java:43)
+]]></error>
+  </testcase>
+  <testcase name="testReEncryptAll_MultiplePoints" classname="com.index.DimensionContextTest" time="0.011">
+    <error type="org.mockito.exceptions.base.MockitoException"><![CDATA[org.mockito.exceptions.base.MockitoException: 
+
+Mockito cannot mock this class: interface com.fspann.crypto.CryptoService.
+
+If you're not sure why you're getting this error, please open an issue on GitHub.
+
+
+Java               : 23
+JVM vendor name    : Oracle Corporation
+JVM vendor version : 23.0.2+7-58
+JVM name           : Java HotSpot(TM) 64-Bit Server VM
+JVM version        : 23.0.2+7-58
+JVM info           : mixed mode, sharing
+OS name            : Windows 11
+OS version         : 10.0
+
+
+You are seeing this disclaimer because Mockito is configured to create inlined mocks.
+You can learn about inline mocks and their limitations under item #39 of the Mockito class javadoc.
+
+Underlying exception : org.mockito.exceptions.base.MockitoException: Could not modify all classes [interface com.fspann.crypto.CryptoService]
+	at com.index.DimensionContextTest.setUp(DimensionContextTest.java:43)
+Caused by: org.mockito.exceptions.base.MockitoException: Could not modify all classes [interface com.fspann.crypto.CryptoService]
+	at com.index.DimensionContextTest.setUp(DimensionContextTest.java:43)
+Caused by: java.lang.IllegalStateException: 
+
+Byte Buddy could not instrument all classes within the mock's type hierarchy
+
+This problem should never occur for javac-compiled classes. This problem has been observed for classes that are:
+ - Compiled by older versions of scalac
+ - Classes that are part of the Android distribution
+	at com.index.DimensionContextTest.setUp(DimensionContextTest.java:43)
+Caused by: java.lang.IllegalArgumentException: Java 23 (67) is not supported by the current version of Byte Buddy which officially supports Java 22 (66) - update Byte Buddy or set net.bytebuddy.experimental as a VM property
+	at com.index.DimensionContextTest.setUp(DimensionContextTest.java:43)
+]]></error>
+  </testcase>
+  <testcase name="testReEncryptAll_EmptyResult" classname="com.index.DimensionContextTest" time="0.008">
+    <error type="org.mockito.exceptions.base.MockitoException"><![CDATA[org.mockito.exceptions.base.MockitoException: 
+
+Mockito cannot mock this class: interface com.fspann.crypto.CryptoService.
+
+If you're not sure why you're getting this error, please open an issue on GitHub.
+
+
+Java               : 23
+JVM vendor name    : Oracle Corporation
+JVM vendor version : 23.0.2+7-58
+JVM name           : Java HotSpot(TM) 64-Bit Server VM
+JVM version        : 23.0.2+7-58
+JVM info           : mixed mode, sharing
+OS name            : Windows 11
+OS version         : 10.0
+
+
+You are seeing this disclaimer because Mockito is configured to create inlined mocks.
+You can learn about inline mocks and their limitations under item #39 of the Mockito class javadoc.
+
+Underlying exception : org.mockito.exceptions.base.MockitoException: Could not modify all classes [interface com.fspann.crypto.CryptoService]
+	at com.index.DimensionContextTest.setUp(DimensionContextTest.java:43)
+Caused by: org.mockito.exceptions.base.MockitoException: Could not modify all classes [interface com.fspann.crypto.CryptoService]
+	at com.index.DimensionContextTest.setUp(DimensionContextTest.java:43)
+Caused by: java.lang.IllegalStateException: 
+
+Byte Buddy could not instrument all classes within the mock's type hierarchy
+
+This problem should never occur for javac-compiled classes. This problem has been observed for classes that are:
+ - Compiled by older versions of scalac
+ - Classes that are part of the Android distribution
+	at com.index.DimensionContextTest.setUp(DimensionContextTest.java:43)
+Caused by: java.lang.IllegalArgumentException: Java 23 (67) is not supported by the current version of Byte Buddy which officially supports Java 22 (66) - update Byte Buddy or set net.bytebuddy.experimental as a VM property
+	at com.index.DimensionContextTest.setUp(DimensionContextTest.java:43)
+]]></error>
+  </testcase>
+  <testcase name="testReEncryptAll_NoDirtyShards" classname="com.index.DimensionContextTest" time="0.007">
+    <error type="org.mockito.exceptions.base.MockitoException"><![CDATA[org.mockito.exceptions.base.MockitoException: 
+
+Mockito cannot mock this class: interface com.fspann.crypto.CryptoService.
+
+If you're not sure why you're getting this error, please open an issue on GitHub.
+
+
+Java               : 23
+JVM vendor name    : Oracle Corporation
+JVM vendor version : 23.0.2+7-58
+JVM name           : Java HotSpot(TM) 64-Bit Server VM
+JVM version        : 23.0.2+7-58
+JVM info           : mixed mode, sharing
+OS name            : Windows 11
+OS version         : 10.0
+
+
+You are seeing this disclaimer because Mockito is configured to create inlined mocks.
+You can learn about inline mocks and their limitations under item #39 of the Mockito class javadoc.
+
+Underlying exception : org.mockito.exceptions.base.MockitoException: Could not modify all classes [interface com.fspann.crypto.CryptoService]
+	at com.index.DimensionContextTest.setUp(DimensionContextTest.java:43)
+Caused by: org.mockito.exceptions.base.MockitoException: Could not modify all classes [interface com.fspann.crypto.CryptoService]
+	at com.index.DimensionContextTest.setUp(DimensionContextTest.java:43)
+Caused by: java.lang.IllegalStateException: 
+
+Byte Buddy could not instrument all classes within the mock's type hierarchy
+
+This problem should never occur for javac-compiled classes. This problem has been observed for classes that are:
+ - Compiled by older versions of scalac
+ - Classes that are part of the Android distribution
+	at com.index.DimensionContextTest.setUp(DimensionContextTest.java:43)
+Caused by: java.lang.IllegalArgumentException: Java 23 (67) is not supported by the current version of Byte Buddy which officially supports Java 22 (66) - update Byte Buddy or set net.bytebuddy.experimental as a VM property
+	at com.index.DimensionContextTest.setUp(DimensionContextTest.java:43)
+]]></error>
+  </testcase>
+</testsuite>
