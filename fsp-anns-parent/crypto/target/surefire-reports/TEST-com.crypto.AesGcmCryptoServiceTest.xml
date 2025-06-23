@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.crypto.AesGcmCryptoServiceTest" time="1.262" tests="7" errors="0" skipped="0" failures="0">
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.crypto.AesGcmCryptoServiceTest" time="1.318" tests="7" errors="0" skipped="0" failures="0">
   <properties>
     <property name="java.specification.version" value="22"/>
     <property name="sun.cpu.isalist" value="amd64"/>
@@ -16,7 +16,7 @@
     <property name="sun.java.launcher" value="SUN_STANDARD"/>
     <property name="user.country" value="US"/>
     <property name="sun.boot.library.path" value="C:\Program Files\Java\jdk-22\bin"/>
-    <property name="sun.java.command" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire18209104551583307509\surefirebooter361920906310187638.jar C:\Users\Mehran Memon\AppData\Local\Temp\surefire18209104551583307509 2025-06-18T05-13-06_899-jvmRun1 surefire10131078136395388375tmp surefire_37856367052520377124tmp"/>
+    <property name="sun.java.command" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire8406668662587207254\surefirebooter4346305750241430709.jar C:\Users\Mehran Memon\AppData\Local\Temp\surefire8406668662587207254 2025-06-18T19-11-28_061-jvmRun1 surefire2889205168040500023tmp surefire_312492697820348523459tmp"/>
     <property name="jdk.debug" value="release"/>
     <property name="surefire.test.class.path" value="C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\crypto\target\test-classes;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\crypto\target\classes;C:\Users\Mehran Memon\.m2\repository\org\bouncycastle\bcprov-jdk18on\1.78\bcprov-jdk18on-1.78.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\common\target\classes;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-lang3\3.17.0\commons-lang3-3.17.0.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-core\2.17.2\jackson-core-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\org\slf4j\slf4j-api\2.0.13\slf4j-api-2.0.13.jar;C:\Users\Mehran Memon\.m2\repository\org\slf4j\slf4j-simple\2.0.13\slf4j-simple-2.0.13.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-registry-prometheus\1.12.0\micrometer-registry-prometheus-1.12.0.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-core\1.11.0\micrometer-core-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-commons\1.11.0\micrometer-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-observation\1.11.0\micrometer-observation-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\hdrhistogram\HdrHistogram\2.1.12\HdrHistogram-2.1.12.jar;C:\Users\Mehran Memon\.m2\repository\org\latencyutils\LatencyUtils\2.0.3\LatencyUtils-2.0.3.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_common\0.16.0\simpleclient_common-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient\0.16.0\simpleclient-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_otel\0.16.0\simpleclient_tracer_otel-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_common\0.16.0\simpleclient_tracer_common-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_otel_agent\0.16.0\simpleclient_tracer_otel_agent-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter\5.11.0\junit-jupiter-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-api\5.11.0\junit-jupiter-api-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\opentest4j\opentest4j\1.3.0\opentest4j-1.3.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\platform\junit-platform-commons\1.11.0\junit-platform-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\apiguardian\apiguardian-api\1.1.2\apiguardian-api-1.1.2.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-params\5.11.0\junit-jupiter-params-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-engine\5.11.0\junit-jupiter-engine-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\platform\junit-platform-engine\1.11.0\junit-platform-engine-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\mockito\mockito-core\5.12.0\mockito-core-5.12.0.jar;C:\Users\Mehran Memon\.m2\repository\net\bytebuddy\byte-buddy-agent\1.14.15\byte-buddy-agent-1.14.15.jar;C:\Users\Mehran Memon\.m2\repository\org\objenesis\objenesis\3.3\objenesis-3.3.jar;C:\Users\Mehran Memon\.m2\repository\net\bytebuddy\byte-buddy\1.14.15\byte-buddy-1.14.15.jar;"/>
     <property name="sun.cpu.endian" value="little"/>
@@ -31,7 +31,7 @@
     <property name="line.separator" value="&#10;"/>
     <property name="java.vm.specification.vendor" value="Oracle Corporation"/>
     <property name="java.specification.name" value="Java Platform API Specification"/>
-    <property name="surefire.real.class.path" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire18209104551583307509\surefirebooter361920906310187638.jar"/>
+    <property name="surefire.real.class.path" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire8406668662587207254\surefirebooter4346305750241430709.jar"/>
     <property name="user.script" value=""/>
     <property name="sun.management.compiler" value="HotSpot 64-Bit Tiered Compilers"/>
     <property name="java.runtime.version" value="22.0.2+9-70"/>
@@ -60,25 +60,33 @@
     <property name="sun.io.unicode.encoding" value="UnicodeLittle"/>
     <property name="java.class.version" value="66.0"/>
   </properties>
-  <testcase name="testDecryptQuery" classname="com.crypto.AesGcmCryptoServiceTest" time="1.184">
+  <testcase name="testDecryptQuery" classname="com.crypto.AesGcmCryptoServiceTest" time="1.231">
     <system-err><![CDATA[WARNING: A Java agent has been loaded dynamically (C:\Users\Mehran Memon\.m2\repository\net\bytebuddy\byte-buddy-agent\1.14.15\byte-buddy-agent-1.14.15.jar)
 WARNING: If a serviceability tool is in use, please run with -XX:+EnableDynamicAgentLoading to hide this warning
 WARNING: If a serviceability tool is not in use, please run with -Djdk.instrument.traceUsage for more information
 WARNING: Dynamic loading of agents will be disallowed by default in a future release
+[main] INFO com.fspann.crypto.AesGcmCryptoService - AesGcmCryptoService initialized successfully
 ]]></system-err>
   </testcase>
-  <testcase name="testEncrypt" classname="com.crypto.AesGcmCryptoServiceTest" time="0.009"/>
-  <testcase name="testDecryptFromPoint" classname="com.crypto.AesGcmCryptoServiceTest" time="0.008"/>
-  <testcase name="testDecryptWithWrongKeyFails" classname="com.crypto.AesGcmCryptoServiceTest" time="0.011">
-    <system-err><![CDATA[[main] ERROR com.fspann.crypto.AesGcmCryptoService - Decryption failed for point failVec
+  <testcase name="testEncrypt" classname="com.crypto.AesGcmCryptoServiceTest" time="0.007">
+    <system-err><![CDATA[[main] INFO com.fspann.crypto.AesGcmCryptoService - AesGcmCryptoService initialized successfully
+]]></system-err>
+  </testcase>
+  <testcase name="testDecryptFromPoint" classname="com.crypto.AesGcmCryptoServiceTest" time="0.014">
+    <system-err><![CDATA[[main] INFO com.fspann.crypto.AesGcmCryptoService - AesGcmCryptoService initialized successfully
+]]></system-err>
+  </testcase>
+  <testcase name="testDecryptWithWrongKeyFails" classname="com.crypto.AesGcmCryptoServiceTest" time="0.013">
+    <system-err><![CDATA[[main] INFO com.fspann.crypto.AesGcmCryptoService - AesGcmCryptoService initialized successfully
+[main] ERROR com.fspann.crypto.AesGcmCryptoService - Decryption failed for point failVec
 javax.crypto.AEADBadTagException: Tag mismatch
 	at java.base/com.sun.crypto.provider.GaloisCounterMode$GCMDecrypt.doFinal(GaloisCounterMode.java:1518)
 	at java.base/com.sun.crypto.provider.GaloisCounterMode.engineDoFinal(GaloisCounterMode.java:415)
 	at java.base/javax.crypto.Cipher.doFinal(Cipher.java:2252)
 	at com.fspann.crypto.EncryptionUtils.decryptVector(EncryptionUtils.java:66)
-	at com.fspann.crypto.AesGcmCryptoService.lambda$decryptFromPoint$1(AesGcmCryptoService.java:67)
+	at com.fspann.crypto.AesGcmCryptoService.lambda$decryptFromPoint$1(AesGcmCryptoService.java:62)
 	at io.micrometer.core.instrument.AbstractTimer.record(AbstractTimer.java:168)
-	at com.fspann.crypto.AesGcmCryptoService.decryptFromPoint(AesGcmCryptoService.java:65)
+	at com.fspann.crypto.AesGcmCryptoService.decryptFromPoint(AesGcmCryptoService.java:60)
 	at com.crypto.AesGcmCryptoServiceTest.lambda$testDecryptWithWrongKeyFails$1(AesGcmCryptoServiceTest.java:123)
 	at org.junit.jupiter.api.AssertThrows.assertThrows(AssertThrows.java:53)
 	at org.junit.jupiter.api.AssertThrows.assertThrows(AssertThrows.java:35)
@@ -155,14 +163,18 @@ javax.crypto.AEADBadTagException: Tag mismatch
 	at org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:548)
 ]]></system-err>
   </testcase>
-  <testcase name="testReEncrypt" classname="com.crypto.AesGcmCryptoServiceTest" time="0.019"/>
-  <testcase name="testReEncryptWithInvalidKey" classname="com.crypto.AesGcmCryptoServiceTest" time="0.007">
-    <system-err><![CDATA[[main] ERROR com.fspann.crypto.AesGcmCryptoService - Failed to retrieve original key for point test
+  <testcase name="testReEncrypt" classname="com.crypto.AesGcmCryptoServiceTest" time="0.013">
+    <system-err><![CDATA[[main] INFO com.fspann.crypto.AesGcmCryptoService - AesGcmCryptoService initialized successfully
+]]></system-err>
+  </testcase>
+  <testcase name="testReEncryptWithInvalidKey" classname="com.crypto.AesGcmCryptoServiceTest" time="0.011">
+    <system-err><![CDATA[[main] INFO com.fspann.crypto.AesGcmCryptoService - AesGcmCryptoService initialized successfully
+[main] ERROR com.fspann.crypto.AesGcmCryptoService - Failed to retrieve original key for point test
 java.lang.IllegalArgumentException: Version not found
-	at com.fspann.crypto.AesGcmCryptoService.getOriginalKey(AesGcmCryptoService.java:127)
-	at com.fspann.crypto.AesGcmCryptoService.lambda$reEncrypt$4(AesGcmCryptoService.java:103)
+	at com.fspann.crypto.AesGcmCryptoService.getOriginalKey(AesGcmCryptoService.java:122)
+	at com.fspann.crypto.AesGcmCryptoService.lambda$reEncrypt$4(AesGcmCryptoService.java:98)
 	at io.micrometer.core.instrument.AbstractTimer.record(AbstractTimer.java:168)
-	at com.fspann.crypto.AesGcmCryptoService.reEncrypt(AesGcmCryptoService.java:101)
+	at com.fspann.crypto.AesGcmCryptoService.reEncrypt(AesGcmCryptoService.java:96)
 	at com.crypto.AesGcmCryptoServiceTest.lambda$testReEncryptWithInvalidKey$0(AesGcmCryptoServiceTest.java:78)
 	at org.junit.jupiter.api.AssertThrows.assertThrows(AssertThrows.java:53)
 	at org.junit.jupiter.api.AssertThrows.assertThrows(AssertThrows.java:35)
@@ -239,10 +251,10 @@ java.lang.IllegalArgumentException: Version not found
 	at org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:548)
 [main] ERROR com.fspann.crypto.AesGcmCryptoService - Re-encryption failed for point test
 com.fspann.crypto.AesGcmCryptoService$CryptoException: Failed to retrieve original key
-	at com.fspann.crypto.AesGcmCryptoService.getOriginalKey(AesGcmCryptoService.java:130)
-	at com.fspann.crypto.AesGcmCryptoService.lambda$reEncrypt$4(AesGcmCryptoService.java:103)
+	at com.fspann.crypto.AesGcmCryptoService.getOriginalKey(AesGcmCryptoService.java:125)
+	at com.fspann.crypto.AesGcmCryptoService.lambda$reEncrypt$4(AesGcmCryptoService.java:98)
 	at io.micrometer.core.instrument.AbstractTimer.record(AbstractTimer.java:168)
-	at com.fspann.crypto.AesGcmCryptoService.reEncrypt(AesGcmCryptoService.java:101)
+	at com.fspann.crypto.AesGcmCryptoService.reEncrypt(AesGcmCryptoService.java:96)
 	at com.crypto.AesGcmCryptoServiceTest.lambda$testReEncryptWithInvalidKey$0(AesGcmCryptoServiceTest.java:78)
 	at org.junit.jupiter.api.AssertThrows.assertThrows(AssertThrows.java:53)
 	at org.junit.jupiter.api.AssertThrows.assertThrows(AssertThrows.java:35)
@@ -318,9 +330,12 @@ com.fspann.crypto.AesGcmCryptoService$CryptoException: Failed to retrieve origin
 	at org.apache.maven.surefire.booter.ForkedBooter.run(ForkedBooter.java:562)
 	at org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:548)
 Caused by: java.lang.IllegalArgumentException: Version not found
-	at com.fspann.crypto.AesGcmCryptoService.getOriginalKey(AesGcmCryptoService.java:127)
+	at com.fspann.crypto.AesGcmCryptoService.getOriginalKey(AesGcmCryptoService.java:122)
 	... 77 more
 ]]></system-err>
   </testcase>
-  <testcase name="testEncryptGeneratesUniqueIVs" classname="com.crypto.AesGcmCryptoServiceTest" time="0.004"/>
+  <testcase name="testEncryptGeneratesUniqueIVs" classname="com.crypto.AesGcmCryptoServiceTest" time="0.006">
+    <system-err><![CDATA[[main] INFO com.fspann.crypto.AesGcmCryptoService - AesGcmCryptoService initialized successfully
+]]></system-err>
+  </testcase>
 </testsuite>

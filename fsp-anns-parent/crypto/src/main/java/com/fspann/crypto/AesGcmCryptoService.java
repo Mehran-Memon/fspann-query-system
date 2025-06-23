@@ -12,10 +12,8 @@ import org.slf4j.LoggerFactory;
 import javax.crypto.SecretKey;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Base64;
 
-/**
- * AES-GCM implementation for secure vector encryption and re-encryption.
- */
 public class AesGcmCryptoService implements CryptoService {
     private static final Logger logger = LoggerFactory.getLogger(AesGcmCryptoService.class);
 
@@ -25,11 +23,8 @@ public class AesGcmCryptoService implements CryptoService {
     private final KeyLifeCycleService keyService;
     private final MetadataManager metadataManager;
 
-    public AesGcmCryptoService() {
-        this(new SimpleMeterRegistry(), null, null);
-    }
-
     public AesGcmCryptoService(MeterRegistry registry, KeyLifeCycleService keyService, MetadataManager metadataManager) {
+        logger.debug("Initializing AesGcmCryptoService");
         this.registry = registry != null ? registry : new SimpleMeterRegistry();
         this.keyService = Objects.requireNonNull(keyService, "KeyLifeCycleService must not be null");
         this.metadataManager = Objects.requireNonNullElseGet(metadataManager, MetadataManager::new);
@@ -41,6 +36,7 @@ public class AesGcmCryptoService implements CryptoService {
         this.decryptTimer = Timer.builder("fspann.crypto.decrypt.time")
                 .description("AES-GCM decryption latency")
                 .register(this.registry);
+        logger.info("AesGcmCryptoService initialized successfully");
     }
 
     @Override
@@ -52,6 +48,7 @@ public class AesGcmCryptoService implements CryptoService {
                 int version = keyService.getCurrentVersion().getVersion();
                 EncryptedPoint point = new EncryptedPoint(id, 0, iv, ciphertext, version, vector.length);
                 metadataManager.updateVectorMetadata(id, Map.of("version", String.valueOf(version)));
+                logger.debug("Encrypted point {} with key version {}", id, version);
                 return point;
             } catch (Exception e) {
                 logger.error("Encryption failed for point {}", id, e);
@@ -64,6 +61,7 @@ public class AesGcmCryptoService implements CryptoService {
     public double[] decryptFromPoint(EncryptedPoint pt, SecretKey key) {
         return decryptTimer.record(() -> {
             try {
+                logger.debug("Decrypting point {} with key version {}", pt.getId(), pt.getVersion());
                 return EncryptionUtils.decryptVector(pt.getCiphertext(), pt.getIv(), key);
             } catch (Exception e) {
                 logger.error("Decryption failed for point {}", pt.getId(), e);
@@ -76,6 +74,8 @@ public class AesGcmCryptoService implements CryptoService {
     public double[] decryptQuery(byte[] ciphertext, byte[] iv, SecretKey key) {
         return decryptTimer.record(() -> {
             try {
+                logger.debug("Decrypting query with IV: {}, key: {}", Base64.getEncoder().encodeToString(iv),
+                        Base64.getEncoder().encodeToString(key.getEncoded()));
                 return EncryptionUtils.decryptVector(ciphertext, iv, key);
             } catch (Exception e) {
                 logger.error("Query decryption failed", e);
@@ -88,6 +88,8 @@ public class AesGcmCryptoService implements CryptoService {
     public byte[] encrypt(double[] vector, SecretKey key, byte[] iv) {
         return encryptTimer.record(() -> {
             try {
+                logger.debug("Encrypting vector with IV: {}, key: {}", Base64.getEncoder().encodeToString(iv),
+                        Base64.getEncoder().encodeToString(key.getEncoded()));
                 return EncryptionUtils.encryptVector(vector, iv, key);
             } catch (Exception e) {
                 logger.error("Encryption failed for vector", e);
@@ -107,6 +109,7 @@ public class AesGcmCryptoService implements CryptoService {
                 int newVersion = keyService.getCurrentVersion().getVersion();
                 EncryptedPoint reEncrypted = new EncryptedPoint(pt.getId(), pt.getShardId(), newIv, ciphertext, newVersion, pt.getVectorLength());
                 metadataManager.updateVectorMetadata(pt.getId(), Map.of("version", String.valueOf(newVersion)));
+                logger.debug("Re-encrypted point {} to version {}", pt.getId(), newVersion);
                 return reEncrypted;
             } catch (Exception e) {
                 logger.error("Re-encryption failed for point {}", pt.getId(), e);
@@ -124,6 +127,7 @@ public class AesGcmCryptoService implements CryptoService {
                 return keyService.getCurrentVersion().getKey();
             }
             int version = Integer.parseInt(versionStr);
+            logger.debug("Retrieved key version {} for point {}", version, pt.getId());
             return keyService.getVersion(version).getKey();
         } catch (Exception e) {
             logger.error("Failed to retrieve original key for point {}", pt.getId(), e);
