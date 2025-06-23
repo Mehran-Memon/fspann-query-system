@@ -14,9 +14,11 @@ import com.fspann.loader.DefaultDataLoader;
 import com.fspann.query.core.QueryTokenFactory;
 import com.fspann.query.service.QueryService;
 import com.fspann.query.service.QueryServiceImpl;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -64,7 +66,7 @@ public class ForwardSecureANNSystem {
             List<Integer> dimensions,
             Path metadataPath
     ) throws Exception {
-        logger.info("Initializing ForwardSecureANNSystem with config={}, data={}, keys={}, dims={}",
+        logger.info("Initializing ForwardSecureANNSystem with config={}, data={}, keys={}, dims={}, metadata={}",
                 configPath, dataPath, keysFilePath, dimensions, metadataPath);
 
         // Initialize collections
@@ -74,6 +76,7 @@ public class ForwardSecureANNSystem {
         this.datasetMap = new ConcurrentHashMap<>();
 
         // Load configuration
+        logger.debug("Loading configuration");
         ApiSystemConfig apiConfig;
         try {
             apiConfig = new ApiSystemConfig(configPath);
@@ -85,47 +88,83 @@ public class ForwardSecureANNSystem {
         }
 
         // Setup key management with enhanced forward security
+        logger.debug("Initializing KeyManager");
         KeyManager keyManager;
         try {
             keyManager = new KeyManager(keysFilePath);
             this.encryptionKeys.put("initial_key", keyManager.getCurrentVersion().getKey().getEncoded());
+            logger.info("KeyManager initialized");
         } catch (Exception e) {
             logger.error("Failed to initialize KeyManager", e);
             throw new Exception("KeyManager initialization failed", e);
         }
 
+        logger.debug("Creating KeyRotationPolicy");
         KeyRotationPolicy policy = new KeyRotationPolicy(
                 (int) config.getOpsThreshold(),
                 config.getAgeThresholdMs()
         );
-        this.keyService = new KeyRotationServiceImpl(keyManager, policy, "fsp-anns-parent/api/metadata/rotate.ser");
+
+        // Initialize keyService
+        logger.debug("Initializing KeyRotationServiceImpl with metadata path {}", metadataPath);
+        try {
+            Files.createDirectories(metadataPath);
+            this.keyService = new KeyRotationServiceImpl(keyManager, policy, metadataPath.toString());
+            logger.info("KeyRotationServiceImpl initialized successfully");
+            if (this.keyService == null) {
+                logger.error("keyService is null after initialization");
+                throw new Exception("KeyRotationServiceImpl initialization resulted in null");
+            }
+        } catch (Exception e) {
+            logger.error("Failed to initialize KeyRotationServiceImpl with metadata path {}", metadataPath, e);
+            throw new Exception("KeyRotationService initialization failed", e);
+        }
         logger.info("KeyManager initialized with forward-secure key derivation, using keys file at {}", keysFilePath);
 
         // Crypto service with forward-secure AES-GCM
-        this.cryptoService = new AesGcmCryptoService(); // Enable forward security
-        logger.info("CryptoService (AES-GCM with forward security) ready");
+        logger.debug("Initializing CryptoService");
+        try {
+            this.cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, new MetadataManager());
+            logger.info("CryptoService (AES-GCM with forward security) ready");
+        } catch (Exception e) {
+            logger.error("Failed to initialize CryptoService", e);
+            throw new Exception("CryptoService initialization failed", e);
+        }
 
         // Build core index with dynamic dimensionality support
+        logger.debug("Initializing SecureLSHIndexService");
         int numShards = config.getNumShards();
         SecureLSHIndex coreIndex = new SecureLSHIndex(1, numShards, new EvenLSH(2, numShards));
-        this.indexService = new SecureLSHIndexService(cryptoService, keyService, new MetadataManager());
-        logger.info("SecureLSHIndexService initialized with {} shards", numShards);
+        try {
+            this.indexService = new SecureLSHIndexService(cryptoService, keyService, new MetadataManager());
+            logger.info("SecureLSHIndexService initialized with {} shards", numShards);
+        } catch (Exception e) {
+            logger.error("Failed to initialize SecureLSHIndexService", e);
+            throw new Exception("SecureLSHIndexService initialization failed", e);
+        }
 
         // Cache and profiler
+        logger.debug("Initializing Cache and Profiler");
         this.cache = new LRUCache<>(1000);
         this.profiler = config.isProfilerEnabled() ? new Profiler() : null;
         logger.info("Cache and Profiler initialized");
 
         // Setup query pipeline with dynamic dimensionality
-        this.tokenFactory = new QueryTokenFactory(
-                cryptoService,
-                keyService,
-                new EvenLSH(Collections.max(dimensions), numShards),
-                /* expansionRange= */ 1,
-                /* numTables= */ 1
-        );
-        this.queryService = new QueryServiceImpl(indexService, cryptoService, keyService);
-        logger.info("QueryService initialized and ready");
+        logger.debug("Initializing QueryTokenFactory and QueryService");
+        try {
+            this.tokenFactory = new QueryTokenFactory(
+                    cryptoService,
+                    keyService,
+                    new EvenLSH(Collections.max(dimensions), numShards),
+                    /* expansionRange= */ 1,
+                    /* numTables= */ 1
+            );
+            this.queryService = new QueryServiceImpl(indexService, cryptoService, keyService);
+            logger.info("QueryService initialized and ready");
+        } catch (Exception e) {
+            logger.error("Failed to initialize QueryTokenFactory or QueryService", e);
+            throw new Exception("Query pipeline initialization failed", e);
+        }
 
         // Load and insert base data
         logger.info("Loading base data from {}", dataPath);
@@ -144,6 +183,7 @@ public class ForwardSecureANNSystem {
         }
         logger.info("Initial data insertion complete");
     }
+
 
     /** Batch insert vectors for efficiency */
     public void batchInsert(List<double[]> vectors, int dim) {

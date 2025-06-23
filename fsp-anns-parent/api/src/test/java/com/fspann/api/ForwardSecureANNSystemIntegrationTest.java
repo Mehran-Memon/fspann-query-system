@@ -20,11 +20,11 @@ class ForwardSecureANNSystemIntegrationTest {
     @BeforeEach
     public void setUp() throws IOException {
         // Delete keys.ser
-        Files.deleteIfExists(Paths.get("keys.ser"));
+        Files.deleteIfExists(Paths.get("C:/Users/Mehran Memon/eclipse-workspace/fspann-query-system/fsp-anns-parent/api/metadata/keys.ser"));
 
         // Delete rotation_*.meta files using DirectoryStream
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(
-                Paths.get("."), "rotation_*.meta")) {
+                Paths.get("C:/Users/Mehran Memon/eclipse-workspace/fspann-query-system/fsp-anns-parent/keymanagement"), "rotation_*.meta")) {
             for (Path path : stream) {
                 Files.deleteIfExists(path);
                 logger.debug("Deleted rotation meta file: {}", path);
@@ -43,14 +43,16 @@ class ForwardSecureANNSystemIntegrationTest {
         Files.writeString(configFile, "{\"numShards\":4, \"profilerEnabled\":true}");
 
         Path keys = tempDir.resolve("keys.ser");
+        Path metadataDir = tempDir.resolve("metadata");
+        Files.createDirectories(metadataDir); // Ensure directory exists
 
         List<Integer> dimensions = Arrays.asList(2);
         ForwardSecureANNSystem localSys = new ForwardSecureANNSystem(
                 configFile.toString(),
                 dataFile.toString(),
                 keys.toString(),
-                dimensions,       // Pass dimensions here
-                Paths.get(tempDir.toString(), "metadata")  // Correct Path conversion for metadata
+                dimensions,
+                metadataDir
         );
 
         logger.info("Indexed vectors for dim=2: {}", localSys.getIndexedVectorCount(2));
@@ -77,14 +79,16 @@ class ForwardSecureANNSystemIntegrationTest {
         Files.writeString(configFile, "{\"numShards\":4, \"profilerEnabled\":true}");
 
         Path keys = tempDir.resolve("keys.ser");
+        Path metadataDir = tempDir.resolve("metadata");
+        Files.createDirectories(metadataDir); // Ensure directory exists
 
         List<Integer> dimensions = Arrays.asList(2, 3);
         ForwardSecureANNSystem localSys = new ForwardSecureANNSystem(
                 configFile.toString(),
                 dataFile.toString(),
                 keys.toString(),
-                dimensions,       // Pass dimensions here
-                Paths.get(tempDir.toString(), "metadata")  // Correct Path conversion for metadata
+                dimensions,
+                metadataDir
         );
 
         assertTrue(localSys.getIndexedVectorCount(2) >= 3, "Should have at least 3 vectors for 2D");
@@ -108,14 +112,16 @@ class ForwardSecureANNSystemIntegrationTest {
         Files.writeString(configFile, "{\"numShards\":4, \"profilerEnabled\":true}");
 
         Path keys = tempDir.resolve("keys.ser");
+        Path metadataDir = tempDir.resolve("metadata");
+        Files.createDirectories(metadataDir); // Ensure directory exists
 
         List<Integer> dimensions = Arrays.asList(2);
         ForwardSecureANNSystem localSys = new ForwardSecureANNSystem(
                 configFile.toString(),
                 dataFile.toString(),
                 keys.toString(),
-                dimensions,       // Pass dimensions here
-                Paths.get(tempDir.toString(), "metadata")  // Correct Path conversion for metadata
+                dimensions,
+                metadataDir
         );
 
         localSys.visualizeEncryptionKeys();

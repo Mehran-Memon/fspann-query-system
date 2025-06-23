@@ -1,16 +1,20 @@
 -------------------------------------------------------------------------------
 Test set: com.fspann.api.ForwardSecureANNSystemIntegrationTest
 -------------------------------------------------------------------------------
-Tests run: 3, Failures: 0, Errors: 3, Skipped: 0, Time elapsed: 0.087 s <<< FAILURE! - in com.fspann.api.ForwardSecureANNSystemIntegrationTest
-com.fspann.api.ForwardSecureANNSystemIntegrationTest.testMultipleDimensions(Path)  Time elapsed: 0.067 s  <<< ERROR!
-java.lang.NullPointerException: KeyLifeCycleService must not be null
-	at com.fspann.api.ForwardSecureANNSystemIntegrationTest.testMultipleDimensions(ForwardSecureANNSystemIntegrationTest.java:87)
+Tests run: 3, Failures: 2, Errors: 1, Skipped: 0, Time elapsed: 14.761 s <<< FAILURE! - in com.fspann.api.ForwardSecureANNSystemIntegrationTest
+com.fspann.api.ForwardSecureANNSystemIntegrationTest.testMultipleDimensions(Path)  Time elapsed: 0.904 s  <<< FAILURE!
+org.opentest4j.AssertionFailedError: Should have at least 3 vectors for 2D ==> expected: <true> but was: <false>
+	at com.fspann.api.ForwardSecureANNSystemIntegrationTest.testMultipleDimensions(ForwardSecureANNSystemIntegrationTest.java:94)
 
-com.fspann.api.ForwardSecureANNSystemIntegrationTest.simpleEndToEndNearestNeighbor(Path)  Time elapsed: 0.009 s  <<< ERROR!
-java.lang.NullPointerException: KeyLifeCycleService must not be null
-	at com.fspann.api.ForwardSecureANNSystemIntegrationTest.simpleEndToEndNearestNeighbor(ForwardSecureANNSystemIntegrationTest.java:53)
+com.fspann.api.ForwardSecureANNSystemIntegrationTest.simpleEndToEndNearestNeighbor(Path)  Time elapsed: 0.37 s  <<< FAILURE!
+org.opentest4j.AssertionFailedError: Should have at least 3 vectors indexed ==> expected: <true> but was: <false>
+	at com.fspann.api.ForwardSecureANNSystemIntegrationTest.simpleEndToEndNearestNeighbor(ForwardSecureANNSystemIntegrationTest.java:59)
 
-com.fspann.api.ForwardSecureANNSystemIntegrationTest.testVisualization(Path)  Time elapsed: 0.008 s  <<< ERROR!
-java.lang.NullPointerException: KeyLifeCycleService must not be null
-	at com.fspann.api.ForwardSecureANNSystemIntegrationTest.testVisualization(ForwardSecureANNSystemIntegrationTest.java:118)
+com.fspann.api.ForwardSecureANNSystemIntegrationTest.testVisualization(Path)  Time elapsed: 13.483 s  <<< ERROR!
+java.lang.RuntimeException: Decryption error: query vector
+	at com.fspann.api.ForwardSecureANNSystemIntegrationTest.testVisualization(ForwardSecureANNSystemIntegrationTest.java:129)
+Caused by: com.fspann.crypto.AesGcmCryptoService$CryptoException: Query decryption failed
+	at com.fspann.api.ForwardSecureANNSystemIntegrationTest.testVisualization(ForwardSecureANNSystemIntegrationTest.java:129)
+Caused by: javax.crypto.AEADBadTagException: Tag mismatch
+	at com.fspann.api.ForwardSecureANNSystemIntegrationTest.testVisualization(ForwardSecureANNSystemIntegrationTest.java:129)
 
