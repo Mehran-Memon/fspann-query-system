@@ -49,7 +49,7 @@ public class ForwardSecureANNSystemPerformanceIntegrationTest {
         logger.debug("Created data file: {} with {} vectors", data, dataset.size());
 
         Path keys = tempDir.resolve("keys.ser");
-        sys = new ForwardSecureANNSystem(cfg.toString(), data.toString(), keys.toString(), Arrays.asList(DIMS), tempDir);
+        sys = new ForwardSecureANNSystem(cfg.toString(), data.toString(), keys.toString(), Arrays.asList(DIMS), tempDir, false);
         logger.info("Initialized system with {} vectors indexed for dim={}", sys.getIndexedVectorCount(DIMS), DIMS);
     }
 

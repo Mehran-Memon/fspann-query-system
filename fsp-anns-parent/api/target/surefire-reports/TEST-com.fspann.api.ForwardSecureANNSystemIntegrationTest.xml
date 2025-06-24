@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.fspann.api.ForwardSecureANNSystemIntegrationTest" time="70.316" tests="2" errors="0" skipped="0" failures="0">
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.fspann.api.ForwardSecureANNSystemIntegrationTest" time="77.872" tests="2" errors="0" skipped="0" failures="0">
   <properties>
     <property name="java.specification.version" value="22"/>
     <property name="sun.cpu.isalist" value="amd64"/>
@@ -17,7 +17,7 @@
     <property name="sun.java.launcher" value="SUN_STANDARD"/>
     <property name="user.country" value="US"/>
     <property name="sun.boot.library.path" value="C:\Program Files\Java\jdk-22\bin"/>
-    <property name="sun.java.command" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire8746401199368662185\surefirebooter17842525385088288107.jar C:\Users\Mehran Memon\AppData\Local\Temp\surefire8746401199368662185 2025-06-24T17-40-46_829-jvmRun1 surefire14414503600755576570tmp surefire_75438767106674103445tmp"/>
+    <property name="sun.java.command" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire14665290364032940908\surefirebooter12189106902912885692.jar C:\Users\Mehran Memon\AppData\Local\Temp\surefire14665290364032940908 2025-06-24T18-22-54_920-jvmRun1 surefire14939849797163349100tmp surefire_74611556931679684022tmp"/>
     <property name="jdk.debug" value="release"/>
     <property name="surefire.test.class.path" value="C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\api\target\test-classes;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\api\target\classes;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\query\target\query-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\index\target\index-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-math3\3.6.1\commons-math3-3.6.1.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\crypto\target\crypto-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\bouncycastle\bcprov-jdk18on\1.78\bcprov-jdk18on-1.78.jar;C:\Users\Mehran Memon\.m2\repository\net\bytebuddy\byte-buddy\1.14.15\byte-buddy-1.14.15.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\common\target\common-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-lang3\3.17.0\commons-lang3-3.17.0.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-core\2.17.2\jackson-core-2.17.2.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\keymanagement\target\keymanagement-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\jetbrains\annotations\26.0.2\annotations-26.0.2.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\config\target\config-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\dataformat\jackson-dataformat-yaml\2.17.1\jackson-dataformat-yaml-2.17.1.jar;C:\Users\Mehran Memon\.m2\repository\org\yaml\snakeyaml\2.2\snakeyaml-2.2.jar;C:\Users\Mehran Memon\.m2\repository\org\slf4j\slf4j-api\2.0.13\slf4j-api-2.0.13.jar;C:\Users\Mehran Memon\.m2\repository\ch\qos\logback\logback-classic\1.5.13\logback-classic-1.5.13.jar;C:\Users\Mehran Memon\.m2\repository\ch\qos\logback\logback-core\1.5.13\logback-core-1.5.13.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-databind\2.17.2\jackson-databind-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-annotations\2.17.2\jackson-annotations-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\com\google\code\gson\gson\2.11.0\gson-2.11.0.jar;C:\Users\Mehran Memon\.m2\repository\com\google\errorprone\error_prone_annotations\2.27.0\error_prone_annotations-2.27.0.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\loader\target\loader-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-compress\1.26.1\commons-compress-1.26.1.jar;C:\Users\Mehran Memon\.m2\repository\commons-codec\commons-codec\1.16.1\commons-codec-1.16.1.jar;C:\Users\Mehran Memon\.m2\repository\commons-io\commons-io\2.15.1\commons-io-2.15.1.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-core\1.11.0\micrometer-core-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-commons\1.11.0\micrometer-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-observation\1.11.0\micrometer-observation-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\hdrhistogram\HdrHistogram\2.1.12\HdrHistogram-2.1.12.jar;C:\Users\Mehran Memon\.m2\repository\org\latencyutils\LatencyUtils\2.0.3\LatencyUtils-2.0.3.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-registry-prometheus\1.11.0\micrometer-registry-prometheus-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_common\0.16.0\simpleclient_common-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient\0.16.0\simpleclient-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_otel\0.16.0\simpleclient_tracer_otel-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_common\0.16.0\simpleclient_tracer_common-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_otel_agent\0.16.0\simpleclient_tracer_otel_agent-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\org\jfree\jfreechart\1.5.3\jfreechart-1.5.3.jar;C:\Users\Mehran Memon\.m2\repository\junit\junit\4.0\junit-4.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter\5.11.0\junit-jupiter-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-params\5.11.0\junit-jupiter-params-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-engine\5.11.0\junit-jupiter-engine-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\platform\junit-platform-engine\1.11.0\junit-platform-engine-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-api\5.11.0\junit-jupiter-api-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\opentest4j\opentest4j\1.3.0\opentest4j-1.3.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\platform\junit-platform-commons\1.11.0\junit-platform-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\apiguardian\apiguardian-api\1.1.2\apiguardian-api-1.1.2.jar;"/>
     <property name="sun.cpu.endian" value="little"/>
@@ -32,7 +32,7 @@
     <property name="line.separator" value="&#10;"/>
     <property name="java.vm.specification.vendor" value="Oracle Corporation"/>
     <property name="java.specification.name" value="Java Platform API Specification"/>
-    <property name="surefire.real.class.path" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire8746401199368662185\surefirebooter17842525385088288107.jar"/>
+    <property name="surefire.real.class.path" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire14665290364032940908\surefirebooter12189106902912885692.jar"/>
     <property name="user.script" value=""/>
     <property name="sun.management.compiler" value="HotSpot 64-Bit Tiered Compilers"/>
     <property name="java.runtime.version" value="22.0.2+9-70"/>
@@ -61,177 +61,40 @@
     <property name="sun.io.unicode.encoding" value="UnicodeLittle"/>
     <property name="java.class.version" value="66.0"/>
   </properties>
-  <testcase name="simpleEndToEndNearestNeighbor(Path)" classname="com.fspann.api.ForwardSecureANNSystemIntegrationTest" time="2.533">
-    <system-out><![CDATA[2025-06-24 17:41:01 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Initializing ForwardSecureANNSystem with config=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-4722125564404277928\config.json, data=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-4722125564404277928\data2d.csv, keys=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-4722125564404277928\keys.ser, dims=[2], metadata=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-4722125564404277928
-2025-06-24 17:41:01 [main] INFO  com.fspann.config.SystemConfig - Successfully loaded config from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-4722125564404277928\config.json
-2025-06-24 17:41:01 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Loaded system configuration
-2025-06-24 17:41:01 [main] INFO  com.fspann.key.KeyManager - Initialized new key store (version 1)
-2025-06-24 17:41:01 [main] INFO  c.fspann.api.ForwardSecureANNSystem - KeyManager initialized
-2025-06-24 17:41:01 [main] INFO  c.fspann.api.ForwardSecureANNSystem - KeyRotationServiceImpl initialized successfully
-2025-06-24 17:41:01 [main] INFO  c.fspann.api.ForwardSecureANNSystem - KeyManager initialized with forward-secure key derivation, using keys file at C:\Users\MEHRAN~1\AppData\Local\Temp\junit-4722125564404277928\keys.ser
-2025-06-24 17:41:01 [main] INFO  c.fspann.crypto.AesGcmCryptoService - AesGcmCryptoService initialized successfully
-2025-06-24 17:41:01 [main] INFO  c.fspann.api.ForwardSecureANNSystem - CryptoService (AES-GCM with forward security) ready
-2025-06-24 17:41:02 [main] INFO  com.fspann.common.MetadataManager - Loaded metadata from metadata.ser
-2025-06-24 17:41:02 [main] INFO  c.fspann.api.ForwardSecureANNSystem - SecureLSHIndexService initialized with 4 shards
-2025-06-24 17:41:02 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Cache and Profiler initialized
-2025-06-24 17:41:02 [main] INFO  c.fspann.api.ForwardSecureANNSystem - QueryService initialized and ready
-2025-06-24 17:41:02 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Loading base data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-4722125564404277928\data2d.csv
-2025-06-24 17:41:02 [main] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-4722125564404277928\data2d.csv using loader for CSV
-2025-06-24 17:41:02 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Loaded 2 vectors for dimension 2
-2025-06-24 17:41:03 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Batch insert complete for 2 vectors in 1581.2902 ms
-2025-06-24 17:41:03 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Initial data insertion complete
-2025-06-24 17:41:03 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Number of indexed vectors for dimension 2: 2
-2025-06-24 17:41:03 [main] INFO  c.f.a.ForwardSecureANNSystemIntegrationTest - Indexed vectors for dim=2: 2
-2025-06-24 17:41:03 [main] INFO  c.f.a.ForwardSecureANNSystemIntegrationTest - Executing query for vector: [0.05, 0.05]
-2025-06-24 17:41:03 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Executing query for topK=1 and dimension 2
-2025-06-24 17:41:03 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Query completed in 2.659 ms
-2025-06-24 17:41:03 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Query returned 1 results
-2025-06-24 17:41:04 [main] INFO  c.fspann.api.PerformanceVisualizer - Chart saved to: results_kneighbors_d2.png
-2025-06-24 17:41:04 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Shutting down ForwardSecureANNSystem
-2025-06-24 17:41:04 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Total indexing time: 1581 ms for 2 inserts
-2025-06-24 17:41:04 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Total query time: 2 ms
+  <testcase name="simpleEndToEndNearestNeighbor(Path)" classname="com.fspann.api.ForwardSecureANNSystemIntegrationTest" time="2.121">
+    <system-out><![CDATA[2025-06-24 18:23:07 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Initializing ForwardSecureANNSystem with config=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-11414840478244489977\config.json, data=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-11414840478244489977\data2d.csv, keys=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-11414840478244489977\keys.ser, dims=[2], metadata=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-11414840478244489977
+2025-06-24 18:23:07 [main] INFO  com.fspann.config.SystemConfig - Successfully loaded config from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-11414840478244489977\config.json
+2025-06-24 18:23:07 [main] INFO  com.fspann.key.KeyManager - Initialized new key store (version 1)
+2025-06-24 18:23:07 [main] INFO  c.fspann.crypto.AesGcmCryptoService - AesGcmCryptoService initialized successfully
+2025-06-24 18:23:08 [main] INFO  com.fspann.common.MetadataManager - Loaded metadata from metadata.ser
+2025-06-24 18:23:08 [main] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-11414840478244489977\data2d.csv using loader for CSV
+2025-06-24 18:23:09 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Number of indexed vectors for dimension 2: 2
+2025-06-24 18:23:09 [main] INFO  c.f.a.ForwardSecureANNSystemIntegrationTest - Indexed vectors for dim=2: 2
+2025-06-24 18:23:09 [main] INFO  c.f.a.ForwardSecureANNSystemIntegrationTest - Executing query for vector: [0.05, 0.05]
+
+=== System Shutdown ===
+Total indexing time: 1448 ms
+Total query time: 2 ms
+
 📤 Profiler data written to profiler_metrics.csv
 ]]></system-out>
   </testcase>
-  <testcase name="testVisualization(Path)" classname="com.fspann.api.ForwardSecureANNSystemIntegrationTest" time="67.782">
-    <system-out><![CDATA[2025-06-24 17:41:04 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Initializing ForwardSecureANNSystem with config=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-16992612285510769939\config.json, data=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-16992612285510769939\data2d.csv, keys=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-16992612285510769939\keys.ser, dims=[2], metadata=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-16992612285510769939
-2025-06-24 17:41:04 [main] INFO  com.fspann.config.SystemConfig - Successfully loaded config from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-16992612285510769939\config.json
-2025-06-24 17:41:04 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Loaded system configuration
-2025-06-24 17:41:04 [main] INFO  com.fspann.key.KeyManager - Initialized new key store (version 1)
-2025-06-24 17:41:04 [main] INFO  c.fspann.api.ForwardSecureANNSystem - KeyManager initialized
-2025-06-24 17:41:04 [main] INFO  c.fspann.api.ForwardSecureANNSystem - KeyRotationServiceImpl initialized successfully
-2025-06-24 17:41:04 [main] INFO  c.fspann.api.ForwardSecureANNSystem - KeyManager initialized with forward-secure key derivation, using keys file at C:\Users\MEHRAN~1\AppData\Local\Temp\junit-16992612285510769939\keys.ser
-2025-06-24 17:41:04 [main] INFO  c.fspann.crypto.AesGcmCryptoService - AesGcmCryptoService initialized successfully
-2025-06-24 17:41:04 [main] INFO  c.fspann.api.ForwardSecureANNSystem - CryptoService (AES-GCM with forward security) ready
-2025-06-24 17:41:04 [main] INFO  com.fspann.common.MetadataManager - Loaded metadata from metadata.ser
-2025-06-24 17:41:04 [main] INFO  c.fspann.api.ForwardSecureANNSystem - SecureLSHIndexService initialized with 4 shards
-2025-06-24 17:41:04 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Cache and Profiler initialized
-2025-06-24 17:41:04 [main] INFO  c.fspann.api.ForwardSecureANNSystem - QueryService initialized and ready
-2025-06-24 17:41:04 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Loading base data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-16992612285510769939\data2d.csv
-2025-06-24 17:41:04 [main] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-16992612285510769939\data2d.csv using loader for CSV
-2025-06-24 17:41:04 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Loaded 2 vectors for dimension 2
-2025-06-24 17:41:06 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Batch insert complete for 2 vectors in 1279.9886 ms
-2025-06-24 17:41:06 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Initial data insertion complete
-2025-06-24 17:41:06 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Number of indexed vectors for dimension 2: 2
-2025-06-24 17:41:06 [main] INFO  c.f.a.ForwardSecureANNSystemIntegrationTest - Indexed vectors for dim=2: 2
-2025-06-24 17:41:06 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Running end-to-end workflow with dataPath=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-16992612285510769939\data2d.csv, topK=1, dim=2
-2025-06-24 17:41:06 [main] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-16992612285510769939\data2d.csv using loader for CSV
-2025-06-24 17:41:07 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Batch insert complete for 2 vectors in 1282.8717 ms
-2025-06-24 17:41:07 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Loaded and indexed 2 vectors
-2025-06-24 17:41:07 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Inserting 100 fake points for dimension 2
-2025-06-24 17:41:07 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=dfb9d2d9-53cf-48cb-87d3-8ca74913aa5c in 631.007 ms
-2025-06-24 17:41:08 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=1175b096-20d3-4f1f-82f1-f1d0908d844d in 634.0399 ms
-2025-06-24 17:41:09 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=2b3adbbc-f17b-426a-acc8-307c09073620 in 639.8882 ms
-2025-06-24 17:41:09 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=eb003d86-a116-45bb-b389-491c87c7efd5 in 648.6092 ms
-2025-06-24 17:41:10 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=bafeb85d-2f79-4d16-85ea-dffb426ec900 in 643.3379 ms
-2025-06-24 17:41:11 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=895f360c-46ea-45ba-97cf-e958538d6fd6 in 635.8675 ms
-2025-06-24 17:41:11 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=c65bc490-cd0e-47c3-bf80-2bf4aa681294 in 640.9306 ms
-2025-06-24 17:41:12 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=eb588a20-42d7-4acb-ac49-b3b050cf0241 in 675.518 ms
-2025-06-24 17:41:13 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=9cc71845-f647-4b28-9e20-a2a5463b5edb in 809.7558 ms
-2025-06-24 17:41:13 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=dbf2dd4b-84f5-44cb-8d8b-945a6335c464 in 643.711 ms
-2025-06-24 17:41:14 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=9730205b-f10c-4978-bd76-4a8e65650557 in 638.2544 ms
-2025-06-24 17:41:15 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=f56124d2-96d8-4083-987b-4cbd0fad5e72 in 648.5718 ms
-2025-06-24 17:41:15 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=cef625f8-6449-4758-9202-772eac2055a1 in 637.8006 ms
-2025-06-24 17:41:16 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=eae09ae0-0c21-4019-831a-5c29fa2fa34c in 634.3641 ms
-2025-06-24 17:41:17 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=5bcb8522-0140-4715-86e3-5768e818c41c in 650.1258 ms
-2025-06-24 17:41:17 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=6844b735-8f4f-4710-ab82-d2f0e8a6265d in 642.597 ms
-2025-06-24 17:41:18 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=80581067-d9c5-4613-b315-228c93e20503 in 637.7249 ms
-2025-06-24 17:41:19 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=e30c4b11-0e9b-4896-bbe7-feedc4310506 in 629.4867 ms
-2025-06-24 17:41:19 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=49e170ee-fcb5-4f84-bda9-2dcd635184c4 in 636.2818 ms
-2025-06-24 17:41:20 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=69b656a0-2e17-4096-8a6c-57589c7b3a31 in 640.4083 ms
-2025-06-24 17:41:20 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=8dd28baf-a2b3-4cad-9c2c-f047cc1580e2 in 637.5467 ms
-2025-06-24 17:41:21 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=8eab22f9-e21c-49a0-b280-96ec7cfe6080 in 649.7714 ms
-2025-06-24 17:41:22 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=b7749f95-9249-46e2-b191-9bee53a68ec8 in 637.3622 ms
-2025-06-24 17:41:22 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=3ab51b60-83db-4982-8b68-285f4aa68c8d in 641.7498 ms
-2025-06-24 17:41:23 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=642670c9-d1dd-4d8f-b162-4bc376f0cebb in 648.8388 ms
-2025-06-24 17:41:24 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=05ebfb04-97f1-4654-ac2d-2f31c9dc0abb in 642.3808 ms
-2025-06-24 17:41:24 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=76cce02c-0733-44c1-8af1-ad29920bae6c in 645.0836 ms
-2025-06-24 17:41:25 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=6061bdbe-c340-47b6-94d7-cd97584e5806 in 638.3873 ms
-2025-06-24 17:41:26 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=5d8a4c7a-835c-4d2b-96d9-1bb6cc4ac95e in 641.7948 ms
-2025-06-24 17:41:26 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=593d3111-d618-4c09-bfdb-74520c6df027 in 626.6784 ms
-2025-06-24 17:41:27 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=9f771f01-97b1-4bb2-8925-38636d3f97be in 641.7711 ms
-2025-06-24 17:41:28 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=1594cca6-891a-4701-b343-cda88974a5f1 in 643.0231 ms
-2025-06-24 17:41:28 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=3d1e866f-bd7a-452f-b436-79edf47cfce8 in 641.914 ms
-2025-06-24 17:41:29 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=6fd20ab7-d6c5-4e70-8076-0f6cd3140ef3 in 648.447 ms
-2025-06-24 17:41:29 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=ff222ed8-29f5-4462-89bd-19a3f7dc0f73 in 641.1189 ms
-2025-06-24 17:41:30 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=fa677e92-2b72-45ae-98b7-3b37204b98a1 in 642.3944 ms
-2025-06-24 17:41:31 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=c25358b0-71c9-4134-8fb5-fd3b53bede65 in 636.9991 ms
-2025-06-24 17:41:31 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=d3b1dfcc-95d6-4d37-b512-b1a72a69a84f in 639.8462 ms
-2025-06-24 17:41:32 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=2467fee1-196e-46c6-87e7-e1e716f6eb88 in 642.7125 ms
-2025-06-24 17:41:33 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=9e71dacc-3cb9-41ee-a310-3dfb470674fd in 629.2279 ms
-2025-06-24 17:41:33 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=72dbf3ad-81e6-42f3-bbfa-537aae41b62b in 641.4153 ms
-2025-06-24 17:41:34 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=b34cb006-53e5-4070-9ae8-876168b02a89 in 640.9791 ms
-2025-06-24 17:41:35 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=4eb429cb-b010-4986-b798-04c1ab80ab9b in 634.5491 ms
-2025-06-24 17:41:35 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=d463dbe6-6369-40e2-a27b-f9c55c654d40 in 631.9822 ms
-2025-06-24 17:41:36 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=097b54d6-9f7d-4756-9e45-fa5fa4db46b1 in 633.395 ms
-2025-06-24 17:41:36 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=2507c47f-7c14-4dfe-bd03-a9ced5de44fb in 641.0724 ms
-2025-06-24 17:41:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=3d7ef131-facb-40ed-8d5a-6d63e93495bb in 637.2709 ms
-2025-06-24 17:41:38 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=bf52eefd-6a96-4d60-b6be-2dd80b96c4b6 in 630.5341 ms
-2025-06-24 17:41:38 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=2513aaa0-3b58-4486-9475-a1dd9bf46ccb in 643.734 ms
-2025-06-24 17:41:39 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=a981e394-f332-49cd-8e96-0fed17ed78e5 in 644.8023 ms
-2025-06-24 17:41:40 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=bfa46036-1a88-40cb-9358-6387a0d5aee4 in 638.8815 ms
-2025-06-24 17:41:40 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=df9b9ee0-4d6a-42a6-be0e-4291a6ea591f in 646.623 ms
-2025-06-24 17:41:41 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=baba1686-85ac-448d-a87b-31bb093a20cf in 657.2422 ms
-2025-06-24 17:41:42 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=f16bdcb6-a9d1-4226-b49f-ba99624b9530 in 639.389 ms
-2025-06-24 17:41:42 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=fb9bca9d-f288-40d3-bc11-51b57f3c1252 in 638.8757 ms
-2025-06-24 17:41:43 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=acce2e3f-a2c1-40a7-be29-f56257f5f5b3 in 644.9731 ms
-2025-06-24 17:41:44 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=c4a213e7-1198-4f55-be53-93ea94db1855 in 636.0462 ms
-2025-06-24 17:41:44 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=99478ffe-193a-44a9-a118-c8cf56d14901 in 643.6598 ms
-2025-06-24 17:41:45 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=4141f054-fe32-42ec-8ab7-ae5aae54a11d in 642.3512 ms
-2025-06-24 17:41:45 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=b0a35be2-eb6e-491b-abb5-ac74a55eea82 in 644.6764 ms
-2025-06-24 17:41:46 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=76dd73c6-f353-4925-9d87-0bc97e367b4c in 643.8128 ms
-2025-06-24 17:41:47 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=2e38724c-310e-4881-873f-a46d978c13c9 in 637.1358 ms
-2025-06-24 17:41:47 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=31046fce-8220-46e5-9185-29dc391053bb in 642.7985 ms
-2025-06-24 17:41:48 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=f8162b84-b9ce-4b4b-b4bd-dec11404f330 in 645.5937 ms
-2025-06-24 17:41:49 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=2fcb754d-5af6-49f0-9464-7d8ff9c415db in 640.935 ms
-2025-06-24 17:41:49 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=36afc381-62d4-4991-9216-930569fcf159 in 646.6346 ms
-2025-06-24 17:41:50 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=4369c622-fef2-420a-bbb3-269a0a2c2ad6 in 638.4403 ms
-2025-06-24 17:41:51 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=af836cd2-a7ff-4d6f-83ef-2349e865c983 in 648.5866 ms
-2025-06-24 17:41:51 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=ab1837a8-4e43-4b87-9a98-fbf0a0cb89e5 in 644.6766 ms
-2025-06-24 17:41:52 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=a14c25f5-c6ff-427d-a97f-bf1e5e241c13 in 641.9224 ms
-2025-06-24 17:41:53 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=444311f3-d4fd-4e6d-aef3-40f60031f6c4 in 644.9728 ms
-2025-06-24 17:41:53 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=abfaa4b1-8f70-4cd0-ac3d-7e54a285406f in 639.5394 ms
-2025-06-24 17:41:54 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=ada3f737-4c97-48ee-a957-856e22459ce1 in 639.8521 ms
-2025-06-24 17:41:54 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=f22d751e-86c6-4dbb-ad13-f30f54b8a04d in 642.3297 ms
-2025-06-24 17:41:55 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=2b52ea91-34c9-4f0a-9d6e-7fa2b57fe404 in 635.5025 ms
-2025-06-24 17:41:56 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=85babe76-7b73-4e33-a515-e98509489166 in 647.8426 ms
-2025-06-24 17:41:56 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=184ddbfe-421a-497a-baa0-e456602b6ea0 in 644.4785 ms
-2025-06-24 17:41:57 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=b66ae3e9-bc82-4ba5-bfcc-5a17f96a0c82 in 635.3006 ms
-2025-06-24 17:41:58 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=2070cf4b-5a0b-4d3a-ae8d-17a17db087f3 in 645.2846 ms
-2025-06-24 17:41:58 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=e711561c-f04f-40c3-9e15-0ceb64bdf7f8 in 641.1098 ms
-2025-06-24 17:41:59 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=fb4f680a-e4cc-42ee-946c-4408cc03c727 in 638.534 ms
-2025-06-24 17:42:00 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=01d090c4-75da-4b0e-8fbf-e2dd59f1f6b3 in 638.4931 ms
-2025-06-24 17:42:00 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=972efddf-6e1e-4fb3-937a-c952b9020184 in 648.9795 ms
-2025-06-24 17:42:01 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=b0c6465e-bc4f-46c6-9d76-016b9a45b7d6 in 658.2059 ms
-2025-06-24 17:42:02 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=7080bb76-911f-4386-884e-355e18431edc in 652.2971 ms
-2025-06-24 17:42:02 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=747ad063-36b4-401a-b62c-2ea86f2fd7b3 in 647.8675 ms
-2025-06-24 17:42:03 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=1665dd82-d647-4a1f-ba13-694428227266 in 651.512 ms
-2025-06-24 17:42:04 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=ceb4f414-4a0b-47f0-99db-6f02290ae5bc in 642.1208 ms
-2025-06-24 17:42:04 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=8d4fafb4-a66d-4247-9a12-a8a0bbba306c in 651.7256 ms
-2025-06-24 17:42:05 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=335dd8e8-71b5-41a7-b531-ebb89d1a927d in 653.3353 ms
-2025-06-24 17:42:05 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=a7be8059-eefb-4247-be27-cc4e3317d3f6 in 647.6732 ms
-2025-06-24 17:42:06 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=dc26bf04-43d3-4a51-93ac-37114b6af22d in 649.8152 ms
-2025-06-24 17:42:07 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=6a517a64-847c-40fc-9802-b307bdd9a044 in 646.8104 ms
-2025-06-24 17:42:07 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=738f609a-cd68-47c2-9c93-a41130269369 in 638.1121 ms
-2025-06-24 17:42:08 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=51b872ec-1d9c-4068-bcb1-3677cdef83fa in 641.6855 ms
-2025-06-24 17:42:09 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=b8651bce-28fa-407d-8635-089494ea180d in 638.9815 ms
-2025-06-24 17:42:09 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=24435dfe-2780-40e0-8134-2f947181d40c in 643.1142 ms
-2025-06-24 17:42:10 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=56a55baa-3880-4385-be67-67b03ce7a7ba in 642.9989 ms
-2025-06-24 17:42:11 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=c174ff34-2ca7-4172-b637-63fe9f9d14c2 in 642.4097 ms
-2025-06-24 17:42:11 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=d8ac17f1-a998-4669-8c7a-6559a9b0b150 in 642.8262 ms
-2025-06-24 17:42:11 [main] INFO  c.fspann.api.PerformanceVisualizer - Visualizing fake points vs indexed points — saved as PNG
-2025-06-24 17:42:11 [main] INFO  c.fspann.api.PerformanceVisualizer - Chart saved to: results_fake_points_d2.png
-2025-06-24 17:42:11 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Cloaked query returned 5 results
-2025-06-24 17:42:11 [main] WARN  c.fspann.api.PerformanceVisualizer - No timing data to visualize
-2025-06-24 17:42:11 [main] INFO  c.fspann.api.PerformanceVisualizer - Chart saved to: results_query_results.png
-2025-06-24 17:42:11 [main] INFO  c.fspann.api.PerformanceVisualizer - Saving raw data visualization: Base Dataset
-2025-06-24 17:42:11 [main] INFO  c.fspann.api.PerformanceVisualizer - Chart saved to: results_raw_Base_Dataset_d2.png
-2025-06-24 17:42:11 [main] INFO  c.fspann.api.PerformanceVisualizer - Saving indexed data visualization: Indexed Dataset
-2025-06-24 17:42:12 [main] INFO  c.fspann.api.PerformanceVisualizer - Chart saved to: results_indexed_Indexed_Dataset_d2.png
-2025-06-24 17:42:12 [main] INFO  c.fspann.api.PerformanceVisualizer - Chart saved to: results_confusion_matrix.png
-2025-06-24 17:42:12 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Shutting down ForwardSecureANNSystem
-2025-06-24 17:42:12 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Total indexing time: 66954 ms for 104 inserts
-2025-06-24 17:42:12 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Total query time: 0 ms
+  <testcase name="testVisualization(Path)" classname="com.fspann.api.ForwardSecureANNSystemIntegrationTest" time="75.75">
+    <system-out><![CDATA[2025-06-24 18:23:09 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Initializing ForwardSecureANNSystem with config=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10169392271644252162\config.json, data=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10169392271644252162\data2d.csv, keys=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10169392271644252162\keys.ser, dims=[2], metadata=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10169392271644252162
+2025-06-24 18:23:09 [main] INFO  com.fspann.config.SystemConfig - Successfully loaded config from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10169392271644252162\config.json
+2025-06-24 18:23:09 [main] INFO  com.fspann.key.KeyManager - Initialized new key store (version 1)
+2025-06-24 18:23:09 [main] INFO  c.fspann.crypto.AesGcmCryptoService - AesGcmCryptoService initialized successfully
+2025-06-24 18:23:10 [main] INFO  com.fspann.common.MetadataManager - Loaded metadata from metadata.ser
+2025-06-24 18:23:10 [main] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10169392271644252162\data2d.csv using loader for CSV
+2025-06-24 18:23:11 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Number of indexed vectors for dimension 2: 2
+2025-06-24 18:23:11 [main] INFO  c.f.a.ForwardSecureANNSystemIntegrationTest - Indexed vectors for dim=2: 2
+2025-06-24 18:23:11 [main] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10169392271644252162\data2d.csv using loader for CSV
+2025-06-24 18:24:25 [main] INFO  c.fspann.api.PerformanceVisualizer - Chart saved to: results_query_results.png
+
+=== System Shutdown ===
+Total indexing time: 2759 ms
+Total query time: 1 ms
+
 📤 Profiler data written to profiler_metrics.csv
 ]]></system-out>
   </testcase>

@@ -39,7 +39,7 @@ class ForwardSecureANNSystemIntegrationTest {
                 dataFile.toString(),
                 keys.toString(),
                 dimensions,
-                tempDir
+                tempDir, false
         );
 
         int indexedCount = localSys.getIndexedVectorCount(2);
@@ -123,7 +123,7 @@ class ForwardSecureANNSystemIntegrationTest {
                 dataFile.toString(),
                 keys.toString(),
                 dimensions,
-                tempDir
+                tempDir, false
         );
 
         int indexedCount = localSys.getIndexedVectorCount(2);

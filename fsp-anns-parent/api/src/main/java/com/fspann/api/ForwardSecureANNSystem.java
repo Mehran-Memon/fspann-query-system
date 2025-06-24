@@ -58,6 +58,8 @@ public class ForwardSecureANNSystem {
     private long totalQueryTime = 0;
     private int indexingCount = 0;
 
+    private final boolean verbose;
+
     /**
      * @param configPath    Path to JSON/YAML config file
      * @param dataPath      Path to feature data file
@@ -70,9 +72,16 @@ public class ForwardSecureANNSystem {
             String dataPath,
             String keysFilePath,
             List<Integer> dimensions,
-            Path metadataPath
+            Path metadataPath,
+            boolean verbose
     ) throws Exception {
+        this.verbose = verbose;
+
         logger.info("Initializing ForwardSecureANNSystem with config={}, data={}, keys={}, dims={}, metadata={}",
+                configPath, dataPath, keysFilePath, dimensions, metadataPath);
+
+
+        if (verbose) logger.info("Initializing ForwardSecureANNSystem with config={}, data={}, keys={}, dims={}, metadata={}",
                 configPath, dataPath, keysFilePath, dimensions, metadataPath);
 
         // Initialize collections
@@ -80,137 +89,50 @@ public class ForwardSecureANNSystem {
         this.dimensionIdMap = new ConcurrentHashMap<>();
         this.encryptionKeys = new ConcurrentHashMap<>();
         this.datasetMap = new ConcurrentHashMap<>();
+        ApiSystemConfig apiConfig = new ApiSystemConfig(configPath);
+        this.config = apiConfig.getConfig();
+        if (verbose) logger.info("Loaded system configuration");
 
-        // Load configuration
-        logger.debug("Loading configuration");
-        ApiSystemConfig apiConfig;
-        try {
-            apiConfig = new ApiSystemConfig(configPath);
-            this.config = apiConfig.getConfig();
-            logger.info("Loaded system configuration");
-        } catch (Exception e) {
-            logger.error("Failed to load configuration", e);
-            throw new Exception("Configuration loading failed", e);
-        }
+        KeyManager keyManager = new KeyManager(keysFilePath);
+        KeyRotationPolicy policy = new KeyRotationPolicy((int) config.getOpsThreshold(), config.getAgeThresholdMs());
+        Files.createDirectories(metadataPath);
+        this.keyService = new KeyRotationServiceImpl(keyManager, policy, metadataPath.toString());
 
-        // Setup key management with enhanced forward security
-        logger.debug("Initializing KeyManager");
-        KeyManager keyManager;
-        try {
-            keyManager = new KeyManager(keysFilePath);
-            this.encryptionKeys.put("initial_key", keyManager.getCurrentVersion().getKey().getEncoded());
-            logger.info("KeyManager initialized");
-        } catch (Exception e) {
-            logger.error("Failed to initialize KeyManager", e);
-            throw new Exception("KeyManager initialization failed", e);
-        }
+        this.cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, new MetadataManager());
+        SecureLSHIndex coreIndex = new SecureLSHIndex(1, config.getNumShards(), new EvenLSH(2, config.getNumShards()));
+        this.indexService = new SecureLSHIndexService(cryptoService, keyService, new MetadataManager());
 
-        logger.debug("Creating KeyRotationPolicy");
-        KeyRotationPolicy policy = new KeyRotationPolicy(
-                (int) config.getOpsThreshold(),
-                config.getAgeThresholdMs()
-        );
-
-        // Initialize keyService
-        logger.debug("Initializing KeyRotationServiceImpl with metadata path {}", metadataPath);
-        try {
-            Files.createDirectories(metadataPath);
-            this.keyService = new KeyRotationServiceImpl(keyManager, policy, metadataPath.toString());
-            logger.info("KeyRotationServiceImpl initialized successfully");
-            if (this.keyService == null) {
-                logger.error("keyService is null after initialization");
-                throw new Exception("KeyRotationServiceImpl initialization resulted in null");
-            }
-        } catch (Exception e) {
-            logger.error("Failed to initialize KeyRotationServiceImpl with metadata path {}", metadataPath, e);
-            throw new Exception("KeyRotationService initialization failed", e);
-        }
-        logger.info("KeyManager initialized with forward-secure key derivation, using keys file at {}", keysFilePath);
-
-        // Crypto service with forward-secure AES-GCM
-        logger.debug("Initializing CryptoService");
-        try {
-            this.cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, new MetadataManager());
-            logger.info("CryptoService (AES-GCM with forward security) ready");
-        } catch (Exception e) {
-            logger.error("Failed to initialize CryptoService", e);
-            throw new Exception("CryptoService initialization failed", e);
-        }
-
-        // Build core index with dynamic dimensionality support
-        logger.debug("Initializing SecureLSHIndexService");
-        int numShards = config.getNumShards();
-        SecureLSHIndex coreIndex = new SecureLSHIndex(1, numShards, new EvenLSH(2, numShards));
-        try {
-            this.indexService = new SecureLSHIndexService(cryptoService, keyService, new MetadataManager());
-            logger.info("SecureLSHIndexService initialized with {} shards", numShards);
-        } catch (Exception e) {
-            logger.error("Failed to initialize SecureLSHIndexService", e);
-            throw new Exception("SecureLSHIndexService initialization failed", e);
-        }
-
-        // Cache and profiler
-        logger.debug("Initializing Cache and Profiler");
         this.cache = new LRUCache<>(1000);
         this.profiler = config.isProfilerEnabled() ? new Profiler() : null;
-        logger.info("Cache and Profiler initialized");
 
-        // Setup query pipeline with dynamic dimensionality
-        logger.debug("Initializing QueryTokenFactory and QueryService");
-        try {
-            this.tokenFactory = new QueryTokenFactory(
-                    cryptoService,
-                    keyService,
-                    new EvenLSH(Collections.max(dimensions), numShards),
-                    /* expansionRange= */ 1,
-                    /* numTables= */ 1
-            );
-            this.queryService = new QueryServiceImpl(indexService, cryptoService, keyService);
-            logger.info("QueryService initialized and ready");
-        } catch (Exception e) {
-            logger.error("Failed to initialize QueryTokenFactory or QueryService", e);
-            throw new Exception("Query pipeline initialization failed", e);
-        }
+        this.tokenFactory = new QueryTokenFactory(cryptoService, keyService, new EvenLSH(Collections.max(dimensions), config.getNumShards()), 1, 1);
+        this.queryService = new QueryServiceImpl(indexService, cryptoService, keyService);
 
         // Load and insert base data
-        logger.info("Loading base data from {}", dataPath);
         DefaultDataLoader loader = new DefaultDataLoader();
         for (int dim : dimensions) {
-            try {
-                List<double[]> vectors = loader.loadData(dataPath, dim);
-                dimensionDataMap.put(dim, vectors);
-                dimensionIdMap.put(dim, new ArrayList<>());
-                logger.info("Loaded {} vectors for dimension {}", vectors.size(), dim);
-                batchInsert(vectors, dim);
-            } catch (Exception e) {
-                logger.error("Failed to load data for dimension {}", dim, e);
-                throw new Exception("Data loading failed for dimension " + dim, e);
-            }
+            List<double[]> vectors = loader.loadData(dataPath, dim);
+            dimensionDataMap.put(dim, vectors);
+            dimensionIdMap.put(dim, new ArrayList<>());
+            batchInsert(vectors, dim);
         }
-        logger.info("Initial data insertion complete");
     }
-
 
     /** Batch insert vectors for efficiency */
     public void batchInsert(List<double[]> vectors, int dim) {
-        logger.debug("Batch inserting {} vectors for dimension {}", vectors.size(), dim);
         if (profiler != null) profiler.start("batchInsert");
         List<String> ids = new ArrayList<>();
-        for (int i = 0; i < vectors.size(); i += BATCH_SIZE) {
-            List<double[]> batch = vectors.subList(i, Math.min(i + BATCH_SIZE, vectors.size()));
-            for (double[] vec : batch) {
-                String id = UUID.randomUUID().toString();
-                ids.add(id);
-                indexService.insert(id, vec);
-            }
+        for (double[] vec : vectors) {
+            String id = UUID.randomUUID().toString();
+            ids.add(id);
+            indexService.insert(id, vec);
         }
         dimensionIdMap.computeIfAbsent(dim, k -> new ArrayList<>()).addAll(ids);
         if (profiler != null) {
             profiler.stop("batchInsert");
-            long duration = profiler.getTimings("batchInsert").get(profiler.getTimings("batchInsert").size() - 1);
+            long duration = profiler.getTimings("batchInsert").getLast();
             totalIndexingTime += duration;
             indexingCount += vectors.size();
-            logger.info("Batch insert complete for {} vectors in {} ms", vectors.size(), duration / 1_000_000.0);
         }
     }
 
@@ -232,20 +154,15 @@ public class ForwardSecureANNSystem {
 
     /** Insert fake points for forward security */
     public void insertFakePoints(int numFakePoints, int dim) {
-        logger.info("Inserting {} fake points for dimension {}", numFakePoints, dim);
         if (profiler != null) profiler.start("insertFakePoints");
         List<double[]> fakePoints = new ArrayList<>();
         for (int i = 0; i < numFakePoints; i++) {
-            double[] fakeVector = new double[dim];
-            for (int j = 0; j < dim; j++) {
-                fakeVector[j] = Math.random();
-            }
-            fakePoints.add(fakeVector);
-            String fakeId = UUID.randomUUID().toString();
-            insert(fakeId, fakeVector, dim);
+            double[] fakeVec = new double[dim];
+            for (int j = 0; j < dim; j++) fakeVec[j] = Math.random();
+            indexService.insert(UUID.randomUUID().toString(), fakeVec);
+            fakePoints.add(fakeVec);
         }
         if (profiler != null) profiler.stop("insertFakePoints");
-        PerformanceVisualizer.visualizeFakePoints(fakePoints, dimensionDataMap.getOrDefault(dim, new ArrayList<>()), dim);
     }
 
     /** Cloak a query vector by adding noise */
@@ -264,29 +181,19 @@ public class ForwardSecureANNSystem {
 
     /** Query the top-K nearest neighbors */
     public List<QueryResult> query(double[] queryVector, int topK, int dim) {
-        logger.info("Executing query for topK={} and dimension {}", topK, dim);
         if (profiler != null) profiler.start("query");
         QueryToken token = tokenFactory.create(queryVector, topK);
         List<QueryResult> cached = cache.get(token);
         if (cached != null) {
-            logger.debug("Cache hit for token={}", token);
             if (profiler != null) profiler.stop("query");
-            if (profiler != null) {
-                long duration = profiler.getTimings("query").get(profiler.getTimings("query").size() - 1);
-                totalQueryTime += duration;
-                logger.info("Query completed in {} ms (cached)", duration / 1_000_000.0);
-            }
             return cached;
         }
         List<QueryResult> results = queryService.search(token);
         cache.put(token, results);
-        if (profiler != null) profiler.stop("query");
         if (profiler != null) {
-            long duration = profiler.getTimings("query").get(profiler.getTimings("query").size() - 1);
+            profiler.stop("query");
+            long duration = profiler.getTimings("query").getLast();
             totalQueryTime += duration;
-            logger.info("Query completed in {} ms", duration / 1_000_000.0);
-            logger.info("Query returned {} results", results.size());
-            PerformanceVisualizer.visualizeKNeighbors(results, topK, dim);
         }
         return results;
     }
@@ -304,27 +211,6 @@ public class ForwardSecureANNSystem {
         int count = dimensionIdMap.getOrDefault(dim, new ArrayList<>()).size();
         logger.info("Number of indexed vectors for dimension {}: {}", dim, count);
         return count;
-    }
-
-    public void addDataset(String datasetName, String dataPath, int dim) throws Exception {
-        logger.info("Adding dataset '{}' from {} for dimension {}", datasetName, dataPath, dim);
-        DefaultDataLoader loader = new DefaultDataLoader();
-        List<double[]> vectors = loader.loadData(dataPath, dim);
-        datasetMap.put(datasetName, vectors);
-
-        batchInsert(vectors, dim);
-
-        PerformanceVisualizer.visualizeRawData(vectors, dim, datasetName);
-        PerformanceVisualizer.visualizeIndexedData(dimensionDataMap.getOrDefault(dim, new ArrayList<>()), dim, datasetName);
-    }
-
-    public static void saveChart(JFreeChart chart, String filename) {
-        try {
-            ChartUtils.saveChartAsPNG(new File(filename), chart, 800, 600);
-            logger.info("Saved chart to {}", filename);
-        } catch (IOException e) {
-            logger.error("Failed to save chart to {}", filename, e);
-        }
     }
 
     public class ResultWriter {
@@ -359,106 +245,39 @@ public class ForwardSecureANNSystem {
 
     /** Clean up resources */
     public void shutdown() {
-        logger.info("Shutting down ForwardSecureANNSystem");
-        logger.info("Total indexing time: {} ms for {} inserts", TimeUnit.NANOSECONDS.toMillis(totalIndexingTime), indexingCount);
-        logger.info("Total query time: {} ms", TimeUnit.NANOSECONDS.toMillis(totalQueryTime));
+        System.out.printf("\n=== System Shutdown ===\nTotal indexing time: %d ms\nTotal query time: %d ms\n\n",
+                TimeUnit.NANOSECONDS.toMillis(totalIndexingTime),
+                TimeUnit.NANOSECONDS.toMillis(totalQueryTime));
         if (profiler != null) profiler.exportToCSV("profiler_metrics.csv");
     }
 
     /** End-to-end workflow with visualization and accuracy */
-    /** End-to-end workflow with visualization and accuracy */
     public void runEndToEnd(String dataPath, double[] queryVector, int topK, int dim) throws Exception {
-        logger.info("Running end-to-end workflow with dataPath={}, topK={}, dim={}", dataPath, topK, dim);
-        if (profiler != null) profiler.start("endToEnd");
+        if (verbose) {
+            System.out.printf("\n=== Forward-Secure ANN Run ===\nDataset: %s\nDims: %d\nTopK: %d\n\n", dataPath, dim, topK);
+        }
 
-        // Load and index data
         DefaultDataLoader loader = new DefaultDataLoader();
         List<double[]> vectors = loader.loadData(dataPath, dim);
-        Map<String, double[]> vectorMap = new HashMap<>();
-        List<String> ids = new ArrayList<>();
-        for (int i = 0; i < vectors.size(); i++) {
-            String id = "vec" + i;
-            vectorMap.put(id, vectors.get(i));
-            ids.add(id);
-        }
-        batchInsert(vectors, dim);
-        logger.info("Loaded and indexed {} vectors", vectors.size());
 
-        // Insert fake points
+        batchInsert(vectors, dim);
+
         insertFakePoints(DEFAULT_FAKE_POINT_COUNT, dim);
 
-        // Perform cloaked query
-        List<QueryResult> results = queryWithCloak(queryVector, topK, dim);
+        List<QueryResult> results = query(queryVector, topK, dim);
 
-        // Visualize performance and data
-        if (profiler != null) {
-            PerformanceVisualizer.visualizeTimings(profiler.getTimings("endToEnd"));
-            PerformanceVisualizer.visualizeQueryResults(results);
-            PerformanceVisualizer.visualizeRawData(vectors, dim, "Base Dataset");
-            PerformanceVisualizer.visualizeIndexedData(dimensionDataMap.getOrDefault(dim, new ArrayList<>()), dim, "Indexed Dataset");
+        if (verbose) {
+            System.out.println("\nTop-" + topK + " results:");
+            results.forEach(r -> System.out.printf("ID: %s\tDistance: %.6f\n", r.getId(), r.getDistance()));
         }
 
-        // Compute and visualize accuracy matrix
-        int[][] confusionMatrix = evaluateAccuracy(vectorMap, queryVector, results);
-        PerformanceVisualizer.visualizeConfusionMatrix(confusionMatrix, topK);
-
-        // Save result table to file
         ResultWriter rw = new ResultWriter(Path.of("results_table.txt"));
-        rw.writeTable("ANN Query Results (dim=" + dim + ", topK=" + topK + ")", new String[]{"Neighbor ID", "Distance"},
+        rw.writeTable("Query Results (dim=" + dim + ")", new String[]{"Neighbor ID", "Distance"},
                 results.stream()
                         .map(r -> new String[]{r.getId(), String.format("%.6f", r.getDistance())})
                         .collect(Collectors.toList()));
 
-        if (profiler != null) {
-            profiler.log("endToEnd");
-            profiler.stop("endToEnd");
-        }
-    }
-
-    /** Evaluate accuracy with a confusion matrix */
-    private int[][] evaluateAccuracy(Map<String, double[]> vectorMap, double[] queryVector, List<QueryResult> results) {
-        int topK = Math.min(results.size(), DEFAULT_TOP_K);
-        int[][] matrix = new int[topK][topK];
-
-        List<String> trueNeighbors = findTrueNearestNeighbors(vectorMap, queryVector, topK);
-        for (int i = 0; i < topK && i < results.size(); i++) {
-            String predictedId = results.get(i).getId();
-            int predictedRank = i;
-            int trueRank = trueNeighbors.indexOf(predictedId);
-            if (trueRank >= 0 && trueRank < topK) {
-                matrix[predictedRank][trueRank]++;
-            } else {
-                matrix[predictedRank][topK - 1]++;
-            }
-        }
-        return matrix;
-    }
-
-    /** Find true nearest neighbors based on Euclidean distance */
-    private List<String> findTrueNearestNeighbors(Map<String, double[]> vectorMap, double[] queryVector, int topK) {
-        PriorityQueue<Map.Entry<String, Double>> pq = new PriorityQueue<>(
-                (a, b) -> Double.compare(a.getValue(), b.getValue())
-        );
-        for (Map.Entry<String, double[]> entry : vectorMap.entrySet()) {
-            double dist = computeEuclideanDistance(queryVector, entry.getValue());
-            pq.offer(new AbstractMap.SimpleEntry<>(entry.getKey(), dist));
-            if (pq.size() > topK) pq.poll();
-        }
-        List<String> neighbors = new ArrayList<>();
-        while (!pq.isEmpty()) {
-            neighbors.add(0, pq.poll().getKey());
-        }
-        return neighbors;
-    }
-
-    /** Compute Euclidean distance between two vectors */
-    private double computeEuclideanDistance(double[] v1, double[] v2) {
-        double sum = 0;
-        for (int i = 0; i < v1.length; i++) {
-            double diff = v1[i] - v2[i];
-            sum += diff * diff;
-        }
-        return Math.sqrt(sum);
+        PerformanceVisualizer.visualizeQueryResults(results);
     }
 
 
@@ -476,7 +295,7 @@ public class ForwardSecureANNSystem {
                 .collect(Collectors.toList());
         String metadataPath = args[4];
 
-        ForwardSecureANNSystem sys = new ForwardSecureANNSystem(configFile, dataPath, keysFile, dimensions, Path.of(metadataPath));
+        ForwardSecureANNSystem sys = new ForwardSecureANNSystem(configFile, dataPath, keysFile, dimensions, Path.of(metadataPath), false);
         int dim = dimensions.get(0);
 
         // Run End-to-End with random query
@@ -491,7 +310,6 @@ public class ForwardSecureANNSystem {
 
         // Save additional results
         sys.saveResults("results_table.txt", additionalResults, dim);
-
 
         sys.shutdown();
     }
