@@ -42,14 +42,13 @@ public class QueryTokenFactory {
         keyService.rotateIfNeeded();
         KeyVersion currentVersion = keyService.getCurrentVersion();
         SecretKey key = currentVersion.getKey();
-        String encryptionContext = "epoch_v" + currentVersion.getVersion();
+        String encryptionContext = String.format("epoch_%d_dim_%d", currentVersion.getVersion(), vector.length);
 
-        byte[] iv = EncryptionUtils.generateIV();
-        EncryptedPoint encrypted = cryptoService.encryptToPoint("query", vector, key);
+        EncryptedPoint encrypted = cryptoService.encryptToPoint("index", vector, key);
+        byte[] iv = encrypted.getIv();  // FIXED: correct IV
         byte[] encryptedQuery = encrypted.getCiphertext();
 
-        // Using the getBuckets method of EvenLSH
-        List<Integer> buckets = lsh.getBuckets(vector);  // This will now work as expected
+        List<Integer> buckets = lsh.getBuckets(vector);
 
         return new QueryToken(buckets, iv, encryptedQuery, vector.clone(), topK, numTables, encryptionContext);
     }

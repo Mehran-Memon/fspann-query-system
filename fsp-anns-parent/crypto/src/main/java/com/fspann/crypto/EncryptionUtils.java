@@ -7,7 +7,10 @@ import java.nio.ByteBuffer;
 import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.Objects;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Low-level AES-GCM encryption/decryption utilities.
@@ -17,6 +20,7 @@ public final class EncryptionUtils {
     public static final int GCM_IV_LENGTH = 12; // Recommended length for AES-GCM
     private static final int GCM_TAG_LENGTH_BITS = 128;
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+    private static final Logger logger = LoggerFactory.getLogger(EncryptionUtils.class);
 
     private EncryptionUtils() {}
 
@@ -59,18 +63,23 @@ public final class EncryptionUtils {
      * @return the decrypted vector
      * @throws GeneralSecurityException if decryption fails
      */
-    public static double[] decryptVector(byte[] ciphertext, byte[] iv, SecretKey key) throws GeneralSecurityException {
-        validateParams(ciphertext, iv, key);
-        Cipher cipher = Cipher.getInstance(TRANSFORMATION);
-        cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv));
-        byte[] plaintext = cipher.doFinal(ciphertext);
-        try {
-            return bytesToDoubleArray(plaintext);
-        } finally {
-            Arrays.fill(plaintext, (byte) 0); // Prevent memory leak of sensitive data
+    public static double[] decryptVector(byte[] ciphertext, byte[] iv, SecretKey key) throws Exception {
+        logger.debug("Decrypting with key: {}, IV: {}, ciphertext length: {}",
+                Base64.getEncoder().encodeToString(key.getEncoded()),
+                Base64.getEncoder().encodeToString(iv),
+                ciphertext.length);
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        GCMParameterSpec spec = new GCMParameterSpec(128, iv);
+        cipher.init(Cipher.DECRYPT_MODE, key, spec);
+        byte[] decrypted = cipher.doFinal(ciphertext);
+        // Convert byte[] to double[]
+        ByteBuffer buffer = ByteBuffer.wrap(decrypted);
+        double[] result = new double[decrypted.length / 8];
+        for (int i = 0; i < result.length; i++) {
+            result[i] = buffer.getDouble();
         }
+        return result;
     }
-
     // --- Helper Methods ---
 
     private static byte[] doubleArrayToBytes(double[] vector) {

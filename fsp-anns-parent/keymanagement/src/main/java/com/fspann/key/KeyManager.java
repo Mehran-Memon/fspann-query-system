@@ -118,19 +118,14 @@ public class KeyManager {
      * Derives a session key from the masterKey using HMAC-SHA256 KDF.
      */
     public SecretKey deriveSessionKey(int version) throws NoSuchAlgorithmException, InvalidKeyException {
-        byte[] salt = new byte[16];
-        SecureRandom.getInstanceStrong().nextBytes(salt);
+        // Use a consistent salt for each version to ensure deterministic key derivation
+        byte[] salt = ByteBuffer.allocate(4).putInt(version).array();
         Mac mac = Mac.getInstance(KDF_ALGORITHM);
         mac.init(masterKey);
-        ByteBuffer buffer = ByteBuffer.allocate(4 + salt.length);
-        buffer.putInt(version);
-        logger.debug("Derived session key for version {} ({} total versions)", version, sessionKeys.size());
-        buffer.put(salt);
-        byte[] derived = mac.doFinal(buffer.array());
+        byte[] derived = mac.doFinal(salt);
         byte[] keyBytes = new byte[KEY_SIZE / 8];
         System.arraycopy(derived, 0, keyBytes, 0, keyBytes.length);
         return new SecretKeySpec(keyBytes, KEY_ALGORITHM);
-
     }
 
     private SecretKey generateMasterKey() throws NoSuchAlgorithmException {

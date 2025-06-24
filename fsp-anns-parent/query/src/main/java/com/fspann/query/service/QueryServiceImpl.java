@@ -17,7 +17,7 @@ import org.slf4j.LoggerFactory;
 public class QueryServiceImpl implements QueryService {
 
     private static final Logger logger = LoggerFactory.getLogger(QueryServiceImpl.class);
-    private static final Pattern VERSION_PATTERN = Pattern.compile(".*_v(\\d+)$");
+    private static final Pattern VERSION_PATTERN = Pattern.compile("epoch_(\\d+)_dim_(\\d+)$");
 
     private final IndexService indexService;
     private final CryptoService cryptoService;

@@ -294,36 +294,22 @@ public class ForwardSecureANNSystem {
         return results;
     }
 
-    /** Add a dataset for comparison */
-    public void addDataset(String datasetName, String dataPath, int dim) throws Exception {
-        logger.info("Adding dataset {} from {} for dimension {}", datasetName, dataPath, dim);
-        DefaultDataLoader loader = new DefaultDataLoader();
-        List<double[]> vectors = loader.loadData(dataPath, dim);
-        datasetMap.put(datasetName, vectors);
-        batchInsert(vectors, dim);
-        PerformanceVisualizer.visualizeRawData(vectors, dim, datasetName);
-        PerformanceVisualizer.visualizeIndexedData(dimensionDataMap.getOrDefault(dim, new ArrayList<>()), dim, datasetName);
-    }
-
-    /** Compare datasets */
-    public void compareDatasets(List<String> datasetNames, int dim) {
-        logger.info("Comparing datasets {} for dimension {}", datasetNames, dim);
-        List<List<double[]>> datasets = datasetNames.stream()
-                .map(name -> datasetMap.getOrDefault(name, new ArrayList<>()))
-                .collect(Collectors.toList());
-        PerformanceVisualizer.visualizeDatasetComparison(datasets, datasetNames, dim);
-    }
-
-    /** Visualize encryption keys */
-    public void visualizeEncryptionKeys() {
-        logger.info("Visualizing encryption keys");
-        PerformanceVisualizer.visualizeEncryptionKeys(encryptionKeys);
-    }
-
     public int getIndexedVectorCount(int dim) {
         int count = dimensionIdMap.getOrDefault(dim, new ArrayList<>()).size();
         logger.info("Number of indexed vectors for dimension {}: {}", dim, count);
         return count;
+    }
+
+    public void addDataset(String datasetName, String dataPath, int dim) throws Exception {
+        logger.info("Adding dataset '{}' from {} for dimension {}", datasetName, dataPath, dim);
+        DefaultDataLoader loader = new DefaultDataLoader();
+        List<double[]> vectors = loader.loadData(dataPath, dim);
+        datasetMap.put(datasetName, vectors);
+
+        batchInsert(vectors, dim);
+
+        PerformanceVisualizer.visualizeRawData(vectors, dim, datasetName);
+        PerformanceVisualizer.visualizeIndexedData(dimensionDataMap.getOrDefault(dim, new ArrayList<>()), dim, datasetName);
     }
 
     /** Clean up resources */
@@ -364,7 +350,6 @@ public class ForwardSecureANNSystem {
             PerformanceVisualizer.visualizeQueryResults(results);
             PerformanceVisualizer.visualizeRawData(vectors, dim, "Base Dataset");
             PerformanceVisualizer.visualizeIndexedData(dimensionDataMap.getOrDefault(dim, new ArrayList<>()), dim, "Indexed Dataset");
-            visualizeEncryptionKeys();
         }
 
         // Compute and visualize accuracy matrix

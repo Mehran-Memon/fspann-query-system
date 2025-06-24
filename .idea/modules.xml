@@ -2,6 +2,10 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
+<<<<<<< HEAD
+=======
+      <module fileurl="file://$PROJECT_DIR$/fspann-parent/fsp-anns-parent.iml" filepath="$PROJECT_DIR$/fspann-parent/fsp-anns-parent.iml" />
+>>>>>>> 8175f8a (24 June Final Submission at the best stage - Solved all errors in api module, completed all tests and have final package)
       <module fileurl="file://$PROJECT_DIR$/.idea/fspann-query-system.iml" filepath="$PROJECT_DIR$/.idea/fspann-query-system.iml" />
     </modules>
   </component>
