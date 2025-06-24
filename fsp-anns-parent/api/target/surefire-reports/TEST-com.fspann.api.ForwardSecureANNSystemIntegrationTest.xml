@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.fspann.api.ForwardSecureANNSystemIntegrationTest" time="14.761" tests="3" errors="1" skipped="0" failures="2">
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.fspann.api.ForwardSecureANNSystemIntegrationTest" time="49.837" tests="2" errors="0" skipped="0" failures="0">
   <properties>
     <property name="java.specification.version" value="22"/>
     <property name="sun.cpu.isalist" value="amd64"/>
     <property name="sun.jnu.encoding" value="Cp1252"/>
-    <property name="java.class.path" value="C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\api\target\test-classes;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\api\target\classes;C:\Users\Mehran Memon\.m2\repository\com\fspann\query\0.0.1-SNAPSHOT\query-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\com\fspann\index\0.0.1-SNAPSHOT\index-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-math3\3.6.1\commons-math3-3.6.1.jar;C:\Users\Mehran Memon\.m2\repository\com\fspann\crypto\0.0.1-SNAPSHOT\crypto-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\bouncycastle\bcprov-jdk18on\1.78\bcprov-jdk18on-1.78.jar;C:\Users\Mehran Memon\.m2\repository\net\bytebuddy\byte-buddy\1.14.15\byte-buddy-1.14.15.jar;C:\Users\Mehran Memon\.m2\repository\com\fspann\common\0.0.1-SNAPSHOT\common-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-lang3\3.17.0\commons-lang3-3.17.0.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-core\2.17.2\jackson-core-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\com\fspann\keymanagement\0.0.1-SNAPSHOT\keymanagement-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\jetbrains\annotations\26.0.2\annotations-26.0.2.jar;C:\Users\Mehran Memon\.m2\repository\com\fspann\config\0.0.1-SNAPSHOT\config-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\dataformat\jackson-dataformat-yaml\2.17.1\jackson-dataformat-yaml-2.17.1.jar;C:\Users\Mehran Memon\.m2\repository\org\yaml\snakeyaml\2.2\snakeyaml-2.2.jar;C:\Users\Mehran Memon\.m2\repository\org\slf4j\slf4j-api\2.0.13\slf4j-api-2.0.13.jar;C:\Users\Mehran Memon\.m2\repository\ch\qos\logback\logback-classic\1.5.13\logback-classic-1.5.13.jar;C:\Users\Mehran Memon\.m2\repository\ch\qos\logback\logback-core\1.5.13\logback-core-1.5.13.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-databind\2.17.2\jackson-databind-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-annotations\2.17.2\jackson-annotations-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\com\google\code\gson\gson\2.11.0\gson-2.11.0.jar;C:\Users\Mehran Memon\.m2\repository\com\google\errorprone\error_prone_annotations\2.27.0\error_prone_annotations-2.27.0.jar;C:\Users\Mehran Memon\.m2\repository\com\fspann\loader\0.0.1-SNAPSHOT\loader-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-compress\1.26.1\commons-compress-1.26.1.jar;C:\Users\Mehran Memon\.m2\repository\commons-codec\commons-codec\1.16.1\commons-codec-1.16.1.jar;C:\Users\Mehran Memon\.m2\repository\commons-io\commons-io\2.15.1\commons-io-2.15.1.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-core\1.11.0\micrometer-core-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-commons\1.11.0\micrometer-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-observation\1.11.0\micrometer-observation-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\hdrhistogram\HdrHistogram\2.1.12\HdrHistogram-2.1.12.jar;C:\Users\Mehran Memon\.m2\repository\org\latencyutils\LatencyUtils\2.0.3\LatencyUtils-2.0.3.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-registry-prometheus\1.11.0\micrometer-registry-prometheus-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_common\0.16.0\simpleclient_common-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient\0.16.0\simpleclient-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_otel\0.16.0\simpleclient_tracer_otel-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_common\0.16.0\simpleclient_tracer_common-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_otel_agent\0.16.0\simpleclient_tracer_otel_agent-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\org\jfree\jfreechart\1.5.3\jfreechart-1.5.3.jar;C:\Users\Mehran Memon\.m2\repository\junit\junit\4.0\junit-4.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter\5.11.0\junit-jupiter-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-params\5.11.0\junit-jupiter-params-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-engine\5.11.0\junit-jupiter-engine-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\platform\junit-platform-engine\1.11.0\junit-platform-engine-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-api\5.11.0\junit-jupiter-api-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\opentest4j\opentest4j\1.3.0\opentest4j-1.3.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\platform\junit-platform-commons\1.11.0\junit-platform-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\apiguardian\apiguardian-api\1.1.2\apiguardian-api-1.1.2.jar;"/>
+    <property name="java.class.path" value="C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\api\target\test-classes;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\api\target\classes;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\query\target\query-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\index\target\index-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-math3\3.6.1\commons-math3-3.6.1.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\crypto\target\crypto-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\bouncycastle\bcprov-jdk18on\1.78\bcprov-jdk18on-1.78.jar;C:\Users\Mehran Memon\.m2\repository\net\bytebuddy\byte-buddy\1.14.15\byte-buddy-1.14.15.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\common\target\common-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-lang3\3.17.0\commons-lang3-3.17.0.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-core\2.17.2\jackson-core-2.17.2.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\keymanagement\target\keymanagement-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\jetbrains\annotations\26.0.2\annotations-26.0.2.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\config\target\config-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\dataformat\jackson-dataformat-yaml\2.17.1\jackson-dataformat-yaml-2.17.1.jar;C:\Users\Mehran Memon\.m2\repository\org\yaml\snakeyaml\2.2\snakeyaml-2.2.jar;C:\Users\Mehran Memon\.m2\repository\org\slf4j\slf4j-api\2.0.13\slf4j-api-2.0.13.jar;C:\Users\Mehran Memon\.m2\repository\ch\qos\logback\logback-classic\1.5.13\logback-classic-1.5.13.jar;C:\Users\Mehran Memon\.m2\repository\ch\qos\logback\logback-core\1.5.13\logback-core-1.5.13.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-databind\2.17.2\jackson-databind-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-annotations\2.17.2\jackson-annotations-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\com\google\code\gson\gson\2.11.0\gson-2.11.0.jar;C:\Users\Mehran Memon\.m2\repository\com\google\errorprone\error_prone_annotations\2.27.0\error_prone_annotations-2.27.0.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\loader\target\loader-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-compress\1.26.1\commons-compress-1.26.1.jar;C:\Users\Mehran Memon\.m2\repository\commons-codec\commons-codec\1.16.1\commons-codec-1.16.1.jar;C:\Users\Mehran Memon\.m2\repository\commons-io\commons-io\2.15.1\commons-io-2.15.1.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-core\1.11.0\micrometer-core-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-commons\1.11.0\micrometer-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-observation\1.11.0\micrometer-observation-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\hdrhistogram\HdrHistogram\2.1.12\HdrHistogram-2.1.12.jar;C:\Users\Mehran Memon\.m2\repository\org\latencyutils\LatencyUtils\2.0.3\LatencyUtils-2.0.3.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-registry-prometheus\1.11.0\micrometer-registry-prometheus-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_common\0.16.0\simpleclient_common-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient\0.16.0\simpleclient-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_otel\0.16.0\simpleclient_tracer_otel-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_common\0.16.0\simpleclient_tracer_common-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_otel_agent\0.16.0\simpleclient_tracer_otel_agent-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\org\jfree\jfreechart\1.5.3\jfreechart-1.5.3.jar;C:\Users\Mehran Memon\.m2\repository\junit\junit\4.0\junit-4.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter\5.11.0\junit-jupiter-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-params\5.11.0\junit-jupiter-params-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-engine\5.11.0\junit-jupiter-engine-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\platform\junit-platform-engine\1.11.0\junit-platform-engine-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-api\5.11.0\junit-jupiter-api-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\opentest4j\opentest4j\1.3.0\opentest4j-1.3.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\platform\junit-platform-commons\1.11.0\junit-platform-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\apiguardian\apiguardian-api\1.1.2\apiguardian-api-1.1.2.jar;"/>
     <property name="sun.awt.enableExtraMouseButtons" value="true"/>
     <property name="java.vm.vendor" value="Oracle Corporation"/>
     <property name="net.bytebuddy.experimental" value="true"/>
@@ -17,9 +17,9 @@
     <property name="sun.java.launcher" value="SUN_STANDARD"/>
     <property name="user.country" value="US"/>
     <property name="sun.boot.library.path" value="C:\Program Files\Java\jdk-22\bin"/>
-    <property name="sun.java.command" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire11214474436592295440\surefirebooter13910744938483427241.jar C:\Users\Mehran Memon\AppData\Local\Temp\surefire11214474436592295440 2025-06-18T19-18-35_433-jvmRun1 surefire13423505066635989799tmp surefire_09495279205587026277tmp"/>
+    <property name="sun.java.command" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire10962682340895437032\surefirebooter18375418591145198352.jar C:\Users\Mehran Memon\AppData\Local\Temp\surefire10962682340895437032 2025-06-24T16-09-21_490-jvmRun1 surefire13597548210764324394tmp surefire_76798091325943983019tmp"/>
     <property name="jdk.debug" value="release"/>
-    <property name="surefire.test.class.path" value="C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\api\target\test-classes;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\api\target\classes;C:\Users\Mehran Memon\.m2\repository\com\fspann\query\0.0.1-SNAPSHOT\query-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\com\fspann\index\0.0.1-SNAPSHOT\index-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-math3\3.6.1\commons-math3-3.6.1.jar;C:\Users\Mehran Memon\.m2\repository\com\fspann\crypto\0.0.1-SNAPSHOT\crypto-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\bouncycastle\bcprov-jdk18on\1.78\bcprov-jdk18on-1.78.jar;C:\Users\Mehran Memon\.m2\repository\net\bytebuddy\byte-buddy\1.14.15\byte-buddy-1.14.15.jar;C:\Users\Mehran Memon\.m2\repository\com\fspann\common\0.0.1-SNAPSHOT\common-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-lang3\3.17.0\commons-lang3-3.17.0.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-core\2.17.2\jackson-core-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\com\fspann\keymanagement\0.0.1-SNAPSHOT\keymanagement-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\jetbrains\annotations\26.0.2\annotations-26.0.2.jar;C:\Users\Mehran Memon\.m2\repository\com\fspann\config\0.0.1-SNAPSHOT\config-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\dataformat\jackson-dataformat-yaml\2.17.1\jackson-dataformat-yaml-2.17.1.jar;C:\Users\Mehran Memon\.m2\repository\org\yaml\snakeyaml\2.2\snakeyaml-2.2.jar;C:\Users\Mehran Memon\.m2\repository\org\slf4j\slf4j-api\2.0.13\slf4j-api-2.0.13.jar;C:\Users\Mehran Memon\.m2\repository\ch\qos\logback\logback-classic\1.5.13\logback-classic-1.5.13.jar;C:\Users\Mehran Memon\.m2\repository\ch\qos\logback\logback-core\1.5.13\logback-core-1.5.13.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-databind\2.17.2\jackson-databind-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-annotations\2.17.2\jackson-annotations-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\com\google\code\gson\gson\2.11.0\gson-2.11.0.jar;C:\Users\Mehran Memon\.m2\repository\com\google\errorprone\error_prone_annotations\2.27.0\error_prone_annotations-2.27.0.jar;C:\Users\Mehran Memon\.m2\repository\com\fspann\loader\0.0.1-SNAPSHOT\loader-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-compress\1.26.1\commons-compress-1.26.1.jar;C:\Users\Mehran Memon\.m2\repository\commons-codec\commons-codec\1.16.1\commons-codec-1.16.1.jar;C:\Users\Mehran Memon\.m2\repository\commons-io\commons-io\2.15.1\commons-io-2.15.1.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-core\1.11.0\micrometer-core-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-commons\1.11.0\micrometer-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-observation\1.11.0\micrometer-observation-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\hdrhistogram\HdrHistogram\2.1.12\HdrHistogram-2.1.12.jar;C:\Users\Mehran Memon\.m2\repository\org\latencyutils\LatencyUtils\2.0.3\LatencyUtils-2.0.3.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-registry-prometheus\1.11.0\micrometer-registry-prometheus-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_common\0.16.0\simpleclient_common-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient\0.16.0\simpleclient-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_otel\0.16.0\simpleclient_tracer_otel-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_common\0.16.0\simpleclient_tracer_common-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_otel_agent\0.16.0\simpleclient_tracer_otel_agent-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\org\jfree\jfreechart\1.5.3\jfreechart-1.5.3.jar;C:\Users\Mehran Memon\.m2\repository\junit\junit\4.0\junit-4.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter\5.11.0\junit-jupiter-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-params\5.11.0\junit-jupiter-params-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-engine\5.11.0\junit-jupiter-engine-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\platform\junit-platform-engine\1.11.0\junit-platform-engine-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-api\5.11.0\junit-jupiter-api-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\opentest4j\opentest4j\1.3.0\opentest4j-1.3.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\platform\junit-platform-commons\1.11.0\junit-platform-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\apiguardian\apiguardian-api\1.1.2\apiguardian-api-1.1.2.jar;"/>
+    <property name="surefire.test.class.path" value="C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\api\target\test-classes;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\api\target\classes;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\query\target\query-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\index\target\index-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-math3\3.6.1\commons-math3-3.6.1.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\crypto\target\crypto-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\bouncycastle\bcprov-jdk18on\1.78\bcprov-jdk18on-1.78.jar;C:\Users\Mehran Memon\.m2\repository\net\bytebuddy\byte-buddy\1.14.15\byte-buddy-1.14.15.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\common\target\common-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-lang3\3.17.0\commons-lang3-3.17.0.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-core\2.17.2\jackson-core-2.17.2.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\keymanagement\target\keymanagement-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\jetbrains\annotations\26.0.2\annotations-26.0.2.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\config\target\config-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\dataformat\jackson-dataformat-yaml\2.17.1\jackson-dataformat-yaml-2.17.1.jar;C:\Users\Mehran Memon\.m2\repository\org\yaml\snakeyaml\2.2\snakeyaml-2.2.jar;C:\Users\Mehran Memon\.m2\repository\org\slf4j\slf4j-api\2.0.13\slf4j-api-2.0.13.jar;C:\Users\Mehran Memon\.m2\repository\ch\qos\logback\logback-classic\1.5.13\logback-classic-1.5.13.jar;C:\Users\Mehran Memon\.m2\repository\ch\qos\logback\logback-core\1.5.13\logback-core-1.5.13.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-databind\2.17.2\jackson-databind-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-annotations\2.17.2\jackson-annotations-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\com\google\code\gson\gson\2.11.0\gson-2.11.0.jar;C:\Users\Mehran Memon\.m2\repository\com\google\errorprone\error_prone_annotations\2.27.0\error_prone_annotations-2.27.0.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\loader\target\loader-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-compress\1.26.1\commons-compress-1.26.1.jar;C:\Users\Mehran Memon\.m2\repository\commons-codec\commons-codec\1.16.1\commons-codec-1.16.1.jar;C:\Users\Mehran Memon\.m2\repository\commons-io\commons-io\2.15.1\commons-io-2.15.1.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-core\1.11.0\micrometer-core-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-commons\1.11.0\micrometer-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-observation\1.11.0\micrometer-observation-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\hdrhistogram\HdrHistogram\2.1.12\HdrHistogram-2.1.12.jar;C:\Users\Mehran Memon\.m2\repository\org\latencyutils\LatencyUtils\2.0.3\LatencyUtils-2.0.3.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-registry-prometheus\1.11.0\micrometer-registry-prometheus-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_common\0.16.0\simpleclient_common-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient\0.16.0\simpleclient-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_otel\0.16.0\simpleclient_tracer_otel-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_common\0.16.0\simpleclient_tracer_common-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_otel_agent\0.16.0\simpleclient_tracer_otel_agent-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\org\jfree\jfreechart\1.5.3\jfreechart-1.5.3.jar;C:\Users\Mehran Memon\.m2\repository\junit\junit\4.0\junit-4.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter\5.11.0\junit-jupiter-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-params\5.11.0\junit-jupiter-params-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-engine\5.11.0\junit-jupiter-engine-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\platform\junit-platform-engine\1.11.0\junit-platform-engine-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-api\5.11.0\junit-jupiter-api-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\opentest4j\opentest4j\1.3.0\opentest4j-1.3.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\platform\junit-platform-commons\1.11.0\junit-platform-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\apiguardian\apiguardian-api\1.1.2\apiguardian-api-1.1.2.jar;"/>
     <property name="sun.cpu.endian" value="little"/>
     <property name="user.home" value="C:\Users\Mehran Memon"/>
     <property name="user.language" value="en"/>
@@ -32,7 +32,7 @@
     <property name="line.separator" value="&#10;"/>
     <property name="java.vm.specification.vendor" value="Oracle Corporation"/>
     <property name="java.specification.name" value="Java Platform API Specification"/>
-    <property name="surefire.real.class.path" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire11214474436592295440\surefirebooter13910744938483427241.jar"/>
+    <property name="surefire.real.class.path" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire10962682340895437032\surefirebooter18375418591145198352.jar"/>
     <property name="user.script" value=""/>
     <property name="sun.management.compiler" value="HotSpot 64-Bit Tiered Compilers"/>
     <property name="java.runtime.version" value="22.0.2+9-70"/>
@@ -61,579 +61,169 @@
     <property name="sun.io.unicode.encoding" value="UnicodeLittle"/>
     <property name="java.class.version" value="66.0"/>
   </properties>
-  <testcase name="testMultipleDimensions(Path)" classname="com.fspann.api.ForwardSecureANNSystemIntegrationTest" time="0.904">
-    <failure type="org.opentest4j.AssertionFailedError"><![CDATA[org.opentest4j.AssertionFailedError: Should have at least 3 vectors for 2D ==> expected: <true> but was: <false>
-	at com.fspann.api.ForwardSecureANNSystemIntegrationTest.testMultipleDimensions(ForwardSecureANNSystemIntegrationTest.java:94)
-]]></failure>
-    <system-out><![CDATA[2025-06-18 19:18:36 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Initializing ForwardSecureANNSystem with config=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-2277123314453738653\config.json, data=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-2277123314453738653\data.csv, keys=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-2277123314453738653\keys.ser, dims=[2, 3], metadata=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-2277123314453738653\metadata
-2025-06-18 19:18:36 [main] INFO  com.fspann.config.SystemConfig - Successfully loaded config from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-2277123314453738653\config.json
-2025-06-18 19:18:36 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Loaded system configuration
-2025-06-18 19:18:36 [main] INFO  com.fspann.key.KeyManager - Initialized new key store (version 1)
-2025-06-18 19:18:36 [main] INFO  c.fspann.api.ForwardSecureANNSystem - KeyManager initialized
-2025-06-18 19:18:36 [main] INFO  c.fspann.api.ForwardSecureANNSystem - KeyRotationServiceImpl initialized successfully
-2025-06-18 19:18:36 [main] INFO  c.fspann.api.ForwardSecureANNSystem - KeyManager initialized with forward-secure key derivation, using keys file at C:\Users\MEHRAN~1\AppData\Local\Temp\junit-2277123314453738653\keys.ser
-2025-06-18 19:18:36 [main] INFO  c.fspann.api.ForwardSecureANNSystem - CryptoService (AES-GCM with forward security) ready
-2025-06-18 19:18:36 [main] INFO  com.fspann.common.MetadataManager - Loaded metadata from metadata.ser
-2025-06-18 19:18:36 [main] INFO  c.fspann.api.ForwardSecureANNSystem - SecureLSHIndexService initialized with 4 shards
-2025-06-18 19:18:36 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Cache and Profiler initialized
-2025-06-18 19:18:36 [main] INFO  c.fspann.api.ForwardSecureANNSystem - QueryService initialized and ready
-2025-06-18 19:18:36 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Loading base data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-2277123314453738653\data.csv
-2025-06-18 19:18:36 [main] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-2277123314453738653\data.csv using loader for CSV
-2025-06-18 19:18:36 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Loaded 2 vectors for dimension 2
-2025-06-18 19:18:36 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:36 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:37 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:37 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Batch insert complete for 2 vectors in 307.7317 ms
-2025-06-18 19:18:37 [main] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-2277123314453738653\data.csv using loader for CSV
-2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Loaded 3 vectors for dimension 3
-2025-06-18 19:18:37 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:37 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:37 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:37 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:37 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:37 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Batch insert complete for 3 vectors in 365.1214 ms
-2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Initial data insertion complete
-2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Number of indexed vectors for dimension 2: 2
+  <testcase name="simpleEndToEndNearestNeighbor(Path)" classname="com.fspann.api.ForwardSecureANNSystemIntegrationTest" time="1.626">
+    <system-out><![CDATA[2025-06-24 16:09:36 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Initializing ForwardSecureANNSystem with config=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-4341431123837108251\config.json, data=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-4341431123837108251\data2d.csv, keys=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-4341431123837108251\keys.ser, dims=[2], metadata=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-4341431123837108251
+2025-06-24 16:09:36 [main] INFO  com.fspann.config.SystemConfig - Successfully loaded config from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-4341431123837108251\config.json
+2025-06-24 16:09:36 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Loaded system configuration
+2025-06-24 16:09:36 [main] INFO  com.fspann.key.KeyManager - Initialized new key store (version 1)
+2025-06-24 16:09:36 [main] INFO  c.fspann.api.ForwardSecureANNSystem - KeyManager initialized
+2025-06-24 16:09:36 [main] INFO  c.fspann.api.ForwardSecureANNSystem - KeyRotationServiceImpl initialized successfully
+2025-06-24 16:09:36 [main] INFO  c.fspann.api.ForwardSecureANNSystem - KeyManager initialized with forward-secure key derivation, using keys file at C:\Users\MEHRAN~1\AppData\Local\Temp\junit-4341431123837108251\keys.ser
+2025-06-24 16:09:36 [main] INFO  c.fspann.crypto.AesGcmCryptoService - AesGcmCryptoService initialized successfully
+2025-06-24 16:09:36 [main] INFO  c.fspann.api.ForwardSecureANNSystem - CryptoService (AES-GCM with forward security) ready
+2025-06-24 16:09:36 [main] INFO  com.fspann.common.MetadataManager - Loaded metadata from metadata.ser
+2025-06-24 16:09:36 [main] INFO  c.fspann.api.ForwardSecureANNSystem - SecureLSHIndexService initialized with 4 shards
+2025-06-24 16:09:36 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Cache and Profiler initialized
+2025-06-24 16:09:36 [main] INFO  c.fspann.api.ForwardSecureANNSystem - QueryService initialized and ready
+2025-06-24 16:09:36 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Loading base data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-4341431123837108251\data2d.csv
+2025-06-24 16:09:36 [main] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-4341431123837108251\data2d.csv using loader for CSV
+2025-06-24 16:09:36 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Loaded 2 vectors for dimension 2
+2025-06-24 16:09:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Batch insert complete for 2 vectors in 960.5425 ms
+2025-06-24 16:09:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Initial data insertion complete
+2025-06-24 16:09:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Number of indexed vectors for dimension 2: 2
+2025-06-24 16:09:37 [main] INFO  c.f.a.ForwardSecureANNSystemIntegrationTest - Indexed vectors for dim=2: 2
+2025-06-24 16:09:37 [main] INFO  c.f.a.ForwardSecureANNSystemIntegrationTest - Executing query for vector: [0.05, 0.05]
+2025-06-24 16:09:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Executing query for topK=1 and dimension 2
+2025-06-24 16:09:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Query completed in 2.2824 ms
+2025-06-24 16:09:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Query returned 1 results
+2025-06-24 16:09:38 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Shutting down ForwardSecureANNSystem
+2025-06-24 16:09:38 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Total indexing time: 960 ms for 2 inserts
+2025-06-24 16:09:38 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Total query time: 2 ms
+📤 Profiler data written to profiler_metrics.csv
 ]]></system-out>
   </testcase>
-  <testcase name="simpleEndToEndNearestNeighbor(Path)" classname="com.fspann.api.ForwardSecureANNSystemIntegrationTest" time="0.37">
-    <failure type="org.opentest4j.AssertionFailedError"><![CDATA[org.opentest4j.AssertionFailedError: Should have at least 3 vectors indexed ==> expected: <true> but was: <false>
-	at com.fspann.api.ForwardSecureANNSystemIntegrationTest.simpleEndToEndNearestNeighbor(ForwardSecureANNSystemIntegrationTest.java:59)
-]]></failure>
-    <system-out><![CDATA[2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Initializing ForwardSecureANNSystem with config=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-7590585617576666185\config.json, data=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-7590585617576666185\data.csv, keys=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-7590585617576666185\keys.ser, dims=[2], metadata=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-7590585617576666185\metadata
-2025-06-18 19:18:37 [main] INFO  com.fspann.config.SystemConfig - Successfully loaded config from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-7590585617576666185\config.json
-2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Loaded system configuration
-2025-06-18 19:18:37 [main] INFO  com.fspann.key.KeyManager - Initialized new key store (version 1)
-2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - KeyManager initialized
-2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - KeyRotationServiceImpl initialized successfully
-2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - KeyManager initialized with forward-secure key derivation, using keys file at C:\Users\MEHRAN~1\AppData\Local\Temp\junit-7590585617576666185\keys.ser
-2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - CryptoService (AES-GCM with forward security) ready
-2025-06-18 19:18:37 [main] INFO  com.fspann.common.MetadataManager - Loaded metadata from metadata.ser
-2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - SecureLSHIndexService initialized with 4 shards
-2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Cache and Profiler initialized
-2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - QueryService initialized and ready
-2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Loading base data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-7590585617576666185\data.csv
-2025-06-18 19:18:37 [main] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-7590585617576666185\data.csv using loader for CSV
-2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Loaded 2 vectors for dimension 2
-2025-06-18 19:18:37 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:37 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:37 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:37 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Batch insert complete for 2 vectors in 255.5599 ms
-2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Initial data insertion complete
-2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Number of indexed vectors for dimension 2: 2
-2025-06-18 19:18:37 [main] INFO  c.f.a.ForwardSecureANNSystemIntegrationTest - Indexed vectors for dim=2: 2
-2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Number of indexed vectors for dimension 2: 2
-]]></system-out>
-  </testcase>
-  <testcase name="testVisualization(Path)" classname="com.fspann.api.ForwardSecureANNSystemIntegrationTest" time="13.483">
-    <error type="java.lang.RuntimeException"><![CDATA[java.lang.RuntimeException: Decryption error: query vector
-	at com.fspann.api.ForwardSecureANNSystemIntegrationTest.testVisualization(ForwardSecureANNSystemIntegrationTest.java:129)
-Caused by: com.fspann.crypto.AesGcmCryptoService$CryptoException: Query decryption failed
-	at com.fspann.api.ForwardSecureANNSystemIntegrationTest.testVisualization(ForwardSecureANNSystemIntegrationTest.java:129)
-Caused by: javax.crypto.AEADBadTagException: Tag mismatch
-	at com.fspann.api.ForwardSecureANNSystemIntegrationTest.testVisualization(ForwardSecureANNSystemIntegrationTest.java:129)
-]]></error>
-    <system-out><![CDATA[2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Initializing ForwardSecureANNSystem with config=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10886917459130520687\config.json, data=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10886917459130520687\data.csv, keys=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10886917459130520687\keys.ser, dims=[2], metadata=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10886917459130520687\metadata
-2025-06-18 19:18:37 [main] INFO  com.fspann.config.SystemConfig - Successfully loaded config from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10886917459130520687\config.json
-2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Loaded system configuration
-2025-06-18 19:18:37 [main] INFO  com.fspann.key.KeyManager - Initialized new key store (version 1)
-2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - KeyManager initialized
-2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - KeyRotationServiceImpl initialized successfully
-2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - KeyManager initialized with forward-secure key derivation, using keys file at C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10886917459130520687\keys.ser
-2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - CryptoService (AES-GCM with forward security) ready
-2025-06-18 19:18:37 [main] INFO  com.fspann.common.MetadataManager - Loaded metadata from metadata.ser
-2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - SecureLSHIndexService initialized with 4 shards
-2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Cache and Profiler initialized
-2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - QueryService initialized and ready
-2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Loading base data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10886917459130520687\data.csv
-2025-06-18 19:18:37 [main] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10886917459130520687\data.csv using loader for CSV
-2025-06-18 19:18:37 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Loaded 2 vectors for dimension 2
-2025-06-18 19:18:38 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:38 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:38 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:38 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:38 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Batch insert complete for 2 vectors in 258.2716 ms
-2025-06-18 19:18:38 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Initial data insertion complete
-2025-06-18 19:18:38 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Visualizing encryption keys
-2025-06-18 19:18:38 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Running end-to-end workflow with dataPath=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10886917459130520687\data.csv, topK=1, dim=2
-2025-06-18 19:18:38 [main] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10886917459130520687\data.csv using loader for CSV
-2025-06-18 19:18:38 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:38 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:38 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:38 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:38 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Batch insert complete for 2 vectors in 278.5132 ms
-2025-06-18 19:18:38 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Loaded and indexed 2 vectors
-2025-06-18 19:18:38 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Inserting 100 fake points for dimension 2
-2025-06-18 19:18:38 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:38 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:38 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=b8cdb9a5-7140-4643-994a-5801eb841137 in 124.5564 ms
-2025-06-18 19:18:38 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:38 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:38 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=00b3a74f-ec08-4449-a694-1909cf87b914 in 125.9674 ms
-2025-06-18 19:18:38 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:39 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:39 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=ccc73f16-9b70-4c0a-8840-13cb62aaa732 in 122.3408 ms
-2025-06-18 19:18:39 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:39 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:39 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=7dc79f78-8ede-48ef-876a-177937480452 in 122.6973 ms
-2025-06-18 19:18:39 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:39 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:39 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=75820212-82dc-46ff-9020-926b9da12341 in 120.0475 ms
-2025-06-18 19:18:39 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:39 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:39 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=085d5cca-4c6f-4b85-879b-b7ead096a676 in 122.522 ms
-2025-06-18 19:18:39 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:39 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:39 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=897a6101-60c7-4ca3-9e82-b3f2f7c11375 in 126.6046 ms
-2025-06-18 19:18:39 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:39 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:39 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=3a42ec47-71c5-4689-bccd-9a5473a44f2d in 129.7096 ms
-2025-06-18 19:18:39 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:39 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:39 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=cec6df94-a305-4752-97b1-dba8e1da0ffb in 121.1845 ms
-2025-06-18 19:18:39 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:39 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:39 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=291457fe-311b-435f-9a70-56a49ab98dff in 125.853 ms
-2025-06-18 19:18:39 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:40 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:40 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=49c5da58-7134-402a-99a9-cd3bca5e00e3 in 122.3527 ms
-2025-06-18 19:18:40 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:40 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:40 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=504dd5c9-c54a-46a5-9c77-32f8f8c8e34e in 122.5118 ms
-2025-06-18 19:18:40 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:40 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:40 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=3a6214b6-e388-4a45-a399-c5e7eb8ac44a in 127.098 ms
-2025-06-18 19:18:40 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:40 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:40 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=65f96160-9d0b-4989-909e-b00ffbd85e99 in 122.2222 ms
-2025-06-18 19:18:40 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:40 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:40 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=3e977c64-56f9-4f51-859b-0157c0982490 in 120.7143 ms
-2025-06-18 19:18:40 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:40 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:40 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=2546ffb7-50df-4492-9fc8-9a3e7140611d in 124.0331 ms
-2025-06-18 19:18:40 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:40 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:40 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=a5b22643-3614-4fc5-8e52-1d1f40f9f906 in 127.3264 ms
-2025-06-18 19:18:40 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:40 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:40 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=caa44f4a-abf2-42c2-bec2-57ae6e552212 in 121.2388 ms
-2025-06-18 19:18:40 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:41 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:41 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=2e5af75e-7e4c-4614-a992-4aea834574b3 in 128.9494 ms
-2025-06-18 19:18:41 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:41 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:41 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=072cf411-4fd5-4eac-b4e6-6b370ad0742c in 122.955 ms
-2025-06-18 19:18:41 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:41 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:41 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=d4c77ea0-5afe-4ff0-b20e-f24f254370f2 in 121.0455 ms
-2025-06-18 19:18:41 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:41 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:41 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=8179769d-4f1a-49c8-9fb6-867b41910fd9 in 119.2693 ms
-2025-06-18 19:18:41 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:41 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:41 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=a4c5c521-8694-4026-bbda-3131231f1566 in 122.1025 ms
-2025-06-18 19:18:41 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:41 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:41 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=9f245d5e-96ae-4a74-b8f4-219a44b9be02 in 119.7975 ms
-2025-06-18 19:18:41 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:41 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:41 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=6257e693-c58e-4d25-be78-93f7de2e1fae in 129.669 ms
-2025-06-18 19:18:41 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:41 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:41 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=2f5ac57e-00f4-4959-a4f2-56713d09ef80 in 126.2651 ms
-2025-06-18 19:18:41 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:42 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:42 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=fbd101aa-f7de-4daa-bd14-52b8e8aa9047 in 121.5304 ms
-2025-06-18 19:18:42 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:42 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:42 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=aede60de-d2fb-4f6a-adea-05f3e53bb797 in 125.608 ms
-2025-06-18 19:18:42 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:42 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:42 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=e51b4294-354d-49b7-91f5-e0739f3d1482 in 120.0543 ms
-2025-06-18 19:18:42 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:42 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:42 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=e56a9664-0f80-46d5-93eb-cadf39f2627d in 130.8307 ms
-2025-06-18 19:18:42 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:42 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:42 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=299d840a-adb5-4714-bb66-a0b5bcf00da9 in 124.8098 ms
-2025-06-18 19:18:42 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:42 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:42 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=c422642d-7222-4be3-bcf7-1de460d8004e in 124.9485 ms
-2025-06-18 19:18:42 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:42 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:42 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=b5b33b63-196c-4a14-9158-afa415edc9e4 in 121.5802 ms
-2025-06-18 19:18:42 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:42 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:42 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=66691ca4-c052-4b7c-81f2-87828f2bda7b in 123.7654 ms
-2025-06-18 19:18:42 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:43 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:43 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=a6b55b5a-ced5-4a4a-9249-b48c3741f8e2 in 123.45 ms
-2025-06-18 19:18:43 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:43 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:43 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=29f1aafa-6746-4b86-be40-0f17b8741da6 in 123.3041 ms
-2025-06-18 19:18:43 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:43 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:43 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=6cb7b3e2-4955-4b49-8870-93e74b4b6bb3 in 125.8401 ms
-2025-06-18 19:18:43 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:43 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:43 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=85f62adf-8147-419e-b3be-4756dc94730c in 122.9742 ms
-2025-06-18 19:18:43 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:43 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:43 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=42301b2b-14d1-4a7e-834e-ade970fa7bb6 in 123.8717 ms
-2025-06-18 19:18:43 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:43 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:43 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=bb702677-3849-4a4d-aecf-d589ac37c5fb in 145.0967 ms
-2025-06-18 19:18:43 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:43 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:43 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=9ea88453-45b0-4627-91a2-2868a96982ed in 135.4049 ms
-2025-06-18 19:18:43 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:43 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:43 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=df3ce822-a6b7-4e7e-8054-2d1fcf51bfcb in 127.5969 ms
-2025-06-18 19:18:43 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:44 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:44 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=7805b05f-0f67-48ca-8012-ec5e6134e932 in 122.833 ms
-2025-06-18 19:18:44 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:44 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:44 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=ebba7489-14fd-4743-b59b-b6b816d2c07a in 127.4434 ms
-2025-06-18 19:18:44 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:44 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:44 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=d5191a1f-f344-42d9-a8b3-cd970591b6b4 in 121.5915 ms
-2025-06-18 19:18:44 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:44 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:44 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=e7de1b6a-d74f-40b2-b9a6-3af7d284ad32 in 122.9126 ms
-2025-06-18 19:18:44 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:44 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:44 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=e96c638c-9d30-4616-9636-00ed7155f7d2 in 122.7797 ms
-2025-06-18 19:18:44 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:44 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:44 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=6cfd7c4d-68c8-4a2b-b491-6de6b20cf222 in 127.8327 ms
-2025-06-18 19:18:44 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:44 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:44 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=c5f518ec-d794-401c-87ce-2fe76b9bc2ce in 123.3774 ms
-2025-06-18 19:18:44 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:44 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:44 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=0e1de882-b031-43fe-b329-8350c5b85eaf in 123.0405 ms
-2025-06-18 19:18:44 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:45 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:45 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=fc9b7ecf-e712-4240-8d6c-a0a398b9e06e in 137.4078 ms
-2025-06-18 19:18:45 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:45 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:45 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=2837fbef-b6da-47c2-82be-08367828f272 in 125.5582 ms
-2025-06-18 19:18:45 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:45 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:45 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=59f8a381-7a4c-4ee4-bffc-41329b7cdae6 in 126.074 ms
-2025-06-18 19:18:45 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:45 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:45 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=cbdfe120-455c-4642-b393-d2c269399628 in 122.1824 ms
-2025-06-18 19:18:45 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:45 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:45 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=0e149a48-0dbb-4413-85eb-c74759f69834 in 121.5422 ms
-2025-06-18 19:18:45 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:45 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:45 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=77ef775f-c37b-4946-bcf1-b52af1f4204a in 125.0411 ms
-2025-06-18 19:18:45 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:45 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:45 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=070d3a7b-88cb-4d44-a87c-14fe1be53b22 in 125.9788 ms
-2025-06-18 19:18:45 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:45 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:45 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=32835851-541f-4dac-a0de-23115b5c1032 in 122.8375 ms
-2025-06-18 19:18:45 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:46 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:46 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=81d4f0b6-3880-41eb-986a-39021d223313 in 124.2269 ms
-2025-06-18 19:18:46 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:46 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:46 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=6249ec74-bb6c-4512-9435-f9caea23fd52 in 124.4222 ms
-2025-06-18 19:18:46 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:46 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:46 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=f54095a8-ab9b-4cd8-9577-24219bc928fa in 123.7506 ms
-2025-06-18 19:18:46 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:46 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:46 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=0617e4be-1988-407f-a38f-3d4ee6dd1308 in 128.0185 ms
-2025-06-18 19:18:46 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:46 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:46 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=a8d0ce50-e877-4868-adda-27042bcbf013 in 122.5061 ms
-2025-06-18 19:18:46 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:46 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:46 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=0186f664-d5aa-4e29-b834-4d055cc7ef3e in 126.3693 ms
-2025-06-18 19:18:46 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:46 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:46 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=bea13493-76db-48bb-b764-76477b0c2021 in 123.9024 ms
-2025-06-18 19:18:46 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:46 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:46 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=66852274-dde4-4e92-8a76-6c10e82c1def in 121.8039 ms
-2025-06-18 19:18:46 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:47 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:47 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=f5597fd8-9062-4e08-966d-d40af46eba1e in 126.7246 ms
-2025-06-18 19:18:47 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:47 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:47 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=77716f19-a8e1-4c46-9ea6-a4f3f55df84d in 125.4793 ms
-2025-06-18 19:18:47 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:47 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:47 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=b5fc675c-f69d-4f4a-966a-f7b8f4238c10 in 124.471 ms
-2025-06-18 19:18:47 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:47 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:47 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=347f24f8-ea3c-40be-9e17-88145dbfead1 in 122.7153 ms
-2025-06-18 19:18:47 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:47 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:47 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=d469cdfa-c995-452f-8eba-27d467f6b318 in 126.1699 ms
-2025-06-18 19:18:47 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:47 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:47 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=70c6f6a3-35bf-4533-ad2f-db498e89478d in 123.2033 ms
-2025-06-18 19:18:47 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:47 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:47 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=cd1ca015-ccef-4e24-9d85-8929af2cab40 in 128.2269 ms
-2025-06-18 19:18:47 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:47 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:47 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=86d53ef2-8d33-4e14-9806-cb48f25083f6 in 122.4871 ms
-2025-06-18 19:18:47 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:48 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:48 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=3b5fcb8c-9d6a-4080-a5d4-0ceb2ae34641 in 121.5781 ms
-2025-06-18 19:18:48 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:48 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:48 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=5d3bd60c-e31d-45e7-a659-55f1c6d767ff in 125.2958 ms
-2025-06-18 19:18:48 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:48 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:48 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=be0747ff-8cd5-420c-892b-3c3e9a749468 in 125.3352 ms
-2025-06-18 19:18:48 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:48 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:48 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=9f267d0b-b646-49cc-baaf-a430ad845944 in 123.571 ms
-2025-06-18 19:18:48 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:48 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:48 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=a32aa9e9-6cc9-4f1b-aa7b-d0b401b5680e in 121.4179 ms
-2025-06-18 19:18:48 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:48 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:48 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=a43a3fee-7665-4885-a5a2-6304155fbbcd in 119.6389 ms
-2025-06-18 19:18:48 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:48 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:48 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=4eb217d0-d741-4259-bba7-d6716139fb39 in 125.4027 ms
-2025-06-18 19:18:48 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:48 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:48 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=1941b7ce-1cf4-4069-9c2e-12a663e618f4 in 125.3327 ms
-2025-06-18 19:18:48 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:49 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:49 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=fab80908-2381-496d-9aef-7bd5c2bf3c87 in 124.5527 ms
-2025-06-18 19:18:49 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:49 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:49 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=00b70b8e-f479-43c0-9c15-b12956dd297e in 124.5295 ms
-2025-06-18 19:18:49 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:49 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:49 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=884e8c1b-e88c-4f40-a4be-ee7e80d0b641 in 125.8591 ms
-2025-06-18 19:18:49 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:49 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:49 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=b0c7f69d-abc1-44b8-b25f-2fd1911d7b81 in 122.6925 ms
-2025-06-18 19:18:49 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:49 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:49 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=2acef062-0422-401a-9f3a-5d55ac253ecd in 121.2758 ms
-2025-06-18 19:18:49 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:49 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:49 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=c45c0689-5b33-477b-95e6-37f824d3c8a0 in 125.2089 ms
-2025-06-18 19:18:49 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:49 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:49 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=d6607d1b-15d3-4cc7-b81a-64b6dabab2c4 in 126.1207 ms
-2025-06-18 19:18:49 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:49 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:49 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=9e709999-da42-4183-9d14-c70a61a50d4a in 124.7926 ms
-2025-06-18 19:18:49 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:50 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:50 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=50a08e22-ce91-4a04-a135-70d43341c2a2 in 122.0336 ms
-2025-06-18 19:18:50 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:50 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:50 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=349a093c-62b8-4749-8555-06f494606a0a in 124.9659 ms
-2025-06-18 19:18:50 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:50 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:50 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=8c023019-f1d8-48c3-9ef6-3bbf56d1627d in 128.3195 ms
-2025-06-18 19:18:50 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:50 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:50 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=881a5765-a142-4d40-8aa1-70eeab7e3f02 in 132.6398 ms
-2025-06-18 19:18:50 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:50 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:50 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=cbf6192d-8d45-47a1-9793-54cb9cebc321 in 134.2191 ms
-2025-06-18 19:18:50 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:50 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:50 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=bc86bdda-c1b3-4e7a-bb22-c78439333804 in 127.5578 ms
-2025-06-18 19:18:50 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:50 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:50 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=a13b1c99-3bea-44c3-aae4-c135b7e3ddaf in 161.1254 ms
-2025-06-18 19:18:50 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:50 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:50 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=83e4836e-9137-4ef6-ab10-4f06b11a0ed1 in 134.3577 ms
-2025-06-18 19:18:51 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:51 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:51 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=e3261264-7602-4648-abc2-7b8c4146d9f6 in 185.0955 ms
-2025-06-18 19:18:51 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:51 [main] INFO  com.fspann.common.MetadataManager - Saved metadata to metadata.ser
-2025-06-18 19:18:51 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=9f64c6c1-cffb-4f3e-baf7-4a774eaf85c2 in 145.503 ms
-2025-06-18 19:18:51 [main] ERROR c.fspann.crypto.AesGcmCryptoService - Query decryption failed
-javax.crypto.AEADBadTagException: Tag mismatch
-	at java.base/com.sun.crypto.provider.GaloisCounterMode$GCMDecrypt.doFinal(GaloisCounterMode.java:1518)
-	at java.base/com.sun.crypto.provider.GaloisCounterMode.engineDoFinal(GaloisCounterMode.java:415)
-	at java.base/javax.crypto.Cipher.doFinal(Cipher.java:2252)
-	at com.fspann.crypto.EncryptionUtils.decryptVector(EncryptionUtils.java:66)
-	at com.fspann.crypto.AesGcmCryptoService.lambda$decryptQuery$2(AesGcmCryptoService.java:79)
-	at io.micrometer.core.instrument.AbstractTimer.record(AbstractTimer.java:168)
-	at com.fspann.crypto.AesGcmCryptoService.decryptQuery(AesGcmCryptoService.java:77)
-	at com.fspann.query.service.QueryServiceImpl.search(QueryServiceImpl.java:48)
-	at com.fspann.api.ForwardSecureANNSystem.queryWithCloak(ForwardSecureANNSystem.java:292)
-	at com.fspann.api.ForwardSecureANNSystem.runEndToEnd(ForwardSecureANNSystem.java:359)
-	at com.fspann.api.ForwardSecureANNSystemIntegrationTest.testVisualization(ForwardSecureANNSystemIntegrationTest.java:129)
-	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
-	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
-	at org.junit.platform.commons.util.ReflectionUtils.invokeMethod(ReflectionUtils.java:766)
-	at org.junit.jupiter.engine.execution.MethodInvocation.proceed(MethodInvocation.java:60)
-	at org.junit.jupiter.engine.execution.InvocationInterceptorChain$ValidatingInvocation.proceed(InvocationInterceptorChain.java:131)
-	at org.junit.jupiter.engine.extension.TimeoutExtension.intercept(TimeoutExtension.java:156)
-	at org.junit.jupiter.engine.extension.TimeoutExtension.interceptTestableMethod(TimeoutExtension.java:147)
-	at org.junit.jupiter.engine.extension.TimeoutExtension.interceptTestMethod(TimeoutExtension.java:86)
-	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker$ReflectiveInterceptorCall.lambda$ofVoidMethod$0(InterceptingExecutableInvoker.java:103)
-	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.lambda$invoke$0(InterceptingExecutableInvoker.java:93)
-	at org.junit.jupiter.engine.execution.InvocationInterceptorChain$InterceptedInvocation.proceed(InvocationInterceptorChain.java:106)
-	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.proceed(InvocationInterceptorChain.java:64)
-	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.chainAndInvoke(InvocationInterceptorChain.java:45)
-	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.invoke(InvocationInterceptorChain.java:37)
-	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.invoke(InterceptingExecutableInvoker.java:92)
-	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.invoke(InterceptingExecutableInvoker.java:86)
-	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.lambda$invokeTestMethod$8(TestMethodTestDescriptor.java:217)
-	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
-	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.invokeTestMethod(TestMethodTestDescriptor.java:213)
-	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.execute(TestMethodTestDescriptor.java:138)
-	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.execute(TestMethodTestDescriptor.java:68)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$6(NodeTestTask.java:151)
-	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$8(NodeTestTask.java:141)
-	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:137)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$9(NodeTestTask.java:139)
-	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:138)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:95)
-	at java.base/java.util.ArrayList.forEach(ArrayList.java:1597)
-	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.invokeAll(SameThreadHierarchicalTestExecutorService.java:41)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$6(NodeTestTask.java:155)
-	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$8(NodeTestTask.java:141)
-	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:137)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$9(NodeTestTask.java:139)
-	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:138)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:95)
-	at java.base/java.util.ArrayList.forEach(ArrayList.java:1597)
-	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.invokeAll(SameThreadHierarchicalTestExecutorService.java:41)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$6(NodeTestTask.java:155)
-	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$8(NodeTestTask.java:141)
-	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:137)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$9(NodeTestTask.java:139)
-	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:138)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:95)
-	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.submit(SameThreadHierarchicalTestExecutorService.java:35)
-	at org.junit.platform.engine.support.hierarchical.HierarchicalTestExecutor.execute(HierarchicalTestExecutor.java:57)
-	at org.junit.platform.engine.support.hierarchical.HierarchicalTestEngine.execute(HierarchicalTestEngine.java:54)
-	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:198)
-	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:169)
-	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:93)
-	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.lambda$execute$0(EngineExecutionOrchestrator.java:58)
-	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.withInterceptedStreams(EngineExecutionOrchestrator.java:141)
-	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:57)
-	at org.junit.platform.launcher.core.DefaultLauncher.execute(DefaultLauncher.java:103)
-	at org.junit.platform.launcher.core.DefaultLauncher.execute(DefaultLauncher.java:85)
-	at org.junit.platform.launcher.core.DelegatingLauncher.execute(DelegatingLauncher.java:47)
-	at org.junit.platform.launcher.core.SessionPerRequestLauncher.execute(SessionPerRequestLauncher.java:63)
-	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.execute(JUnitPlatformProvider.java:188)
-	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.invokeAllTests(JUnitPlatformProvider.java:154)
-	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.invoke(JUnitPlatformProvider.java:128)
-	at org.apache.maven.surefire.booter.ForkedBooter.runSuitesInProcess(ForkedBooter.java:428)
-	at org.apache.maven.surefire.booter.ForkedBooter.execute(ForkedBooter.java:162)
-	at org.apache.maven.surefire.booter.ForkedBooter.run(ForkedBooter.java:562)
-	at org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:548)
-2025-06-18 19:18:51 [main] ERROR c.f.query.service.QueryServiceImpl - ❌ Failed to decrypt query vector
-com.fspann.crypto.AesGcmCryptoService$CryptoException: Query decryption failed
-	at com.fspann.crypto.AesGcmCryptoService.lambda$decryptQuery$2(AesGcmCryptoService.java:82)
-	at io.micrometer.core.instrument.AbstractTimer.record(AbstractTimer.java:168)
-	at com.fspann.crypto.AesGcmCryptoService.decryptQuery(AesGcmCryptoService.java:77)
-	at com.fspann.query.service.QueryServiceImpl.search(QueryServiceImpl.java:48)
-	at com.fspann.api.ForwardSecureANNSystem.queryWithCloak(ForwardSecureANNSystem.java:292)
-	at com.fspann.api.ForwardSecureANNSystem.runEndToEnd(ForwardSecureANNSystem.java:359)
-	at com.fspann.api.ForwardSecureANNSystemIntegrationTest.testVisualization(ForwardSecureANNSystemIntegrationTest.java:129)
-	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
-	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
-	at org.junit.platform.commons.util.ReflectionUtils.invokeMethod(ReflectionUtils.java:766)
-	at org.junit.jupiter.engine.execution.MethodInvocation.proceed(MethodInvocation.java:60)
-	at org.junit.jupiter.engine.execution.InvocationInterceptorChain$ValidatingInvocation.proceed(InvocationInterceptorChain.java:131)
-	at org.junit.jupiter.engine.extension.TimeoutExtension.intercept(TimeoutExtension.java:156)
-	at org.junit.jupiter.engine.extension.TimeoutExtension.interceptTestableMethod(TimeoutExtension.java:147)
-	at org.junit.jupiter.engine.extension.TimeoutExtension.interceptTestMethod(TimeoutExtension.java:86)
-	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker$ReflectiveInterceptorCall.lambda$ofVoidMethod$0(InterceptingExecutableInvoker.java:103)
-	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.lambda$invoke$0(InterceptingExecutableInvoker.java:93)
-	at org.junit.jupiter.engine.execution.InvocationInterceptorChain$InterceptedInvocation.proceed(InvocationInterceptorChain.java:106)
-	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.proceed(InvocationInterceptorChain.java:64)
-	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.chainAndInvoke(InvocationInterceptorChain.java:45)
-	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.invoke(InvocationInterceptorChain.java:37)
-	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.invoke(InterceptingExecutableInvoker.java:92)
-	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.invoke(InterceptingExecutableInvoker.java:86)
-	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.lambda$invokeTestMethod$8(TestMethodTestDescriptor.java:217)
-	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
-	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.invokeTestMethod(TestMethodTestDescriptor.java:213)
-	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.execute(TestMethodTestDescriptor.java:138)
-	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.execute(TestMethodTestDescriptor.java:68)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$6(NodeTestTask.java:151)
-	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$8(NodeTestTask.java:141)
-	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:137)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$9(NodeTestTask.java:139)
-	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:138)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:95)
-	at java.base/java.util.ArrayList.forEach(ArrayList.java:1597)
-	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.invokeAll(SameThreadHierarchicalTestExecutorService.java:41)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$6(NodeTestTask.java:155)
-	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$8(NodeTestTask.java:141)
-	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:137)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$9(NodeTestTask.java:139)
-	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:138)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:95)
-	at java.base/java.util.ArrayList.forEach(ArrayList.java:1597)
-	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.invokeAll(SameThreadHierarchicalTestExecutorService.java:41)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$6(NodeTestTask.java:155)
-	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$8(NodeTestTask.java:141)
-	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:137)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$9(NodeTestTask.java:139)
-	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:138)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:95)
-	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.submit(SameThreadHierarchicalTestExecutorService.java:35)
-	at org.junit.platform.engine.support.hierarchical.HierarchicalTestExecutor.execute(HierarchicalTestExecutor.java:57)
-	at org.junit.platform.engine.support.hierarchical.HierarchicalTestEngine.execute(HierarchicalTestEngine.java:54)
-	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:198)
-	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:169)
-	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:93)
-	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.lambda$execute$0(EngineExecutionOrchestrator.java:58)
-	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.withInterceptedStreams(EngineExecutionOrchestrator.java:141)
-	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:57)
-	at org.junit.platform.launcher.core.DefaultLauncher.execute(DefaultLauncher.java:103)
-	at org.junit.platform.launcher.core.DefaultLauncher.execute(DefaultLauncher.java:85)
-	at org.junit.platform.launcher.core.DelegatingLauncher.execute(DelegatingLauncher.java:47)
-	at org.junit.platform.launcher.core.SessionPerRequestLauncher.execute(SessionPerRequestLauncher.java:63)
-	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.execute(JUnitPlatformProvider.java:188)
-	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.invokeAllTests(JUnitPlatformProvider.java:154)
-	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.invoke(JUnitPlatformProvider.java:128)
-	at org.apache.maven.surefire.booter.ForkedBooter.runSuitesInProcess(ForkedBooter.java:428)
-	at org.apache.maven.surefire.booter.ForkedBooter.execute(ForkedBooter.java:162)
-	at org.apache.maven.surefire.booter.ForkedBooter.run(ForkedBooter.java:562)
-	at org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:548)
-Caused by: javax.crypto.AEADBadTagException: Tag mismatch
-	at java.base/com.sun.crypto.provider.GaloisCounterMode$GCMDecrypt.doFinal(GaloisCounterMode.java:1518)
-	at java.base/com.sun.crypto.provider.GaloisCounterMode.engineDoFinal(GaloisCounterMode.java:415)
-	at java.base/javax.crypto.Cipher.doFinal(Cipher.java:2252)
-	at com.fspann.crypto.EncryptionUtils.decryptVector(EncryptionUtils.java:66)
-	at com.fspann.crypto.AesGcmCryptoService.lambda$decryptQuery$2(AesGcmCryptoService.java:79)
-	... 75 common frames omitted
+  <testcase name="testVisualization(Path)" classname="com.fspann.api.ForwardSecureANNSystemIntegrationTest" time="48.209">
+    <system-out><![CDATA[2025-06-24 16:09:38 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Initializing ForwardSecureANNSystem with config=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-12240658349939763455\config.json, data=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-12240658349939763455\data2d.csv, keys=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-12240658349939763455\keys.ser, dims=[2], metadata=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-12240658349939763455
+2025-06-24 16:09:38 [main] INFO  com.fspann.config.SystemConfig - Successfully loaded config from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-12240658349939763455\config.json
+2025-06-24 16:09:38 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Loaded system configuration
+2025-06-24 16:09:38 [main] INFO  com.fspann.key.KeyManager - Initialized new key store (version 1)
+2025-06-24 16:09:38 [main] INFO  c.fspann.api.ForwardSecureANNSystem - KeyManager initialized
+2025-06-24 16:09:38 [main] INFO  c.fspann.api.ForwardSecureANNSystem - KeyRotationServiceImpl initialized successfully
+2025-06-24 16:09:38 [main] INFO  c.fspann.api.ForwardSecureANNSystem - KeyManager initialized with forward-secure key derivation, using keys file at C:\Users\MEHRAN~1\AppData\Local\Temp\junit-12240658349939763455\keys.ser
+2025-06-24 16:09:38 [main] INFO  c.fspann.crypto.AesGcmCryptoService - AesGcmCryptoService initialized successfully
+2025-06-24 16:09:38 [main] INFO  c.fspann.api.ForwardSecureANNSystem - CryptoService (AES-GCM with forward security) ready
+2025-06-24 16:09:38 [main] INFO  com.fspann.common.MetadataManager - Loaded metadata from metadata.ser
+2025-06-24 16:09:38 [main] INFO  c.fspann.api.ForwardSecureANNSystem - SecureLSHIndexService initialized with 4 shards
+2025-06-24 16:09:38 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Cache and Profiler initialized
+2025-06-24 16:09:38 [main] INFO  c.fspann.api.ForwardSecureANNSystem - QueryService initialized and ready
+2025-06-24 16:09:38 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Loading base data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-12240658349939763455\data2d.csv
+2025-06-24 16:09:38 [main] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-12240658349939763455\data2d.csv using loader for CSV
+2025-06-24 16:09:38 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Loaded 2 vectors for dimension 2
+2025-06-24 16:09:39 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Batch insert complete for 2 vectors in 922.3541 ms
+2025-06-24 16:09:39 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Initial data insertion complete
+2025-06-24 16:09:39 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Number of indexed vectors for dimension 2: 2
+2025-06-24 16:09:39 [main] INFO  c.f.a.ForwardSecureANNSystemIntegrationTest - Indexed vectors for dim=2: 2
+2025-06-24 16:09:39 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Running end-to-end workflow with dataPath=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-12240658349939763455\data2d.csv, topK=1, dim=2
+2025-06-24 16:09:39 [main] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-12240658349939763455\data2d.csv using loader for CSV
+2025-06-24 16:09:40 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Batch insert complete for 2 vectors in 889.4962 ms
+2025-06-24 16:09:40 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Loaded and indexed 2 vectors
+2025-06-24 16:09:40 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Inserting 100 fake points for dimension 2
+2025-06-24 16:09:40 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=fc44b711-4b21-4626-a0c7-a0ffbb6b2dff in 455.5322 ms
+2025-06-24 16:09:41 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=5773975f-0fe7-4ecd-a8e3-bdde1333d1d8 in 471.6568 ms
+2025-06-24 16:09:41 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=3522d949-dc56-4c4f-903f-4160fb1e1fd9 in 566.6881 ms
+2025-06-24 16:09:42 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=44984e58-40a3-4d80-9b74-57c629a47ab8 in 485.8547 ms
+2025-06-24 16:09:42 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=8f385713-2e99-4439-81e1-ed73f9c8fcf4 in 457.1041 ms
+2025-06-24 16:09:43 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=1c77a987-bdec-4c87-af4f-cea2b7577f06 in 450.5437 ms
+2025-06-24 16:09:43 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=bb64cf3f-5984-4b9b-86d6-1f5a248c3182 in 451.4155 ms
+2025-06-24 16:09:44 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=38529d53-247b-40e9-8c9f-c658bd5a6bf3 in 447.7952 ms
+2025-06-24 16:09:44 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=282b7dd4-0a5c-4fb2-a34a-0f5db68d9dbd in 454.4991 ms
+2025-06-24 16:09:44 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=4ea29f3e-dd3b-4700-96c9-6e98a1ca5afc in 443.5202 ms
+2025-06-24 16:09:45 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=4452b619-2ea5-4784-a06e-7184fb705e8d in 455.1765 ms
+2025-06-24 16:09:45 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=7b1adb0b-c031-4d5d-a4bb-4212b25c62db in 461.3496 ms
+2025-06-24 16:09:46 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=b3c4420b-bb46-4c59-8d2b-d617e96b98be in 453.024 ms
+2025-06-24 16:09:46 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=fa28d159-72f0-471d-9277-08dfcbb010c4 in 468.4311 ms
+2025-06-24 16:09:47 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=95214670-52ab-44d5-86ac-15898c7baa38 in 450.8301 ms
+2025-06-24 16:09:47 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=bf378f8a-115e-4944-a8ef-a951c69c7e42 in 451.1045 ms
+2025-06-24 16:09:48 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=5259c40a-0e89-4a3b-bfc1-4bb22987a4a2 in 449.2531 ms
+2025-06-24 16:09:48 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=42e73135-8a07-4add-9bc6-3c00ead4a56c in 451.8671 ms
+2025-06-24 16:09:49 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=6ca1000f-5646-4b92-a9b5-6c2c709c1fa8 in 452.4683 ms
+2025-06-24 16:09:49 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=8b0a45a8-858f-4c39-93cb-31d934016321 in 448.8731 ms
+2025-06-24 16:09:49 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=c1b70083-eec2-4208-b502-1c913a1bc9ff in 462.0288 ms
+2025-06-24 16:09:50 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=8c043808-33dd-4006-a44d-c808e1f55048 in 456.7687 ms
+2025-06-24 16:09:50 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=750ae15d-5863-449f-9707-ee6936304b25 in 464.594 ms
+2025-06-24 16:09:51 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=30fbf31e-fefd-4fd1-9308-7df60255e140 in 454.1838 ms
+2025-06-24 16:09:51 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=b086e6b7-5047-42d5-8654-4ce6e14a1429 in 454.4787 ms
+2025-06-24 16:09:52 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=f343c371-a898-4d92-8f80-d392ba67d860 in 456.2085 ms
+2025-06-24 16:09:52 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=3176124e-c802-42d9-a109-4255746158d6 in 452.0042 ms
+2025-06-24 16:09:53 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=c6b776e4-06f3-4206-b4e7-e8eeeaced1fe in 448.5626 ms
+2025-06-24 16:09:53 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=8140612d-d204-462c-8d9f-ea7211cfe656 in 457.0431 ms
+2025-06-24 16:09:54 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=65fea6a0-fbc1-43f4-802b-5a2f25f71d71 in 453.5925 ms
+2025-06-24 16:09:54 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=43a44b4a-a23d-42ad-a6bf-2f860943ed44 in 459.1133 ms
+2025-06-24 16:09:55 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=7e78b803-7d07-4e15-b28f-5509a15181b2 in 459.4461 ms
+2025-06-24 16:09:55 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=b2d3ba95-299f-4d51-acde-384752f9baf0 in 467.7984 ms
+2025-06-24 16:09:55 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=abbf8b1a-1e53-4d43-b457-d53f04a4bdc3 in 460.6589 ms
+2025-06-24 16:09:56 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=12aca8d8-bbf3-41e5-934c-b6d72e398782 in 449.101 ms
+2025-06-24 16:09:56 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=0639c95f-82b8-49b5-99a7-adcd7b7796a2 in 453.1447 ms
+2025-06-24 16:09:57 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=18a11537-8f7f-48a2-9537-dd6acce7d7b9 in 448.2564 ms
+2025-06-24 16:09:57 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=7ea208a4-7095-4a36-b6c5-be23f8920bcf in 463.4556 ms
+2025-06-24 16:09:58 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=7d7da392-9250-4335-a38c-b55bae4f7078 in 467.0206 ms
+2025-06-24 16:09:58 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=ccab7c99-1cb6-42b5-b12e-fec64c5f70b9 in 456.2167 ms
+2025-06-24 16:09:59 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=67c61402-8192-498c-a0de-f01aee8ad654 in 453.8734 ms
+2025-06-24 16:09:59 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=e89e3de3-aa0c-46b1-84cc-7ce5610e4832 in 459.4665 ms
+2025-06-24 16:10:00 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=3e478a86-dd0f-40dd-8f56-aab2a7264ec9 in 461.8604 ms
+2025-06-24 16:10:00 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=f351b9f7-6312-4e34-aff4-c1a2bca23770 in 452.5949 ms
+2025-06-24 16:10:00 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=da0de5a6-ceb8-475c-9164-abdd453b3c56 in 459.0357 ms
+2025-06-24 16:10:01 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=3f85662d-09c7-4d65-8994-15af9692d69e in 458.439 ms
+2025-06-24 16:10:01 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=6e6bc7f9-d909-45eb-aa1a-79382be6c707 in 459.4005 ms
+2025-06-24 16:10:02 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=65ddeb26-a505-456b-8384-1d43edc808b7 in 462.03 ms
+2025-06-24 16:10:02 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=1ddd3282-6825-4f98-be23-f091d1a91b5a in 457.9678 ms
+2025-06-24 16:10:03 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=466cb534-50d0-45cc-9d33-906e4bbebf31 in 458.1301 ms
+2025-06-24 16:10:03 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=f3dc1139-2700-45e9-a97e-6147099e90b4 in 462.4783 ms
+2025-06-24 16:10:04 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=724e3785-6957-4ec9-a7cc-aab80036515f in 453.7116 ms
+2025-06-24 16:10:04 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=ed0c9dd8-8c1b-423c-ba0a-13df815971eb in 451.1919 ms
+2025-06-24 16:10:05 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=f0da6bb4-e7c2-43b0-ac31-21c8e8040979 in 455.0258 ms
+2025-06-24 16:10:05 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=f65d5d93-e8c0-4dfa-b32c-5a28b0b1d50a in 449.9222 ms
+2025-06-24 16:10:05 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=4c444923-d6da-4776-abf1-4e67d2ac30e9 in 453.0995 ms
+2025-06-24 16:10:06 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=74fba660-bfa3-4a85-8c22-ba5856f503a6 in 468.5208 ms
+2025-06-24 16:10:06 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=ef2d6b49-9640-4eba-a288-1661d92f772d in 457.7889 ms
+2025-06-24 16:10:07 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=2a26ea59-1753-4c17-bd65-0030b8f7fcfb in 449.6346 ms
+2025-06-24 16:10:07 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=f37002bc-e2c2-46f8-b271-29e5514e0f68 in 465.1295 ms
+2025-06-24 16:10:08 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=ba783906-5920-4d7a-ad9b-c14e975a0141 in 461.3537 ms
+2025-06-24 16:10:08 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=b70d3b78-dcca-4546-8aa3-aa346672bfa0 in 453.6167 ms
+2025-06-24 16:10:09 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=d4fce321-c002-4c36-9392-de59ea9d5b01 in 466.4716 ms
+2025-06-24 16:10:09 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=8e50d095-265e-40f4-a11f-9d41995cdad4 in 452.9953 ms
+2025-06-24 16:10:10 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=800ae71f-b1f0-4e23-98ac-267746847311 in 458.9177 ms
+2025-06-24 16:10:10 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=58a449c6-e52e-4ef3-a7d5-2c3d0e3e2c29 in 460.9129 ms
+2025-06-24 16:10:11 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=b9a8af72-3534-4c43-871d-25d5b546767a in 460.8115 ms
+2025-06-24 16:10:11 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=5dd53ef2-ee10-4a5e-9a02-f5848ce8bd0f in 458.3648 ms
+2025-06-24 16:10:11 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=56357934-6c14-45d2-b810-4d9160ece68e in 466.9996 ms
+2025-06-24 16:10:12 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=7ab33aa2-087b-43bf-8c06-03e00d070c28 in 455.2055 ms
+2025-06-24 16:10:12 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=964db2c4-1df4-41c4-8d7f-1b0cee32d1b5 in 452.2916 ms
+2025-06-24 16:10:13 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=c69dbf6d-6476-43a6-9eba-df702dca7853 in 459.7331 ms
+2025-06-24 16:10:13 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=9c82ef5d-ac65-4ab4-a0ae-caf5e6421269 in 459.7039 ms
+2025-06-24 16:10:14 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=204b9619-d329-4cea-9c0b-2c3410400c65 in 461.5651 ms
+2025-06-24 16:10:14 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=ada2c2f8-1e80-4f90-bae0-33b5a2244093 in 453.3151 ms
+2025-06-24 16:10:15 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=12497125-d321-466a-b4df-c85a5e203080 in 449.1032 ms
+2025-06-24 16:10:15 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=8e3ff65b-8db5-47cd-bfc3-13e594dd698c in 456.1043 ms
+2025-06-24 16:10:16 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=f3757967-c803-44f6-9fd4-9efd5908edbb in 457.148 ms
+2025-06-24 16:10:16 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=b69543c2-59d3-4a19-9f5b-4bb0b3b1fab2 in 450.6259 ms
+2025-06-24 16:10:16 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=568fbf14-26fb-4b55-b99a-b49945353e52 in 455.029 ms
+2025-06-24 16:10:17 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=479c5b5f-4939-40f8-8a67-41630b504548 in 457.3673 ms
+2025-06-24 16:10:17 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=1904316e-4eeb-4979-a3fb-d07f3370409f in 451.5147 ms
+2025-06-24 16:10:18 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=557670d4-71b9-4988-954d-9591d0ca97c7 in 456.2333 ms
+2025-06-24 16:10:18 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=5c556731-97b5-46b4-bcdf-05d36ee40f08 in 457.2088 ms
+2025-06-24 16:10:19 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=ea1cfe4c-7817-4e05-94df-f2318a0873dd in 470.68 ms
+2025-06-24 16:10:19 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=c670a0be-081d-47f2-88d3-699a8885dc77 in 453.0779 ms
+2025-06-24 16:10:20 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=63e09e42-98a4-44aa-bd8e-cd5d0cb63c0c in 453.9057 ms
+2025-06-24 16:10:20 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=c774fdf0-79de-4cde-8fc2-f0d89836565d in 460.2951 ms
+2025-06-24 16:10:21 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=22bec9b7-da2a-43f7-8313-00c8f6a8243a in 455.2916 ms
+2025-06-24 16:10:21 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=f1e50aeb-1fd3-4c52-babc-0601c68f2bf1 in 447.7683 ms
+2025-06-24 16:10:22 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=40e58f18-38ae-4d60-85cb-8c2014b7462b in 457.1685 ms
+2025-06-24 16:10:22 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=06139b66-d6cc-42aa-aaf1-3f97d45a0516 in 461.683 ms
+2025-06-24 16:10:22 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=ee992b20-b2d9-4849-a1a2-223218adbe38 in 458.3725 ms
+2025-06-24 16:10:23 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=b5414444-e810-4968-b075-ff46793fa5e2 in 452.3486 ms
+2025-06-24 16:10:23 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=fcb8dccd-bd93-4d84-8d14-04611a66050f in 457.0282 ms
+2025-06-24 16:10:24 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=d5dbc5aa-fd09-4f07-8da0-ac81480b13ff in 448.5122 ms
+2025-06-24 16:10:24 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=c0578ba4-a07e-409b-b00f-daceab64ab94 in 458.696 ms
+2025-06-24 16:10:25 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=fdb949f4-bcdc-4875-9703-9a256145467a in 453.2951 ms
+2025-06-24 16:10:25 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=304aec10-64c8-470c-b333-d30121841f89 in 448.5405 ms
+2025-06-24 16:10:26 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=ab0382f7-6a61-4ea7-8fd9-2423de11ddcf in 449.1149 ms
+2025-06-24 16:10:26 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Cloaked query returned 5 results
+2025-06-24 16:10:26 [main] WARN  c.fspann.api.PerformanceVisualizer - No timing data to visualize
+2025-06-24 16:10:26 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Shutting down ForwardSecureANNSystem
+2025-06-24 16:10:26 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Total indexing time: 47590 ms for 104 inserts
+2025-06-24 16:10:26 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Total query time: 0 ms
+📤 Profiler data written to profiler_metrics.csv
 ]]></system-out>
   </testcase>
 </testsuite>

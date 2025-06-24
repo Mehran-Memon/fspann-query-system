@@ -14,7 +14,7 @@ public class FvecsLoader implements FormatLoader {
     private static final Logger logger = LoggerFactory.getLogger(FvecsLoader.class);
 
     @Override
-    public List<double[]> loadVectors(String path, int batchSize) throws IOException {
+    public List<double[]> loadVectors(String path, int expectedDim) throws IOException {
         List<double[]> data = new ArrayList<>();
         try (BufferedInputStream bis = new BufferedInputStream(new FileInputStream(path))) {
             byte[] dimBuf = new byte[4];
@@ -33,7 +33,10 @@ public class FvecsLoader implements FormatLoader {
                 for (int i = 0; i < dim; i++) vec[i] = tmp[i];
 
                 data.add(vec);
-                if (batchSize > 0 && data.size() >= batchSize) break;
+                // Validate against expectedDim
+                if (expectedDim > 0 && dim != expectedDim) {
+                    throw new IOException(String.format("Dimension mismatch in file %s: expected %d, got %d", path, expectedDim, dim));
+                }
             }
         }
         logger.info("Loaded {} vectors from {}", data.size(), path);

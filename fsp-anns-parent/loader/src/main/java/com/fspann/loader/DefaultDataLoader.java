@@ -24,7 +24,7 @@ public class DefaultDataLoader implements DataLoader {
     }
 
     @Override
-    public List<double[]> loadData(String path, int batchSize) throws IOException {
+    public List<double[]> loadData(String path, int expectedDim) throws IOException {
         String ext = detectExtension(path);
         FormatLoader loader = registry.get(ext);
         if (loader == null) {
@@ -32,7 +32,7 @@ public class DefaultDataLoader implements DataLoader {
             throw new UnsupportedOperationException("Unsupported format: " + ext);
         }
         logger.info("Loading data from {} using loader for {}", path, ext);
-        return loader.loadVectors(path, batchSize);
+        return loader.loadVectors(path, expectedDim);
     }
 
     @Override

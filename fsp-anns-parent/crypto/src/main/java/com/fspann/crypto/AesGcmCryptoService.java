@@ -71,29 +71,34 @@ public class AesGcmCryptoService implements CryptoService {
     }
 
     @Override
-    public double[] decryptQuery(byte[] ciphertext, byte[] iv, SecretKey key) {
-        return decryptTimer.record(() -> {
+    public byte[] encrypt(double[] vector, SecretKey key, byte[] iv) {
+        return encryptTimer.record(() -> {
             try {
-                logger.debug("Decrypting query with IV: {}, key: {}", Base64.getEncoder().encodeToString(iv),
+                logger.debug("Encrypting vector with IV: {}, key: {}",
+                        Base64.getEncoder().encodeToString(iv),
                         Base64.getEncoder().encodeToString(key.getEncoded()));
-                return EncryptionUtils.decryptVector(ciphertext, iv, key);
+                byte[] ciphertext = EncryptionUtils.encryptVector(vector, iv, key);
+                logger.debug("Encrypted ciphertext: {}", Base64.getEncoder().encodeToString(ciphertext));
+                return ciphertext;
             } catch (Exception e) {
-                logger.error("Query decryption failed", e);
-                throw new CryptoException("Query decryption failed", e);
+                logger.error("Encryption failed for vector", e);
+                throw new CryptoException("Encryption failed", e);
             }
         });
     }
 
     @Override
-    public byte[] encrypt(double[] vector, SecretKey key, byte[] iv) {
-        return encryptTimer.record(() -> {
+    public double[] decryptQuery(byte[] ciphertext, byte[] iv, SecretKey key) {
+        return decryptTimer.record(() -> {
             try {
-                logger.debug("Encrypting vector with IV: {}, key: {}", Base64.getEncoder().encodeToString(iv),
-                        Base64.getEncoder().encodeToString(key.getEncoded()));
-                return EncryptionUtils.encryptVector(vector, iv, key);
+                logger.debug("Decrypting query with IV: {}, key: {}, ciphertext: {}",
+                        Base64.getEncoder().encodeToString(iv),
+                        Base64.getEncoder().encodeToString(key.getEncoded()),
+                        Base64.getEncoder().encodeToString(ciphertext));
+                return EncryptionUtils.decryptVector(ciphertext, iv, key);
             } catch (Exception e) {
-                logger.error("Encryption failed for vector", e);
-                throw new CryptoException("Encryption failed", e);
+                logger.error("Query decryption failed", e);
+                throw new CryptoException("Query decryption failed", e);
             }
         });
     }

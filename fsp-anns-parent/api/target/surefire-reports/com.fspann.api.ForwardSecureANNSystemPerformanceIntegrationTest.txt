@@ -1,16 +1,4 @@
 -------------------------------------------------------------------------------
 Test set: com.fspann.api.ForwardSecureANNSystemPerformanceIntegrationTest
 -------------------------------------------------------------------------------
-Tests run: 3, Failures: 1, Errors: 1, Skipped: 0, Time elapsed: 178.703 s <<< FAILURE! - in com.fspann.api.ForwardSecureANNSystemPerformanceIntegrationTest
-com.fspann.api.ForwardSecureANNSystemPerformanceIntegrationTest.bulkPerformanceTest  Time elapsed: 143.782 s  <<< FAILURE!
-org.opentest4j.AssertionFailedError: Insert too slow: 143.7784293 ms ==> expected: <true> but was: <false>
-	at com.fspann.api.ForwardSecureANNSystemPerformanceIntegrationTest.bulkPerformanceTest(ForwardSecureANNSystemPerformanceIntegrationTest.java:102)
-
-com.fspann.api.ForwardSecureANNSystemPerformanceIntegrationTest.endToEndWorkflowTest(Path)  Time elapsed: 16.738 s  <<< ERROR!
-java.lang.RuntimeException: Decryption error: query vector
-	at com.fspann.api.ForwardSecureANNSystemPerformanceIntegrationTest.endToEndWorkflowTest(ForwardSecureANNSystemPerformanceIntegrationTest.java:131)
-Caused by: com.fspann.crypto.AesGcmCryptoService$CryptoException: Query decryption failed
-	at com.fspann.api.ForwardSecureANNSystemPerformanceIntegrationTest.endToEndWorkflowTest(ForwardSecureANNSystemPerformanceIntegrationTest.java:131)
-Caused by: javax.crypto.AEADBadTagException: Tag mismatch
-	at com.fspann.api.ForwardSecureANNSystemPerformanceIntegrationTest.endToEndWorkflowTest(ForwardSecureANNSystemPerformanceIntegrationTest.java:131)
-
+Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 648.965 s - in com.fspann.api.ForwardSecureANNSystemPerformanceIntegrationTest

@@ -18,7 +18,7 @@ public class SystemConfig {
     private int numShards = 32;
 
     @JsonProperty("opsThreshold")
-    private long opsThreshold = 5_000_000;
+    private long opsThreshold = 500_000_000;
 
     @JsonProperty("ageThresholdMs")
     private long ageThresholdMs = 7L * 24 * 60 * 60 * 1000; // 7 days

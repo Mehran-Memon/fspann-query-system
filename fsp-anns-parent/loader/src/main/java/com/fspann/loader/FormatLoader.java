@@ -7,6 +7,6 @@ import java.util.List;
  * Strategy interface for file-format–specific loading logic.
  */
 public interface FormatLoader {
-    List<double[]> loadVectors(String path, int batchSize) throws IOException;
+    List<double[]> loadVectors(String path, int expectedDim) throws IOException;
     List<int[]>   loadIndices(String path, int batchSize) throws IOException;
 }

@@ -56,7 +56,6 @@ public class MetadataManager {
             logger.debug("Saving metadata: {}", dto.getMetadata());
             PersistenceUtils.saveObject(dto, path);
             this.currentPath = path;
-            logger.info("Saved metadata to {}", path);
         } catch (IOException e) {
             logger.error("Failed to save metadata to {}", path, e);
             throw new MetadataException("Failed to save metadata to " + path, e);

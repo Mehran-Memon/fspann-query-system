@@ -34,7 +34,7 @@ class QueryTokenFactoryTest {
         SecretKey mockKey = new SecretKeySpec(new byte[16], "AES");
         when(keyService.getCurrentVersion()).thenReturn(new KeyVersion(7, mockKey));
         when(lsh.getBuckets(any(double[].class))).thenReturn(List.of(1, 2, 3));
-        when(cryptoService.encryptToPoint(eq("query"), any(double[].class), any(SecretKey.class)))
+        when(cryptoService.encryptToPoint(eq("index"), any(double[].class), any(SecretKey.class)))
                 .thenReturn(new EncryptedPoint("query", 0, new byte[12], new byte[32], 7, 2));
 
         factory = new QueryTokenFactory(cryptoService, keyService, lsh, 2, 3);
@@ -49,7 +49,7 @@ class QueryTokenFactoryTest {
         assertEquals(3, token.getBuckets().size());
         assertArrayEquals(vector, token.getPlaintextQuery());
         assertEquals(5, token.getTopK());
-        assertEquals("epoch_v7", token.getEncryptionContext());  // Check encryption context
+        assertEquals(String.format("epoch_%d_dim_%d", 7, vector.length), token.getEncryptionContext());
         assertNotNull(token.getIv());  // Ensure IV is set
         assertNotNull(token.getEncryptedQuery());  // Ensure encrypted query is set
     }

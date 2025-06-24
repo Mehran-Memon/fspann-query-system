@@ -1,5 +1,7 @@
 Label,AvgTime(ms),Runs
-insertFakePoints,16456.9780,2
-batchInsert,888.2399,2
-insert,147.1963,1200
-cloakQuery,0.2000,1
+insertFakePoints,50569.2105,2
+query,0.6778,1
+batchInsert,3115.2574,2
+endToEnd,52281.5940,1
+insert,534.8180,1200
+cloakQuery,0.0569,201

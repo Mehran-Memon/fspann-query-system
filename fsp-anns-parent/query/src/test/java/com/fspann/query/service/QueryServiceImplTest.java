@@ -46,7 +46,8 @@ class QueryServiceImplTest {
         Arrays.fill(encQuery, (byte) 2);
 
         double[] plaintextQuery = new double[]{1.0, 2.0};
-        QueryToken token = new QueryToken(List.of(1, 2), iv, encQuery, plaintextQuery, 2, 1, "epoch_v7");
+        String encryptionContext = String.format("epoch_%d_dim_%d", 7, plaintextQuery.length);
+        QueryToken token = new QueryToken(List.of(1, 2), iv, encQuery, plaintextQuery, 2, 1, encryptionContext);
 
         SecretKey queryKey = new SecretKeySpec(new byte[32], "AES");
         KeyVersion queryVersion = new KeyVersion(7, queryKey);
@@ -86,7 +87,9 @@ class QueryServiceImplTest {
         byte[] iv = new byte[12];
         byte[] encQuery = new byte[32];
         double[] plaintextQuery = new double[]{1.0, 2.0, 3.0};
-        QueryToken token = new QueryToken(List.of(1, 2), iv, encQuery, plaintextQuery, 2, 1, "epoch_v7");
+        String encryptionContext = String.format("epoch_%d_dim_%d", 7, plaintextQuery.length);
+
+        QueryToken token = new QueryToken(List.of(1, 2), iv, encQuery, plaintextQuery, 2, 1,encryptionContext );
 
         SecretKey queryKey = new SecretKeySpec(new byte[32], "AES");
         KeyVersion queryVersion = new KeyVersion(7, queryKey);
@@ -125,8 +128,9 @@ class QueryServiceImplTest {
         byte[] iv = new byte[12];
         byte[] encQuery = new byte[32];
         double[] vector = new double[]{1, 2};
+        String encryptionContext = String.format("epoch_%d_dim_%d", 7, vector.length);
 
-        QueryToken token = new QueryToken(List.of(1), iv, encQuery, vector, 1, 1, "epoch_v7");
+        QueryToken token = new QueryToken(List.of(1), iv, encQuery, vector, 1, 1, encryptionContext);
         SecretKey key = new SecretKeySpec(new byte[32], "AES");
         KeyVersion version = new KeyVersion(7, key);
 
@@ -143,7 +147,8 @@ class QueryServiceImplTest {
         byte[] encQuery = new byte[32];
         double[] query = new double[]{0.5, 0.6};
 
-        QueryToken token = new QueryToken(List.of(5), iv, encQuery, query, 10, 1, "epoch_v1");
+        String encryptionContext = String.format("epoch_%d_dim_%d", 1, query.length);
+        QueryToken token = new QueryToken(List.of(5), iv, encQuery, query, 10, 1, encryptionContext);
         SecretKey key = new SecretKeySpec(new byte[32], "AES");
         KeyVersion version = new KeyVersion(1, key);
 
