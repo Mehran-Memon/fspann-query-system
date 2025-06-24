@@ -2,29 +2,30 @@ package com.fspann.api;
 
 import com.fspann.common.QueryResult;
 import org.jfree.chart.ChartFactory;
-import org.jfree.chart.ChartPanel;
 import org.jfree.chart.JFreeChart;
-import org.jfree.chart.plot.PlotOrientation;
+import org.jfree.chart.ChartUtils;
+import org.jfree.chart.axis.NumberAxis;
+import org.jfree.chart.plot.XYPlot;
+import org.jfree.chart.renderer.GrayPaintScale;
+import org.jfree.chart.renderer.PaintScale;
+import org.jfree.chart.renderer.xy.XYBlockRenderer;
 import org.jfree.data.category.DefaultCategoryDataset;
-import org.jfree.data.xy.XYSeries;
-import org.jfree.data.xy.XYSeriesCollection;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.swing.*;
 import java.awt.*;
+import java.io.File;
+import java.io.IOException;
+import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
+import org.jfree.data.xy.DefaultXYZDataset;
 
 /**
- * Enhanced visualizer for performance metrics, data, and encryption keys using JFreeChart.
+ * Visualizes performance metrics and query results using JFreeChart.
  */
 public class PerformanceVisualizer {
     private static final Logger logger = LoggerFactory.getLogger(PerformanceVisualizer.class);
 
-    /**
-     * Visualizes a list of timing measurements.
-     */
     public static void visualizeTimings(List<Long> timings) {
         if (timings == null || timings.isEmpty()) {
             logger.warn("No timing data to visualize");
@@ -40,49 +41,57 @@ public class PerformanceVisualizer {
                 "Operation Timings",
                 "Operation",
                 "Time (ms)",
-                dataset,
-                PlotOrientation.VERTICAL,
-                true, true, false
+                dataset
         );
 
-        ChartPanel chartPanel = new ChartPanel(chart);
-        chartPanel.setPreferredSize(new Dimension(800, 600));
-        displayInTab("Timings", chartPanel);
+        saveChart(chart, "results_timings.png");
     }
 
-    /**
-     * Visualizes a confusion matrix for query accuracy.
-     */
+
     public static void visualizeConfusionMatrix(int[][] confusionMatrix, int topK) {
         if (confusionMatrix == null || confusionMatrix.length == 0) {
             logger.warn("No confusion matrix data to visualize");
             return;
         }
 
-        DefaultCategoryDataset dataset = new DefaultCategoryDataset();
-        for (int i = 0; i < Math.min(confusionMatrix.length, topK); i++) {
-            for (int j = 0; j < Math.min(confusionMatrix[i].length, topK); j++) {
-                dataset.addValue(confusionMatrix[i][j], "Predicted Rank " + i, "True Rank " + j);
+        DefaultXYZDataset dataset = new DefaultXYZDataset();
+
+        int rows = confusionMatrix.length;
+        int cols = confusionMatrix[0].length;
+
+        double[] xValues = new double[rows * cols];
+        double[] yValues = new double[rows * cols];
+        double[] zValues = new double[rows * cols];
+
+        int index = 0;
+        for (int i = 0; i < rows; i++) {
+            for (int j = 0; j < cols; j++) {
+                xValues[index] = j;  // X = True Rank
+                yValues[index] = i;  // Y = Predicted Rank
+                zValues[index] = confusionMatrix[i][j]; // Value
+                index++;
             }
         }
 
-        JFreeChart chart = ChartFactory.createBarChart(
-                "Confusion Matrix",
-                "True Rank",
-                "Count",
-                dataset,
-                PlotOrientation.VERTICAL,
-                true, true, false
-        );
+        double[][] data = new double[][] { xValues, yValues, zValues };
+        dataset.addSeries("Confusion Matrix", data);
 
-        ChartPanel chartPanel = new ChartPanel(chart);
-        chartPanel.setPreferredSize(new Dimension(800, 600));
-        displayInTab("Confusion Matrix", chartPanel);
+        NumberAxis xAxis = new NumberAxis("True Rank");
+        NumberAxis yAxis = new NumberAxis("Predicted Rank");
+
+        XYBlockRenderer renderer = new XYBlockRenderer();
+        PaintScale scale = new GrayPaintScale(0, Arrays.stream(zValues).max().orElse(1));
+        renderer.setPaintScale(scale);
+        renderer.setBlockHeight(1.0);
+        renderer.setBlockWidth(1.0);
+
+        XYPlot plot = new XYPlot(dataset, xAxis, yAxis, renderer);
+        plot.setBackgroundPaint(Color.WHITE);
+
+        JFreeChart chart = new JFreeChart("Confusion Matrix", JFreeChart.DEFAULT_TITLE_FONT, plot, false);
+
+        saveChart(chart, "results_confusion_matrix.png");
     }
-
-    /**
-     * Visualizes query results distances.
-     */
     public static void visualizeQueryResults(List<QueryResult> results) {
         if (results == null || results.isEmpty()) {
             logger.warn("No query results to visualize");
@@ -98,230 +107,98 @@ public class PerformanceVisualizer {
                 "Query Results",
                 "Neighbor ID",
                 "Distance",
-                dataset,
-                PlotOrientation.VERTICAL,
-                true, true, false
+                dataset
         );
 
-        ChartPanel chartPanel = new ChartPanel(chart);
-        chartPanel.setPreferredSize(new Dimension(800, 600));
-        displayInTab("Query Results", chartPanel);
+        saveChart(chart, "results_query_results.png");
     }
 
-    /**
-     * Visualizes raw data (2D projection for high-dimensional data).
-     */
-    public static void visualizeRawData(List<double[]> vectors, int dim, String datasetName) {
-        if (vectors == null || vectors.isEmpty()) {
-            logger.warn("No raw data to visualize for dataset {}", datasetName);
-            return;
-        }
-
-        XYSeries series = new XYSeries("Raw Data");
-        for (double[] vec : vectors) {
-            series.add(vec[0], dim > 1 ? vec[1] : 0.0);
-        }
-
-        XYSeriesCollection dataset = new XYSeriesCollection(series);
-        JFreeChart chart = ChartFactory.createScatterPlot(
-                "Raw Data - " + datasetName,
-                "Dimension 1",
-                dim > 1 ? "Dimension 2" : "Value",
-                dataset,
-                PlotOrientation.VERTICAL,
-                true, true, false
-        );
-
-        ChartPanel chartPanel = new ChartPanel(chart);
-        chartPanel.setPreferredSize(new Dimension(800, 600));
-        displayInTab("Raw Data - " + datasetName, chartPanel);
-    }
-
-    /**
-     * Visualizes indexed data.
-     */
-    public static void visualizeIndexedData(List<double[]> vectors, int dim, String datasetName) {
-        if (vectors == null || vectors.isEmpty()) {
-            logger.warn("No indexed data to visualize for dataset {}", datasetName);
-            return;
-        }
-
-        XYSeries series = new XYSeries("Indexed Data");
-        for (double[] vec : vectors) {
-            series.add(vec[0], dim > 1 ? vec[1] : 0.0);
-        }
-
-        XYSeriesCollection dataset = new XYSeriesCollection(series);
-        JFreeChart chart = ChartFactory.createScatterPlot(
-                "Indexed Data - " + datasetName,
-                "Dimension 1",
-                dim > 1 ? "Dimension 2" : "Value",
-                dataset,
-                PlotOrientation.VERTICAL,
-                true, true, false
-        );
-
-        ChartPanel chartPanel = new ChartPanel(chart);
-        chartPanel.setPreferredSize(new Dimension(800, 600));
-        displayInTab("Indexed Data - " + datasetName, chartPanel);
-    }
-
-    /**
-     * Visualizes fake points vs real data.
-     */
-    public static void visualizeFakePoints(List<double[]> fakePoints, List<double[]> realData, int dim) {
-        if (fakePoints == null || fakePoints.isEmpty()) {
-            logger.warn("No fake points to visualize");
-            return;
-        }
-
-        XYSeries fakeSeries = new XYSeries("Fake Points");
-        XYSeries realSeries = new XYSeries("Real Data");
-        for (double[] vec : fakePoints) {
-            fakeSeries.add(vec[0], dim > 1 ? vec[1] : 0.0);
-        }
-        for (double[] vec : realData) {
-            realSeries.add(vec[0], dim > 1 ? vec[1] : 0.0);
-        }
-
-        XYSeriesCollection dataset = new XYSeriesCollection();
-        dataset.addSeries(fakeSeries);
-        dataset.addSeries(realSeries);
-        JFreeChart chart = ChartFactory.createScatterPlot(
-                "Fake vs Real Points",
-                "Dimension 1",
-                dim > 1 ? "Dimension 2" : "Value",
-                dataset,
-                PlotOrientation.VERTICAL,
-                true, true, false
-        );
-
-        ChartPanel chartPanel = new ChartPanel(chart);
-        chartPanel.setPreferredSize(new Dimension(800, 600));
-        displayInTab("Fake vs Real Points", chartPanel);
-    }
-
-    /**
-     * Visualizes encryption keys.
-     */
-    public static void visualizeEncryptionKeys(Map<String, byte[]> keys) {
-        if (keys == null || keys.isEmpty()) {
-            logger.warn("No encryption keys to visualize");
+    public static void visualizeKNeighbors(List<QueryResult> results, int topK, int dim) {
+        if (results == null || results.isEmpty()) {
+            logger.warn("No k-neighbors results to visualize");
             return;
         }
 
         DefaultCategoryDataset dataset = new DefaultCategoryDataset();
-        int index = 0;
-        for (Map.Entry<String, byte[]> entry : keys.entrySet()) {
-            dataset.addValue(entry.getValue().length, "Key Length", "Key " + index++);
+        for (QueryResult result : results) {
+            dataset.addValue(result.getDistance(), "Distance", result.getId());
         }
 
         JFreeChart chart = ChartFactory.createBarChart(
-                "Encryption Key Lengths",
-                "Key",
-                "Length (bytes)",
-                dataset,
-                PlotOrientation.VERTICAL,
-                true, true, false
-        );
-
-        ChartPanel chartPanel = new ChartPanel(chart);
-        chartPanel.setPreferredSize(new Dimension(800, 600));
-        displayInTab("Encryption Keys", chartPanel);
-    }
-
-    /**
-     * Visualizes k-nearest neighbors.
-     */
-    public static void visualizeKNeighbors(List<QueryResult> results, int topK, int dim) {
-        if (results == null || results.isEmpty()) {
-            logger.warn("No k-neighbor results to visualize");
-            return;
-        }
-
-        XYSeries series = new XYSeries("K-Neighbors");
-        for (QueryResult result : results) {
-            series.add(result.getDistance(), 0.0);
-        }
-
-        XYSeriesCollection dataset = new XYSeriesCollection(series);
-        JFreeChart chart = ChartFactory.createScatterPlot(
-                "K-Nearest Neighbors (Top " + topK + ")",
+                String.format("K-Nearest Neighbors (K=%d, D=%d)", topK, dim),
+                "Neighbor ID",
                 "Distance",
-                "Value",
-                dataset,
-                PlotOrientation.VERTICAL,
-                true, true, false
+                dataset
         );
 
-        ChartPanel chartPanel = new ChartPanel(chart);
-        chartPanel.setPreferredSize(new Dimension(800, 600));
-        displayInTab("K-Neighbors", chartPanel);
+        saveChart(chart, "results_kneighbors_d" + dim + ".png");
     }
 
-    /**
-     * Visualizes comparison of multiple datasets.
-     */
-    public static void visualizeDatasetComparison(List<List<double[]>> datasets, List<String> datasetNames, int dim) {
-        if (datasets == null || datasets.isEmpty() || datasetNames == null || datasetNames.isEmpty()) {
-            logger.warn("No datasets to compare");
-            return;
+    public static void visualizeFakePoints(List<double[]> fakePoints, List<double[]> indexedPoints, int dim) {
+        logger.info("Visualizing fake points vs indexed points — saved as PNG");
+
+        DefaultCategoryDataset dataset = new DefaultCategoryDataset();
+
+        for (int i = 0; i < fakePoints.size(); i++) {
+            dataset.addValue(fakePoints.get(i)[0], "Fake Point", "F" + i);
         }
 
-        XYSeriesCollection dataset = new XYSeriesCollection();
-        for (int i = 0; i < datasets.size(); i++) {
-            XYSeries series = new XYSeries(datasetNames.get(i));
-            for (double[] vec : datasets.get(i)) {
-                series.add(vec[0], dim > 1 ? vec[1] : 0.0);
-            }
-            dataset.addSeries(series);
+        for (int i = 0; i < indexedPoints.size(); i++) {
+            dataset.addValue(indexedPoints.get(i)[0], "Indexed Point", "P" + i);
         }
 
-        JFreeChart chart = ChartFactory.createScatterPlot(
-                "Dataset Comparison",
-                "Dimension 1",
-                dim > 1 ? "Dimension 2" : "Value",
-                dataset,
-                PlotOrientation.VERTICAL,
-                true, true, false
+        JFreeChart chart = ChartFactory.createBarChart(
+                String.format("Fake Points vs Indexed Points (D=%d)", dim),
+                "Point",
+                "First Dimension Value",
+                dataset
         );
 
-        ChartPanel chartPanel = new ChartPanel(chart);
-        chartPanel.setPreferredSize(new Dimension(800, 600));
-        displayInTab("Dataset Comparison", chartPanel);
+        saveChart(chart, "results_fake_points_d" + dim + ".png");
     }
 
-    /**
-     * Displays a chart in a tabbed pane.
-     */
-    private static void displayInTab(String tabName, ChartPanel chartPanel) {
-        JFrame frame = getOrCreateFrame();
-        JTabbedPane tabbedPane = (JTabbedPane) frame.getContentPane().getComponent(0);
+    public static void visualizeRawData(List<double[]> vectors, int dim, String label) {
+        logger.info("Saving raw data visualization: {}", label);
 
-        for (int i = 0; i < tabbedPane.getTabCount(); i++) {
-            if (tabbedPane.getTitleAt(i).equals(tabName)) {
-                tabbedPane.remove(i);
-                break;
-            }
+        DefaultCategoryDataset dataset = new DefaultCategoryDataset();
+        for (int i = 0; i < vectors.size(); i++) {
+            dataset.addValue(vectors.get(i)[0], label, "Vec" + i);
         }
 
-        tabbedPane.add(tabName, chartPanel);
-        frame.pack();
-        frame.setVisible(true);
+        JFreeChart chart = ChartFactory.createBarChart(
+                "Raw Data " + label,
+                "Vector",
+                "First Dimension",
+                dataset
+        );
+
+        saveChart(chart, "results_raw_" + label.replace(" ", "_") + "_d" + dim + ".png");
     }
 
-    /**
-     * Gets or creates the singleton JFrame with a tabbed pane.
-     */
-    private static JFrame getOrCreateFrame() {
-        JFrame frame = (JFrame) SwingUtilities.getWindowAncestor(JOptionPane.getRootFrame());
-        if (frame == null || !frame.isDisplayable()) {
-            frame = new JFrame("Performance Visualizations");
-            frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
-            JTabbedPane tabbedPane = new JTabbedPane();
-            frame.getContentPane().add(tabbedPane);
-            frame.setSize(850, 650);
+    public static void visualizeIndexedData(List<double[]> vectors, int dim, String label) {
+        logger.info("Saving indexed data visualization: {}", label);
+
+        DefaultCategoryDataset dataset = new DefaultCategoryDataset();
+        for (int i = 0; i < vectors.size(); i++) {
+            dataset.addValue(vectors.get(i)[0], label, "Vec" + i);
         }
-        return frame;
+
+        JFreeChart chart = ChartFactory.createBarChart(
+                "Indexed Data " + label,
+                "Vector",
+                "First Dimension",
+                dataset
+        );
+
+        saveChart(chart, "results_indexed_" + label.replace(" ", "_") + "_d" + dim + ".png");
+    }
+
+    public static void saveChart(JFreeChart chart, String filename) {
+        try {
+            ChartUtils.saveChartAsPNG(new File(filename), chart, 1000, 600);
+            logger.info("Chart saved to: {}", filename);
+        } catch (IOException e) {
+            logger.error("Failed to save chart: {}", filename, e);
+        }
     }
 }
