@@ -15,11 +15,17 @@ import com.fspann.query.core.QueryTokenFactory;
 import com.fspann.query.service.QueryService;
 import com.fspann.query.service.QueryServiceImpl;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.jfree.chart.ChartUtils;
+import org.jfree.chart.JFreeChart;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -312,6 +318,45 @@ public class ForwardSecureANNSystem {
         PerformanceVisualizer.visualizeIndexedData(dimensionDataMap.getOrDefault(dim, new ArrayList<>()), dim, datasetName);
     }
 
+    public static void saveChart(JFreeChart chart, String filename) {
+        try {
+            ChartUtils.saveChartAsPNG(new File(filename), chart, 800, 600);
+            logger.info("Saved chart to {}", filename);
+        } catch (IOException e) {
+            logger.error("Failed to save chart to {}", filename, e);
+        }
+    }
+
+    public class ResultWriter {
+        private final Path outputPath;
+
+        public ResultWriter(Path outputPath) {
+            this.outputPath = outputPath;
+        }
+
+        public void writeTable(String title, String[] columns, List<String[]> rows) throws IOException {
+            try (BufferedWriter writer = Files.newBufferedWriter(outputPath, StandardOpenOption.CREATE, StandardOpenOption.APPEND)) {
+                writer.write(title + "\n");
+                writer.write(String.join("\t", columns) + "\n");
+                for (String[] row : rows) {
+                    writer.write(String.join("\t", row) + "\n");
+                }
+                writer.write("\n\n");
+            }
+        }
+    }
+
+    public void saveResults(String filename, List<QueryResult> results, int dim) throws IOException {
+        ResultWriter rw = new ResultWriter(Path.of(filename));
+        rw.writeTable(
+                "Query Results (dim=" + dim + ")",
+                new String[]{"Neighbor ID", "Distance"},
+                results.stream()
+                        .map(r -> new String[]{r.getId(), String.format("%.6f", r.getDistance())})
+                        .collect(Collectors.toList())
+        );
+    }
+
     /** Clean up resources */
     public void shutdown() {
         logger.info("Shutting down ForwardSecureANNSystem");
@@ -320,6 +365,7 @@ public class ForwardSecureANNSystem {
         if (profiler != null) profiler.exportToCSV("profiler_metrics.csv");
     }
 
+    /** End-to-end workflow with visualization and accuracy */
     /** End-to-end workflow with visualization and accuracy */
     public void runEndToEnd(String dataPath, double[] queryVector, int topK, int dim) throws Exception {
         logger.info("Running end-to-end workflow with dataPath={}, topK={}, dim={}", dataPath, topK, dim);
@@ -355,6 +401,13 @@ public class ForwardSecureANNSystem {
         // Compute and visualize accuracy matrix
         int[][] confusionMatrix = evaluateAccuracy(vectorMap, queryVector, results);
         PerformanceVisualizer.visualizeConfusionMatrix(confusionMatrix, topK);
+
+        // Save result table to file
+        ResultWriter rw = new ResultWriter(Path.of("results_table.txt"));
+        rw.writeTable("ANN Query Results (dim=" + dim + ", topK=" + topK + ")", new String[]{"Neighbor ID", "Distance"},
+                results.stream()
+                        .map(r -> new String[]{r.getId(), String.format("%.6f", r.getDistance())})
+                        .collect(Collectors.toList()));
 
         if (profiler != null) {
             profiler.log("endToEnd");
@@ -421,21 +474,24 @@ public class ForwardSecureANNSystem {
         List<Integer> dimensions = Arrays.stream(args[3].split(","))
                 .map(Integer::parseInt)
                 .collect(Collectors.toList());
-        String metadataPath = args[4];  // The 5th argument: metadataPath
+        String metadataPath = args[4];
 
         ForwardSecureANNSystem sys = new ForwardSecureANNSystem(configFile, dataPath, keysFile, dimensions, Path.of(metadataPath));
         int dim = dimensions.get(0);
+
+        // Run End-to-End with random query
         double[] queryVector = new double[dim];
         Arrays.fill(queryVector, Math.random());
-        logger.info("Generated random query vector: {}", Arrays.toString(queryVector));
-
         sys.runEndToEnd(dataPath, queryVector, DEFAULT_TOP_K, dim);
 
+        // Additional Query
         double[] additionalQuery = new double[dim];
         Arrays.fill(additionalQuery, Math.random() * 2);
-        logger.info("Running additional query with vector: {}", Arrays.toString(additionalQuery));
         List<QueryResult> additionalResults = sys.query(additionalQuery, DEFAULT_TOP_K, dim);
-        PerformanceVisualizer.visualizeQueryResults(additionalResults);
+
+        // Save additional results
+        sys.saveResults("results_table.txt", additionalResults, dim);
+
 
         sys.shutdown();
     }
