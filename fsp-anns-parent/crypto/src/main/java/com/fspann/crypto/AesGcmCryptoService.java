@@ -20,7 +20,7 @@ public class AesGcmCryptoService implements CryptoService {
     private final MeterRegistry registry;
     private final Timer encryptTimer;
     private final Timer decryptTimer;
-    private final KeyLifeCycleService keyService;
+    private KeyLifeCycleService keyService;
     private final MetadataManager metadataManager;
 
     public AesGcmCryptoService(MeterRegistry registry, KeyLifeCycleService keyService, MetadataManager metadataManager) {
@@ -150,4 +150,15 @@ public class AesGcmCryptoService implements CryptoService {
             super(message, cause);
         }
     }
+
+    public void setKeyService(KeyLifeCycleService keyService) {
+        this.keyService = keyService;
+    }
+
+    @Override
+    public KeyLifeCycleService getKeyService() {
+        return this.keyService;
+    }
+
+
 }

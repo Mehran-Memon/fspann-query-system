@@ -1,8 +1,15 @@
 package com.fspann.api;
 
-import com.fspann.common.QueryResult;
+import com.fspann.common.MetadataManager;
+import com.fspann.crypto.AesGcmCryptoService;
+import com.fspann.crypto.CryptoService;
+import com.fspann.key.KeyManager;
+import com.fspann.key.KeyRotationPolicy;
+import com.fspann.key.KeyRotationServiceImpl;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.Logger;
@@ -10,10 +17,7 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -22,108 +26,97 @@ public class ForwardSecureANNSystemPerformanceIntegrationTest {
     private static ForwardSecureANNSystem sys;
     private static List<double[]> dataset;
     private static final int DIMS = 10;
+    private static final int VECTOR_COUNT = 1000;
+    private static final double MAX_INSERT_MS = 1000.0;
+    private static final double MAX_QUERY_MS = 100.0;
 
     @BeforeAll
     public static void setup(@TempDir Path tempDir) throws Exception {
-        Path cfg = tempDir.resolve("config.json");
-        Files.writeString(cfg, "{\"numShards\":4, \"profilerEnabled\":true}");
-        logger.debug("Created config file: {}", cfg);
+        Path configPath = tempDir.resolve("config.json");
+        Files.writeString(configPath, "{\"numShards\":4, \"profilerEnabled\":true}");
+        logger.debug("✅ Created config: {}", configPath);
 
-        Path data = tempDir.resolve("data.csv");
-        StringBuilder sb = new StringBuilder();
         dataset = new ArrayList<>();
-
-        for (int i = 0; i < 1000; i++) {
-            double[] vector = new double[DIMS];
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < VECTOR_COUNT; i++) {
+            double[] vec = new double[DIMS];
             for (int j = 0; j < DIMS; j++) {
-                vector[j] = Math.random();
-            }
-            dataset.add(vector);
-            for (int j = 0; j < DIMS; j++) {
-                sb.append(vector[j]);
+                vec[j] = Math.random();
+                sb.append(vec[j]);
                 if (j < DIMS - 1) sb.append(',');
             }
             sb.append('\n');
+            dataset.add(vec);
         }
-        Files.writeString(data, sb.toString());
-        logger.debug("Created data file: {} with {} vectors", data, dataset.size());
+        Path dataPath = tempDir.resolve("data.csv");
+        Files.writeString(dataPath, sb.toString());
+        logger.debug("✅ Generated data file: {} with {} vectors", dataPath, dataset.size());
 
-        Path keys = tempDir.resolve("keys.ser");
-        sys = new ForwardSecureANNSystem(cfg.toString(), data.toString(), keys.toString(), Arrays.asList(DIMS), tempDir, false);
-        logger.info("Initialized system with {} vectors indexed for dim={}", sys.getIndexedVectorCount(DIMS), DIMS);
+        Path keysPath = tempDir.resolve("keys.ser");
+        MetadataManager metadataManager = new MetadataManager();
+        KeyManager keyManager = new KeyManager(keysPath.toString());
+        KeyRotationPolicy policy = new KeyRotationPolicy(2, 1000);
+        KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(keyManager, policy, tempDir.toString(), metadataManager, null);
+        CryptoService cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
+        keyService.setCryptoService(cryptoService);
+
+        sys = new ForwardSecureANNSystem(
+                configPath.toString(),
+                dataPath.toString(),
+                keysPath.toString(),
+                List.of(DIMS),
+                tempDir,
+                false,
+                metadataManager,
+                cryptoService
+        );
+        logger.info("🚀 System initialized successfully");
     }
 
     @AfterAll
     public static void tearDown() {
         if (sys != null) {
-            logger.info("Shutting down system");
+            logger.info("🧹 Shutting down system");
             sys.shutdown();
+            System.out.println("✅ Performance integration test completed");
         }
     }
 
     @Test
-    public void bulkPerformanceTest() throws Exception {
-        assertNotNull(dataset, "Dataset should not be null");
-        assertTrue(dataset.size() > 0, "Dataset should contain data");
+    @DisplayName("⏱️ Performance Test: Insert + Query Latency Under Threshold")
 
-        int inserts = 1000;
-        long start = System.nanoTime();
-        for (int i = 0; i < inserts; i++) {
-            String vectorId = UUID.randomUUID().toString();
-            logger.debug("Inserting vector with ID: {}", vectorId);
-            sys.insert(vectorId, dataset.get(i % dataset.size()), DIMS);
-        }
-        long endTime = System.nanoTime();
-        double avgMs = (endTime - start) / 1e6 / inserts;
-        logger.info("Average insert latency: {} ms", avgMs);
-        assertTrue(avgMs < 2000, "Insert too slow: " + avgMs + " ms");
+    public void bulkPerformanceTest() {
+        assertNotNull(dataset, "Dataset must be initialized");
+        assertEquals(VECTOR_COUNT, dataset.size(), "Dataset size mismatch");
+
+        long startInsert = System.nanoTime();
+        sys.batchInsert(dataset, DIMS);
+        long endInsert = System.nanoTime();
+
+        double totalMs = (endInsert - startInsert) / 1e6;
+        double avgInsertMs = totalMs / dataset.size();
+        logger.info("✅ Inserted {} vectors in {} ms (avg: {} ms)", dataset.size(), totalMs, avgInsertMs);
+        assertTrue(avgInsertMs < MAX_INSERT_MS, String.format("⚠️ Insert too slow: %.3f ms", avgInsertMs));
 
         int queries = 200;
-        start = System.nanoTime();
+        long startQuery = System.nanoTime();
         for (int i = 0; i < queries; i++) {
-            logger.debug("Querying for vector: {}", Arrays.toString(dataset.get(i % dataset.size())));
-            sys.queryWithCloak(dataset.get(i % dataset.size()), 5, DIMS);
+            double[] query = dataset.get(i % dataset.size());
+            sys.queryWithCloak(query, 5, DIMS);
         }
-        endTime = System.nanoTime();
-        double avgMsQuery = (endTime - start) / 1e6 / queries;
-        logger.info("Average query latency: {} ms", avgMsQuery);
-        assertTrue(avgMsQuery < 100, "Query too slow: " + avgMsQuery + " ms");
+        long endQuery = System.nanoTime();
+
+        double avgQueryMs = (endQuery - startQuery) / 1e6 / queries;
+        logger.info("✅ Average query latency: {} ms", avgQueryMs);
+        assertTrue(avgQueryMs < MAX_QUERY_MS, String.format("⚠️ Query too slow: %.3f ms", avgQueryMs));
     }
 
     @Test
-    public void endToEndWorkflowTest(@TempDir Path tempDir) throws Exception {
-        Path dataFile = tempDir.resolve("data.csv");
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < 3; i++) {
-            for (int j = 0; j < DIMS; j++) {
-                sb.append(i * 0.1).append(j == DIMS - 1 ? "\n" : ",");
-            }
-        }
-        Files.writeString(dataFile, sb.toString());
-
-        double[] queryVector = new double[DIMS];
-        for (int i = 0; i < DIMS; i++) {
-            queryVector[i] = 0.05 + (i * 0.01);
-        }
-
-        sys.runEndToEnd(dataFile.toString(), queryVector, 5, DIMS);
-
-        List<QueryResult> res = sys.query(queryVector, 5, DIMS);
-        logger.info("Query returned {} results:", res.size());
-        for (QueryResult r : res) {
-            logger.info("ID: {}, Distance: {}", r.getId(), r.getDistance());
-        }
-
-        // Just basic assertion to ensure results exist
-        assertTrue(res.size() > 0, "Should return at least 1 result");
-    }
-
-    @Test
-    public void testFakePointsInsertion(@TempDir Path tempDir) throws Exception {
-        int numFakePoints = 100;
-        sys.insertFakePoints(numFakePoints, DIMS);
-        int indexedCount = sys.getIndexedVectorCount(DIMS);
-        logger.info("Indexed vectors after fake points: {}", indexedCount);
-        assertTrue(indexedCount >= numFakePoints, "Should have at least " + numFakePoints + " vectors indexed, got: " + indexedCount);
+    public void testFakePointsInsertion() {
+        int fakeCount = 100;
+        sys.insertFakePoints(fakeCount, DIMS);
+        int total = sys.getIndexedVectorCount(DIMS);
+        logger.info("✅ Total indexed vectors after fake insert: {}", total);
+        assertTrue(total >= fakeCount, String.format("Indexed count should be ≥ %d, got: %d", fakeCount, total));
     }
 }

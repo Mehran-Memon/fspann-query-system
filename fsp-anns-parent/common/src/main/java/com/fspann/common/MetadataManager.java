@@ -3,10 +3,11 @@ package com.fspann.common;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import java.io.IOException;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
+import java.nio.file.Paths;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
+
 import com.fasterxml.jackson.core.type.TypeReference;
 
 /**
@@ -137,6 +138,34 @@ public class MetadataManager {
             super(message, cause);
         }
     }
+
+
+    public List<EncryptedPoint> getAllEncryptedPoints() {
+        return metadata.keySet().stream()
+                .map(this::loadEncryptedPoint)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toList());
+    }
+
+    public void saveEncryptedPoint(EncryptedPoint pt) {
+        try {
+            String fileName = Paths.get(currentPath).resolveSibling(pt.getId() + ".point").toString();
+            PersistenceUtils.<EncryptedPoint>saveObject(pt, fileName);
+        } catch (IOException e) {
+            logger.error("Failed to persist updated point: {}", pt.getId(), e);
+        }
+    }
+
+    private EncryptedPoint loadEncryptedPoint(String id) {
+        try {
+            String fileName = Paths.get(currentPath).resolveSibling(id + ".point").toString();
+            return (EncryptedPoint) PersistenceUtils.loadObject(fileName, new TypeReference<EncryptedPoint>() {});
+        } catch (Exception e) {
+            logger.warn("Failed to load encrypted point for ID: {}", id, e);
+            return null;
+        }
+    }
+
 
     // DTO for serialization
     private static class MetadataDTO implements java.io.Serializable {

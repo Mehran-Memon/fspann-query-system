@@ -35,6 +35,8 @@ public class SecureLSHIndex {
         }
     }
 
+
+
     public void addPoint(EncryptedPoint pt) {
         lock.writeLock().lock();
         try {

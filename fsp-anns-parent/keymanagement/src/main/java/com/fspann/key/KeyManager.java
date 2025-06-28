@@ -114,6 +114,7 @@ public class KeyManager {
             throw new RuntimeException("Key rotation failed", e);
         }
     }
+
     /**
      * Derives a session key from the masterKey using HMAC-SHA256 KDF.
      */
