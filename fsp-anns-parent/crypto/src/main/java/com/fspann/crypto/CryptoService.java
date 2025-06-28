@@ -1,6 +1,7 @@
 package com.fspann.crypto;
 
 import com.fspann.common.EncryptedPoint;
+import com.fspann.common.KeyLifeCycleService;
 
 import javax.crypto.SecretKey;
 
@@ -64,4 +65,7 @@ public interface CryptoService {
      * @return Random IV.
      */
     byte[] generateIV();
+
+    KeyLifeCycleService getKeyService();
+
 }

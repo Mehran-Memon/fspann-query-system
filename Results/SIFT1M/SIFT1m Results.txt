@@ -1,0 +1,98 @@
+~\eclipse-workspace\fspann-query-system\fsp-anns-parent\api git:[fsp-anns-parent]
+java -Xms16g -Xmx64g -jar target/api-0.0.1-SNAPSHOT-jar-with-dependencies.jar "C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\config\target\classes\config.json" "C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\data\sift_dataset\sift\sift_base.fvecs" "C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\data\sift_dataset\sift\sift_query.fvecs" "C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\api\metadata\keys.ser" "128" "C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\api\metadata"
+2025-06-25 16:26:02 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Initializing ForwardSecureANNSystem with config=C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\config\target\classes\config.json, data=C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\data\sift_dataset\sift\sift_base.fvecs, keys=C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\api\metadata\keys.ser, dims=[128], metadata=C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\api\metadata
+2025-06-25 16:26:02 [main] INFO  com.fspann.config.SystemConfig - Successfully loaded config from C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\config\target\classes\config.json
+2025-06-25 16:26:02 [main] INFO  com.fspann.key.KeyManager - Loaded key store up to version 1
+2025-06-25 16:26:02 [main] INFO  c.fspann.crypto.AesGcmCryptoService - AesGcmCryptoService initialized successfully
+2025-06-25 16:26:02 [main] ERROR com.fspann.common.PersistenceUtils - ❌ Failed to load object from metadata.ser: java.io.EOFException
+2025-06-25 16:26:02 [main] WARN  com.fspann.common.MetadataManager - Failed to load metadata from metadata.ser, starting fresh
+java.io.EOFException: null
+        at java.base/java.io.ObjectInputStream$BlockDataInputStream.peekByte(ObjectInputStream.java:3217)
+        at java.base/java.io.ObjectInputStream.readObject0(ObjectInputStream.java:1698)
+        at java.base/java.io.ObjectInputStream.readObject(ObjectInputStream.java:525)
+        at java.base/java.io.ObjectInputStream.readObject(ObjectInputStream.java:483)
+        at java.base/java.util.HashMap.readObject(HashMap.java:1558)
+        at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+        at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+        at java.base/java.io.ObjectStreamClass.invokeReadObject(ObjectStreamClass.java:1108)
+        at java.base/java.io.ObjectInputStream.readSerialData(ObjectInputStream.java:2429)
+        at java.base/java.io.ObjectInputStream.readOrdinaryObject(ObjectInputStream.java:2269)
+        at java.base/java.io.ObjectInputStream.readObject0(ObjectInputStream.java:1747)
+        at java.base/java.io.ObjectInputStream.readObject(ObjectInputStream.java:525)
+        at java.base/java.io.ObjectInputStream.readObject(ObjectInputStream.java:483)
+        at java.base/java.util.HashMap.readObject(HashMap.java:1560)
+        at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+        at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+        at java.base/java.io.ObjectStreamClass.invokeReadObject(ObjectStreamClass.java:1108)
+        at java.base/java.io.ObjectInputStream.readSerialData(ObjectInputStream.java:2429)
+        at java.base/java.io.ObjectInputStream.readOrdinaryObject(ObjectInputStream.java:2269)
+        at java.base/java.io.ObjectInputStream.readObject0(ObjectInputStream.java:1747)
+        at java.base/java.io.ObjectInputStream$FieldValues.<init>(ObjectInputStream.java:2603)
+        at java.base/java.io.ObjectInputStream.readSerialData(ObjectInputStream.java:2454)
+        at java.base/java.io.ObjectInputStream.readOrdinaryObject(ObjectInputStream.java:2269)
+        at java.base/java.io.ObjectInputStream.readObject0(ObjectInputStream.java:1747)
+        at java.base/java.io.ObjectInputStream.readObject(ObjectInputStream.java:525)
+        at java.base/java.io.ObjectInputStream.readObject(ObjectInputStream.java:483)
+        at com.fspann.common.PersistenceUtils.loadObject(PersistenceUtils.java:34)
+        at com.fspann.common.MetadataManager.load(MetadataManager.java:32)
+        at com.fspann.index.service.SecureLSHIndexService.<init>(SecureLSHIndexService.java:53)
+        at com.fspann.index.service.SecureLSHIndexService.<init>(SecureLSHIndexService.java:37)
+        at com.fspann.api.ForwardSecureANNSystem.<init>(ForwardSecureANNSystem.java:102)
+        at com.fspann.api.ForwardSecureANNSystem.main(ForwardSecureANNSystem.java:348)
+2025-06-25 16:26:02 [main] WARN  c.f.i.service.SecureLSHIndexService - Failed to load metadata, starting fresh
+com.fspann.common.MetadataManager$MetadataException: Failed to load metadata from metadata.ser
+        at com.fspann.common.MetadataManager.load(MetadataManager.java:44)
+        at com.fspann.index.service.SecureLSHIndexService.<init>(SecureLSHIndexService.java:53)
+        at com.fspann.index.service.SecureLSHIndexService.<init>(SecureLSHIndexService.java:37)
+        at com.fspann.api.ForwardSecureANNSystem.<init>(ForwardSecureANNSystem.java:102)
+        at com.fspann.api.ForwardSecureANNSystem.main(ForwardSecureANNSystem.java:348)
+Caused by: java.io.EOFException: null
+        at java.base/java.io.ObjectInputStream$BlockDataInputStream.peekByte(ObjectInputStream.java:3217)
+        at java.base/java.io.ObjectInputStream.readObject0(ObjectInputStream.java:1698)
+        at java.base/java.io.ObjectInputStream.readObject(ObjectInputStream.java:525)
+        at java.base/java.io.ObjectInputStream.readObject(ObjectInputStream.java:483)
+        at java.base/java.util.HashMap.readObject(HashMap.java:1558)
+        at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+        at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+        at java.base/java.io.ObjectStreamClass.invokeReadObject(ObjectStreamClass.java:1108)
+        at java.base/java.io.ObjectInputStream.readSerialData(ObjectInputStream.java:2429)
+        at java.base/java.io.ObjectInputStream.readOrdinaryObject(ObjectInputStream.java:2269)
+        at java.base/java.io.ObjectInputStream.readObject0(ObjectInputStream.java:1747)
+        at java.base/java.io.ObjectInputStream.readObject(ObjectInputStream.java:525)
+        at java.base/java.io.ObjectInputStream.readObject(ObjectInputStream.java:483)
+        at java.base/java.util.HashMap.readObject(HashMap.java:1560)
+        at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+        at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+        at java.base/java.io.ObjectStreamClass.invokeReadObject(ObjectStreamClass.java:1108)
+        at java.base/java.io.ObjectInputStream.readSerialData(ObjectInputStream.java:2429)
+        at java.base/java.io.ObjectInputStream.readOrdinaryObject(ObjectInputStream.java:2269)
+        at java.base/java.io.ObjectInputStream.readObject0(ObjectInputStream.java:1747)
+        at java.base/java.io.ObjectInputStream$FieldValues.<init>(ObjectInputStream.java:2603)
+        at java.base/java.io.ObjectInputStream.readSerialData(ObjectInputStream.java:2454)
+        at java.base/java.io.ObjectInputStream.readOrdinaryObject(ObjectInputStream.java:2269)
+        at java.base/java.io.ObjectInputStream.readObject0(ObjectInputStream.java:1747)
+        at java.base/java.io.ObjectInputStream.readObject(ObjectInputStream.java:525)
+        at java.base/java.io.ObjectInputStream.readObject(ObjectInputStream.java:483)
+        at com.fspann.common.PersistenceUtils.loadObject(PersistenceUtils.java:34)
+        at com.fspann.common.MetadataManager.load(MetadataManager.java:32)
+        ... 4 common frames omitted
+        ... 4 common frames omitted
+2025-06-25 16:26:02 [main] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\data\sift_dataset\sift\sift_base.fvecs using loader for FVECS
+2025-06-25 16:26:03 [main] INFO  com.fspann.loader.FvecsLoader - Loaded 1000000 vectors from C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\data\sift_dataset\sift\sift_base.fvecs
+2025-06-25 16:50:19 [pool-2-thread-18] INFO  c.fspann.api.ForwardSecureANNSystem - [BatchInsert] Inserted 10000 of 1000000 vectors... elapsed: 1456154 ms
+2025-06-25 17:26:03 [main] INFO  c.fspann.api.ForwardSecureANNSystem - ✅ Batch insert complete: 1000000 vectors in 3600109 ms
+2025-06-25 17:26:03 [main] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\data\sift_dataset\sift\sift_base.fvecs using loader for FVECS
+2025-06-25 17:26:04 [main] INFO  com.fspann.loader.FvecsLoader - Loaded 1000000 vectors from C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\data\sift_dataset\sift\sift_base.fvecs
+2025-06-25 18:26:04 [main] INFO  c.fspann.api.ForwardSecureANNSystem - ✅ Batch insert complete: 1000000 vectors in 3600100 ms
+2025-06-25 18:49:10 [pool-2-thread-7] INFO  c.fspann.api.ForwardSecureANNSystem - [BatchInsert] Inserted 20000 of 1000000 vectors... elapsed: 8586902 ms
+2025-06-25 19:09:52 [main] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\data\sift_dataset\sift\sift_query.fvecs using loader for FVECS
+2025-06-25 19:09:52 [main] INFO  com.fspann.loader.FvecsLoader - Loaded 10000 vectors from C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\data\sift_dataset\sift\sift_query.fvecs
+2025-06-25 19:09:54 [main] INFO  c.fspann.api.PerformanceVisualizer - Chart saved to: results_query_results.png
+2025-06-25 19:09:54 [main] INFO  c.fspann.api.PerformanceVisualizer - Chart saved to: results_query_results.png
+2025-06-25 19:09:54 [main] INFO  c.fspann.api.PerformanceVisualizer - Chart saved to: results_query_results.png
+
+=== System Shutdown ===
+Total indexing time: 7200209 ms
+Total query time: 136558 ms
+
+? Profiler data written to profiler_metrics.csv

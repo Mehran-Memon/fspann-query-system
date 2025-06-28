@@ -1,6 +1,14 @@
 package com.fspann.api;
 
+import com.fspann.common.MetadataManager;
 import com.fspann.common.QueryResult;
+import com.fspann.crypto.AesGcmCryptoService;
+import com.fspann.crypto.CryptoService;
+import com.fspann.key.KeyManager;
+import com.fspann.key.KeyRotationPolicy;
+import com.fspann.key.KeyRotationServiceImpl;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -11,16 +19,23 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
-import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class ForwardSecureANNSystemIntegrationTest {
     private static final Logger logger = LoggerFactory.getLogger(ForwardSecureANNSystemIntegrationTest.class);
+    private ForwardSecureANNSystem system;
 
     @BeforeEach
-    public void setUp() throws Exception {
-        // No-op: ForwardSecureANNSystem now handles key rotation path per test dir
+    public void setUp() {
+        // No-op
+    }
+
+    @AfterEach
+    public void cleanup() {
+        if (system != null) {
+            system.shutdown();
+        }
     }
 
     @Test
@@ -29,101 +44,77 @@ class ForwardSecureANNSystemIntegrationTest {
         Files.writeString(dataFile, "0.0,0.0\n0.1,0.1\n1.0,1.0\n");
 
         Path configFile = tempDir.resolve("config.json");
-        Files.writeString(configFile, "{\"numShards\":4, \"profilerEnabled\":true, \"opsThreshold\":2147483647, \"ageThresholdMs\":9223372036854775807}");
+        Files.writeString(configFile, "{" +
+                "\"numShards\":4," +
+                "\"profilerEnabled\":true," +
+                "\"opsThreshold\":2147483647," +
+                "\"ageThresholdMs\":9223372036854775807}");
 
         Path keys = tempDir.resolve("keys.ser");
-
         List<Integer> dimensions = Arrays.asList(2);
-        ForwardSecureANNSystem localSys = new ForwardSecureANNSystem(
+
+        MetadataManager metadataManager = new MetadataManager();
+        KeyManager keyManager = new KeyManager(keys.toString());
+        KeyRotationPolicy policy = new KeyRotationPolicy(2, 1000);
+        KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(keyManager, policy, tempDir.toString(), metadataManager, null);
+        CryptoService cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
+        keyService.setCryptoService(cryptoService);
+
+        system = new ForwardSecureANNSystem(
                 configFile.toString(),
                 dataFile.toString(),
                 keys.toString(),
                 dimensions,
-                tempDir, false
+                tempDir,
+                false,
+                metadataManager,
+                cryptoService
         );
 
-        int indexedCount = localSys.getIndexedVectorCount(2);
+        int indexedCount = system.getIndexedVectorCount(2);
         logger.info("Indexed vectors for dim=2: {}", indexedCount);
         assertTrue(indexedCount > 0, "Should have at least 1 vector indexed, got: " + indexedCount);
 
         logger.info("Executing query for vector: [0.05, 0.05]");
-        List<QueryResult> res = localSys.query(new double[]{0.05, 0.05}, 1, 2);
+        List<QueryResult> res = system.query(new double[]{0.05, 0.05}, 1, 2);
 
         assertEquals(1, res.size(), "Should return exactly 1 result");
 
         double expectedDist = Math.hypot(0.05 - 0.1, 0.05 - 0.1);
         double actualDist = res.get(0).getDistance();
-
         assertTrue(Math.abs(actualDist - expectedDist) < 0.05, "Expected distance ~" + expectedDist + " but got: " + actualDist);
-
-        localSys.shutdown();
     }
-
-//    @Test
-//    public void testMultipleDimensions(@TempDir Path tempDir) throws Exception {
-//        Path configFile = tempDir.resolve("config.json");
-//        Files.writeString(configFile, "{\"numShards\":4, \"profilerEnabled\":true}");
-//
-//        Path keys = tempDir.resolve("keys.ser");
-//
-//        List<Integer> dimensions = Arrays.asList(2, 3);
-//        ForwardSecureANNSystem localSys = new ForwardSecureANNSystem(
-//                configFile.toString(),
-//                "", // dataPath unused since we will insert manually
-//                keys.toString(),
-//                dimensions, tempDir
-//        );
-//
-//        // --- 2D data ---
-//        for (int i = 0; i < 5; i++) {
-//            double[] vec2D = new double[] { Math.random(), Math.random() };
-//            localSys.insert(UUID.randomUUID().toString(), vec2D, 2);
-//        }
-//        int count2D = localSys.getIndexedVectorCount(2);
-//        logger.info("Indexed 2D vectors: {}", count2D);
-//        assertTrue(count2D > 0);
-//
-//        // --- 3D data ---
-//        for (int i = 0; i < 5; i++) {
-//            double[] vec3D = new double[] { Math.random(), Math.random(), Math.random() };
-//            localSys.insert(UUID.randomUUID().toString(), vec3D, 3);
-//        }
-//        int count3D = localSys.getIndexedVectorCount(3);
-//        logger.info("Indexed 3D vectors: {}", count3D);
-//        assertTrue(count3D > 0);
-//
-//        // --- Queries ---
-//
-//        // 2D query
-//        double[] query2D = new double[] { 0.1, 0.1 };
-//        List<QueryResult> res2D = localSys.query(query2D, 1, 2);
-//        assertTrue(res2D.size() >= 1);
-//        logger.info("2D query result: {}", res2D.get(0).getDistance());
-//
-//        // 3D query
-//        double[] query3D = new double[] { 0.1, 0.1, 0.1 };
-//        List<QueryResult> res3D = localSys.query(query3D, 1, 3);
-//        assertTrue(res3D.size() >= 1);
-//        logger.info("3D query result: {}", res3D.get(0).getDistance());
-//    }
 
     @Test
     public void testVisualization(@TempDir Path tempDir) throws Exception {
         Path dataFile = tempDir.resolve("data2d.csv");
         Files.writeString(dataFile, "0.0,0.0\n0.1,0.1\n1.0,1.0\n");
 
+        Path queryFile = tempDir.resolve("query2d.csv");
+        Files.writeString(queryFile, "0.05,0.05\n");
+
         Path configFile = tempDir.resolve("config.json");
         Files.writeString(configFile, "{\"numShards\":4, \"profilerEnabled\":true}");
 
         Path keys = tempDir.resolve("keys.ser");
-
         List<Integer> dimensions = Arrays.asList(2);
+
+        MetadataManager metadataManager = new MetadataManager();
+        KeyManager keyManager = new KeyManager(keys.toString());
+        KeyRotationPolicy policy = new KeyRotationPolicy(2, 1000);
+        KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(keyManager, policy, tempDir.toString(), metadataManager, null);
+        CryptoService cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
+        keyService.setCryptoService(cryptoService);
+
         ForwardSecureANNSystem localSys = new ForwardSecureANNSystem(
                 configFile.toString(),
                 dataFile.toString(),
                 keys.toString(),
                 dimensions,
-                tempDir, false
+                tempDir,
+                false,
+                metadataManager,
+                cryptoService
         );
 
         int indexedCount = localSys.getIndexedVectorCount(2);
@@ -131,8 +122,7 @@ class ForwardSecureANNSystemIntegrationTest {
         assertTrue(indexedCount > 0, "Should have at least 1 vector indexed, got: " + indexedCount);
 
         try {
-            double[] queryVector = new double[]{0.05, 0.05};
-            localSys.runEndToEnd(dataFile.toString(), queryVector, 1, 2);
+            localSys.runEndToEnd(dataFile.toString(), queryFile.toString(), 1, 2);
         } catch (Exception e) {
             logger.error("Visualization failed", e);
             throw e;

@@ -1,4 +1,4 @@
 -------------------------------------------------------------------------------
 Test set: com.fspann.api.ForwardSecureANNSystemPerformanceIntegrationTest
 -------------------------------------------------------------------------------
-Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 894.598 s - in com.fspann.api.ForwardSecureANNSystemPerformanceIntegrationTest
+Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 117.905 s - in com.fspann.api.ForwardSecureANNSystemPerformanceIntegrationTest

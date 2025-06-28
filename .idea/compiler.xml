@@ -18,6 +18,7 @@
     </annotationProcessing>
     <bytecodeTargetLevel target="22">
       <module name="data" target="17" />
+      <module name="fsp-anns-parent" target="1.5" />
       <module name="Gdata" target="22" />
       <module name="generate_data" target="22" />
     </bytecodeTargetLevel>

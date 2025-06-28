@@ -7,6 +7,7 @@ com\fspann\common\MetadataManager$MetadataException.class
 com\fspann\common\QueryToken.class
 com\fspann\common\MetadataManager$1.class
 com\fspann\common\KeyLifeCycleService.class
+com\fspann\common\MetadataManager$2.class
 com\fspann\common\EncryptedPoint.class
 com\fspann\common\MetadataManager.class
 com\fspann\common\QueryResult.class

@@ -30,14 +30,12 @@ public class SecureLSHIndexService implements IndexService {
     private final Map<Integer, DimensionContext> dimensionContexts = new ConcurrentHashMap<>();
     private final Map<String, EncryptedPoint> indexedPoints = new ConcurrentHashMap<>();
 
-    // Constructor for production
     public SecureLSHIndexService(CryptoService crypto,
                                  KeyLifeCycleService keyService,
                                  MetadataManager metadataManager) {
         this(crypto, keyService, metadataManager, null, null);
     }
 
-    // Constructor for testing with mocked index and lsh
     public SecureLSHIndexService(CryptoService crypto,
                                  KeyLifeCycleService keyService,
                                  MetadataManager metadataManager,
@@ -153,5 +151,9 @@ public class SecureLSHIndexService implements IndexService {
         DimensionContext ctx = dimensionContexts.get(dimension);
         if (ctx == null) return 0;
         return ctx.getIndex().getPointCount();
+    }
+
+    public EncryptedPoint getEncryptedPoint(String id) {
+        return indexedPoints.get(id);
     }
 }

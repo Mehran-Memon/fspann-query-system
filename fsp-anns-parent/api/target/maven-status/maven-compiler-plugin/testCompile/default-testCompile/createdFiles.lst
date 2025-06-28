@@ -1,3 +1,4 @@
+com\fspann\api\ForwardSecurityAdversarialTest.class
 com\fspann\api\ForwardSecureANNSystemIntegrationTest.class
 com\fspann\api\MicrometerProfilerTest.class
 com\fspann\api\ApiSystemConfigTest.class

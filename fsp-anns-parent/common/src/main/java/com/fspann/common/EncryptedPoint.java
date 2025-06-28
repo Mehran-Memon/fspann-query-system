@@ -1,11 +1,14 @@
 package com.fspann.common;
 
 
+import java.io.Serializable;
+
 /**
  * Represents an encrypted data point with its identifier, shard (bucket) ID, IV, ciphertext, and dimension.
  * This is a pure DTO and does not contain any crypto logic.
  */
-public class EncryptedPoint {
+public class EncryptedPoint implements Serializable {
+    private static final long serialVersionUID = 1L;
     private final String id;
     private final int shardId;
     private final byte[] iv;

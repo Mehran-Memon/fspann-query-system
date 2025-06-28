@@ -1,5 +1,7 @@
 package com.key;
 
+import com.fspann.crypto.CryptoService;
+import com.fspann.common.MetadataManager;
 import com.fspann.key.KeyManager;
 import com.fspann.key.KeyRotationPolicy;
 import com.fspann.key.KeyRotationServiceImpl;
@@ -12,6 +14,7 @@ import org.mockito.MockitoAnnotations;
 
 import javax.crypto.SecretKey;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -31,6 +34,12 @@ class KeyRotationServiceImplTest {
 
     private KeyRotationServiceImpl service;
 
+    @Mock
+    private MetadataManager metadataManager;
+
+    @Mock
+    private CryptoService cryptoService;
+
     @TempDir
     Path tempDir;
 
@@ -39,8 +48,9 @@ class KeyRotationServiceImplTest {
         MockitoAnnotations.openMocks(this);
         when(policy.getMaxOperations()).thenReturn(1000);
         when(policy.getMaxIntervalMillis()).thenReturn(7L * 24 * 60 * 60 * 1000L); // 7 days
+        when(metadataManager.getAllEncryptedPoints()).thenReturn(List.of()); // no points to re-encrypt
 
-        service = new KeyRotationServiceImpl(keyManager, policy, tempDir.toString());
+        service = new KeyRotationServiceImpl(keyManager, policy, tempDir.toString(), metadataManager, cryptoService);
     }
 
 
