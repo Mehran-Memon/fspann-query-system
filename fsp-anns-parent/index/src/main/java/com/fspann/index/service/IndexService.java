@@ -51,4 +51,7 @@ public interface IndexService {
      * Get the number of indexed vectors for a specific dimension.
      */
     int getVectorCountForDimension(int dimension);
+
+    EncryptedPoint getEncryptedPoint(String id);
+
 }

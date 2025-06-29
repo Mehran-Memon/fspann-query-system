@@ -1,32 +1,36 @@
 package com.fspann.common;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-
-/**
- * Manager for persisting structured metadata, including vector-specific data (e.g., shard ID, version).
- */
 public class MetadataManager {
     private static final Logger logger = LoggerFactory.getLogger(MetadataManager.class);
-    private final Map<String, Map<String, String>> metadata = new ConcurrentHashMap<>(); // vectorId -> {shardId, version}
-    private String currentPath; // Track the last save/load path
+    private static final String BASE_DIR = "metadata/points";
+    private final Map<String, Map<String, String>> metadata = new ConcurrentHashMap<>();
+    private final Set<String> encryptedPoints = ConcurrentHashMap.newKeySet();
+    private String currentPath;
 
     public MetadataManager() {
-        // Initialize with empty map for thread safety
+        ensureBaseDirExists();
     }
 
-    /**
-     * Loads metadata from a file.
-     * @param path Path to the metadata file.
-     * @throws MetadataException if loading fails.
-     */
+    private void ensureBaseDirExists() {
+        try {
+            Files.createDirectories(Paths.get(BASE_DIR));
+        } catch (IOException e) {
+            logger.error("Failed to create base directory: {}", BASE_DIR, e);
+        }
+    }
+
     public void load(String path) throws MetadataException {
         try {
             TypeReference<MetadataDTO> typeRef = new TypeReference<MetadataDTO>() {};
@@ -46,11 +50,6 @@ public class MetadataManager {
         }
     }
 
-    /**
-     * Saves metadata to a file.
-     * @param path Path to save the metadata file.
-     * @throws MetadataException if saving fails.
-     */
     public void save(String path) throws MetadataException {
         try {
             MetadataDTO dto = new MetadataDTO(new HashMap<>(metadata));
@@ -63,20 +62,13 @@ public class MetadataManager {
         }
     }
 
-    /**
-     * Adds or updates metadata for a vector using a map and persists it.
-     * @param vectorId The ID of the vector.
-     * @param metadata A map containing metadata key-value pairs (e.g., "version", "shardId").
-     */
     public synchronized void updateVectorMetadata(String vectorId, Map<String, String> metadata) {
         if (vectorId == null || metadata == null) {
             throw new IllegalArgumentException("vectorId and metadata cannot be null");
         }
-        // Compute if absent on the class field metadata
-        Map<String, String> vectorMetadata = this.metadata.computeIfAbsent(vectorId, k -> new HashMap<String, String>());
-        vectorMetadata.putAll(metadata); // Merge the provided metadata
+        Map<String, String> vectorMetadata = this.metadata.computeIfAbsent(vectorId, k -> new HashMap<>());
+        vectorMetadata.putAll(metadata);
         logger.debug("Updated metadata for vectorId={} with {}", vectorId, metadata);
-        // Persist if a path is set
         if (currentPath != null) {
             try {
                 save(currentPath);
@@ -86,20 +78,13 @@ public class MetadataManager {
         }
     }
 
-    /**
-     * Adds or updates metadata for a vector.
-     * @param vectorId The ID of the vector.
-     * @param shardId The shard ID.
-     * @param version The key version.
-     */
     public synchronized void putVectorMetadata(String vectorId, String shardId, String version) {
         if (vectorId == null || shardId == null || version == null) {
             throw new IllegalArgumentException("vectorId, shardId, and version cannot be null");
         }
-        metadata.computeIfAbsent(vectorId, k -> new HashMap<String, String>()).put("shardId", shardId);
-        metadata.computeIfAbsent(vectorId, k -> new HashMap<String, String>()).put("version", version);
+        metadata.computeIfAbsent(vectorId, k -> new HashMap<>()).put("shardId", shardId);
+        metadata.computeIfAbsent(vectorId, k -> new HashMap<>()).put("version", version);
         logger.debug("Updated metadata for vectorId={} with shardId={} and version={}", vectorId, shardId, version);
-        // Persist if a path is set
         if (currentPath != null) {
             try {
                 save(currentPath);
@@ -109,11 +94,6 @@ public class MetadataManager {
         }
     }
 
-    /**
-     * Retrieves metadata for a vector.
-     * @param vectorId The ID of the vector.
-     * @return A map containing shardId and version, or empty map if not found.
-     */
     public Map<String, String> getVectorMetadata(String vectorId) {
         Map<String, String> meta = metadata.getOrDefault(vectorId, new HashMap<>());
         if (meta.isEmpty()) {
@@ -122,52 +102,68 @@ public class MetadataManager {
         return Collections.unmodifiableMap(meta);
     }
 
-    /**
-     * Retrieves all metadata.
-     * @return An unmodifiable view of all metadata.
-     */
     public Map<String, Map<String, String>> all() {
         return Collections.unmodifiableMap(new HashMap<>(metadata));
     }
 
-    /**
-     * Custom exception for metadata operations.
-     */
-    public static class MetadataException extends Exception {
-        public MetadataException(String message, Throwable cause) {
-            super(message, cause);
-        }
-    }
-
-
     public List<EncryptedPoint> getAllEncryptedPoints() {
-        return metadata.keySet().stream()
-                .map(this::loadEncryptedPoint)
-                .filter(Objects::nonNull)
-                .collect(Collectors.toList());
+        List<EncryptedPoint> points = new ArrayList<>();
+        for (String vectorId : metadata.keySet()) {
+            EncryptedPoint pt = loadEncryptedPoint(vectorId);
+            if (pt != null) {
+                points.add(pt);
+            } else {
+                logger.warn("Skipping missing or corrupted point: {}", vectorId);
+            }
+        }
+        return points;
     }
 
     public void saveEncryptedPoint(EncryptedPoint pt) {
         try {
-            String fileName = Paths.get(currentPath).resolveSibling(pt.getId() + ".point").toString();
-            PersistenceUtils.<EncryptedPoint>saveObject(pt, fileName);
+            String versionStr = getVectorMetadata(pt.getId()).get("version");
+            if (versionStr == null) versionStr = "v_unknown";
+
+            Path versionDir = Paths.get(BASE_DIR).resolve("v" + versionStr);
+            Files.createDirectories(versionDir);
+
+            Path filePath = versionDir.resolve(pt.getId() + ".point");
+            PersistenceUtils.saveObject(pt, filePath.toString());
         } catch (IOException e) {
             logger.error("Failed to persist updated point: {}", pt.getId(), e);
         }
     }
 
-    private EncryptedPoint loadEncryptedPoint(String id) {
+    public EncryptedPoint loadEncryptedPoint(String id) {
         try {
-            String fileName = Paths.get(currentPath).resolveSibling(id + ".point").toString();
-            return (EncryptedPoint) PersistenceUtils.loadObject(fileName, new TypeReference<EncryptedPoint>() {});
+            Path basePath = Paths.get(BASE_DIR);
+            try (Stream<Path> paths = Files.walk(basePath)) {
+                Optional<Path> found = paths
+                        .filter(p -> p.getFileName().toString().equals(id + ".point"))
+                        .findFirst();
+
+                if (found.isPresent()) {
+                    return (EncryptedPoint) PersistenceUtils.loadObject(
+                            found.get().toString(),
+                            new TypeReference<EncryptedPoint>() {}
+                    );
+                } else {
+                    logger.warn("Point {} not found in any version folder", id);
+                    return null;
+                }
+            }
         } catch (Exception e) {
             logger.warn("Failed to load encrypted point for ID: {}", id, e);
             return null;
         }
     }
 
+    public static class MetadataException extends Exception {
+        public MetadataException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
 
-    // DTO for serialization
     private static class MetadataDTO implements java.io.Serializable {
         private final Map<String, Map<String, String>> metadata;
 

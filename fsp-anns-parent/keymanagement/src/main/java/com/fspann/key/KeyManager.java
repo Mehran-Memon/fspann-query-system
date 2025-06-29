@@ -17,7 +17,6 @@ import java.nio.file.Paths;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
-import java.util.Arrays;
 import java.util.NavigableMap;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
@@ -138,6 +137,24 @@ public class KeyManager {
     private synchronized void persist() throws IOException {
         KeyStoreBlob blob = new KeyStoreBlob(masterKey, sessionKeys);
         PersistenceUtils.saveObject(blob, storagePath);
+    }
+
+    public void init() {
+        // Ensure version 1 exists
+        if (!sessionKeys.containsKey(1)) {
+            try {
+                sessionKeys.put(1, deriveSessionKey(1));
+                persist();
+                logger.info("🔐 Initialized session key version 1 manually via init()");
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to initialize key version 1", e);
+            }
+        }
+    }
+
+    public void rotate() {
+        // Manually rotate without returning KeyVersion
+        rotateKey(); // You already defined this above
     }
 
     // DTO for serializing keys

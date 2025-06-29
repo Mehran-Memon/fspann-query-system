@@ -24,8 +24,8 @@ public class SecureLSHIndexService implements IndexService {
     private final CryptoService crypto;
     private final KeyLifeCycleService keyService;
     private final MetadataManager metadataManager;
-    private final SecureLSHIndex index; // For testing
-    private final EvenLSH lsh; // For testing
+    private final SecureLSHIndex index; // Optional for testing
+    private final EvenLSH lsh;          // Optional for testing
 
     private final Map<Integer, DimensionContext> dimensionContexts = new ConcurrentHashMap<>();
     private final Map<String, EncryptedPoint> indexedPoints = new ConcurrentHashMap<>();
@@ -72,6 +72,7 @@ public class SecureLSHIndexService implements IndexService {
         idx.addPoint(pt);
         idx.markShardDirty(pt.getShardId());
         metadataManager.putVectorMetadata(pt.getId(), String.valueOf(pt.getShardId()), String.valueOf(pt.getVersion()));
+        metadataManager.saveEncryptedPoint(pt); // ✅ Persist encrypted point to disk
         try {
             metadataManager.save("metadata.ser");
         } catch (MetadataManager.MetadataException e) {
@@ -153,7 +154,21 @@ public class SecureLSHIndexService implements IndexService {
         return ctx.getIndex().getPointCount();
     }
 
+    @Override
     public EncryptedPoint getEncryptedPoint(String id) {
-        return indexedPoints.get(id);
+        EncryptedPoint cached = indexedPoints.get(id);
+        if (cached != null) return cached;
+        try {
+            return metadataManager.loadEncryptedPoint(id);
+        } catch (Exception e) {
+            logger.error("Failed to load encrypted point {} from disk", id, e);
+            return null;
+        }
     }
+
+    public void updateCachedPoint(EncryptedPoint pt) {
+        indexedPoints.put(pt.getId(), pt);
+    }
+
+
 }

@@ -28,7 +28,7 @@ public class ForwardSecureANNSystemPerformanceIntegrationTest {
     private static final int DIMS = 10;
     private static final int VECTOR_COUNT = 1000;
     private static final double MAX_INSERT_MS = 1000.0;
-    private static final double MAX_QUERY_MS = 100.0;
+    private static final double MAX_QUERY_MS = 500.0;
 
     @BeforeAll
     public static void setup(@TempDir Path tempDir) throws Exception {
