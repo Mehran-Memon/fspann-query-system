@@ -106,38 +106,36 @@ public class AesGcmCryptoService implements CryptoService {
     @Override
     public EncryptedPoint reEncrypt(EncryptedPoint pt, SecretKey newKey) {
         return encryptTimer.record(() -> {
+            int oldVersion = pt.getVersion();
+
+            // ⚠ Prevent tag mismatch by checking key availability first
+            SecretKey oldKey;
             try {
-                SecretKey oldKey = getOriginalKey(pt);
+                oldKey = keyService.getVersion(oldVersion).getKey();
+            } catch (IllegalArgumentException e) {
+                logger.warn("Skipping re-encryption for point {}: missing key version {}", pt.getId(), oldVersion);
+                throw new CryptoException("Old key version not found: " + oldVersion, e);
+            }
+
+            try {
                 double[] plaintext = EncryptionUtils.decryptVector(pt.getCiphertext(), pt.getIv(), oldKey);
                 byte[] newIv = EncryptionUtils.generateIV();
                 byte[] ciphertext = EncryptionUtils.encryptVector(plaintext, newIv, newKey);
+
                 int newVersion = keyService.getCurrentVersion().getVersion();
-                EncryptedPoint reEncrypted = new EncryptedPoint(pt.getId(), pt.getShardId(), newIv, ciphertext, newVersion, pt.getVectorLength());
+                EncryptedPoint reEncrypted = new EncryptedPoint(
+                        pt.getId(), pt.getShardId(), newIv, ciphertext, newVersion, pt.getVectorLength()
+                );
+
                 metadataManager.updateVectorMetadata(pt.getId(), Map.of("version", String.valueOf(newVersion)));
-                logger.debug("Re-encrypted point {} to version {}", pt.getId(), newVersion);
+                logger.debug("Re-encrypted point {} from v{} to v{}", pt.getId(), oldVersion, newVersion);
                 return reEncrypted;
+
             } catch (Exception e) {
                 logger.error("Re-encryption failed for point {}", pt.getId(), e);
                 throw new CryptoException("Re-encryption failed", e);
             }
         });
-    }
-
-    private SecretKey getOriginalKey(EncryptedPoint pt) {
-        try {
-            Map<String, String> meta = metadataManager.getVectorMetadata(pt.getId());
-            String versionStr = meta.get("version");
-            if (versionStr == null) {
-                logger.warn("No version found for point {}, defaulting to current version", pt.getId());
-                return keyService.getCurrentVersion().getKey();
-            }
-            int version = Integer.parseInt(versionStr);
-            logger.debug("Retrieved key version {} for point {}", version, pt.getId());
-            return keyService.getVersion(version).getKey();
-        } catch (Exception e) {
-            logger.error("Failed to retrieve original key for point {}", pt.getId(), e);
-            throw new CryptoException("Failed to retrieve original key", e);
-        }
     }
 
     @Override

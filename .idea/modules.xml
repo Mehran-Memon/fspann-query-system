@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/fspann-parent/fsp-anns-parent.iml" filepath="$PROJECT_DIR$/fspann-parent/fsp-anns-parent.iml" />
+      <module fileurl="file://$PROJECT_DIR$/fsp-anns-parent/fsp-anns-parent.iml" filepath="$PROJECT_DIR$/fsp-anns-parent/fsp-anns-parent.iml" />
       <module fileurl="file://$PROJECT_DIR$/.idea/fspann-query-system.iml" filepath="$PROJECT_DIR$/.idea/fspann-query-system.iml" />
     </modules>
   </component>

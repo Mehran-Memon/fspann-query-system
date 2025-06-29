@@ -57,11 +57,20 @@ public class AesGcmCryptoServiceTest {
     }
 
 
-
     @Test
     public void testReEncrypt() {
+        // First, simulate version 1 for encryption
+        when(keyService.getVersion(1)).thenReturn(new KeyVersion(1, key1));
+        when(keyService.getCurrentVersion()).thenReturn(new KeyVersion(1, key1));
+
         double[] vector = {1.0, 2.0};
         EncryptedPoint pt = cryptoService.encryptToPoint("test", vector, key1);
+        assertEquals(1, pt.getVersion()); // ✅ now this should pass
+
+        // Then simulate version 2 for re-encryption
+        when(keyService.getVersion(2)).thenReturn(new KeyVersion(2, key2));
+        when(keyService.getCurrentVersion()).thenReturn(new KeyVersion(2, key2));
+
         EncryptedPoint reEncrypted = cryptoService.reEncrypt(pt, key2);
 
         assertNotEquals(pt.getCiphertext(), reEncrypted.getCiphertext());
@@ -69,17 +78,19 @@ public class AesGcmCryptoServiceTest {
         assertNotEquals(pt.getIv(), reEncrypted.getIv());
         assertEquals(pt.getId(), reEncrypted.getId());
         assertEquals(pt.getShardId(), reEncrypted.getShardId());
+        assertEquals(2, reEncrypted.getVersion()); // ✅ new version after re-encryption
     }
 
     @Test
-    public void testReEncryptWithInvalidKey() {
-        when(metadataManager.getVectorMetadata(anyString())).thenReturn(Map.of("version", "999"));
+    public void testReEncryptWithInvalidOldKeyVersion() {
+        // Simulate encrypted point with bad version (999)
+        EncryptedPoint pt = new EncryptedPoint("bad", 0, cryptoService.generateIV(), new byte[16], 999, 2);
         when(keyService.getVersion(999)).thenThrow(new IllegalArgumentException("Version not found"));
 
-        EncryptedPoint pt = cryptoService.encryptToPoint("test", new double[]{1.0, 2.0}, key1);
-        assertThrows(com.fspann.crypto.AesGcmCryptoService.CryptoException.class,
+        assertThrows(AesGcmCryptoService.CryptoException.class,
                 () -> cryptoService.reEncrypt(pt, key2));
     }
+
 
     @Test
     public void testEncrypt() {

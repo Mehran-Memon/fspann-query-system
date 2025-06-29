@@ -127,7 +127,10 @@ public class ForwardSecureANNSystem {
         if (profiler != null) profiler.start("insert");
 
         keyService.incrementOperation();        // <-- ADD
-        keyService.rotateIfNeeded();            // <-- ADD
+        List<EncryptedPoint> updatedPoints = ((KeyRotationServiceImpl) keyService).rotateIfNeededAndReturnUpdated();
+        for (EncryptedPoint pt : updatedPoints) {
+            indexService.updateCachedPoint(pt);  // Ensure indexService has this method
+        }
         indexService.insert(id, vector);
 
         dimensionIdMap.computeIfAbsent(dim, k -> new ArrayList<>()).add(id);

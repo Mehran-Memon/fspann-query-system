@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.fspann.api.ForwardSecureANNSystemPerformanceIntegrationTest" time="117.905" tests="2" errors="0" skipped="0" failures="0">
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.fspann.api.ForwardSecureANNSystemPerformanceIntegrationTest" time="411.867" tests="2" errors="0" skipped="0" failures="0">
   <properties>
     <property name="java.specification.version" value="22"/>
     <property name="sun.cpu.isalist" value="amd64"/>
@@ -17,7 +17,7 @@
     <property name="sun.java.launcher" value="SUN_STANDARD"/>
     <property name="user.country" value="US"/>
     <property name="sun.boot.library.path" value="C:\Program Files\Java\jdk-22\bin"/>
-    <property name="sun.java.command" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire9562606299058831032\surefirebooter10697531808669655939.jar C:\Users\Mehran Memon\AppData\Local\Temp\surefire9562606299058831032 2025-06-29T01-14-45_593-jvmRun1 surefire11094348530541323043tmp surefire_717835279894511923576tmp"/>
+    <property name="sun.java.command" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire14388328005652740987\surefirebooter802525204231909733.jar C:\Users\Mehran Memon\AppData\Local\Temp\surefire14388328005652740987 2025-06-30T05-25-44_926-jvmRun1 surefire6652506886805138713tmp surefire_76134618253392176861tmp"/>
     <property name="jdk.debug" value="release"/>
     <property name="surefire.test.class.path" value="C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\api\target\test-classes;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\api\target\classes;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\query\target\query-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\index\target\index-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-math3\3.6.1\commons-math3-3.6.1.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\crypto\target\crypto-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\bouncycastle\bcprov-jdk18on\1.78\bcprov-jdk18on-1.78.jar;C:\Users\Mehran Memon\.m2\repository\net\bytebuddy\byte-buddy\1.14.15\byte-buddy-1.14.15.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\common\target\common-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-lang3\3.17.0\commons-lang3-3.17.0.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-core\2.17.2\jackson-core-2.17.2.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\keymanagement\target\keymanagement-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\jetbrains\annotations\26.0.2\annotations-26.0.2.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\config\target\config-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\dataformat\jackson-dataformat-yaml\2.17.1\jackson-dataformat-yaml-2.17.1.jar;C:\Users\Mehran Memon\.m2\repository\org\yaml\snakeyaml\2.2\snakeyaml-2.2.jar;C:\Users\Mehran Memon\.m2\repository\org\slf4j\slf4j-api\2.0.13\slf4j-api-2.0.13.jar;C:\Users\Mehran Memon\.m2\repository\ch\qos\logback\logback-classic\1.5.13\logback-classic-1.5.13.jar;C:\Users\Mehran Memon\.m2\repository\ch\qos\logback\logback-core\1.5.13\logback-core-1.5.13.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-databind\2.17.2\jackson-databind-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-annotations\2.17.2\jackson-annotations-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\com\google\code\gson\gson\2.11.0\gson-2.11.0.jar;C:\Users\Mehran Memon\.m2\repository\com\google\errorprone\error_prone_annotations\2.27.0\error_prone_annotations-2.27.0.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\loader\target\loader-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-compress\1.26.1\commons-compress-1.26.1.jar;C:\Users\Mehran Memon\.m2\repository\commons-codec\commons-codec\1.16.1\commons-codec-1.16.1.jar;C:\Users\Mehran Memon\.m2\repository\commons-io\commons-io\2.15.1\commons-io-2.15.1.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-core\1.11.0\micrometer-core-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-commons\1.11.0\micrometer-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-observation\1.11.0\micrometer-observation-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\hdrhistogram\HdrHistogram\2.1.12\HdrHistogram-2.1.12.jar;C:\Users\Mehran Memon\.m2\repository\org\latencyutils\LatencyUtils\2.0.3\LatencyUtils-2.0.3.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-registry-prometheus\1.11.0\micrometer-registry-prometheus-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_common\0.16.0\simpleclient_common-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient\0.16.0\simpleclient-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_otel\0.16.0\simpleclient_tracer_otel-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_common\0.16.0\simpleclient_tracer_common-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_otel_agent\0.16.0\simpleclient_tracer_otel_agent-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\org\jfree\jfreechart\1.5.3\jfreechart-1.5.3.jar;C:\Users\Mehran Memon\.m2\repository\junit\junit\4.0\junit-4.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter\5.11.0\junit-jupiter-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-params\5.11.0\junit-jupiter-params-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-engine\5.11.0\junit-jupiter-engine-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\platform\junit-platform-engine\1.11.0\junit-platform-engine-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-api\5.11.0\junit-jupiter-api-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\opentest4j\opentest4j\1.3.0\opentest4j-1.3.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\platform\junit-platform-commons\1.11.0\junit-platform-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\apiguardian\apiguardian-api\1.1.2\apiguardian-api-1.1.2.jar;"/>
     <property name="sun.cpu.endian" value="little"/>
@@ -32,7 +32,7 @@
     <property name="line.separator" value="&#10;"/>
     <property name="java.vm.specification.vendor" value="Oracle Corporation"/>
     <property name="java.specification.name" value="Java Platform API Specification"/>
-    <property name="surefire.real.class.path" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire9562606299058831032\surefirebooter10697531808669655939.jar"/>
+    <property name="surefire.real.class.path" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire14388328005652740987\surefirebooter802525204231909733.jar"/>
     <property name="user.script" value=""/>
     <property name="sun.management.compiler" value="HotSpot 64-Bit Tiered Compilers"/>
     <property name="java.runtime.version" value="22.0.2+9-70"/>
@@ -60,23 +60,23 @@
     <property name="sun.io.unicode.encoding" value="UnicodeLittle"/>
     <property name="java.class.version" value="66.0"/>
   </properties>
-  <testcase name="bulkPerformanceTest" classname="com.fspann.api.ForwardSecureANNSystemPerformanceIntegrationTest" time="104.7">
-    <system-out><![CDATA[2025-06-29 01:15:07 [main] INFO  com.fspann.key.KeyManager - Initialized new key store (version 1)
-2025-06-29 01:15:07 [main] INFO  c.fspann.crypto.AesGcmCryptoService - AesGcmCryptoService initialized successfully
-2025-06-29 01:15:07 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Initializing ForwardSecureANNSystem with config=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-12195671860257877801\config.json, data=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-12195671860257877801\data.csv, keys=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-12195671860257877801\keys.ser, dims=[10], metadata=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-12195671860257877801
-2025-06-29 01:15:07 [main] INFO  com.fspann.config.SystemConfig - Successfully loaded config from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-12195671860257877801\config.json
-2025-06-29 01:15:07 [main] INFO  com.fspann.key.KeyManager - Loaded key store up to version 1
-2025-06-29 01:15:07 [main] INFO  com.fspann.common.MetadataManager - Loaded metadata from metadata.ser
-2025-06-29 01:15:07 [main] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-12195671860257877801\data.csv using loader for CSV
-2025-06-29 01:15:08 [main] INFO  c.fspann.api.ForwardSecureANNSystem - ✅ Batch insert complete: 10 vectors in 720 ms
-2025-06-29 01:15:08 [main] INFO  c.f.a.ForwardSecureANNSystemPerformanceIntegrationTest - 🚀 System initialized successfully
-2025-06-29 01:16:45 [main] INFO  c.fspann.api.ForwardSecureANNSystem - ✅ Batch insert complete: 1000 vectors in 96497 ms
-2025-06-29 01:16:45 [main] INFO  c.f.a.ForwardSecureANNSystemPerformanceIntegrationTest - ✅ Inserted 1000 vectors in 96497.6982 ms (avg: 96.4976982 ms)
-2025-06-29 01:16:53 [main] INFO  c.f.a.ForwardSecureANNSystemPerformanceIntegrationTest - ✅ Average query latency: 41.001076999999995 ms
+  <testcase name="bulkPerformanceTest" classname="com.fspann.api.ForwardSecureANNSystemPerformanceIntegrationTest" time="370.988">
+    <system-out><![CDATA[2025-06-30 05:26:34 [main] INFO  com.fspann.key.KeyManager - Initialized new key store (version 1)
+2025-06-30 05:26:34 [main] INFO  c.fspann.crypto.AesGcmCryptoService - AesGcmCryptoService initialized successfully
+2025-06-30 05:26:34 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Initializing ForwardSecureANNSystem with config=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-11788969323082226720\config.json, data=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-11788969323082226720\data.csv, keys=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-11788969323082226720\keys.ser, dims=[10], metadata=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-11788969323082226720
+2025-06-30 05:26:34 [main] INFO  com.fspann.config.SystemConfig - Successfully loaded config from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-11788969323082226720\config.json
+2025-06-30 05:26:34 [main] INFO  com.fspann.key.KeyManager - Loaded key store up to version 1
+2025-06-30 05:26:35 [main] INFO  com.fspann.common.MetadataManager - Loaded metadata from metadata.ser
+2025-06-30 05:26:35 [main] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-11788969323082226720\data.csv using loader for CSV
+2025-06-30 05:26:38 [main] INFO  c.fspann.api.ForwardSecureANNSystem - ✅ Batch insert complete: 10 vectors in 3206 ms
+2025-06-30 05:26:38 [main] INFO  c.f.a.ForwardSecureANNSystemPerformanceIntegrationTest - 🚀 System initialized successfully
+2025-06-30 05:32:24 [main] INFO  c.fspann.api.ForwardSecureANNSystem - ✅ Batch insert complete: 1000 vectors in 346189 ms
+2025-06-30 05:32:24 [main] INFO  c.f.a.ForwardSecureANNSystemPerformanceIntegrationTest - ✅ Inserted 1000 vectors in 346189.4185 ms (avg: 346.18941850000004 ms)
+2025-06-30 05:32:49 [main] INFO  c.f.a.ForwardSecureANNSystemPerformanceIntegrationTest - ✅ Average query latency: 123.97926949999999 ms
 ]]></system-out>
   </testcase>
-  <testcase name="testFakePointsInsertion" classname="com.fspann.api.ForwardSecureANNSystemPerformanceIntegrationTest" time="12.402">
-    <system-out><![CDATA[2025-06-29 01:17:05 [main] INFO  c.f.a.ForwardSecureANNSystemPerformanceIntegrationTest - ✅ Total indexed vectors after fake insert: 1010
+  <testcase name="testFakePointsInsertion" classname="com.fspann.api.ForwardSecureANNSystemPerformanceIntegrationTest" time="37.45">
+    <system-out><![CDATA[2025-06-30 05:33:26 [main] INFO  c.f.a.ForwardSecureANNSystemPerformanceIntegrationTest - ✅ Total indexed vectors after fake insert: 1010
 ]]></system-out>
   </testcase>
 </testsuite>

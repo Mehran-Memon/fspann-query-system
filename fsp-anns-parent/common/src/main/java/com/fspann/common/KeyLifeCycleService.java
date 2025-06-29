@@ -6,4 +6,6 @@ public interface KeyLifeCycleService {
     KeyVersion getCurrentVersion();
     KeyVersion getPreviousVersion();
     KeyVersion getVersion(int version); // Updated to match usage
+    void reEncryptAll();
+
 }
