@@ -51,7 +51,6 @@ public class ForwardSecureANNSystem {
     private long totalIndexingTime = 0;
     private long totalQueryTime = 0;
     private int indexingCount = 0;
-
     public ForwardSecureANNSystem(
             String configPath,
             String dataPath,
@@ -107,7 +106,12 @@ public class ForwardSecureANNSystem {
             batch.add(vectors.get(i));
 
             if (batch.size() == BATCH_SIZE || i == vectors.size() - 1) {
+                long memBefore = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
                 indexService.batchInsert(ids, batch);
+                long memAfter = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
+                long memUsed = (memAfter - memBefore) / (1024 * 1024);
+                logger.debug("Memory used for last batch: {} MB", memUsed);
+
                 allIds.addAll(ids);
                 ids.clear();
                 batch.clear();
@@ -123,13 +127,12 @@ public class ForwardSecureANNSystem {
             long duration = profiler.getTimings("batchInsert").getLast();
             totalIndexingTime += duration;
             indexingCount += vectors.size();
-            logger.info("✅ Batch insert complete: {} vectors in {} ms", vectors.size(), TimeUnit.NANOSECONDS.toMillis(duration));
+            logger.info("Batch insert complete: {} vectors in {} ms", vectors.size(), TimeUnit.NANOSECONDS.toMillis(duration));
         } else {
             long totalElapsed = (System.nanoTime() - start) / 1_000_000;
-            logger.info("✅ Batch insert complete: {} vectors in {} ms", vectors.size(), totalElapsed);
+            logger.info("Batch insert complete: {} vectors in {} ms", vectors.size(), totalElapsed);
         }
     }
-
 
     public void insert(String id, double[] vector, int dim) {
         if (profiler != null) profiler.start("insert");
