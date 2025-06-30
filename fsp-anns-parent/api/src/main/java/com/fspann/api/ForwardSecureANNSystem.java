@@ -34,6 +34,7 @@ public class ForwardSecureANNSystem {
     private static final double DEFAULT_NOISE_SCALE = 0.01;
     private static final int DEFAULT_TOP_K = 5;
     private static final int DEFAULT_FAKE_POINT_COUNT = 100;
+    private static final int BATCH_SIZE = 10000;
 
     private final SecureLSHIndexService indexService;
     private final QueryTokenFactory tokenFactory;
@@ -92,24 +93,30 @@ public class ForwardSecureANNSystem {
         }
     }
 
-
     public void batchInsert(List<double[]> vectors, int dim) {
         if (profiler != null) profiler.start("batchInsert");
         long start = System.nanoTime();
 
-        List<String> ids = new ArrayList<>();
+        List<String> allIds = new ArrayList<>();
+        List<String> ids = new ArrayList<>(BATCH_SIZE);
+        List<double[]> batch = new ArrayList<>(BATCH_SIZE);
+
         for (int i = 0; i < vectors.size(); i++) {
             String id = UUID.randomUUID().toString();
-            indexService.insert(id, vectors.get(i));
             ids.add(id);
+            batch.add(vectors.get(i));
 
-            if ((i + 1) % 10000 == 0) {
+            if (batch.size() == BATCH_SIZE || i == vectors.size() - 1) {
+                indexService.batchInsert(ids, batch);
+                allIds.addAll(ids);
+                ids.clear();
+                batch.clear();
                 long elapsed = (System.nanoTime() - start) / 1_000_000;
                 logger.info("[BatchInsert] Inserted {} of {} vectors... elapsed: {} ms", i + 1, vectors.size(), elapsed);
             }
         }
 
-        dimensionIdMap.computeIfAbsent(dim, k -> new ArrayList<>()).addAll(ids);
+        dimensionIdMap.computeIfAbsent(dim, k -> new ArrayList<>()).addAll(allIds);
 
         if (profiler != null) {
             profiler.stop("batchInsert");
@@ -122,6 +129,7 @@ public class ForwardSecureANNSystem {
             logger.info("✅ Batch insert complete: {} vectors in {} ms", vectors.size(), totalElapsed);
         }
     }
+
 
     public void insert(String id, double[] vector, int dim) {
         if (profiler != null) profiler.start("insert");
@@ -254,9 +262,15 @@ public class ForwardSecureANNSystem {
         List<Integer> dimensions = Arrays.stream(args[4].split(",")).map(Integer::parseInt).collect(Collectors.toList());
         Path metadataPath = Path.of(args[5]);
 
-        // Create shared metadata manager and crypto service
+        Files.createDirectories(metadataPath); // ensure metadata dir exists
+
         MetadataManager metadataManager = new MetadataManager();
-        CryptoService cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), null, metadataManager);
+        KeyManager keyManager = new KeyManager(keysFile);
+        KeyRotationPolicy policy = new KeyRotationPolicy(999_999, 999_999);
+        KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(keyManager, policy, metadataPath.toString(), metadataManager, null);
+
+        CryptoService cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
+        keyService.setCryptoService(cryptoService); // IMPORTANT
 
         ForwardSecureANNSystem sys = new ForwardSecureANNSystem(
                 configFile, dataPath, keysFile, dimensions, metadataPath, false,
@@ -267,5 +281,6 @@ public class ForwardSecureANNSystem {
         sys.runEndToEnd(dataPath, queryPath, DEFAULT_TOP_K, dim);
         sys.shutdown();
     }
+
 }
 

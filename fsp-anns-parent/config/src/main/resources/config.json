@@ -1,7 +1,7 @@
 {
   "numShards": 32,
-  "opsThreshold": 100,
-  "ageThresholdMs": 200,
-  "reEncBatchSize": 5,
+  "opsThreshold": 5000000,
+  "ageThresholdMs": 604800000,
+  "reEncBatchSize": 2000,
   "profilerEnabled": true
 }

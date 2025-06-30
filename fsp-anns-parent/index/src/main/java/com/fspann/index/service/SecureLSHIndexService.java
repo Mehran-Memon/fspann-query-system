@@ -170,5 +170,21 @@ public class SecureLSHIndexService implements IndexService {
         indexedPoints.put(pt.getId(), pt);
     }
 
+    public void batchInsert(List<String> ids, List<double[]> vectors) {
+        if (ids.size() != vectors.size()) {
+            throw new IllegalArgumentException("IDs and vectors must be the same size.");
+        }
+
+        for (int i = 0; i < vectors.size(); i++) {
+            String id = ids.get(i);
+            double[] vector = vectors.get(i);
+            try {
+                insert(id, vector);
+            } catch (Exception e) {
+                logger.error("Failed to insert vector id={} during batchInsert", id, e);
+            }
+        }
+    }
+
 
 }
