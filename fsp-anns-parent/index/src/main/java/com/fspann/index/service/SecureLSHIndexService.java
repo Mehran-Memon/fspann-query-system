@@ -1,20 +1,17 @@
 package com.fspann.index.service;
 
-import com.fspann.common.EncryptedPoint;
-import com.fspann.common.QueryToken;
+import com.fspann.common.*;
 import com.fspann.crypto.AesGcmCryptoService;
 import com.fspann.crypto.CryptoService;
 import com.fspann.index.core.DimensionContext;
 import com.fspann.index.core.SecureLSHIndex;
 import com.fspann.index.core.EvenLSH;
-import com.fspann.common.KeyLifeCycleService;
-import com.fspann.common.KeyVersion;
-import com.fspann.common.MetadataManager;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.crypto.SecretKey;
+import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -30,28 +27,40 @@ public class SecureLSHIndexService implements IndexService {
 
     private final Map<Integer, DimensionContext> dimensionContexts = new ConcurrentHashMap<>();
     private final Map<String, EncryptedPoint> indexedPoints = new ConcurrentHashMap<>();
+    private final EncryptedPointBuffer buffer;
 
     public SecureLSHIndexService(CryptoService crypto,
                                  KeyLifeCycleService keyService,
                                  MetadataManager metadataManager) {
-        this(crypto, keyService, metadataManager, null, null);
+        this(crypto, keyService, metadataManager, null, null, createBuffer(metadataManager) );
     }
 
     public SecureLSHIndexService(CryptoService crypto,
                                  KeyLifeCycleService keyService,
                                  MetadataManager metadataManager,
                                  SecureLSHIndex index,
-                                 EvenLSH lsh) {
+                                 EvenLSH lsh,
+                                 EncryptedPointBuffer buffer) {
         this.crypto = crypto != null ? crypto : new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
         this.keyService = keyService;
         this.metadataManager = metadataManager;
         this.index = index;
         this.lsh = lsh;
+        this.buffer = buffer;
+
 
         try {
             metadataManager.load("metadata.ser");
         } catch (MetadataManager.MetadataException e) {
             logger.warn("Failed to load metadata, starting fresh", e);
+        }
+    }
+
+    private static EncryptedPointBuffer createBuffer(MetadataManager metadataManager) {
+        try {
+            return new EncryptedPointBuffer("metadata/points", metadataManager);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to initialize EncryptedPointBuffer", e);
         }
     }
 
@@ -118,11 +127,11 @@ public class SecureLSHIndexService implements IndexService {
             long t3 = System.nanoTime();
 
             for (EncryptedPoint pt : entry.getValue()) {
-                metadataManager.saveEncryptedPoint(pt);
+                buffer.add(pt);
             }
             long t4 = System.nanoTime();
 
-            logger.info("[BatchIndexing] Inserted {} points in {} ms (index: {} ms, metaMap: {} ms, save: {} ms)",
+            logger.info("{} points in {} ms (index: {} ms, metaMap: {} ms, save: {} ms)",
                     entry.getValue().size(),
                     TimeUnit.NANOSECONDS.toMillis(t4 - t1),
                     TimeUnit.NANOSECONDS.toMillis(t2 - t1),
@@ -138,6 +147,7 @@ public class SecureLSHIndexService implements IndexService {
         } catch (MetadataManager.MetadataException e) {
             logger.error("Failed to save metadata after batchInsert", e);
         }
+        buffer.flushAll();
     }
 
     @Override
@@ -149,7 +159,7 @@ public class SecureLSHIndexService implements IndexService {
         idx.addPoint(pt);
         idx.markShardDirty(pt.getShardId());
         metadataManager.putVectorMetadata(pt.getId(), String.valueOf(pt.getShardId()), String.valueOf(pt.getVersion()));
-        metadataManager.saveEncryptedPoint(pt); // ✅ Persist encrypted point to disk
+        buffer.add(pt);       //Persist encrypted point to disk
         try {
             metadataManager.save("metadata.ser");
         } catch (MetadataManager.MetadataException e) {
@@ -245,6 +255,10 @@ public class SecureLSHIndexService implements IndexService {
 
     public void updateCachedPoint(EncryptedPoint pt) {
         indexedPoints.put(pt.getId(), pt);
+    }
+
+    public void flushBuffers() {
+        buffer.flushAll();
     }
 
 }
