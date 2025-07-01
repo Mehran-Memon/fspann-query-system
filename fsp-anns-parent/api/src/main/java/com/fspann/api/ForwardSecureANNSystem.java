@@ -51,6 +51,7 @@ public class ForwardSecureANNSystem {
     private long totalIndexingTime = 0;
     private long totalQueryTime = 0;
     private int indexingCount = 0;
+
     public ForwardSecureANNSystem(
             String configPath,
             String dataPath,
@@ -106,17 +107,17 @@ public class ForwardSecureANNSystem {
             batch.add(vectors.get(i));
 
             if (batch.size() == BATCH_SIZE || i == vectors.size() - 1) {
-                long memBefore = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
+                long batchStart = System.nanoTime();
                 indexService.batchInsert(ids, batch);
-                long memAfter = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
-                long memUsed = (memAfter - memBefore) / (1024 * 1024);
-                logger.debug("Memory used for last batch: {} MB", memUsed);
-
+                long batchEnd = System.nanoTime();
                 allIds.addAll(ids);
                 ids.clear();
                 batch.clear();
                 long elapsed = (System.nanoTime() - start) / 1_000_000;
-                logger.info("[BatchInsert] Inserted {} of {} vectors... elapsed: {} ms", i + 1, vectors.size(), elapsed);
+                long batchDuration = (batchEnd - batchStart) / 1_000_000;
+                logger.info("[BatchInsert] Inserted {} of {} vectors... elapsed: {} ms, last batch: {} ms, freeMem: {} MB",
+                        i + 1, vectors.size(), elapsed, batchDuration,
+                        Runtime.getRuntime().freeMemory() / (1024 * 1024));
             }
         }
 

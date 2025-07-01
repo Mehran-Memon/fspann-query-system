@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.crypto.AesGcmCryptoServiceTest" time="1.333" tests="7" errors="0" skipped="0" failures="0">
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.crypto.AesGcmCryptoServiceTest" time="1.409" tests="7" errors="0" skipped="0" failures="0">
   <properties>
     <property name="java.specification.version" value="22"/>
     <property name="sun.cpu.isalist" value="amd64"/>
@@ -16,7 +16,7 @@
     <property name="sun.java.launcher" value="SUN_STANDARD"/>
     <property name="user.country" value="US"/>
     <property name="sun.boot.library.path" value="C:\Program Files\Java\jdk-22\bin"/>
-    <property name="sun.java.command" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire244603411946215242\surefirebooter10137049494052342412.jar C:\Users\Mehran Memon\AppData\Local\Temp\surefire244603411946215242 2025-06-30T09-13-23_059-jvmRun1 surefire1999411817588945711tmp surefire_318138592744365766135tmp"/>
+    <property name="sun.java.command" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire3215883128794850352\surefirebooter10045984612725626973.jar C:\Users\Mehran Memon\AppData\Local\Temp\surefire3215883128794850352 2025-07-01T05-39-22_831-jvmRun1 surefire12768060484449142869tmp surefire_32377218804319254308tmp"/>
     <property name="jdk.debug" value="release"/>
     <property name="surefire.test.class.path" value="C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\crypto\target\test-classes;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\crypto\target\classes;C:\Users\Mehran Memon\.m2\repository\org\bouncycastle\bcprov-jdk18on\1.78\bcprov-jdk18on-1.78.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\common\target\common-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-lang3\3.17.0\commons-lang3-3.17.0.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-core\2.17.2\jackson-core-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\org\slf4j\slf4j-api\2.0.13\slf4j-api-2.0.13.jar;C:\Users\Mehran Memon\.m2\repository\org\slf4j\slf4j-simple\2.0.13\slf4j-simple-2.0.13.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-registry-prometheus\1.12.0\micrometer-registry-prometheus-1.12.0.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-core\1.11.0\micrometer-core-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-commons\1.11.0\micrometer-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-observation\1.11.0\micrometer-observation-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\hdrhistogram\HdrHistogram\2.1.12\HdrHistogram-2.1.12.jar;C:\Users\Mehran Memon\.m2\repository\org\latencyutils\LatencyUtils\2.0.3\LatencyUtils-2.0.3.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_common\0.16.0\simpleclient_common-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient\0.16.0\simpleclient-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_otel\0.16.0\simpleclient_tracer_otel-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_common\0.16.0\simpleclient_tracer_common-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_otel_agent\0.16.0\simpleclient_tracer_otel_agent-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter\5.11.0\junit-jupiter-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-api\5.11.0\junit-jupiter-api-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\opentest4j\opentest4j\1.3.0\opentest4j-1.3.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\platform\junit-platform-commons\1.11.0\junit-platform-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\apiguardian\apiguardian-api\1.1.2\apiguardian-api-1.1.2.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-params\5.11.0\junit-jupiter-params-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-engine\5.11.0\junit-jupiter-engine-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\platform\junit-platform-engine\1.11.0\junit-platform-engine-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\mockito\mockito-core\5.12.0\mockito-core-5.12.0.jar;C:\Users\Mehran Memon\.m2\repository\net\bytebuddy\byte-buddy-agent\1.14.15\byte-buddy-agent-1.14.15.jar;C:\Users\Mehran Memon\.m2\repository\org\objenesis\objenesis\3.3\objenesis-3.3.jar;C:\Users\Mehran Memon\.m2\repository\net\bytebuddy\byte-buddy\1.14.15\byte-buddy-1.14.15.jar;"/>
     <property name="sun.cpu.endian" value="little"/>
@@ -31,7 +31,7 @@
     <property name="line.separator" value="&#10;"/>
     <property name="java.vm.specification.vendor" value="Oracle Corporation"/>
     <property name="java.specification.name" value="Java Platform API Specification"/>
-    <property name="surefire.real.class.path" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire244603411946215242\surefirebooter10137049494052342412.jar"/>
+    <property name="surefire.real.class.path" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire3215883128794850352\surefirebooter10045984612725626973.jar"/>
     <property name="user.script" value=""/>
     <property name="sun.management.compiler" value="HotSpot 64-Bit Tiered Compilers"/>
     <property name="java.runtime.version" value="22.0.2+9-70"/>
@@ -59,7 +59,7 @@
     <property name="sun.io.unicode.encoding" value="UnicodeLittle"/>
     <property name="java.class.version" value="66.0"/>
   </properties>
-  <testcase name="testDecryptQuery" classname="com.crypto.AesGcmCryptoServiceTest" time="1.233">
+  <testcase name="testDecryptQuery" classname="com.crypto.AesGcmCryptoServiceTest" time="1.305">
     <system-err><![CDATA[WARNING: A Java agent has been loaded dynamically (C:\Users\Mehran Memon\.m2\repository\net\bytebuddy\byte-buddy-agent\1.14.15\byte-buddy-agent-1.14.15.jar)
 WARNING: If a serviceability tool is in use, please run with -XX:+EnableDynamicAgentLoading to hide this warning
 WARNING: If a serviceability tool is not in use, please run with -Djdk.instrument.traceUsage for more information
@@ -67,15 +67,15 @@ WARNING: Dynamic loading of agents will be disallowed by default in a future rel
 [main] INFO com.fspann.crypto.AesGcmCryptoService - AesGcmCryptoService initialized successfully
 ]]></system-err>
   </testcase>
-  <testcase name="testEncrypt" classname="com.crypto.AesGcmCryptoServiceTest" time="0.008">
+  <testcase name="testEncrypt" classname="com.crypto.AesGcmCryptoServiceTest" time="0.009">
     <system-err><![CDATA[[main] INFO com.fspann.crypto.AesGcmCryptoService - AesGcmCryptoService initialized successfully
 ]]></system-err>
   </testcase>
-  <testcase name="testDecryptFromPoint" classname="com.crypto.AesGcmCryptoServiceTest" time="0.017">
+  <testcase name="testDecryptFromPoint" classname="com.crypto.AesGcmCryptoServiceTest" time="0.021">
     <system-err><![CDATA[[main] INFO com.fspann.crypto.AesGcmCryptoService - AesGcmCryptoService initialized successfully
 ]]></system-err>
   </testcase>
-  <testcase name="testDecryptWithWrongKeyFails" classname="com.crypto.AesGcmCryptoServiceTest" time="0.013">
+  <testcase name="testDecryptWithWrongKeyFails" classname="com.crypto.AesGcmCryptoServiceTest" time="0.014">
     <system-err><![CDATA[[main] INFO com.fspann.crypto.AesGcmCryptoService - AesGcmCryptoService initialized successfully
 [main] ERROR com.fspann.crypto.AesGcmCryptoService - Decryption failed for point failVec
 javax.crypto.AEADBadTagException: Tag mismatch
@@ -162,16 +162,16 @@ javax.crypto.AEADBadTagException: Tag mismatch
 	at org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:548)
 ]]></system-err>
   </testcase>
-  <testcase name="testReEncrypt" classname="com.crypto.AesGcmCryptoServiceTest" time="0.018">
+  <testcase name="testReEncrypt" classname="com.crypto.AesGcmCryptoServiceTest" time="0.016">
     <system-err><![CDATA[[main] INFO com.fspann.crypto.AesGcmCryptoService - AesGcmCryptoService initialized successfully
 ]]></system-err>
   </testcase>
-  <testcase name="testReEncryptWithInvalidOldKeyVersion" classname="com.crypto.AesGcmCryptoServiceTest" time="0.013">
+  <testcase name="testReEncryptWithInvalidOldKeyVersion" classname="com.crypto.AesGcmCryptoServiceTest" time="0.012">
     <system-err><![CDATA[[main] INFO com.fspann.crypto.AesGcmCryptoService - AesGcmCryptoService initialized successfully
 [main] WARN com.fspann.crypto.AesGcmCryptoService - Skipping re-encryption for point bad: missing key version 999
 ]]></system-err>
   </testcase>
-  <testcase name="testEncryptGeneratesUniqueIVs" classname="com.crypto.AesGcmCryptoServiceTest" time="0.006">
+  <testcase name="testEncryptGeneratesUniqueIVs" classname="com.crypto.AesGcmCryptoServiceTest" time="0.003">
     <system-err><![CDATA[[main] INFO com.fspann.crypto.AesGcmCryptoService - AesGcmCryptoService initialized successfully
 ]]></system-err>
   </testcase>

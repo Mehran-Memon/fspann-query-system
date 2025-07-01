@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.loader.DefaultDataLoaderTest" time="0.209" tests="2" errors="0" skipped="0" failures="0">
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.loader.DefaultDataLoaderTest" time="0.238" tests="2" errors="0" skipped="0" failures="0">
   <properties>
     <property name="java.specification.version" value="22"/>
     <property name="sun.cpu.isalist" value="amd64"/>
@@ -16,7 +16,7 @@
     <property name="sun.java.launcher" value="SUN_STANDARD"/>
     <property name="user.country" value="US"/>
     <property name="sun.boot.library.path" value="C:\Program Files\Java\jdk-22\bin"/>
-    <property name="sun.java.command" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire5934015176180907267\surefirebooter17657494089607567791.jar C:\Users\Mehran Memon\AppData\Local\Temp\surefire5934015176180907267 2025-06-30T09-13-23_059-jvmRun1 surefire2734777592819360664tmp surefire_215230696702467354931tmp"/>
+    <property name="sun.java.command" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire2003701968289217369\surefirebooter492013680800538217.jar C:\Users\Mehran Memon\AppData\Local\Temp\surefire2003701968289217369 2025-07-01T05-39-22_831-jvmRun1 surefire12181933125529569816tmp surefire_214499736606085189441tmp"/>
     <property name="jdk.debug" value="release"/>
     <property name="surefire.test.class.path" value="C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\loader\target\test-classes;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\loader\target\classes;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\common\target\common-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\slf4j\slf4j-api\2.0.13\slf4j-api-2.0.13.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-lang3\3.17.0\commons-lang3-3.17.0.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-core\2.17.2\jackson-core-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\ch\qos\logback\logback-classic\1.4.11\logback-classic-1.4.11.jar;C:\Users\Mehran Memon\.m2\repository\ch\qos\logback\logback-core\1.4.11\logback-core-1.4.11.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-compress\1.26.1\commons-compress-1.26.1.jar;C:\Users\Mehran Memon\.m2\repository\commons-codec\commons-codec\1.16.1\commons-codec-1.16.1.jar;C:\Users\Mehran Memon\.m2\repository\commons-io\commons-io\2.15.1\commons-io-2.15.1.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-databind\2.17.2\jackson-databind-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-annotations\2.17.2\jackson-annotations-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-api\5.11.0\junit-jupiter-api-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\opentest4j\opentest4j\1.3.0\opentest4j-1.3.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\platform\junit-platform-commons\1.11.0\junit-platform-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\apiguardian\apiguardian-api\1.1.2\apiguardian-api-1.1.2.jar;"/>
     <property name="sun.cpu.endian" value="little"/>
@@ -31,7 +31,7 @@
     <property name="line.separator" value="&#10;"/>
     <property name="java.vm.specification.vendor" value="Oracle Corporation"/>
     <property name="java.specification.name" value="Java Platform API Specification"/>
-    <property name="surefire.real.class.path" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire5934015176180907267\surefirebooter17657494089607567791.jar"/>
+    <property name="surefire.real.class.path" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire2003701968289217369\surefirebooter492013680800538217.jar"/>
     <property name="user.script" value=""/>
     <property name="sun.management.compiler" value="HotSpot 64-Bit Tiered Compilers"/>
     <property name="java.runtime.version" value="22.0.2+9-70"/>
@@ -59,15 +59,15 @@
     <property name="sun.io.unicode.encoding" value="UnicodeLittle"/>
     <property name="java.class.version" value="66.0"/>
   </properties>
-  <testcase name="testConcurrentLoading" classname="com.loader.DefaultDataLoaderTest" time="0.194">
-    <system-out><![CDATA[09:13:26.587 [pool-2-thread-4] INFO com.fspann.loader.DefaultDataLoader -- Loading data from C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\data\sift_dataset\sift\sift_base.fvecs using loader for FVECS
-09:13:26.587 [pool-2-thread-2] INFO com.fspann.loader.DefaultDataLoader -- Loading data from C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\data\sift_dataset\sift\sift_base.fvecs using loader for FVECS
-09:13:26.587 [pool-2-thread-1] INFO com.fspann.loader.DefaultDataLoader -- Loading data from C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\data\sift_dataset\sift\sift_base.fvecs using loader for FVECS
-09:13:26.587 [pool-2-thread-3] INFO com.fspann.loader.DefaultDataLoader -- Loading data from C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\data\sift_dataset\sift\sift_base.fvecs using loader for FVECS
+  <testcase name="testConcurrentLoading" classname="com.loader.DefaultDataLoaderTest" time="0.219">
+    <system-out><![CDATA[05:39:26.821 [pool-2-thread-1] INFO com.fspann.loader.DefaultDataLoader -- Loading data from C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\data\sift_dataset\sift\sift_base.fvecs using loader for FVECS
+05:39:26.821 [pool-2-thread-3] INFO com.fspann.loader.DefaultDataLoader -- Loading data from C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\data\sift_dataset\sift\sift_base.fvecs using loader for FVECS
+05:39:26.821 [pool-2-thread-2] INFO com.fspann.loader.DefaultDataLoader -- Loading data from C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\data\sift_dataset\sift\sift_base.fvecs using loader for FVECS
+05:39:26.821 [pool-2-thread-4] INFO com.fspann.loader.DefaultDataLoader -- Loading data from C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\data\sift_dataset\sift\sift_base.fvecs using loader for FVECS
 ]]></system-out>
   </testcase>
-  <testcase name="testInvalidFormatExtension" classname="com.loader.DefaultDataLoaderTest" time="0.001">
-    <system-out><![CDATA[09:13:26.603 [main] ERROR com.fspann.loader.DefaultDataLoader -- Unsupported file extension 'UNKNOWN'
+  <testcase name="testInvalidFormatExtension" classname="com.loader.DefaultDataLoaderTest" time="0.002">
+    <system-out><![CDATA[05:39:26.838 [main] ERROR com.fspann.loader.DefaultDataLoader -- Unsupported file extension 'UNKNOWN'
 ]]></system-out>
   </testcase>
 </testsuite>
