@@ -1,12 +1,9 @@
 package com.index;
 
-import com.fspann.common.EncryptedPoint;
-import com.fspann.common.KeyVersion;
+import com.fspann.common.*;
 import com.fspann.crypto.AesGcmCryptoService;
 import com.fspann.index.core.EvenLSH;
 import com.fspann.index.core.SecureLSHIndex;
-import com.fspann.common.KeyLifeCycleService;
-import com.fspann.common.MetadataManager;
 import com.fspann.index.service.SecureLSHIndexService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -29,6 +26,7 @@ class SecureLSHIndexServiceTest {
     @Mock private KeyLifeCycleService keyService;
     @Mock private EvenLSH lsh;
     @Mock private MetadataManager metadataManager;
+    @Mock private EncryptedPointBuffer buffer;
 
     private SecureLSHIndexService service;
     private final byte[] testIv = new byte[12];
@@ -37,7 +35,7 @@ class SecureLSHIndexServiceTest {
     @BeforeEach
     void setUp() {
         MockitoAnnotations.openMocks(this);
-        service = new SecureLSHIndexService(crypto, keyService, metadataManager, index, lsh);
+        service = new SecureLSHIndexService(crypto, keyService, metadataManager, index, lsh, buffer);
 
         when(keyService.getCurrentVersion()).thenReturn(new KeyVersion(1, new SecretKeySpec(new byte[16], "AES")));
         when(crypto.encryptToPoint(any(String.class), any(double[].class), any(SecretKey.class)))

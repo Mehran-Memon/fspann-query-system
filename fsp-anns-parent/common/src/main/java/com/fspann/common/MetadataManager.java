@@ -100,6 +100,7 @@ public class MetadataManager {
         Map<String, String> meta = metadata.getOrDefault(vectorId, new HashMap<>());
         if (meta.isEmpty()) {
             logger.warn("No metadata found for vectorId {}, using default", vectorId);
+            return Collections.emptyMap();
         }
         return Collections.unmodifiableMap(meta);
     }
