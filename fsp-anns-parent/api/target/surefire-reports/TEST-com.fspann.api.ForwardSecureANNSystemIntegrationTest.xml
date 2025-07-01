@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.fspann.api.ForwardSecureANNSystemIntegrationTest" time="1.316" tests="2" errors="0" skipped="0" failures="0">
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.fspann.api.ForwardSecureANNSystemIntegrationTest" time="17.073" tests="2" errors="0" skipped="0" failures="0">
   <properties>
     <property name="java.specification.version" value="22"/>
     <property name="sun.cpu.isalist" value="amd64"/>
@@ -17,7 +17,7 @@
     <property name="sun.java.launcher" value="SUN_STANDARD"/>
     <property name="user.country" value="US"/>
     <property name="sun.boot.library.path" value="C:\Program Files\Java\jdk-22\bin"/>
-    <property name="sun.java.command" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire10714678277528568227\surefirebooter9983995432110791829.jar C:\Users\Mehran Memon\AppData\Local\Temp\surefire10714678277528568227 2025-07-01T05-39-22_831-jvmRun1 surefire8362459618358069554tmp surefire_78067566858067750428tmp"/>
+    <property name="sun.java.command" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire3332753576252811042\surefirebooter16111240912273881884.jar C:\Users\Mehran Memon\AppData\Local\Temp\surefire3332753576252811042 2025-07-01T12-12-26_767-jvmRun1 surefire14187147503879980165tmp surefire_711357049641929042020tmp"/>
     <property name="jdk.debug" value="release"/>
     <property name="surefire.test.class.path" value="C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\api\target\test-classes;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\api\target\classes;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\query\target\query-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\index\target\index-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-math3\3.6.1\commons-math3-3.6.1.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\crypto\target\crypto-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\bouncycastle\bcprov-jdk18on\1.78\bcprov-jdk18on-1.78.jar;C:\Users\Mehran Memon\.m2\repository\net\bytebuddy\byte-buddy\1.14.15\byte-buddy-1.14.15.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\common\target\common-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-lang3\3.17.0\commons-lang3-3.17.0.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-core\2.17.2\jackson-core-2.17.2.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\keymanagement\target\keymanagement-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\jetbrains\annotations\26.0.2\annotations-26.0.2.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\config\target\config-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\dataformat\jackson-dataformat-yaml\2.17.1\jackson-dataformat-yaml-2.17.1.jar;C:\Users\Mehran Memon\.m2\repository\org\yaml\snakeyaml\2.2\snakeyaml-2.2.jar;C:\Users\Mehran Memon\.m2\repository\org\slf4j\slf4j-api\2.0.13\slf4j-api-2.0.13.jar;C:\Users\Mehran Memon\.m2\repository\ch\qos\logback\logback-classic\1.5.13\logback-classic-1.5.13.jar;C:\Users\Mehran Memon\.m2\repository\ch\qos\logback\logback-core\1.5.13\logback-core-1.5.13.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-databind\2.17.2\jackson-databind-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-annotations\2.17.2\jackson-annotations-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\com\google\code\gson\gson\2.11.0\gson-2.11.0.jar;C:\Users\Mehran Memon\.m2\repository\com\google\errorprone\error_prone_annotations\2.27.0\error_prone_annotations-2.27.0.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\loader\target\loader-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-compress\1.26.1\commons-compress-1.26.1.jar;C:\Users\Mehran Memon\.m2\repository\commons-codec\commons-codec\1.16.1\commons-codec-1.16.1.jar;C:\Users\Mehran Memon\.m2\repository\commons-io\commons-io\2.15.1\commons-io-2.15.1.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-core\1.11.0\micrometer-core-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-commons\1.11.0\micrometer-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-observation\1.11.0\micrometer-observation-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\hdrhistogram\HdrHistogram\2.1.12\HdrHistogram-2.1.12.jar;C:\Users\Mehran Memon\.m2\repository\org\latencyutils\LatencyUtils\2.0.3\LatencyUtils-2.0.3.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-registry-prometheus\1.11.0\micrometer-registry-prometheus-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_common\0.16.0\simpleclient_common-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient\0.16.0\simpleclient-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_otel\0.16.0\simpleclient_tracer_otel-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_common\0.16.0\simpleclient_tracer_common-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_otel_agent\0.16.0\simpleclient_tracer_otel_agent-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\org\jfree\jfreechart\1.5.3\jfreechart-1.5.3.jar;C:\Users\Mehran Memon\.m2\repository\junit\junit\4.0\junit-4.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter\5.11.0\junit-jupiter-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-params\5.11.0\junit-jupiter-params-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-engine\5.11.0\junit-jupiter-engine-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\platform\junit-platform-engine\1.11.0\junit-platform-engine-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-api\5.11.0\junit-jupiter-api-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\opentest4j\opentest4j\1.3.0\opentest4j-1.3.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\platform\junit-platform-commons\1.11.0\junit-platform-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\apiguardian\apiguardian-api\1.1.2\apiguardian-api-1.1.2.jar;"/>
     <property name="sun.cpu.endian" value="little"/>
@@ -32,7 +32,7 @@
     <property name="line.separator" value="&#10;"/>
     <property name="java.vm.specification.vendor" value="Oracle Corporation"/>
     <property name="java.specification.name" value="Java Platform API Specification"/>
-    <property name="surefire.real.class.path" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire10714678277528568227\surefirebooter9983995432110791829.jar"/>
+    <property name="surefire.real.class.path" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire3332753576252811042\surefirebooter16111240912273881884.jar"/>
     <property name="user.script" value=""/>
     <property name="sun.management.compiler" value="HotSpot 64-Bit Tiered Compilers"/>
     <property name="java.runtime.version" value="22.0.2+9-70"/>
@@ -60,261 +60,52 @@
     <property name="sun.io.unicode.encoding" value="UnicodeLittle"/>
     <property name="java.class.version" value="66.0"/>
   </properties>
-  <testcase name="simpleEndToEndNearestNeighbor(Path)" classname="com.fspann.api.ForwardSecureANNSystemIntegrationTest" time="0.19">
-    <system-out><![CDATA[2025-07-01 05:39:39 [main] INFO  com.fspann.key.KeyManager - Initialized new key store (version 1)
-2025-07-01 05:39:39 [main] INFO  c.fspann.crypto.AesGcmCryptoService - AesGcmCryptoService initialized successfully
-2025-07-01 05:39:39 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Initializing ForwardSecureANNSystem with config=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-13166182114492417717\config.json, data=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-13166182114492417717\data2d.csv, keys=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-13166182114492417717\keys.ser, dims=[2], metadata=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-13166182114492417717
-2025-07-01 05:39:39 [main] INFO  com.fspann.config.SystemConfig - Successfully loaded config from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-13166182114492417717\config.json
-2025-07-01 05:39:39 [main] INFO  com.fspann.key.KeyManager - Loaded key store up to version 1
-2025-07-01 05:39:39 [main] ERROR com.fspann.common.PersistenceUtils - ❌ Failed to load object from metadata.ser: java.io.EOFException
-2025-07-01 05:39:39 [main] WARN  com.fspann.common.MetadataManager - Failed to load metadata from metadata.ser, starting fresh
-java.io.EOFException: null
-	at java.base/java.io.ObjectInputStream$BlockDataInputStream.peekByte(ObjectInputStream.java:3217)
-	at java.base/java.io.ObjectInputStream.readObject0(ObjectInputStream.java:1698)
-	at java.base/java.io.ObjectInputStream.readObject(ObjectInputStream.java:525)
-	at java.base/java.io.ObjectInputStream.readObject(ObjectInputStream.java:483)
-	at java.base/java.util.HashMap.readObject(HashMap.java:1558)
-	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
-	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
-	at java.base/java.io.ObjectStreamClass.invokeReadObject(ObjectStreamClass.java:1108)
-	at java.base/java.io.ObjectInputStream.readSerialData(ObjectInputStream.java:2429)
-	at java.base/java.io.ObjectInputStream.readOrdinaryObject(ObjectInputStream.java:2269)
-	at java.base/java.io.ObjectInputStream.readObject0(ObjectInputStream.java:1747)
-	at java.base/java.io.ObjectInputStream.readObject(ObjectInputStream.java:525)
-	at java.base/java.io.ObjectInputStream.readObject(ObjectInputStream.java:483)
-	at java.base/java.util.HashMap.readObject(HashMap.java:1560)
-	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
-	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
-	at java.base/java.io.ObjectStreamClass.invokeReadObject(ObjectStreamClass.java:1108)
-	at java.base/java.io.ObjectInputStream.readSerialData(ObjectInputStream.java:2429)
-	at java.base/java.io.ObjectInputStream.readOrdinaryObject(ObjectInputStream.java:2269)
-	at java.base/java.io.ObjectInputStream.readObject0(ObjectInputStream.java:1747)
-	at java.base/java.io.ObjectInputStream$FieldValues.<init>(ObjectInputStream.java:2603)
-	at java.base/java.io.ObjectInputStream.readSerialData(ObjectInputStream.java:2454)
-	at java.base/java.io.ObjectInputStream.readOrdinaryObject(ObjectInputStream.java:2269)
-	at java.base/java.io.ObjectInputStream.readObject0(ObjectInputStream.java:1747)
-	at java.base/java.io.ObjectInputStream.readObject(ObjectInputStream.java:525)
-	at java.base/java.io.ObjectInputStream.readObject(ObjectInputStream.java:483)
-	at com.fspann.common.PersistenceUtils.loadObject(PersistenceUtils.java:34)
-	at com.fspann.common.MetadataManager.load(MetadataManager.java:39)
-	at com.fspann.index.service.SecureLSHIndexService.<init>(SecureLSHIndexService.java:52)
-	at com.fspann.index.service.SecureLSHIndexService.<init>(SecureLSHIndexService.java:37)
-	at com.fspann.api.ForwardSecureANNSystem.<init>(ForwardSecureANNSystem.java:81)
-	at com.fspann.api.ForwardSecureANNSystemIntegrationTest.simpleEndToEndNearestNeighbor(ForwardSecureANNSystemIntegrationTest.java:66)
-	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
-	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
-	at org.junit.platform.commons.util.ReflectionUtils.invokeMethod(ReflectionUtils.java:766)
-	at org.junit.jupiter.engine.execution.MethodInvocation.proceed(MethodInvocation.java:60)
-	at org.junit.jupiter.engine.execution.InvocationInterceptorChain$ValidatingInvocation.proceed(InvocationInterceptorChain.java:131)
-	at org.junit.jupiter.engine.extension.TimeoutExtension.intercept(TimeoutExtension.java:156)
-	at org.junit.jupiter.engine.extension.TimeoutExtension.interceptTestableMethod(TimeoutExtension.java:147)
-	at org.junit.jupiter.engine.extension.TimeoutExtension.interceptTestMethod(TimeoutExtension.java:86)
-	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker$ReflectiveInterceptorCall.lambda$ofVoidMethod$0(InterceptingExecutableInvoker.java:103)
-	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.lambda$invoke$0(InterceptingExecutableInvoker.java:93)
-	at org.junit.jupiter.engine.execution.InvocationInterceptorChain$InterceptedInvocation.proceed(InvocationInterceptorChain.java:106)
-	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.proceed(InvocationInterceptorChain.java:64)
-	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.chainAndInvoke(InvocationInterceptorChain.java:45)
-	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.invoke(InvocationInterceptorChain.java:37)
-	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.invoke(InterceptingExecutableInvoker.java:92)
-	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.invoke(InterceptingExecutableInvoker.java:86)
-	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.lambda$invokeTestMethod$8(TestMethodTestDescriptor.java:217)
-	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
-	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.invokeTestMethod(TestMethodTestDescriptor.java:213)
-	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.execute(TestMethodTestDescriptor.java:138)
-	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.execute(TestMethodTestDescriptor.java:68)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$6(NodeTestTask.java:151)
-	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$8(NodeTestTask.java:141)
-	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:137)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$9(NodeTestTask.java:139)
-	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:138)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:95)
-	at java.base/java.util.ArrayList.forEach(ArrayList.java:1597)
-	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.invokeAll(SameThreadHierarchicalTestExecutorService.java:41)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$6(NodeTestTask.java:155)
-	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$8(NodeTestTask.java:141)
-	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:137)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$9(NodeTestTask.java:139)
-	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:138)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:95)
-	at java.base/java.util.ArrayList.forEach(ArrayList.java:1597)
-	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.invokeAll(SameThreadHierarchicalTestExecutorService.java:41)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$6(NodeTestTask.java:155)
-	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$8(NodeTestTask.java:141)
-	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:137)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$9(NodeTestTask.java:139)
-	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:138)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:95)
-	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.submit(SameThreadHierarchicalTestExecutorService.java:35)
-	at org.junit.platform.engine.support.hierarchical.HierarchicalTestExecutor.execute(HierarchicalTestExecutor.java:57)
-	at org.junit.platform.engine.support.hierarchical.HierarchicalTestEngine.execute(HierarchicalTestEngine.java:54)
-	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:198)
-	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:169)
-	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:93)
-	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.lambda$execute$0(EngineExecutionOrchestrator.java:58)
-	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.withInterceptedStreams(EngineExecutionOrchestrator.java:141)
-	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:57)
-	at org.junit.platform.launcher.core.DefaultLauncher.execute(DefaultLauncher.java:103)
-	at org.junit.platform.launcher.core.DefaultLauncher.execute(DefaultLauncher.java:85)
-	at org.junit.platform.launcher.core.DelegatingLauncher.execute(DelegatingLauncher.java:47)
-	at org.junit.platform.launcher.core.SessionPerRequestLauncher.execute(SessionPerRequestLauncher.java:63)
-	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.execute(JUnitPlatformProvider.java:188)
-	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.invokeAllTests(JUnitPlatformProvider.java:154)
-	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.invoke(JUnitPlatformProvider.java:128)
-	at org.apache.maven.surefire.booter.ForkedBooter.runSuitesInProcess(ForkedBooter.java:428)
-	at org.apache.maven.surefire.booter.ForkedBooter.execute(ForkedBooter.java:162)
-	at org.apache.maven.surefire.booter.ForkedBooter.run(ForkedBooter.java:562)
-	at org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:548)
-2025-07-01 05:39:39 [main] WARN  c.f.i.service.SecureLSHIndexService - Failed to load metadata, starting fresh
-com.fspann.common.MetadataManager$MetadataException: Failed to load metadata from metadata.ser
-	at com.fspann.common.MetadataManager.load(MetadataManager.java:51)
-	at com.fspann.index.service.SecureLSHIndexService.<init>(SecureLSHIndexService.java:52)
-	at com.fspann.index.service.SecureLSHIndexService.<init>(SecureLSHIndexService.java:37)
-	at com.fspann.api.ForwardSecureANNSystem.<init>(ForwardSecureANNSystem.java:81)
-	at com.fspann.api.ForwardSecureANNSystemIntegrationTest.simpleEndToEndNearestNeighbor(ForwardSecureANNSystemIntegrationTest.java:66)
-	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
-	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
-	at org.junit.platform.commons.util.ReflectionUtils.invokeMethod(ReflectionUtils.java:766)
-	at org.junit.jupiter.engine.execution.MethodInvocation.proceed(MethodInvocation.java:60)
-	at org.junit.jupiter.engine.execution.InvocationInterceptorChain$ValidatingInvocation.proceed(InvocationInterceptorChain.java:131)
-	at org.junit.jupiter.engine.extension.TimeoutExtension.intercept(TimeoutExtension.java:156)
-	at org.junit.jupiter.engine.extension.TimeoutExtension.interceptTestableMethod(TimeoutExtension.java:147)
-	at org.junit.jupiter.engine.extension.TimeoutExtension.interceptTestMethod(TimeoutExtension.java:86)
-	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker$ReflectiveInterceptorCall.lambda$ofVoidMethod$0(InterceptingExecutableInvoker.java:103)
-	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.lambda$invoke$0(InterceptingExecutableInvoker.java:93)
-	at org.junit.jupiter.engine.execution.InvocationInterceptorChain$InterceptedInvocation.proceed(InvocationInterceptorChain.java:106)
-	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.proceed(InvocationInterceptorChain.java:64)
-	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.chainAndInvoke(InvocationInterceptorChain.java:45)
-	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.invoke(InvocationInterceptorChain.java:37)
-	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.invoke(InterceptingExecutableInvoker.java:92)
-	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.invoke(InterceptingExecutableInvoker.java:86)
-	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.lambda$invokeTestMethod$8(TestMethodTestDescriptor.java:217)
-	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
-	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.invokeTestMethod(TestMethodTestDescriptor.java:213)
-	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.execute(TestMethodTestDescriptor.java:138)
-	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.execute(TestMethodTestDescriptor.java:68)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$6(NodeTestTask.java:151)
-	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$8(NodeTestTask.java:141)
-	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:137)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$9(NodeTestTask.java:139)
-	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:138)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:95)
-	at java.base/java.util.ArrayList.forEach(ArrayList.java:1597)
-	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.invokeAll(SameThreadHierarchicalTestExecutorService.java:41)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$6(NodeTestTask.java:155)
-	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$8(NodeTestTask.java:141)
-	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:137)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$9(NodeTestTask.java:139)
-	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:138)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:95)
-	at java.base/java.util.ArrayList.forEach(ArrayList.java:1597)
-	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.invokeAll(SameThreadHierarchicalTestExecutorService.java:41)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$6(NodeTestTask.java:155)
-	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$8(NodeTestTask.java:141)
-	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:137)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$9(NodeTestTask.java:139)
-	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:138)
-	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:95)
-	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.submit(SameThreadHierarchicalTestExecutorService.java:35)
-	at org.junit.platform.engine.support.hierarchical.HierarchicalTestExecutor.execute(HierarchicalTestExecutor.java:57)
-	at org.junit.platform.engine.support.hierarchical.HierarchicalTestEngine.execute(HierarchicalTestEngine.java:54)
-	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:198)
-	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:169)
-	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:93)
-	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.lambda$execute$0(EngineExecutionOrchestrator.java:58)
-	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.withInterceptedStreams(EngineExecutionOrchestrator.java:141)
-	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:57)
-	at org.junit.platform.launcher.core.DefaultLauncher.execute(DefaultLauncher.java:103)
-	at org.junit.platform.launcher.core.DefaultLauncher.execute(DefaultLauncher.java:85)
-	at org.junit.platform.launcher.core.DelegatingLauncher.execute(DelegatingLauncher.java:47)
-	at org.junit.platform.launcher.core.SessionPerRequestLauncher.execute(SessionPerRequestLauncher.java:63)
-	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.execute(JUnitPlatformProvider.java:188)
-	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.invokeAllTests(JUnitPlatformProvider.java:154)
-	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.invoke(JUnitPlatformProvider.java:128)
-	at org.apache.maven.surefire.booter.ForkedBooter.runSuitesInProcess(ForkedBooter.java:428)
-	at org.apache.maven.surefire.booter.ForkedBooter.execute(ForkedBooter.java:162)
-	at org.apache.maven.surefire.booter.ForkedBooter.run(ForkedBooter.java:562)
-	at org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:548)
-Caused by: java.io.EOFException: null
-	at java.base/java.io.ObjectInputStream$BlockDataInputStream.peekByte(ObjectInputStream.java:3217)
-	at java.base/java.io.ObjectInputStream.readObject0(ObjectInputStream.java:1698)
-	at java.base/java.io.ObjectInputStream.readObject(ObjectInputStream.java:525)
-	at java.base/java.io.ObjectInputStream.readObject(ObjectInputStream.java:483)
-	at java.base/java.util.HashMap.readObject(HashMap.java:1558)
-	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
-	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
-	at java.base/java.io.ObjectStreamClass.invokeReadObject(ObjectStreamClass.java:1108)
-	at java.base/java.io.ObjectInputStream.readSerialData(ObjectInputStream.java:2429)
-	at java.base/java.io.ObjectInputStream.readOrdinaryObject(ObjectInputStream.java:2269)
-	at java.base/java.io.ObjectInputStream.readObject0(ObjectInputStream.java:1747)
-	at java.base/java.io.ObjectInputStream.readObject(ObjectInputStream.java:525)
-	at java.base/java.io.ObjectInputStream.readObject(ObjectInputStream.java:483)
-	at java.base/java.util.HashMap.readObject(HashMap.java:1560)
-	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
-	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
-	at java.base/java.io.ObjectStreamClass.invokeReadObject(ObjectStreamClass.java:1108)
-	at java.base/java.io.ObjectInputStream.readSerialData(ObjectInputStream.java:2429)
-	at java.base/java.io.ObjectInputStream.readOrdinaryObject(ObjectInputStream.java:2269)
-	at java.base/java.io.ObjectInputStream.readObject0(ObjectInputStream.java:1747)
-	at java.base/java.io.ObjectInputStream$FieldValues.<init>(ObjectInputStream.java:2603)
-	at java.base/java.io.ObjectInputStream.readSerialData(ObjectInputStream.java:2454)
-	at java.base/java.io.ObjectInputStream.readOrdinaryObject(ObjectInputStream.java:2269)
-	at java.base/java.io.ObjectInputStream.readObject0(ObjectInputStream.java:1747)
-	at java.base/java.io.ObjectInputStream.readObject(ObjectInputStream.java:525)
-	at java.base/java.io.ObjectInputStream.readObject(ObjectInputStream.java:483)
-	at com.fspann.common.PersistenceUtils.loadObject(PersistenceUtils.java:34)
-	at com.fspann.common.MetadataManager.load(MetadataManager.java:39)
-	... 73 common frames omitted
-2025-07-01 05:39:39 [main] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-13166182114492417717\data2d.csv using loader for CSV
-2025-07-01 05:39:39 [main] INFO  c.f.i.service.SecureLSHIndexService - [BatchIndexing] Inserted 2 points in 5 ms (index: 1 ms, metaMap: 0 ms, save: 3 ms)
-2025-07-01 05:39:39 [main] INFO  c.f.i.service.SecureLSHIndexService - Flushed metadata.ser after batch.
-2025-07-01 05:39:39 [main] INFO  c.fspann.api.ForwardSecureANNSystem - [BatchInsert] Inserted 2 of 2 vectors... elapsed: 18 ms, last batch: 15 ms, freeMem: 234 MB
-2025-07-01 05:39:39 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Batch insert complete: 2 vectors in 18 ms
-2025-07-01 05:39:39 [main] INFO  c.f.a.ForwardSecureANNSystemIntegrationTest - Indexed vectors for dim=2: 2
-2025-07-01 05:39:39 [main] INFO  c.f.a.ForwardSecureANNSystemIntegrationTest - Executing query for vector: [0.05, 0.05]
+  <testcase name="simpleEndToEndNearestNeighbor(Path)" classname="com.fspann.api.ForwardSecureANNSystemIntegrationTest" time="0.478">
+    <system-out><![CDATA[2025-07-01 12:12:43 [main] INFO  com.fspann.key.KeyManager - Initialized new key store (version 1)
+2025-07-01 12:12:43 [main] INFO  c.fspann.crypto.AesGcmCryptoService - AesGcmCryptoService initialized successfully
+2025-07-01 12:12:43 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Initializing ForwardSecureANNSystem with config=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-9240351491306747472\config.json, data=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-9240351491306747472\data2d.csv, keys=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-9240351491306747472\keys.ser, dims=[2], metadata=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-9240351491306747472
+2025-07-01 12:12:43 [main] INFO  com.fspann.config.SystemConfig - Successfully loaded config from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-9240351491306747472\config.json
+2025-07-01 12:12:43 [main] INFO  com.fspann.key.KeyManager - Loaded key store up to version 1
+2025-07-01 12:12:43 [main] INFO  com.fspann.common.MetadataManager - Loaded metadata from metadata.ser
+2025-07-01 12:12:43 [main] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-9240351491306747472\data2d.csv using loader for CSV
+2025-07-01 12:12:43 [main] INFO  c.f.i.service.SecureLSHIndexService - [BatchIndexing] Inserted 2 points in 5 ms (index: 2 ms, metaMap: 0 ms, save: 3 ms)
+2025-07-01 12:12:43 [main] INFO  c.f.i.service.SecureLSHIndexService - Flushed metadata.ser after batch.
+2025-07-01 12:12:43 [main] INFO  c.fspann.api.ForwardSecureANNSystem - [BatchInsert] Inserted 2 of 2 vectors... elapsed: 206 ms, last batch: 205 ms, freeMem: 228 MB
+2025-07-01 12:12:43 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Batch insert complete: 2 vectors in 207 ms
+2025-07-01 12:12:43 [main] INFO  c.f.a.ForwardSecureANNSystemIntegrationTest - Indexed vectors for dim=2: 2
+2025-07-01 12:12:43 [main] INFO  c.f.a.ForwardSecureANNSystemIntegrationTest - Executing query for vector: [0.05, 0.05]
 
 === System Shutdown ===
-Total indexing time: 18 ms
-Total query time: 0 ms
+Total indexing time: 207 ms
+Total query time: 54 ms
 
 📤 Profiler data written to profiler_metrics.csv
 ]]></system-out>
   </testcase>
-  <testcase name="testVisualization(Path)" classname="com.fspann.api.ForwardSecureANNSystemIntegrationTest" time="1.123">
-    <system-out><![CDATA[2025-07-01 05:39:39 [main] INFO  com.fspann.key.KeyManager - Initialized new key store (version 1)
-2025-07-01 05:39:39 [main] INFO  c.fspann.crypto.AesGcmCryptoService - AesGcmCryptoService initialized successfully
-2025-07-01 05:39:39 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Initializing ForwardSecureANNSystem with config=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10665552854128658179\config.json, data=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10665552854128658179\data2d.csv, keys=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10665552854128658179\keys.ser, dims=[2], metadata=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10665552854128658179
-2025-07-01 05:39:39 [main] INFO  com.fspann.config.SystemConfig - Successfully loaded config from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10665552854128658179\config.json
-2025-07-01 05:39:39 [main] INFO  com.fspann.key.KeyManager - Loaded key store up to version 1
-2025-07-01 05:39:39 [main] INFO  com.fspann.common.MetadataManager - Loaded metadata from metadata.ser
-2025-07-01 05:39:39 [main] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10665552854128658179\data2d.csv using loader for CSV
-2025-07-01 05:39:39 [main] INFO  c.f.i.service.SecureLSHIndexService - [BatchIndexing] Inserted 2 points in 3 ms (index: 0 ms, metaMap: 0 ms, save: 2 ms)
-2025-07-01 05:39:39 [main] INFO  c.f.i.service.SecureLSHIndexService - Flushed metadata.ser after batch.
-2025-07-01 05:39:39 [main] INFO  c.fspann.api.ForwardSecureANNSystem - [BatchInsert] Inserted 2 of 2 vectors... elapsed: 7 ms, last batch: 7 ms, freeMem: 37 MB
-2025-07-01 05:39:39 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Batch insert complete: 2 vectors in 7 ms
-2025-07-01 05:39:39 [main] INFO  c.f.a.ForwardSecureANNSystemIntegrationTest - Indexed vectors for dim=2: 2
-2025-07-01 05:39:39 [main] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10665552854128658179\data2d.csv using loader for CSV
-2025-07-01 05:39:39 [main] INFO  c.f.i.service.SecureLSHIndexService - [BatchIndexing] Inserted 2 points in 3 ms (index: 0 ms, metaMap: 0 ms, save: 2 ms)
-2025-07-01 05:39:39 [main] INFO  c.f.i.service.SecureLSHIndexService - Flushed metadata.ser after batch.
-2025-07-01 05:39:39 [main] INFO  c.fspann.api.ForwardSecureANNSystem - [BatchInsert] Inserted 2 of 2 vectors... elapsed: 6 ms, last batch: 6 ms, freeMem: 37 MB
-2025-07-01 05:39:39 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Batch insert complete: 2 vectors in 6 ms
-2025-07-01 05:39:40 [main] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10665552854128658179\query2d.csv using loader for CSV
-2025-07-01 05:39:40 [main] INFO  c.fspann.api.PerformanceVisualizer - Chart saved to: results_query_results.png
+  <testcase name="testVisualization(Path)" classname="com.fspann.api.ForwardSecureANNSystemIntegrationTest" time="16.593">
+    <system-out><![CDATA[2025-07-01 12:12:43 [main] INFO  com.fspann.key.KeyManager - Initialized new key store (version 1)
+2025-07-01 12:12:43 [main] INFO  c.fspann.crypto.AesGcmCryptoService - AesGcmCryptoService initialized successfully
+2025-07-01 12:12:43 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Initializing ForwardSecureANNSystem with config=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10213342195810702856\config.json, data=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10213342195810702856\data2d.csv, keys=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10213342195810702856\keys.ser, dims=[2], metadata=C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10213342195810702856
+2025-07-01 12:12:43 [main] INFO  com.fspann.config.SystemConfig - Successfully loaded config from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10213342195810702856\config.json
+2025-07-01 12:12:43 [main] INFO  com.fspann.key.KeyManager - Loaded key store up to version 1
+2025-07-01 12:12:43 [main] INFO  com.fspann.common.MetadataManager - Loaded metadata from metadata.ser
+2025-07-01 12:12:43 [main] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10213342195810702856\data2d.csv using loader for CSV
+2025-07-01 12:12:44 [main] INFO  c.f.i.service.SecureLSHIndexService - [BatchIndexing] Inserted 2 points in 2 ms (index: 0 ms, metaMap: 0 ms, save: 1 ms)
+2025-07-01 12:12:44 [main] INFO  c.f.i.service.SecureLSHIndexService - Flushed metadata.ser after batch.
+2025-07-01 12:12:44 [main] INFO  c.fspann.api.ForwardSecureANNSystem - [BatchInsert] Inserted 2 of 2 vectors... elapsed: 171 ms, last batch: 170 ms, freeMem: 42 MB
+2025-07-01 12:12:44 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Batch insert complete: 2 vectors in 171 ms
+2025-07-01 12:12:44 [main] INFO  c.f.a.ForwardSecureANNSystemIntegrationTest - Indexed vectors for dim=2: 2
+2025-07-01 12:12:44 [main] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10213342195810702856\data2d.csv using loader for CSV
+2025-07-01 12:12:44 [main] INFO  c.f.i.service.SecureLSHIndexService - [BatchIndexing] Inserted 2 points in 2 ms (index: 0 ms, metaMap: 0 ms, save: 2 ms)
+2025-07-01 12:12:44 [main] INFO  c.f.i.service.SecureLSHIndexService - Flushed metadata.ser after batch.
+2025-07-01 12:12:44 [main] INFO  c.fspann.api.ForwardSecureANNSystem - [BatchInsert] Inserted 2 of 2 vectors... elapsed: 155 ms, last batch: 155 ms, freeMem: 38 MB
+2025-07-01 12:12:44 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Batch insert complete: 2 vectors in 155 ms
+2025-07-01 12:12:59 [main] INFO  com.fspann.loader.DefaultDataLoader - Loading data from C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10213342195810702856\query2d.csv using loader for CSV
+2025-07-01 12:13:00 [main] INFO  c.fspann.api.PerformanceVisualizer - Chart saved to: results_query_results.png
 
 === System Shutdown ===
-Total indexing time: 14 ms
-Total query time: 0 ms
+Total indexing time: 326 ms
+Total query time: 52 ms
 
 📤 Profiler data written to profiler_metrics.csv
 ]]></system-out>

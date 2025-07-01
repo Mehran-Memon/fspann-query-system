@@ -9,6 +9,7 @@ com\fspann\common\MetadataManager$1.class
 com\fspann\common\KeyLifeCycleService.class
 com\fspann\common\MetadataManager$2.class
 com\fspann\common\EncryptedPoint.class
+com\fspann\common\EncryptedPointBuffer.class
 com\fspann\common\MetadataManager.class
 com\fspann\common\QueryResult.class
 com\fspann\common\PersistenceUtils.class
