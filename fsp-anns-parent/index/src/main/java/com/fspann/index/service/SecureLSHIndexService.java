@@ -17,6 +17,7 @@ import org.slf4j.LoggerFactory;
 import javax.crypto.SecretKey;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 public class SecureLSHIndexService implements IndexService {
     private static final Logger logger = LoggerFactory.getLogger(SecureLSHIndexService.class);
@@ -61,6 +62,82 @@ public class SecureLSHIndexService implements IndexService {
             SecureLSHIndex idx = (index != null) ? index : new SecureLSHIndex(1, buckets, lshInstance);
             return new DimensionContext(idx, crypto, keyService, lshInstance);
         });
+    }
+
+    public void batchInsert(List<String> ids, List<double[]> vectors) {
+        if (ids.size() != vectors.size()) {
+            throw new IllegalArgumentException("IDs and vectors must be the same size.");
+        }
+
+        metadataManager.setDeferSave(true); // Disable metadata.ser writes temporarily
+
+        Map<Integer, List<EncryptedPoint>> byDim = new HashMap<>();
+
+        for (int i = 0; i < vectors.size(); i++) {
+            String id = ids.get(i);
+            double[] vector = vectors.get(i);
+            try {
+                int dimension = vector.length;
+                DimensionContext ctx = getOrCreateContext(dimension);
+                keyService.rotateIfNeeded();
+                KeyVersion version = keyService.getCurrentVersion();
+                SecretKey key = version.getKey();
+
+                int shardId = ctx.getLsh().getBucketId(vector);
+                EncryptedPoint encryptedPoint = crypto.encryptToPoint(id, vector, key);
+                EncryptedPoint withShard = new EncryptedPoint(
+                        encryptedPoint.getId(),
+                        shardId,
+                        encryptedPoint.getIv(),
+                        encryptedPoint.getCiphertext(),
+                        version.getVersion(),
+                        dimension
+                );
+
+                byDim.computeIfAbsent(dimension, k -> new ArrayList<>()).add(withShard);
+            } catch (Exception e) {
+                logger.error("Failed to encrypt vector id={} during batchInsert", id, e);
+            }
+        }
+
+        for (Map.Entry<Integer, List<EncryptedPoint>> entry : byDim.entrySet()) {
+            DimensionContext ctx = getOrCreateContext(entry.getKey());
+            SecureLSHIndex idx = ctx.getIndex();
+
+            long t1 = System.nanoTime();
+            for (EncryptedPoint pt : entry.getValue()) {
+                indexedPoints.put(pt.getId(), pt);
+                idx.addPoint(pt);
+                idx.markShardDirty(pt.getShardId());
+            }
+            long t2 = System.nanoTime();
+
+            for (EncryptedPoint pt : entry.getValue()) {
+                metadataManager.putVectorMetadata(pt.getId(), String.valueOf(pt.getShardId()), String.valueOf(pt.getVersion()));
+            }
+            long t3 = System.nanoTime();
+
+            for (EncryptedPoint pt : entry.getValue()) {
+                metadataManager.saveEncryptedPoint(pt);
+            }
+            long t4 = System.nanoTime();
+
+            logger.info("[BatchIndexing] Inserted {} points in {} ms (index: {} ms, metaMap: {} ms, save: {} ms)",
+                    entry.getValue().size(),
+                    TimeUnit.NANOSECONDS.toMillis(t4 - t1),
+                    TimeUnit.NANOSECONDS.toMillis(t2 - t1),
+                    TimeUnit.NANOSECONDS.toMillis(t3 - t2),
+                    TimeUnit.NANOSECONDS.toMillis(t4 - t3)
+            );
+        }
+
+        try {
+            metadataManager.setDeferSave(false); // Enable metadata.ser saving again
+            metadataManager.save("metadata.ser"); // Write once at the end
+            logger.info("Flushed metadata.ser after batch.");
+        } catch (MetadataManager.MetadataException e) {
+            logger.error("Failed to save metadata after batchInsert", e);
+        }
     }
 
     @Override
@@ -169,22 +246,5 @@ public class SecureLSHIndexService implements IndexService {
     public void updateCachedPoint(EncryptedPoint pt) {
         indexedPoints.put(pt.getId(), pt);
     }
-
-    public void batchInsert(List<String> ids, List<double[]> vectors) {
-        if (ids.size() != vectors.size()) {
-            throw new IllegalArgumentException("IDs and vectors must be the same size.");
-        }
-
-        for (int i = 0; i < vectors.size(); i++) {
-            String id = ids.get(i);
-            double[] vector = vectors.get(i);
-            try {
-                insert(id, vector);
-            } catch (Exception e) {
-                logger.error("Failed to insert vector id={} during batchInsert", id, e);
-            }
-        }
-    }
-
 
 }

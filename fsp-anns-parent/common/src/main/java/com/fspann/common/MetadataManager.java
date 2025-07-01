@@ -18,6 +18,8 @@ public class MetadataManager {
     private final Map<String, Map<String, String>> metadata = new ConcurrentHashMap<>();
     private final Set<String> encryptedPoints = ConcurrentHashMap.newKeySet();
     private String currentPath;
+    private boolean deferSave = false;
+
 
     public MetadataManager() {
         ensureBaseDirExists();
@@ -85,7 +87,7 @@ public class MetadataManager {
         metadata.computeIfAbsent(vectorId, k -> new HashMap<>()).put("shardId", shardId);
         metadata.computeIfAbsent(vectorId, k -> new HashMap<>()).put("version", version);
         logger.debug("Updated metadata for vectorId={} with shardId={} and version={}", vectorId, shardId, version);
-        if (currentPath != null) {
+        if (currentPath != null && !deferSave) {
             try {
                 save(currentPath);
             } catch (MetadataException e) {
@@ -175,4 +177,9 @@ public class MetadataManager {
             return new HashMap<>(metadata);
         }
     }
+
+    public void setDeferSave(boolean deferSave) {
+        this.deferSave = deferSave;
+    }
+
 }
