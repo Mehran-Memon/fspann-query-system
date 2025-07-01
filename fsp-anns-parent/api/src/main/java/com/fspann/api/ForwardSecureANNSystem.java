@@ -64,8 +64,8 @@ public class ForwardSecureANNSystem {
     ) throws Exception {
         this.verbose = verbose;
 
-        logger.info("Initializing ForwardSecureANNSystem with config={}, data={}, keys={}, dims={}, metadata={}",
-                configPath, dataPath, keysFilePath, dimensions, metadataPath);
+//        logger.info("Initializing ForwardSecureANNSystem with config={}, data={}, keys={}, dims={}, metadata={}",
+//                configPath, dataPath, keysFilePath, dimensions, metadataPath);
 
         this.dimensionDataMap = new HashMap<>();
         this.dimensionIdMap = new HashMap<>();
@@ -79,7 +79,7 @@ public class ForwardSecureANNSystem {
         this.keyService = new KeyRotationServiceImpl(keyManager, policy, metadataPath.toString(), metadataManager, cryptoService);
         this.cryptoService = cryptoService;
         this.indexService = new SecureLSHIndexService(cryptoService, keyService, metadataManager);
-        this.cache = new LRUCache<>(1000);
+        this.cache = new LRUCache<>(10000);
         this.profiler = config.isProfilerEnabled() ? new Profiler() : null;
         this.tokenFactory = new QueryTokenFactory(cryptoService, keyService, new EvenLSH(Collections.max(dimensions), config.getNumShards()), 1, 1);
         this.queryService = new QueryServiceImpl(indexService, cryptoService, keyService);
@@ -115,8 +115,8 @@ public class ForwardSecureANNSystem {
                 batch.clear();
                 long elapsed = (System.nanoTime() - start) / 1_000_000;
                 long batchDuration = (batchEnd - batchStart) / 1_000_000;
-                logger.info("[BatchInsert] Inserted {} of {} vectors... elapsed: {} ms, last batch: {} ms, freeMem: {} MB",
-                        i + 1, vectors.size(), elapsed, batchDuration,
+                logger.info(" {}, elapsed: {} ms, last batch: {} ms, freeMem: {} MB",
+                        i + 1, elapsed, batchDuration,
                         Runtime.getRuntime().freeMemory() / (1024 * 1024));
             }
         }
@@ -128,7 +128,7 @@ public class ForwardSecureANNSystem {
             long duration = profiler.getTimings("batchInsert").getLast();
             totalIndexingTime += duration;
             indexingCount += vectors.size();
-            logger.info("Batch insert complete: {} vectors in {} ms", vectors.size(), TimeUnit.NANOSECONDS.toMillis(duration));
+            logger.info("{} vectors in {} ms", vectors.size(), TimeUnit.NANOSECONDS.toMillis(duration));
         } else {
             long totalElapsed = (System.nanoTime() - start) / 1_000_000;
             logger.info("Batch insert complete: {} vectors in {} ms", vectors.size(), totalElapsed);
@@ -175,18 +175,26 @@ public class ForwardSecureANNSystem {
     }
 
     public List<QueryResult> query(double[] queryVector, int topK, int dim) {
+        long start = System.nanoTime();
         QueryToken token = tokenFactory.create(queryVector, topK);
         List<QueryResult> cached = cache.get(token);
         if (cached != null) return cached;
         List<QueryResult> results = queryService.search(token);
         cache.put(token, results);
+        long elapsed = System.nanoTime() - start;
+        //logger.info("[Query] TopK={} took {} ms", topK, TimeUnit.NANOSECONDS.toMillis(elapsed));
+        totalQueryTime += elapsed;
         return results;
     }
 
     public List<QueryResult> queryWithCloak(double[] queryVector, int topK, int dim) {
+        long start = System.nanoTime();
         QueryToken token = cloakQuery(queryVector, dim);
         List<QueryResult> results = queryService.search(token);
         if (verbose) logger.info("Cloaked query returned {} results", results.size());
+        long elapsed = System.nanoTime() - start;
+        //logger.info("[Query] TopK={} took {} ms", topK, TimeUnit.NANOSECONDS.toMillis(elapsed));
+        totalQueryTime += elapsed;
         return results;
     }
 
@@ -255,7 +263,7 @@ public class ForwardSecureANNSystem {
 
     public static void main(String[] args) throws Exception {
         if (args.length < 6) {
-            System.err.println("Usage: <configPath> <dataPath> <queryPath> <keysFilePath> <dimensions> <metadataPath>");
+//            System.err.println("Usage: <configPath> <dataPath> <queryPath> <keysFilePath> <dimensions> <metadataPath>");
             System.exit(1);
         }
 
@@ -270,7 +278,7 @@ public class ForwardSecureANNSystem {
 
         MetadataManager metadataManager = new MetadataManager();
         KeyManager keyManager = new KeyManager(keysFile);
-        KeyRotationPolicy policy = new KeyRotationPolicy(999_999, 999_999);
+        KeyRotationPolicy policy = new KeyRotationPolicy(100000, 999_999);
         KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(keyManager, policy, metadataPath.toString(), metadataManager, null);
 
         CryptoService cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
