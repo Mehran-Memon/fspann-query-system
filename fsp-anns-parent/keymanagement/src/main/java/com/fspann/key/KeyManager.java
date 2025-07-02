@@ -78,7 +78,7 @@ public class KeyManager {
             this.currentVersion = blob.getSessionKeys().keySet().stream()
                     .max(Integer::compare)
                     .orElse(1);
-            logger.info("Loaded key store up to version {}", currentVersion);
+            logger.debug("Loaded key store up to version {}", currentVersion);
         } catch (ClassNotFoundException e) {
             throw new IOException("Failed to load keys, class not found: " + path, e);
         }
@@ -145,7 +145,7 @@ public class KeyManager {
             try {
                 sessionKeys.put(1, deriveSessionKey(1));
                 persist();
-                logger.info("🔐 Initialized session key version 1 manually via init()");
+                logger.debug("Initialized session key version 1 manually via init()");
             } catch (Exception e) {
                 throw new RuntimeException("Failed to initialize key version 1", e);
             }

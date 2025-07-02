@@ -24,7 +24,7 @@ public class AesGcmCryptoService implements CryptoService {
     private final MetadataManager metadataManager;
 
     public AesGcmCryptoService(MeterRegistry registry, KeyLifeCycleService keyService, MetadataManager metadataManager) {
-        logger.debug("Initializing AesGcmCryptoService");
+//        logger.debug("Initializing AesGcmCryptoService");
         this.registry = registry != null ? registry : new SimpleMeterRegistry();
         this.keyService = Objects.requireNonNull(keyService, "KeyLifeCycleService must not be null");
         this.metadataManager = Objects.requireNonNullElseGet(metadataManager, MetadataManager::new);
@@ -36,7 +36,7 @@ public class AesGcmCryptoService implements CryptoService {
         this.decryptTimer = Timer.builder("fspann.crypto.decrypt.time")
                 .description("AES-GCM decryption latency")
                 .register(this.registry);
-        logger.info("AesGcmCryptoService initialized successfully");
+//        logger.info("AesGcmCryptoService initialized successfully");
     }
 
     @Override

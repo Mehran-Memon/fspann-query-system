@@ -99,7 +99,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
                     EncryptedPoint updated = cryptoService.reEncrypt(pt, getCurrentVersion().getKey());
                     reEncrypted.add(updated);
                 } catch (AesGcmCryptoService.CryptoException e) {
-                    logger.warn("❌ Skipping point {} (v={}) due to re-encryption failure: {}",
+                    logger.warn("Skipping point {} (v={}) due to re-encryption failure: {}",
                             pt.getId(), pt.getVersion(), e.getMessage());
                 }
             }
@@ -111,10 +111,10 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
                 metadataManager.putVectorMetadata(pt.getId(), String.valueOf(pt.getShardId()), String.valueOf(pt.getVersion()));
             }
 
-            logger.info("✅ Re-encryption completed for {} vectors", reEncrypted.size());
+            logger.info("Re-encryption completed for {} vectors", reEncrypted.size());
 
         } catch (Exception e) {
-            logger.error("❌ Manual re-encryption failed", e);
+            logger.error("Manual re-encryption failed", e);
             throw new RuntimeException("Manual re-encryption failed", e);
         }
     }

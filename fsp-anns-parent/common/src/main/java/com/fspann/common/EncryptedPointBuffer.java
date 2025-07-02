@@ -11,24 +11,40 @@ import java.util.*;
 
 public class EncryptedPointBuffer {
     private static final Logger logger = LoggerFactory.getLogger(EncryptedPointBuffer.class);
-    private static final int FLUSH_THRESHOLD = 1000;
 
     private final Map<Integer, List<EncryptedPoint>> versionBuffer = new HashMap<>();
-    private final Path baseDir;
-
-    private final MetadataManager metadataManager;
     private final Map<Integer, Integer> batchCounters = new HashMap<>();
+    private final Path baseDir;
+    private final MetadataManager metadataManager;
+    private static final double MEMORY_THRESHOLD_RATIO = 0.80;
+    private final int flushThreshold;
+    private int globalBufferCount = 0; // total points buffered across versions
 
     public EncryptedPointBuffer(String baseDirPath, MetadataManager metadataManager) throws IOException {
+        this(baseDirPath, metadataManager, 10000); // default flush threshold
+    }
+
+    public EncryptedPointBuffer(String baseDirPath, MetadataManager metadataManager, int flushThreshold) throws IOException {
         this.baseDir = Paths.get(baseDirPath);
         this.metadataManager = metadataManager;
+        this.flushThreshold = flushThreshold;
         Files.createDirectories(baseDir);
     }
 
-    public void add(EncryptedPoint pt) {
+    public synchronized void add(EncryptedPoint pt) {
         versionBuffer.computeIfAbsent(pt.getVersion(), v -> new ArrayList<>()).add(pt);
+        globalBufferCount++;
 
-        if (versionBuffer.get(pt.getVersion()).size() >= FLUSH_THRESHOLD) {
+        long maxMemory = Runtime.getRuntime().maxMemory();
+        long usedMemory = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
+
+        if ((double) usedMemory / maxMemory > MEMORY_THRESHOLD_RATIO) {
+            logger.warn("Memory usage exceeded 80%% of max ({} MB used of {} MB). Flushing buffers early.",
+                    usedMemory / (1024 * 1024), maxMemory / (1024 * 1024));
+            flushAll();
+        }
+
+        if (versionBuffer.get(pt.getVersion()).size() >= flushThreshold) {
             flush(pt.getVersion());
         }
     }
@@ -58,12 +74,24 @@ public class EncryptedPointBuffer {
                 metadataManager.putVectorMetadata(pt.getId(), String.valueOf(pt.getShardId()), String.valueOf(pt.getVersion()));
             }
 
-            logger.info("Flushed {} points for v{} to {}", points.size(), version, batchFileName);
+//            logger.info("Flushed {} points for v{} to {}", points.size(), version, batchFileName);
         } catch (IOException e) {
-            logger.error("Failed to flush EncryptedPoints for version {}", version, e);
+//            logger.error("Failed to flush EncryptedPoints for version {}", version, e);
         }
 
         batchCounters.put(version, batchCounters.getOrDefault(version, 0) + 1);
         versionBuffer.remove(version);
+    }
+
+    public int getBufferSize() {
+        return globalBufferCount;
+    }
+
+    public int getFlushThreshold() {
+        return flushThreshold;
+    }
+
+    public void shutdown() {
+        // No-op (executor removed)
     }
 }

@@ -47,7 +47,7 @@ public class QueryServiceImpl implements QueryService {
         try {
             queryVec = cryptoService.decryptQuery(token.getEncryptedQuery(), token.getIv(), key);
         } catch (Exception e) {
-            logger.error("❌ Failed to decrypt query vector", e);
+            logger.error("Failed to decrypt query vector", e);
             throw new RuntimeException("Decryption error: query vector", e);
         }
 
@@ -69,7 +69,7 @@ public class QueryServiceImpl implements QueryService {
                         if (e instanceof IllegalArgumentException) {
                             throw (IllegalArgumentException) e; // Propagate dimension mismatch
                         }
-                        logger.warn("Skipped corrupt candidate point ID {} due to decryption failure", pt.getId(), e);
+                        logger.warn("Skipped {} due to decryption failure", pt.getId(), e);
                         return null;
                     }
                 })

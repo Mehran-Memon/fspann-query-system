@@ -31,13 +31,13 @@ public class DefaultDataLoader implements DataLoader {
             logger.error("Unsupported file extension '{}'", ext);
             throw new UnsupportedOperationException("Unsupported format: " + ext);
         }
-        logger.info("Loading data from {} using loader for {}", path, ext);
+//        logger.info("Loading data from {} using loader for {}", path, ext);
         return loader.loadVectors(path, expectedDim);
     }
 
     @Override
     public List<int[]> loadGroundTruth(String path, int batchSize) throws IOException {
-        logger.info("Loading ground-truth indices from {}", path);
+//        logger.info("Loading ground-truth indices from {}", path);
         FormatLoader loader = registry.get("IVECS"); // Hardcoded loader
         return loader.loadIndices(path, batchSize);
     }
@@ -45,7 +45,7 @@ public class DefaultDataLoader implements DataLoader {
     private String detectExtension(String path) {
         int idx = path.lastIndexOf('.') + 1;
         if (idx <= 0 || idx >= path.length()) {
-            logger.warn("No valid file extension found in {}", path);
+//            logger.warn("No valid file extension found in {}", path);
             return "";
         }
         return path.substring(idx).toUpperCase();

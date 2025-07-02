@@ -72,10 +72,10 @@ public class SystemConfig {
         try {
             SystemConfig config = mapper.readValue(new File(filePath), SystemConfig.class);
             config.validate();
-            logger.info("Successfully loaded config from {}", filePath);
+//            logger.info("Successfully loaded config from {}", filePath);
             return config;
         } catch (IOException e) {
-            logger.error("Failed to load config from {}", filePath, e);
+//            logger.error("Failed to load config from {}", filePath, e);
             throw new ConfigLoadException("Unable to load configuration: " + e.getMessage(), e);
         }
     }

@@ -47,6 +47,7 @@ public class ForwardSecureANNSystem {
     private final Map<Integer, List<double[]>> dimensionDataMap;
     private final Map<Integer, List<String>> dimensionIdMap;
     private final boolean verbose;
+    private final List<Long> batchDurations = new ArrayList<>();
 
     private long totalIndexingTime = 0;
     private long totalQueryTime = 0;
@@ -94,6 +95,7 @@ public class ForwardSecureANNSystem {
     }
 
     public void batchInsert(List<double[]> vectors, int dim) {
+        logger.info("BatchInsert with {} vectors for dim={}", vectors.size(), dim);
         if (profiler != null) profiler.start("batchInsert");
         long start = System.nanoTime();
 
@@ -110,13 +112,14 @@ public class ForwardSecureANNSystem {
                 long batchStart = System.nanoTime();
                 indexService.batchInsert(ids, batch);
                 long batchEnd = System.nanoTime();
+                batchDurations.add(TimeUnit.NANOSECONDS.toMillis(batchEnd - batchStart));
                 allIds.addAll(ids);
                 ids.clear();
                 batch.clear();
                 long elapsed = (System.nanoTime() - start) / 1_000_000;
                 long batchDuration = (batchEnd - batchStart) / 1_000_000;
-                logger.info(" {}, elapsed: {} ms, last batch: {} ms, freeMem: {} MB",
-                        i + 1, elapsed, batchDuration,
+                logger.info(" {} - {} ms - {} MB\n",
+                        i + 1, elapsed,
                         Runtime.getRuntime().freeMemory() / (1024 * 1024));
             }
         }
@@ -128,7 +131,7 @@ public class ForwardSecureANNSystem {
             long duration = profiler.getTimings("batchInsert").getLast();
             totalIndexingTime += duration;
             indexingCount += vectors.size();
-            logger.info("{} vectors in {} ms", vectors.size(), TimeUnit.NANOSECONDS.toMillis(duration));
+            logger.info("{} {} ms", vectors.size(), TimeUnit.NANOSECONDS.toMillis(duration));
         } else {
             long totalElapsed = (System.nanoTime() - start) / 1_000_000;
             logger.info("Batch insert complete: {} vectors in {} ms", vectors.size(), totalElapsed);
@@ -244,13 +247,30 @@ public class ForwardSecureANNSystem {
     }
 
     public void shutdown() {
-        System.out.printf("\n=== System Shutdown ===\nTotal indexing time: %d ms\nTotal query time: %d ms\n\n",
-                TimeUnit.NANOSECONDS.toMillis(totalIndexingTime),
-                TimeUnit.NANOSECONDS.toMillis(totalQueryTime));
-        if (profiler != null) {
-            profiler.exportToCSV("profiler_metrics.csv");
+        try {
+            System.out.printf("\n=== System Shutdown ===\nTotal indexing time: %d ms\nTotal query time: %d ms\n\n",
+                    TimeUnit.NANOSECONDS.toMillis(totalIndexingTime),
+                    TimeUnit.NANOSECONDS.toMillis(totalQueryTime));
+
+            indexService.flushBuffers();
+            indexService.shutdown();
+
+            if (profiler != null) {
+                profiler.exportToCSV("profiler_metrics.csv");
+            }
+
+            if (!batchDurations.isEmpty()) {
+                System.out.println("==== Batch Duration Summary ====");
+                for (int i = 0; i < batchDurations.size(); i++) {
+                    System.out.printf("Batch %02d: %d ms%n", i + 1, batchDurations.get(i));
+                }
+            }
+
+        } catch (Exception e) {
+            logger.error("Unexpected error during shutdown", e);
+        } finally {
+            System.gc();
         }
-        System.gc();
     }
 
     public CryptoService getCryptoService() {
