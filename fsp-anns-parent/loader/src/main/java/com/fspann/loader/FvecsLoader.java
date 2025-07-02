@@ -39,7 +39,7 @@ public class FvecsLoader implements FormatLoader {
                 }
             }
         }
-        logger.info("Loaded {} vectors from {}", data.size(), path);
+//        logger.info("Loaded {} vectors from {}", data.size(), path);
         return data;
     }
 

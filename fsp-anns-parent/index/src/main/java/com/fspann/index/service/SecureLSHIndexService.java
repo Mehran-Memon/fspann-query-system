@@ -131,9 +131,8 @@ public class SecureLSHIndexService implements IndexService {
             }
             long t4 = System.nanoTime();
 
-            logger.info("{} points in {} ms (index: {} ms, metaMap: {} ms, save: {} ms)",
+            logger.info("{} ms (index: {} ms, metaMap: {} ms, save: {} ms)",
                     entry.getValue().size(),
-                    TimeUnit.NANOSECONDS.toMillis(t4 - t1),
                     TimeUnit.NANOSECONDS.toMillis(t2 - t1),
                     TimeUnit.NANOSECONDS.toMillis(t3 - t2),
                     TimeUnit.NANOSECONDS.toMillis(t4 - t3)
@@ -143,7 +142,7 @@ public class SecureLSHIndexService implements IndexService {
         try {
             metadataManager.setDeferSave(false); // Enable metadata.ser saving again
             metadataManager.save("metadata.ser"); // Write once at the end
-            logger.info("Flushed metadata.ser after batch.");
+//            logger.info("Flushed metadata.ser after batch.");
         } catch (MetadataManager.MetadataException e) {
             logger.error("Failed to save metadata after batchInsert", e);
         }
@@ -260,5 +259,10 @@ public class SecureLSHIndexService implements IndexService {
     public void flushBuffers() {
         buffer.flushAll();
     }
+
+    public void shutdown() {
+        buffer.shutdown(); // now a no-op
+    }
+
 
 }

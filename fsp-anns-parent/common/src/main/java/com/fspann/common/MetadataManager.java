@@ -29,7 +29,7 @@ public class MetadataManager {
         try {
             Files.createDirectories(Paths.get(BASE_DIR));
         } catch (IOException e) {
-            logger.error("Failed to create base directory: {}", BASE_DIR, e);
+//            logger.error("Failed to create base directory: {}", BASE_DIR, e);
         }
     }
 
@@ -37,15 +37,15 @@ public class MetadataManager {
         try {
             TypeReference<MetadataDTO> typeRef = new TypeReference<MetadataDTO>() {};
             MetadataDTO loaded = (MetadataDTO) PersistenceUtils.loadObject(path, typeRef);
-            logger.debug("Loaded metadata DTO: {}", loaded != null ? loaded.getMetadata() : "null");
+//            logger.debug("Loaded metadata DTO: {}", loaded != null ? loaded.getMetadata() : "null");
             metadata.clear();
             if (loaded != null && loaded.getMetadata() != null) {
                 metadata.putAll(loaded.getMetadata());
             }
             this.currentPath = path;
-            logger.info("Loaded metadata from {}", path);
+//            logger.info("Loaded metadata from {}", path);
         } catch (IOException | ClassNotFoundException e) {
-            logger.warn("Failed to load metadata from {}, starting fresh", path, e);
+//            logger.warn("Failed to load metadata from {}, starting fresh", path, e);
             metadata.clear();
             this.currentPath = null;
             throw new MetadataException("Failed to load metadata from " + path, e);
@@ -55,11 +55,11 @@ public class MetadataManager {
     public void save(String path) throws MetadataException {
         try {
             MetadataDTO dto = new MetadataDTO(new HashMap<>(metadata));
-            logger.debug("Saving metadata: {}", dto.getMetadata());
+//            logger.debug("Saving metadata: {}", dto.getMetadata());
             PersistenceUtils.saveObject(dto, path);
             this.currentPath = path;
         } catch (IOException e) {
-            logger.error("Failed to save metadata to {}", path, e);
+//            logger.error("Failed to save metadata to {}", path, e);
             throw new MetadataException("Failed to save metadata to " + path, e);
         }
     }
@@ -70,12 +70,12 @@ public class MetadataManager {
         }
         Map<String, String> vectorMetadata = this.metadata.computeIfAbsent(vectorId, k -> new HashMap<>());
         vectorMetadata.putAll(metadata);
-        logger.debug("Updated metadata for vectorId={} with {}", vectorId, metadata);
+//        logger.debug("Updated metadata for vectorId={} with {}", vectorId, metadata);
         if (currentPath != null) {
             try {
                 save(currentPath);
             } catch (MetadataException e) {
-                logger.warn("Failed to persist metadata after update for vectorId {}", vectorId, e);
+//                logger.warn("Failed to persist metadata after update for vectorId {}", vectorId, e);
             }
         }
     }
@@ -86,12 +86,12 @@ public class MetadataManager {
         }
         metadata.computeIfAbsent(vectorId, k -> new HashMap<>()).put("shardId", shardId);
         metadata.computeIfAbsent(vectorId, k -> new HashMap<>()).put("version", version);
-        logger.debug("Updated metadata for vectorId={} with shardId={} and version={}", vectorId, shardId, version);
+//        logger.debug("Updated metadata for vectorId={} with shardId={} and version={}", vectorId, shardId, version);
         if (currentPath != null && !deferSave) {
             try {
                 save(currentPath);
             } catch (MetadataException e) {
-                logger.warn("Failed to persist metadata after update for vectorId {}", vectorId, e);
+//                logger.warn("Failed to persist metadata after update for vectorId {}", vectorId, e);
             }
         }
     }
@@ -99,7 +99,7 @@ public class MetadataManager {
     public Map<String, String> getVectorMetadata(String vectorId) {
         Map<String, String> meta = metadata.getOrDefault(vectorId, new HashMap<>());
         if (meta.isEmpty()) {
-            logger.warn("No metadata found for vectorId {}, using default", vectorId);
+//            logger.warn("No metadata found for vectorId {}, using default", vectorId);
             return Collections.emptyMap();
         }
         return Collections.unmodifiableMap(meta);
@@ -116,7 +116,7 @@ public class MetadataManager {
             if (pt != null) {
                 points.add(pt);
             } else {
-                logger.warn("Skipping missing or corrupted point: {}", vectorId);
+//                logger.warn("Skipping missing or corrupted point: {}", vectorId);
             }
         }
         return points;
@@ -133,7 +133,7 @@ public class MetadataManager {
             Path filePath = versionDir.resolve(pt.getId() + ".point");
             PersistenceUtils.saveObject(pt, filePath.toString());
         } catch (IOException e) {
-            logger.error("Failed to persist updated point: {}", pt.getId(), e);
+//            logger.error("Failed to persist updated point: {}", pt.getId(), e);
         }
     }
 
@@ -151,12 +151,12 @@ public class MetadataManager {
                             new TypeReference<EncryptedPoint>() {}
                     );
                 } else {
-                    logger.warn("Point {} not found in any version folder", id);
+//                    logger.warn("Point {} not found in any version folder", id);
                     return null;
                 }
             }
         } catch (Exception e) {
-            logger.warn("Failed to load encrypted point for ID: {}", id, e);
+//            logger.warn("Failed to load encrypted point for ID: {}", id, e);
             return null;
         }
     }
