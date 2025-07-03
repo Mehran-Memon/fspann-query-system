@@ -4,19 +4,16 @@ import com.fspann.common.EncryptedPoint;
 import com.fspann.common.KeyLifeCycleService;
 import com.fspann.common.KeyVersion;
 import com.fspann.crypto.AesGcmCryptoService;
-import com.fspann.common.MetadataManager;
+import com.fspann.common.RocksDBMetadataManager;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
-import javax.net.ssl.KeyManager;
-import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.util.Map;
 
@@ -28,7 +25,7 @@ public class AesGcmCryptoServiceTest {
     private KeyLifeCycleService keyService;
 
     @Mock
-    private MetadataManager metadataManager;
+    private RocksDBMetadataManager metadataManager;
 
     private AesGcmCryptoService cryptoService;
     private SecretKey key1, key2;

@@ -17,6 +17,7 @@
         <option value="$PROJECT_DIR$/fsp-anns-parent/Gdata/pom.xml" />
         <option value="$PROJECT_DIR$/fsp-anns-parent/data/pom.xml" />
         <option value="$PROJECT_DIR$/fsp-anns-parent/generate_data/pom.xml" />
+        <option value="$PROJECT_DIR$/fsp-anns-parent/metadata/pom.xml" />
       </set>
     </option>
   </component>

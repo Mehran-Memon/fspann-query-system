@@ -13,10 +13,8 @@ public class KeyVersion implements Serializable {
         this.version = version;
         this.key = key;
     }
-
     public int getVersion() { return version; }
     public SecretKey getKey() { return key; }
-
     @Override
     public String toString() {
         return "KeyVersion{version=" + version +

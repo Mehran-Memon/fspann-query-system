@@ -1,7 +1,6 @@
 package com.fspann.api;
 
-import com.fspann.common.MetadataManager;
-import com.fspann.common.QueryResult;
+import com.fspann.common.*;
 import com.fspann.crypto.AesGcmCryptoService;
 import com.fspann.crypto.CryptoService;
 import com.fspann.key.KeyManager;
@@ -28,7 +27,7 @@ class ForwardSecureANNSystemIntegrationTest {
 
     @BeforeEach
     public void setUp() {
-        // No-op
+        // Prepare any required resources before each test, if needed
     }
 
     @AfterEach
@@ -40,9 +39,11 @@ class ForwardSecureANNSystemIntegrationTest {
 
     @Test
     public void simpleEndToEndNearestNeighbor(@TempDir Path tempDir) throws Exception {
+        // Create sample data file
         Path dataFile = tempDir.resolve("data2d.csv");
         Files.writeString(dataFile, "0.0,0.0\n0.1,0.1\n1.0,1.0\n");
 
+        // Create config file
         Path configFile = tempDir.resolve("config.json");
         Files.writeString(configFile, "{" +
                 "\"numShards\":4," +
@@ -50,16 +51,21 @@ class ForwardSecureANNSystemIntegrationTest {
                 "\"opsThreshold\":2147483647," +
                 "\"ageThresholdMs\":9223372036854775807}");
 
+        // Define keys file path
         Path keys = tempDir.resolve("keys.ser");
         List<Integer> dimensions = Arrays.asList(2);
 
-        MetadataManager metadataManager = new MetadataManager();
+        // Initialize RocksDBMetadataManager
+        RocksDBMetadataManager metadataManager = new RocksDBMetadataManager(tempDir.toString());
+
+        // Setup key management and encryption
         KeyManager keyManager = new KeyManager(keys.toString());
         KeyRotationPolicy policy = new KeyRotationPolicy(2, 1000);
         KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(keyManager, policy, tempDir.toString(), metadataManager, null);
         CryptoService cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
         keyService.setCryptoService(cryptoService);
 
+        // Initialize ForwardSecureANNSystem
         system = new ForwardSecureANNSystem(
                 configFile.toString(),
                 dataFile.toString(),
@@ -71,10 +77,12 @@ class ForwardSecureANNSystemIntegrationTest {
                 cryptoService
         );
 
+        // Test if data was indexed correctly
         int indexedCount = system.getIndexedVectorCount(2);
         logger.info("Indexed vectors for dim=2: {}", indexedCount);
         assertTrue(indexedCount > 0, "Should have at least 1 vector indexed, got: " + indexedCount);
 
+        // Query and check results
         logger.info("Executing query for vector: [0.05, 0.05]");
         List<QueryResult> res = system.query(new double[]{0.05, 0.05}, 1, 2);
 
@@ -87,25 +95,32 @@ class ForwardSecureANNSystemIntegrationTest {
 
     @Test
     public void testVisualization(@TempDir Path tempDir) throws Exception {
+        // Create sample data and query files
         Path dataFile = tempDir.resolve("data2d.csv");
         Files.writeString(dataFile, "0.0,0.0\n0.1,0.1\n1.0,1.0\n");
 
         Path queryFile = tempDir.resolve("query2d.csv");
         Files.writeString(queryFile, "0.05,0.05\n");
 
+        // Create config file
         Path configFile = tempDir.resolve("config.json");
         Files.writeString(configFile, "{\"numShards\":4, \"profilerEnabled\":true}");
 
+        // Define keys file path
         Path keys = tempDir.resolve("keys.ser");
         List<Integer> dimensions = Arrays.asList(2);
 
-        MetadataManager metadataManager = new MetadataManager();
+        // Initialize RocksDBMetadataManager
+        RocksDBMetadataManager metadataManager = new RocksDBMetadataManager(tempDir.toString());
+
+        // Setup key management and encryption
         KeyManager keyManager = new KeyManager(keys.toString());
         KeyRotationPolicy policy = new KeyRotationPolicy(2, 1000);
         KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(keyManager, policy, tempDir.toString(), metadataManager, null);
         CryptoService cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
         keyService.setCryptoService(cryptoService);
 
+        // Initialize ForwardSecureANNSystem
         ForwardSecureANNSystem localSys = new ForwardSecureANNSystem(
                 configFile.toString(),
                 dataFile.toString(),
@@ -117,11 +132,13 @@ class ForwardSecureANNSystemIntegrationTest {
                 cryptoService
         );
 
+        // Test if data was indexed correctly
         int indexedCount = localSys.getIndexedVectorCount(2);
         logger.info("Indexed vectors for dim=2: {}", indexedCount);
         assertTrue(indexedCount > 0, "Should have at least 1 vector indexed, got: " + indexedCount);
 
         try {
+            // Run end-to-end test
             localSys.runEndToEnd(dataFile.toString(), queryFile.toString(), 1, 2);
         } catch (Exception e) {
             logger.error("Visualization failed", e);

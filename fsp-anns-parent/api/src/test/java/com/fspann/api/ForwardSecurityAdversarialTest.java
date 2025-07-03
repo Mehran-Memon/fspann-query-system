@@ -1,9 +1,6 @@
 package com.fspann.api;
 
-import com.fspann.common.EncryptedPoint;
-import com.fspann.common.KeyVersion;
-import com.fspann.common.MetadataManager;
-import com.fspann.common.QueryResult;
+import com.fspann.common.*;
 import com.fspann.crypto.AesGcmCryptoService;
 import com.fspann.crypto.CryptoService;
 import com.fspann.crypto.KeyUtils;
@@ -41,8 +38,9 @@ public class ForwardSecurityAdversarialTest {
         Path keys = tempDir.resolve("keys.ser");
         List<Integer> dimensions = Collections.singletonList(3);
 
-        // Setup
-        MetadataManager metadataManager = new MetadataManager();
+        // Setup: Initialize RocksDBMetadataManager and KeyRotation services
+        RocksDBMetadataManager metadataManager = new RocksDBMetadataManager(tempDir.toString());
+
         KeyManager keyManager = new KeyManager(keys.toString());
         KeyRotationPolicy policy = new KeyRotationPolicy(999999, 999999);
         KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(keyManager, policy, tempDir.toString(), metadataManager, null);
@@ -88,39 +86,28 @@ public class ForwardSecurityAdversarialTest {
 
         // Check version only if it matches
         EncryptedPoint encryptedAfter = system.getEncryptedPointById(afterId);
-        if (encryptedAfter.getVersion() != versionAfter) {
-            System.out.printf("Skipping version assertion for post-rotation point %s: expected v=%d but got v=%d\n",
-                    encryptedAfter.getId(), versionAfter, encryptedAfter.getVersion());
-        } else {
-            assertEquals(versionAfter, encryptedAfter.getVersion(), "Point version should match current key version");
-        }
+        assertNotNull(encryptedAfter, "Post-rotation point should exist.");
+        assertEquals(versionAfter, encryptedAfter.getVersion(), "Point version should match current key version after rotation.");
 
-        // ANN query result analysis
+        // ANN query result analysis for pre-rotation point
         List<QueryResult> results = system.query(pointBefore, 20, dim);
         boolean matchFound = results.stream().anyMatch(r -> r.getId().equals(beforeId));
         System.out.println("Query results:");
         results.forEach(r -> System.out.printf("Returned ID: %s | Distance: %.6f\n", r.getId(), r.getDistance()));
-        if (!matchFound) {
-            System.out.println("ANN did not retrieve the pre-compromise point. This is acceptable under approximation.");
-        }
+        assertTrue(matchFound, "Pre-compromise point should be found in the query results.");
 
         // Attempt to decrypt the pre-rotation point using compromised key
         EncryptedPoint encryptedBefore = system.getEncryptedPointById(beforeId);
-        assertNotNull(encryptedBefore);
+        assertNotNull(encryptedBefore, "Pre-rotation point should exist.");
 
-        if (encryptedBefore.getVersion() == versionAfter) {
-            Optional<double[]> decryptedOld = KeyUtils.tryDecryptWithKeyOnly(encryptedBefore, compromisedKey);
-            System.out.println("Decryption of pre-rotation point with compromised key: " + (decryptedOld.isEmpty() ? "✔ BLOCKED" : "❌ FAILED"));
-            assertTrue(decryptedOld.isEmpty(), "Old key should NOT decrypt re-encrypted point");
-        } else {
-            System.out.printf("Skipping decryption test for %s due to unrotated version: v=%d\n",
-                    encryptedBefore.getId(), encryptedBefore.getVersion());
-        }
+        Optional<double[]> decryptedOld = KeyUtils.tryDecryptWithKeyOnly(encryptedBefore, compromisedKey);
+        System.out.println("Decryption of pre-rotation point with compromised key: " + (decryptedOld.isEmpty() ? "BLOCKED" : "FAILED"));
+        assertTrue(decryptedOld.isEmpty(), "Old key should NOT decrypt re-encrypted point after key rotation");
 
         // Attempt to decrypt the post-rotation point using current key
         SecretKey currentKey = keyService.getVersion(encryptedAfter.getVersion()).getKey();
         Optional<double[]> decryptedNew = KeyUtils.tryDecryptWithKeyOnly(encryptedAfter, currentKey);
-        System.out.println("Decryption of post-rotation point with current key: " + (decryptedNew.isPresent() ? "✔ SUCCESS" : "❌ FAILED"));
+        System.out.println("Decryption of post-rotation point with current key: " + (decryptedNew.isPresent() ? "SUCCESS" : "FAILED"));
         assertTrue(decryptedNew.isPresent(), "Current key should decrypt post-rotation point");
 
         System.out.println("========= FORWARD SECURITY VALIDATED =========");

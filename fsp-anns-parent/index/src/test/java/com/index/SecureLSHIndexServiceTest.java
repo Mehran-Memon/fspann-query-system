@@ -5,6 +5,7 @@ import com.fspann.crypto.AesGcmCryptoService;
 import com.fspann.index.core.EvenLSH;
 import com.fspann.index.core.SecureLSHIndex;
 import com.fspann.index.service.SecureLSHIndexService;
+import com.fspann.common.RocksDBMetadataManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
@@ -13,9 +14,11 @@ import org.mockito.MockitoAnnotations;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import java.util.Arrays;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -25,7 +28,7 @@ class SecureLSHIndexServiceTest {
     @Mock private AesGcmCryptoService crypto;
     @Mock private KeyLifeCycleService keyService;
     @Mock private EvenLSH lsh;
-    @Mock private MetadataManager metadataManager;
+    @Mock private RocksDBMetadataManager metadataManager;
     @Mock private EncryptedPointBuffer buffer;
 
     private SecureLSHIndexService service;
@@ -65,7 +68,9 @@ class SecureLSHIndexServiceTest {
                         Arrays.equals(pt.getCiphertext(), testCiphertext)
         ));
         verify(index).markShardDirty(1);
-        verify(metadataManager).putVectorMetadata(id, "1", "1");
+
+        Map<String, String> expectedMeta = Map.of("shardId", "1", "version", "1");
+        verify(metadataManager).putVectorMetadata(eq(id), eq(expectedMeta));
     }
 
     @Test
@@ -95,7 +100,9 @@ class SecureLSHIndexServiceTest {
                         Arrays.equals(pt.getCiphertext(), cipher)
         ));
         verify(index).markShardDirty(4);
-        verify(metadataManager).putVectorMetadata(id, "4", "99");
+
+        Map<String, String> expectedMeta = Map.of("shardId", "4", "version", "99");
+        verify(metadataManager).putVectorMetadata(eq(id), eq(expectedMeta));
     }
 
     @Test
@@ -125,6 +132,8 @@ class SecureLSHIndexServiceTest {
                         Arrays.equals(pt.getCiphertext(), cipher)
         ));
         verify(index).markShardDirty(11);
-        verify(metadataManager).putVectorMetadata(id, "11", "7");
+
+        Map<String, String> expectedMeta = Map.of("shardId", "11", "version", "7");
+        verify(metadataManager).putVectorMetadata(eq(id), eq(expectedMeta));
     }
 }
