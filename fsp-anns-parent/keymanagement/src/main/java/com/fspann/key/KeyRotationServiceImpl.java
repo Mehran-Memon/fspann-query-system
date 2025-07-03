@@ -6,7 +6,7 @@ import com.fspann.common.KeyVersion;
 import com.fspann.common.PersistenceUtils;
 import com.fspann.crypto.AesGcmCryptoService;
 import com.fspann.crypto.CryptoService;
-import com.fspann.common.MetadataManager;
+import com.fspann.common.RocksDBMetadataManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -15,9 +15,7 @@ import java.io.IOException;
 import java.nio.file.Paths;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
+import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class KeyRotationServiceImpl implements KeyLifeCycleService {
@@ -26,7 +24,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
     private final KeyManager keyManager;
     private final KeyRotationPolicy policy;
     private final String rotationMetaDir;
-    private final MetadataManager metadataManager;
+    private final RocksDBMetadataManager metadataManager;
     private CryptoService cryptoService;
 
     private Instant lastRotation = Instant.now();
@@ -35,7 +33,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
     public KeyRotationServiceImpl(KeyManager keyManager,
                                   KeyRotationPolicy policy,
                                   String rotationMetaDir,
-                                  MetadataManager metadataManager,
+                                  RocksDBMetadataManager metadataManager,
                                   CryptoService cryptoService) {
         this.keyManager = keyManager;
         this.policy = policy;
@@ -68,9 +66,13 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
 
         List<EncryptedPoint> reEncrypted = new ArrayList<>();
         for (EncryptedPoint pt : metadataManager.getAllEncryptedPoints()) {
-            EncryptedPoint updated = cryptoService.reEncrypt(pt, newVer.getKey());
-            metadataManager.saveEncryptedPoint(updated);
-            reEncrypted.add(updated);
+            try {
+                EncryptedPoint updated = cryptoService.reEncrypt(pt, newVer.getKey());
+                metadataManager.saveEncryptedPoint(updated);
+                reEncrypted.add(updated);
+            } catch (IOException e) {
+                logger.warn("Skipping point {} (v={}) due to save failure: {}", pt.getId(), pt.getVersion(), e.getMessage());
+            }
         }
 
         return reEncrypted;
@@ -90,33 +92,30 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
             return;
         }
 
-        try {
-            List<EncryptedPoint> allPoints = metadataManager.getAllEncryptedPoints();
-            List<EncryptedPoint> reEncrypted = new ArrayList<>();
+        List<EncryptedPoint> allPoints = metadataManager.getAllEncryptedPoints();
+        List<EncryptedPoint> reEncrypted = new ArrayList<>();
 
-            for (EncryptedPoint pt : allPoints) {
-                try {
-                    EncryptedPoint updated = cryptoService.reEncrypt(pt, getCurrentVersion().getKey());
-                    reEncrypted.add(updated);
-                } catch (AesGcmCryptoService.CryptoException e) {
-                    logger.warn("Skipping point {} (v={}) due to re-encryption failure: {}",
-                            pt.getId(), pt.getVersion(), e.getMessage());
-                }
+        for (EncryptedPoint pt : allPoints) {
+            try {
+                EncryptedPoint updated = cryptoService.reEncrypt(pt, getCurrentVersion().getKey());
+                reEncrypted.add(updated);
+            } catch (AesGcmCryptoService.CryptoException e) {
+                logger.warn("Skipping point {} (v={}) due to re-encryption failure: {}",
+                        pt.getId(), pt.getVersion(), e.getMessage());
             }
-
-
-            // Save updated points and metadata
-            for (EncryptedPoint pt : reEncrypted) {
-                metadataManager.saveEncryptedPoint(pt);
-                metadataManager.putVectorMetadata(pt.getId(), String.valueOf(pt.getShardId()), String.valueOf(pt.getVersion()));
-            }
-
-            logger.info("Re-encryption completed for {} vectors", reEncrypted.size());
-
-        } catch (Exception e) {
-            logger.error("Manual re-encryption failed", e);
-            throw new RuntimeException("Manual re-encryption failed", e);
         }
+
+        for (EncryptedPoint pt : reEncrypted) {
+            try {
+                metadataManager.saveEncryptedPoint(pt);
+                Map<String, String> metadata = new HashMap<>();
+                metadata.put("version", String.valueOf(pt.getVersion()));
+                metadataManager.putVectorMetadata(pt.getId(), metadata);
+            } catch (IOException e) {
+                logger.warn("Failed to save point {} (v={}) or update metadata: {}", pt.getId(), pt.getVersion(), e.getMessage());
+            }
+        }
+        logger.info("Re-encryption completed for {} vectors", reEncrypted.size());
     }
 
     @Override
@@ -142,10 +141,9 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
     }
 
     public KeyVersion rotateKey() {
-        KeyVersion newVersion = keyManager.rotateKey();  // Also persists key
+        KeyVersion newVersion = keyManager.rotateKey();
         lastRotation = Instant.now();
         operationCount.set(0);
         return newVersion;
     }
-
 }

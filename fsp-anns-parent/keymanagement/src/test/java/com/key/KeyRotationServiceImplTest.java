@@ -1,7 +1,7 @@
 package com.key;
 
 import com.fspann.crypto.CryptoService;
-import com.fspann.common.MetadataManager;
+import com.fspann.common.RocksDBMetadataManager;
 import com.fspann.key.KeyManager;
 import com.fspann.key.KeyRotationPolicy;
 import com.fspann.key.KeyRotationServiceImpl;
@@ -35,7 +35,7 @@ class KeyRotationServiceImplTest {
     private KeyRotationServiceImpl service;
 
     @Mock
-    private MetadataManager metadataManager;
+    private RocksDBMetadataManager metadataManager;
 
     @Mock
     private CryptoService cryptoService;

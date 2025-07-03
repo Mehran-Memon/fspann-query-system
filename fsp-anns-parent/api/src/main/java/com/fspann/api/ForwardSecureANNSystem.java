@@ -60,13 +60,10 @@ public class ForwardSecureANNSystem {
             List<Integer> dimensions,
             Path metadataPath,
             boolean verbose,
-            MetadataManager metadataManager,
+            RocksDBMetadataManager metadataManager,
             CryptoService cryptoService
     ) throws Exception {
         this.verbose = verbose;
-
-//        logger.info("Initializing ForwardSecureANNSystem with config={}, data={}, keys={}, dims={}, metadata={}",
-//                configPath, dataPath, keysFilePath, dimensions, metadataPath);
 
         this.dimensionDataMap = new HashMap<>();
         this.dimensionIdMap = new HashMap<>();
@@ -141,10 +138,10 @@ public class ForwardSecureANNSystem {
     public void insert(String id, double[] vector, int dim) {
         if (profiler != null) profiler.start("insert");
 
-        keyService.incrementOperation();        // <-- ADD
+        keyService.incrementOperation();
         List<EncryptedPoint> updatedPoints = ((KeyRotationServiceImpl) keyService).rotateIfNeededAndReturnUpdated();
         for (EncryptedPoint pt : updatedPoints) {
-            indexService.updateCachedPoint(pt);  // Ensure indexService has this method
+            indexService.updateCachedPoint(pt);
         }
         indexService.insert(id, vector);
 
@@ -185,7 +182,6 @@ public class ForwardSecureANNSystem {
         List<QueryResult> results = queryService.search(token);
         cache.put(token, results);
         long elapsed = System.nanoTime() - start;
-        //logger.info("[Query] TopK={} took {} ms", topK, TimeUnit.NANOSECONDS.toMillis(elapsed));
         totalQueryTime += elapsed;
         return results;
     }
@@ -196,7 +192,6 @@ public class ForwardSecureANNSystem {
         List<QueryResult> results = queryService.search(token);
         if (verbose) logger.info("Cloaked query returned {} results", results.size());
         long elapsed = System.nanoTime() - start;
-        //logger.info("[Query] TopK={} took {} ms", topK, TimeUnit.NANOSECONDS.toMillis(elapsed));
         totalQueryTime += elapsed;
         return results;
     }
@@ -283,7 +278,7 @@ public class ForwardSecureANNSystem {
 
     public static void main(String[] args) throws Exception {
         if (args.length < 6) {
-//            System.err.println("Usage: <configPath> <dataPath> <queryPath> <keysFilePath> <dimensions> <metadataPath>");
+            System.err.println("Usage: <configPath> <dataPath> <queryPath> <keysFilePath> <dimensions> <metadataPath>");
             System.exit(1);
         }
 
@@ -294,25 +289,38 @@ public class ForwardSecureANNSystem {
         List<Integer> dimensions = Arrays.stream(args[4].split(",")).map(Integer::parseInt).collect(Collectors.toList());
         Path metadataPath = Path.of(args[5]);
 
-        Files.createDirectories(metadataPath); // ensure metadata dir exists
+        // Ensure metadata directory exists
+        Files.createDirectories(metadataPath);
 
-        MetadataManager metadataManager = new MetadataManager();
+        // Initialize RocksDBMetadataManager with metadataPath
+        RocksDBMetadataManager metadataManager;
+        try {
+            metadataManager = new RocksDBMetadataManager(metadataPath.toString());
+        } catch (IOException e) {
+            logger.error("Failed to initialize RocksDBMetadataManager", e);
+            throw new RuntimeException("Failed to initialize RocksDBMetadataManager", e);
+        }
+
+        // Setup key management and rotation
         KeyManager keyManager = new KeyManager(keysFile);
         KeyRotationPolicy policy = new KeyRotationPolicy(100000, 999_999);
         KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(keyManager, policy, metadataPath.toString(), metadataManager, null);
 
+        // Setup Crypto Service
         CryptoService cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
         keyService.setCryptoService(cryptoService); // IMPORTANT
 
+        // Initialize the ANN system
         ForwardSecureANNSystem sys = new ForwardSecureANNSystem(
                 configFile, dataPath, keysFile, dimensions, metadataPath, false,
                 metadataManager, cryptoService
         );
 
+        // Run end-to-end tests with data
         int dim = dimensions.get(0);
         sys.runEndToEnd(dataPath, queryPath, DEFAULT_TOP_K, dim);
+
+        // Shutdown the system after execution
         sys.shutdown();
     }
-
 }
-

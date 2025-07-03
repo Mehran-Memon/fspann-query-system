@@ -6,6 +6,7 @@ import com.fspann.crypto.CryptoService;
 import com.fspann.index.core.DimensionContext;
 import com.fspann.index.core.SecureLSHIndex;
 import com.fspann.index.core.EvenLSH;
+import com.fspann.common.RocksDBMetadataManager;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,9 +22,9 @@ public class SecureLSHIndexService implements IndexService {
 
     private final CryptoService crypto;
     private final KeyLifeCycleService keyService;
-    private final MetadataManager metadataManager;
-    private final SecureLSHIndex index; // Optional for testing
-    private final EvenLSH lsh;          // Optional for testing
+    private final RocksDBMetadataManager metadataManager;
+    private final SecureLSHIndex index;
+    private final EvenLSH lsh;
 
     private final Map<Integer, DimensionContext> dimensionContexts = new ConcurrentHashMap<>();
     private final Map<String, EncryptedPoint> indexedPoints = new ConcurrentHashMap<>();
@@ -31,13 +32,13 @@ public class SecureLSHIndexService implements IndexService {
 
     public SecureLSHIndexService(CryptoService crypto,
                                  KeyLifeCycleService keyService,
-                                 MetadataManager metadataManager) {
-        this(crypto, keyService, metadataManager, null, null, createBuffer(metadataManager) );
+                                 RocksDBMetadataManager metadataManager) {
+        this(crypto, keyService, metadataManager, null, null, createBuffer(metadataManager));
     }
 
     public SecureLSHIndexService(CryptoService crypto,
                                  KeyLifeCycleService keyService,
-                                 MetadataManager metadataManager,
+                                 RocksDBMetadataManager metadataManager,
                                  SecureLSHIndex index,
                                  EvenLSH lsh,
                                  EncryptedPointBuffer buffer) {
@@ -47,16 +48,9 @@ public class SecureLSHIndexService implements IndexService {
         this.index = index;
         this.lsh = lsh;
         this.buffer = buffer;
-
-
-        try {
-            metadataManager.load("metadata.ser");
-        } catch (MetadataManager.MetadataException e) {
-            logger.warn("Failed to load metadata, starting fresh", e);
-        }
     }
 
-    private static EncryptedPointBuffer createBuffer(MetadataManager metadataManager) {
+    private static EncryptedPointBuffer createBuffer(RocksDBMetadataManager metadataManager) {
         try {
             return new EncryptedPointBuffer("metadata/points", metadataManager);
         } catch (IOException e) {
@@ -77,8 +71,6 @@ public class SecureLSHIndexService implements IndexService {
         if (ids.size() != vectors.size()) {
             throw new IllegalArgumentException("IDs and vectors must be the same size.");
         }
-
-        metadataManager.setDeferSave(true); // Disable metadata.ser writes temporarily
 
         Map<Integer, List<EncryptedPoint>> byDim = new HashMap<>();
 
@@ -122,7 +114,10 @@ public class SecureLSHIndexService implements IndexService {
             long t2 = System.nanoTime();
 
             for (EncryptedPoint pt : entry.getValue()) {
-                metadataManager.putVectorMetadata(pt.getId(), String.valueOf(pt.getShardId()), String.valueOf(pt.getVersion()));
+                Map<String, String> meta = new HashMap<>();
+                meta.put("shardId", String.valueOf(pt.getShardId()));
+                meta.put("version", String.valueOf(pt.getVersion()));
+                metadataManager.putVectorMetadata(pt.getId(), meta);
             }
             long t3 = System.nanoTime();
 
@@ -131,21 +126,15 @@ public class SecureLSHIndexService implements IndexService {
             }
             long t4 = System.nanoTime();
 
-            logger.info("{} ms (index: {} ms, metaMap: {} ms, save: {} ms)",
+            logger.info("{} points in {} ms (index: {} ms, metaMap: {} ms, save: {} ms)",
                     entry.getValue().size(),
+                    TimeUnit.NANOSECONDS.toMillis(t4 - t1),
                     TimeUnit.NANOSECONDS.toMillis(t2 - t1),
                     TimeUnit.NANOSECONDS.toMillis(t3 - t2),
                     TimeUnit.NANOSECONDS.toMillis(t4 - t3)
             );
         }
 
-        try {
-            metadataManager.setDeferSave(false); // Enable metadata.ser saving again
-            metadataManager.save("metadata.ser"); // Write once at the end
-//            logger.info("Flushed metadata.ser after batch.");
-        } catch (MetadataManager.MetadataException e) {
-            logger.error("Failed to save metadata after batchInsert", e);
-        }
         buffer.flushAll();
     }
 
@@ -157,13 +146,13 @@ public class SecureLSHIndexService implements IndexService {
         SecureLSHIndex idx = ctx.getIndex();
         idx.addPoint(pt);
         idx.markShardDirty(pt.getShardId());
-        metadataManager.putVectorMetadata(pt.getId(), String.valueOf(pt.getShardId()), String.valueOf(pt.getVersion()));
-        buffer.add(pt);       //Persist encrypted point to disk
-        try {
-            metadataManager.save("metadata.ser");
-        } catch (MetadataManager.MetadataException e) {
-            logger.error("Failed to save metadata", e);
-        }
+
+        Map<String, String> meta = new HashMap<>();
+        meta.put("shardId", String.valueOf(pt.getShardId()));
+        meta.put("version", String.valueOf(pt.getVersion()));
+        metadataManager.putVectorMetadata(pt.getId(), meta);
+
+        buffer.add(pt);
     }
 
     @Override
@@ -261,8 +250,7 @@ public class SecureLSHIndexService implements IndexService {
     }
 
     public void shutdown() {
-        buffer.shutdown(); // now a no-op
+        buffer.shutdown();
+        metadataManager.close(); // important: release RocksDB resources
     }
-
-
 }

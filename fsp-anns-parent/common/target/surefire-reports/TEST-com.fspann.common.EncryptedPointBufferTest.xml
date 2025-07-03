@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.fspann.common.QueryResultTest" time="0.003" tests="1" errors="0" skipped="0" failures="0">
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.fspann.common.EncryptedPointBufferTest" time="0.223" tests="1" errors="0" skipped="0" failures="0">
   <properties>
     <property name="java.specification.version" value="22"/>
     <property name="sun.cpu.isalist" value="amd64"/>
@@ -59,5 +59,15 @@
     <property name="sun.io.unicode.encoding" value="UnicodeLittle"/>
     <property name="java.class.version" value="66.0"/>
   </properties>
-  <testcase name="orderingByDistance" classname="com.fspann.common.QueryResultTest" time="0.002"/>
+  <testcase name="testBufferFlush(Path)" classname="com.fspann.common.EncryptedPointBufferTest" time="0.201">
+    <system-err><![CDATA[[main] INFO com.fspann.common.RocksDBMetadataManager - RocksDB native library loaded successfully
+[main] INFO com.fspann.common.RocksDBMetadataManager - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_4076677178523934973
+[main] INFO com.fspann.common.EncryptedPointBufferTest - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_4076677178523934973 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_16287999918788301720
+[main] INFO com.fspann.common.RocksDBMetadataManager - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\junit-17754162609067482772\rocksdb
+[main] INFO com.fspann.common.EncryptedPointBuffer - Flushed 2 points for v1 to v1_batch_000.points
+[main] INFO com.fspann.common.RocksDBMetadataManager - RocksDB closed at C:\Users\MEHRAN~1\AppData\Local\Temp\junit-17754162609067482772\rocksdb
+[main] INFO com.fspann.common.EncryptedPointBufferTest - Cleaning up RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_4076677178523934973 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_16287999918788301720
+[main] INFO com.fspann.common.RocksDBMetadataManager - RocksDB closed at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_4076677178523934973
+]]></system-err>
+  </testcase>
 </testsuite>

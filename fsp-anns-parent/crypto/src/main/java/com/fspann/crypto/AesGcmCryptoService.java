@@ -2,7 +2,7 @@ package com.fspann.crypto;
 
 import com.fspann.common.EncryptedPoint;
 import com.fspann.common.KeyLifeCycleService;
-import com.fspann.common.MetadataManager;
+import com.fspann.common.RocksDBMetadataManager;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -10,6 +10,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.crypto.SecretKey;
+import java.io.IOException;
+import java.security.GeneralSecurityException;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Base64;
@@ -21,13 +23,12 @@ public class AesGcmCryptoService implements CryptoService {
     private final Timer encryptTimer;
     private final Timer decryptTimer;
     private KeyLifeCycleService keyService;
-    private final MetadataManager metadataManager;
+    private final RocksDBMetadataManager metadataManager;
 
-    public AesGcmCryptoService(MeterRegistry registry, KeyLifeCycleService keyService, MetadataManager metadataManager) {
-//        logger.debug("Initializing AesGcmCryptoService");
+    public AesGcmCryptoService(MeterRegistry registry, KeyLifeCycleService keyService, RocksDBMetadataManager metadataManager) {
         this.registry = registry != null ? registry : new SimpleMeterRegistry();
         this.keyService = Objects.requireNonNull(keyService, "KeyLifeCycleService must not be null");
-        this.metadataManager = Objects.requireNonNullElseGet(metadataManager, MetadataManager::new);
+        this.metadataManager = metadataManager != null ? metadataManager : createDefaultMetadataManager();
 
         this.encryptTimer = Timer.builder("fspann.crypto.encrypt.time")
                 .description("AES-GCM encryption latency")
@@ -36,7 +37,6 @@ public class AesGcmCryptoService implements CryptoService {
         this.decryptTimer = Timer.builder("fspann.crypto.decrypt.time")
                 .description("AES-GCM decryption latency")
                 .register(this.registry);
-//        logger.info("AesGcmCryptoService initialized successfully");
     }
 
     @Override
@@ -50,7 +50,7 @@ public class AesGcmCryptoService implements CryptoService {
                 metadataManager.updateVectorMetadata(id, Map.of("version", String.valueOf(version)));
                 logger.debug("Encrypted point {} with key version {}", id, version);
                 return point;
-            } catch (Exception e) {
+            } catch (GeneralSecurityException e) {
                 logger.error("Encryption failed for point {}", id, e);
                 throw new CryptoException("Encryption failed for point: " + id, e);
             }
@@ -63,9 +63,11 @@ public class AesGcmCryptoService implements CryptoService {
             try {
                 logger.debug("Decrypting point {} with key version {}", pt.getId(), pt.getVersion());
                 return EncryptionUtils.decryptVector(pt.getCiphertext(), pt.getIv(), key);
-            } catch (Exception e) {
+            } catch (GeneralSecurityException e) {
                 logger.error("Decryption failed for point {}", pt.getId(), e);
                 throw new CryptoException("Decryption failed for point: " + pt.getId(), e);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
             }
         });
     }
@@ -80,7 +82,7 @@ public class AesGcmCryptoService implements CryptoService {
                 byte[] ciphertext = EncryptionUtils.encryptVector(vector, iv, key);
                 logger.debug("Encrypted ciphertext: {}", Base64.getEncoder().encodeToString(ciphertext));
                 return ciphertext;
-            } catch (Exception e) {
+            } catch (GeneralSecurityException e) {
                 logger.error("Encryption failed for vector", e);
                 throw new CryptoException("Encryption failed", e);
             }
@@ -96,9 +98,11 @@ public class AesGcmCryptoService implements CryptoService {
                         Base64.getEncoder().encodeToString(key.getEncoded()),
                         Base64.getEncoder().encodeToString(ciphertext));
                 return EncryptionUtils.decryptVector(ciphertext, iv, key);
-            } catch (Exception e) {
+            } catch (GeneralSecurityException e) {
                 logger.error("Query decryption failed", e);
                 throw new CryptoException("Query decryption failed", e);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
             }
         });
     }
@@ -107,8 +111,6 @@ public class AesGcmCryptoService implements CryptoService {
     public EncryptedPoint reEncrypt(EncryptedPoint pt, SecretKey newKey) {
         return encryptTimer.record(() -> {
             int oldVersion = pt.getVersion();
-
-            // ⚠ Prevent tag mismatch by checking key availability first
             SecretKey oldKey;
             try {
                 oldKey = keyService.getVersion(oldVersion).getKey();
@@ -130,10 +132,11 @@ public class AesGcmCryptoService implements CryptoService {
                 metadataManager.updateVectorMetadata(pt.getId(), Map.of("version", String.valueOf(newVersion)));
                 logger.debug("Re-encrypted point {} from v{} to v{}", pt.getId(), oldVersion, newVersion);
                 return reEncrypted;
-
-            } catch (Exception e) {
+            } catch (IOException | GeneralSecurityException e) {
                 logger.error("Re-encryption failed for point {}", pt.getId(), e);
                 throw new CryptoException("Re-encryption failed", e);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
             }
         });
     }
@@ -158,5 +161,12 @@ public class AesGcmCryptoService implements CryptoService {
         return this.keyService;
     }
 
+    private static RocksDBMetadataManager createDefaultMetadataManager() {
+        try {
+            return new RocksDBMetadataManager("metadata/rocksdb");
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to initialize RocksDBMetadataManager", e);
+        }
+    }
 
 }

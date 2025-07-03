@@ -21,7 +21,6 @@ import java.util.NavigableMap;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import com.fasterxml.jackson.core.type.TypeReference;
 
 /**
  * Core provider of master and session keys, with load/save support.
@@ -69,10 +68,7 @@ public class KeyManager {
 
     private synchronized void loadKeys(Path path) throws IOException {
         try {
-            KeyStoreBlob blob = PersistenceUtils.loadObject(
-                    path.toString(),
-                    new TypeReference<KeyStoreBlob>() {}
-            );
+            KeyStoreBlob blob = PersistenceUtils.loadObject(path.toString());
             this.masterKey = blob.getMasterKey();
             this.sessionKeys.putAll(blob.getSessionKeys());
             this.currentVersion = blob.getSessionKeys().keySet().stream()
@@ -154,7 +150,7 @@ public class KeyManager {
 
     public void rotate() {
         // Manually rotate without returning KeyVersion
-        rotateKey(); // You already defined this above
+        rotateKey();
     }
 
     // DTO for serializing keys

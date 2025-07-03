@@ -1,6 +1,6 @@
 package com.fspann.api;
 
-import com.fspann.common.MetadataManager;
+import com.fspann.common.*;
 import com.fspann.crypto.AesGcmCryptoService;
 import com.fspann.crypto.CryptoService;
 import com.fspann.key.KeyManager;
@@ -32,10 +32,12 @@ public class ForwardSecureANNSystemPerformanceIntegrationTest {
 
     @BeforeAll
     public static void setup(@TempDir Path tempDir) throws Exception {
+        // Create configuration file
         Path configPath = tempDir.resolve("config.json");
         Files.writeString(configPath, "{\"numShards\":4, \"profilerEnabled\":true}");
         logger.debug("✅ Created config: {}", configPath);
 
+        // Prepare dataset with random vectors
         dataset = new ArrayList<>();
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < VECTOR_COUNT; i++) {
@@ -48,18 +50,23 @@ public class ForwardSecureANNSystemPerformanceIntegrationTest {
             sb.append('\n');
             dataset.add(vec);
         }
+
+        // Save dataset to a CSV file
         Path dataPath = tempDir.resolve("data.csv");
         Files.writeString(dataPath, sb.toString());
         logger.debug("✅ Generated data file: {} with {} vectors", dataPath, dataset.size());
 
+        // Initialize RocksDBMetadataManager and key management system
         Path keysPath = tempDir.resolve("keys.ser");
-        MetadataManager metadataManager = new MetadataManager();
+        RocksDBMetadataManager metadataManager = new RocksDBMetadataManager(tempDir.toString());
+
         KeyManager keyManager = new KeyManager(keysPath.toString());
         KeyRotationPolicy policy = new KeyRotationPolicy(2, 1000);
         KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(keyManager, policy, tempDir.toString(), metadataManager, null);
         CryptoService cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
         keyService.setCryptoService(cryptoService);
 
+        // Initialize ForwardSecureANNSystem
         sys = new ForwardSecureANNSystem(
                 configPath.toString(),
                 dataPath.toString(),
@@ -84,7 +91,6 @@ public class ForwardSecureANNSystemPerformanceIntegrationTest {
 
     @Test
     @DisplayName("⏱️ Performance Test: Insert + Query Latency Under Threshold")
-
     public void bulkPerformanceTest() {
         assertNotNull(dataset, "Dataset must be initialized");
         assertEquals(VECTOR_COUNT, dataset.size(), "Dataset size mismatch");
