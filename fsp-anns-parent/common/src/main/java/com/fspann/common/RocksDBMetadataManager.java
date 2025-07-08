@@ -124,32 +124,41 @@ public class RocksDBMetadataManager implements AutoCloseable {
 
     @SuppressWarnings("unchecked")
     public List<EncryptedPoint> getAllEncryptedPoints() {
-        List<EncryptedPoint> allPoints = new ArrayList<>();
-        int count = 0;
-        try (Stream<Path> stream = Files.walk(Paths.get(baseDir), 3)) {
-            for (Path path : stream.filter(Files::isRegularFile).collect(Collectors.toList())) {
-                try {
-                    if (path.toString().endsWith(".point")) {
-                        EncryptedPoint pt = (EncryptedPoint) PersistenceUtils.loadObject(path.toString());
-                        if (pt != null) allPoints.add(pt);
-                    } else if (path.toString().endsWith(".points")) {
-                        List<EncryptedPoint> pts = (List<EncryptedPoint>) PersistenceUtils.loadObject(path.toString());
-                        if (pts != null) allPoints.addAll(pts);
-                    }
-                    count++;
-                    if (count >= 10000) break;  // 💥 FAILSAFE: prevent loading too many points
-                } catch (Exception e) {
-//                    logger.warn("⚠️ Failed to load point(s) from {}: {}", path, e.getMessage());
-                }
-            }
+        Set<String> seenIds = new HashSet<>();
+        List<EncryptedPoint> uniquePoints = new ArrayList<>();
+
+        try (Stream<Path> files = Files.walk(Paths.get(baseDir))) {
+            files.filter(Files::isRegularFile)
+                    .filter(path -> path.toString().endsWith(".point"))
+                    .forEach(path -> {
+                        try {
+                            EncryptedPoint pt = PersistenceUtils.loadObject(path.toString());
+                            if (pt == null) return;
+
+                            String id = pt.getId();
+                            if (!seenIds.add(id)) {
+                                logger.debug("Skipping duplicate EncryptedPoint with ID {}", id);
+                                return;
+                            }
+
+                            Map<String, String> meta = getVectorMetadata(id);
+                            if (meta == null || !meta.containsKey("version") || !meta.containsKey("shardId")) {
+                                logger.warn("Skipping point {}: Missing or incomplete metadata", id);
+                                return;
+                            }
+
+                            uniquePoints.add(pt);
+                        } catch (IOException | ClassNotFoundException e) {
+                            logger.error("Failed to load point from {}", path, e);
+                        }
+                    });
         } catch (IOException e) {
-//            logger.error("Failed to walk metadata directory: {}", e.getMessage(), e);
+            logger.error("Failed to walk points directory {}", baseDir, e);
         }
 
-        logger.info("✅ Total encrypted points loaded: {}", allPoints.size());
-        return allPoints;
+        logger.info("✅ Total encrypted points loaded (unique + metadata-valid): {}", uniquePoints.size());
+        return uniquePoints;
     }
-
 
     @SuppressWarnings("unchecked")
     public EncryptedPoint loadEncryptedPoint(String id) throws IOException, ClassNotFoundException {
@@ -217,6 +226,9 @@ public class RocksDBMetadataManager implements AutoCloseable {
         }
     }
 
+    public String getPointsBaseDir() {
+        return this.baseDir;
+    }
 
     public int loadIndexVersion() {
         try {
@@ -253,4 +265,5 @@ public class RocksDBMetadataManager implements AutoCloseable {
     public String getDbPath() {
         return dbPath;
     }
+
 }

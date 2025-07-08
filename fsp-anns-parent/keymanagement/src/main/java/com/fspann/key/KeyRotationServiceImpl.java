@@ -13,11 +13,14 @@ import org.slf4j.LoggerFactory;
 
 import javax.crypto.SecretKey;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
 
 public class KeyRotationServiceImpl implements KeyLifeCycleService {
     private static final Logger logger = LoggerFactory.getLogger(KeyRotationServiceImpl.class);
@@ -74,7 +77,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
                 Map<String, String> newMetadata = new HashMap<>();
                 newMetadata.put("version", String.valueOf(updated.getVersion()));
                 newMetadata.put("shardId", String.valueOf(updated.getShardId()));
-                metadataManager.mergeVectorMetadata(updated.getId(), newMetadata);
+                metadataManager.updateVectorMetadata(updated.getId(), newMetadata);
                 reEncrypted.add(updated);
             } catch (IOException e) {
                 logger.warn("Skipping point {} (v={}) due to save failure: {}", pt.getId(), pt.getVersion(), e.getMessage());
@@ -98,36 +101,51 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
             return;
         }
 
-        List<EncryptedPoint> allPoints = metadataManager.getAllEncryptedPoints();
-        List<EncryptedPoint> reEncrypted = new ArrayList<>();
+        int totalReEncrypted = 0;
+        Set<String> seen = new HashSet<>();
 
-        for (EncryptedPoint pt : allPoints) {
-            try {
-                EncryptedPoint updated = cryptoService.reEncrypt(pt, getCurrentVersion().getKey());
+        try (Stream<Path> stream = Files.walk(Paths.get(metadataManager.getPointsBaseDir()))) {
+            List<Path> pointFiles = stream
+                    .filter(Files::isRegularFile)
+                    .filter(p -> p.toString().endsWith(".point"))
+                    .toList();
 
-                // ✅ Step 1: Save re-encrypted point to disk
-                metadataManager.saveEncryptedPoint(updated);
+            for (Path file : pointFiles) {
+                try {
+                    EncryptedPoint pt = PersistenceUtils.loadObject(file.toString());
+                    if (pt == null || !seen.add(pt.getId())) continue;
 
-                // ✅ Step 2: Only update metadata if save succeeded
-                Map<String, String> metadata = new HashMap<>();
-                metadata.put("version", String.valueOf(updated.getVersion()));
-                metadata.put("shardId", String.valueOf(updated.getShardId()));
-                metadataManager.mergeVectorMetadata(updated.getId(), metadata);
+                    EncryptedPoint updated = cryptoService.reEncrypt(pt, getCurrentVersion().getKey());
 
-                logger.info("Re-encrypted + saved + merged metadata for {} → {}", updated.getId(), metadata);
+                    metadataManager.saveEncryptedPoint(updated);
 
-                // ✅ Step 3: Reinsert into index
-                indexService.insert(updated);
+                    Map<String, String> metadata = Map.of(
+                            "version", String.valueOf(updated.getVersion()),
+                            "shardId", String.valueOf(updated.getShardId())
+                    );
+                    metadataManager.mergeVectorMetadata(updated.getId(), metadata);
 
-                reEncrypted.add(updated);
+                    indexService.insert(updated);
+                    totalReEncrypted++;
 
-            } catch (Exception e) {
-                logger.warn("Failed to re-encrypt/save point {} (v={}): {}", pt.getId(), pt.getVersion(), e.getMessage());
+                    if (totalReEncrypted % 100 == 0) {
+                        logger.info("Re-encrypted {} points so far...", totalReEncrypted);
+                        System.gc(); // Hint to JVM
+                        Thread.sleep(50); // Allow GC to catch up
+                    }
+
+                } catch (Exception e) {
+                    logger.warn("❌ Failed to re-encrypt from file {}: {}", file, e.getMessage());
+                }
             }
+
+        } catch (IOException e) {
+            logger.error("🚫 Failed to walk encrypted points directory", e);
         }
 
-        logger.info("✅ Re-encryption completed for {} vectors", reEncrypted.size());
+        logger.info("✅ Re-encryption completed for {} vectors", totalReEncrypted);
     }
+
 
 
     @Override

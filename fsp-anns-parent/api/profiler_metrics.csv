@@ -1,2 +1,3 @@
 Label,AvgTime(ms),Runs
-batchInsert,273.9946,2
+batchInsert,2.4667,1
+insert,1.3402,2
