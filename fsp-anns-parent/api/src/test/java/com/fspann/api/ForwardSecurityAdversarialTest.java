@@ -4,6 +4,7 @@ import com.fspann.common.*;
 import com.fspann.crypto.AesGcmCryptoService;
 import com.fspann.crypto.CryptoService;
 import com.fspann.crypto.KeyUtils;
+import com.fspann.index.service.SecureLSHIndexService;
 import com.fspann.key.KeyManager;
 import com.fspann.key.KeyRotationPolicy;
 import com.fspann.key.KeyRotationServiceImpl;
@@ -24,7 +25,6 @@ public class ForwardSecurityAdversarialTest {
     public void testForwardSecurityAgainstKeyCompromise(@TempDir Path tempDir) throws Exception {
         System.out.println("========== Forward Security Test ==========");
 
-        // Configuration
         Path config = tempDir.resolve("config.json");
         Files.writeString(config, "{" +
                 "\"numShards\":4," +
@@ -38,7 +38,6 @@ public class ForwardSecurityAdversarialTest {
         Path keys = tempDir.resolve("keys.ser");
         List<Integer> dimensions = Collections.singletonList(3);
 
-        // Setup: Initialize RocksDBMetadataManager and KeyRotation services
         RocksDBMetadataManager metadataManager = new RocksDBMetadataManager(tempDir.toString());
 
         KeyManager keyManager = new KeyManager(keys.toString());
@@ -58,9 +57,10 @@ public class ForwardSecurityAdversarialTest {
                 cryptoService
         );
 
-        int dim = 3;
+        // Ensure indexService is injected for re-encryption
+        keyService.setIndexService(system.getIndexService());
 
-        // Insert a point with the current (soon-to-be compromised) key
+        int dim = 3;
         double[] pointBefore = {0.15, 0.15, 0.15};
         String beforeId = UUID.randomUUID().toString();
         system.insert(beforeId, pointBefore, dim);
@@ -71,7 +71,8 @@ public class ForwardSecurityAdversarialTest {
         int versionBefore = system.getCryptoService().getKeyService().getCurrentVersion().getVersion();
         System.out.println("Compromised key (base64): " + Base64.getEncoder().encodeToString(compromisedKey.getEncoded()));
 
-        // Rotate using keyService (not keyManager directly!)
+        system.flush();
+
         KeyVersion rotated = keyService.rotateKey();
         keyService.reEncryptAll();
 
@@ -79,32 +80,31 @@ public class ForwardSecurityAdversarialTest {
         System.out.printf("Key Version Before: %d, After: %d\n", versionBefore, versionAfter);
         assertTrue(versionAfter > versionBefore, "Key should have rotated");
 
-        // Insert a point after key rotation
         double[] pointAfter = {0.25, 0.25, 0.25};
         String afterId = UUID.randomUUID().toString();
-        system.insert(afterId, pointAfter, dim);
+        int currentVersion = system.getCryptoService().getKeyService().getCurrentVersion().getVersion();
+        System.out.printf("CryptoService current version before post-rotation insert: %d%n", currentVersion);
+        assertEquals(versionAfter, currentVersion, "CryptoService should reflect rotated key version");
 
-        // Check version only if it matches
+        system.insert(afterId, pointAfter, dim);
+        system.flush();
+
         EncryptedPoint encryptedAfter = system.getEncryptedPointById(afterId);
         assertNotNull(encryptedAfter, "Post-rotation point should exist.");
         assertEquals(versionAfter, encryptedAfter.getVersion(), "Point version should match current key version after rotation.");
 
-        // ANN query result analysis for pre-rotation point
         List<QueryResult> results = system.query(pointBefore, 20, dim);
         boolean matchFound = results.stream().anyMatch(r -> r.getId().equals(beforeId));
         System.out.println("Query results:");
         results.forEach(r -> System.out.printf("Returned ID: %s | Distance: %.6f\n", r.getId(), r.getDistance()));
         assertTrue(matchFound, "Pre-compromise point should be found in the query results.");
 
-        // Attempt to decrypt the pre-rotation point using compromised key
         EncryptedPoint encryptedBefore = system.getEncryptedPointById(beforeId);
         assertNotNull(encryptedBefore, "Pre-rotation point should exist.");
-
         Optional<double[]> decryptedOld = KeyUtils.tryDecryptWithKeyOnly(encryptedBefore, compromisedKey);
         System.out.println("Decryption of pre-rotation point with compromised key: " + (decryptedOld.isEmpty() ? "BLOCKED" : "FAILED"));
         assertTrue(decryptedOld.isEmpty(), "Old key should NOT decrypt re-encrypted point after key rotation");
 
-        // Attempt to decrypt the post-rotation point using current key
         SecretKey currentKey = keyService.getVersion(encryptedAfter.getVersion()).getKey();
         Optional<double[]> decryptedNew = KeyUtils.tryDecryptWithKeyOnly(encryptedAfter, currentKey);
         System.out.println("Decryption of post-rotation point with current key: " + (decryptedNew.isPresent() ? "SUCCESS" : "FAILED"));

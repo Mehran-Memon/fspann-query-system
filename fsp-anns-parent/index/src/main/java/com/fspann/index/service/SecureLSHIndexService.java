@@ -42,12 +42,14 @@ public class SecureLSHIndexService implements IndexService {
                                  SecureLSHIndex index,
                                  EvenLSH lsh,
                                  EncryptedPointBuffer buffer) {
+
         this.crypto = crypto != null ? crypto : new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
         this.keyService = keyService;
         this.metadataManager = metadataManager;
         this.index = index;
         this.lsh = lsh;
         this.buffer = buffer;
+
     }
 
     private static EncryptedPointBuffer createBuffer(RocksDBMetadataManager metadataManager) {
@@ -123,7 +125,13 @@ public class SecureLSHIndexService implements IndexService {
 
             for (EncryptedPoint pt : entry.getValue()) {
                 buffer.add(pt);
+                try {
+                    metadataManager.saveEncryptedPoint(pt); // Ensure disk persistence
+                } catch (IOException e) {
+                    logger.error("Failed to persist encrypted point {}", pt.getId(), e);
+                }
             }
+
             long t4 = System.nanoTime();
 
             logger.info("{} points in {} ms (index: {} ms, metaMap: {} ms, save: {} ms)",
@@ -153,6 +161,11 @@ public class SecureLSHIndexService implements IndexService {
         metadataManager.putVectorMetadata(pt.getId(), meta);
 
         buffer.add(pt);
+        try {
+            metadataManager.saveEncryptedPoint(pt); // Save to .point file
+        } catch (IOException e) {
+            logger.error("Failed to persist encrypted point {}", pt.getId(), e);
+        }
     }
 
     @Override
@@ -161,26 +174,29 @@ public class SecureLSHIndexService implements IndexService {
         DimensionContext ctx = getOrCreateContext(dimension);
 
         keyService.rotateIfNeeded();
-        KeyVersion version = keyService.getCurrentVersion();
-        SecretKey key = version.getKey();
 
         try {
+            // ✅ Encrypt and get accurate version
+            EncryptedPoint encryptedPoint = crypto.encrypt(id, vector);
             int shardId = ctx.getLsh().getBucketId(vector);
-            EncryptedPoint encryptedPoint = crypto.encryptToPoint(id, vector, key);
+
+            // ✅ Use encryptedPoint's version
             EncryptedPoint withShard = new EncryptedPoint(
                     encryptedPoint.getId(),
                     shardId,
                     encryptedPoint.getIv(),
                     encryptedPoint.getCiphertext(),
-                    version.getVersion(),
+                    encryptedPoint.getVersion(),
                     vector.length
             );
+
             insert(withShard);
         } catch (Exception e) {
             logger.error("Failed to encrypt vector id={}", id, e);
             throw new RuntimeException("Encryption failed for id=" + id, e);
         }
     }
+
 
     @Override
     public void delete(String id) {

@@ -1,7 +1,4 @@
-package com.fspann.index.service;
-
-import com.fspann.common.EncryptedPoint;
-import com.fspann.common.QueryToken;
+package com.fspann.common;
 
 import java.util.List;
 import java.util.Set;

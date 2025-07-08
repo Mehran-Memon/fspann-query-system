@@ -2,6 +2,7 @@ package com.fspann.crypto;
 
 import com.fspann.common.EncryptedPoint;
 import com.fspann.common.KeyLifeCycleService;
+import com.fspann.common.KeyVersion;
 import com.fspann.common.RocksDBMetadataManager;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -56,6 +57,32 @@ public class AesGcmCryptoService implements CryptoService {
             }
         });
     }
+
+    @Override
+    public EncryptedPoint encrypt(String id, double[] vector) {
+        return encryptTimer.record(() -> {
+            try {
+                keyService.rotateIfNeeded();  // Ensure key is rotated if needed
+                KeyVersion version = keyService.getCurrentVersion();
+                SecretKey key = version.getKey();
+
+                byte[] iv = EncryptionUtils.generateIV();
+                byte[] ciphertext = EncryptionUtils.encryptVector(vector, iv, key);
+
+                EncryptedPoint point = new EncryptedPoint(id, 0, iv, ciphertext, version.getVersion(), vector.length);
+                metadataManager.updateVectorMetadata(id, Map.of("version", String.valueOf(version.getVersion())));
+
+                logger.debug("Encrypted (auto-version) point {} with version {}", id, version.getVersion());
+                return point;
+            } catch (GeneralSecurityException e) {
+                logger.error("Auto-encryption failed for point {}", id, e);
+                throw new CryptoException("Auto-encryption failed for point: " + id, e);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+    }
+
 
     @Override
     public double[] decryptFromPoint(EncryptedPoint pt, SecretKey key) {

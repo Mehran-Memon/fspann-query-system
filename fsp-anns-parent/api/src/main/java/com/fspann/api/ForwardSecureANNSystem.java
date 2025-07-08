@@ -5,6 +5,7 @@ import com.fspann.config.SystemConfig;
 import com.fspann.crypto.AesGcmCryptoService;
 import com.fspann.crypto.CryptoService;
 import com.fspann.index.core.EvenLSH;
+import com.fspann.common.IndexService;
 import com.fspann.index.service.SecureLSHIndexService;
 import com.fspann.key.KeyManager;
 import com.fspann.key.KeyRotationPolicy;
@@ -48,6 +49,9 @@ public class ForwardSecureANNSystem {
     private final Map<Integer, List<String>> dimensionIdMap;
     private final boolean verbose;
     private final List<Long> batchDurations = new ArrayList<>();
+    private final EncryptedPointBuffer pointBuffer;
+    private final RocksDBMetadataManager metadataManager;
+    private int currentVersion;
 
     private long totalIndexingTime = 0;
     private long totalQueryTime = 0;
@@ -76,7 +80,11 @@ public class ForwardSecureANNSystem {
         KeyRotationPolicy policy = new KeyRotationPolicy((int) config.getOpsThreshold(), config.getAgeThresholdMs());
         this.keyService = new KeyRotationServiceImpl(keyManager, policy, metadataPath.toString(), metadataManager, cryptoService);
         this.cryptoService = cryptoService;
+        this.metadataManager = metadataManager;
+        this.pointBuffer = new EncryptedPointBuffer(metadataPath.toString(), metadataManager);
+        this.currentVersion = keyService.getCurrentVersion().getVersion();
         this.indexService = new SecureLSHIndexService(cryptoService, keyService, metadataManager);
+        ((KeyRotationServiceImpl) keyService).setIndexService(indexService);
         this.cache = new LRUCache<>(10000);
         this.profiler = config.isProfilerEnabled() ? new Profiler() : null;
         this.tokenFactory = new QueryTokenFactory(cryptoService, keyService, new EvenLSH(Collections.max(dimensions), config.getNumShards()), 1, 1);
@@ -218,6 +226,10 @@ public class ForwardSecureANNSystem {
         }
     }
 
+    public IndexService getIndexService() {
+        return this.indexService;
+    }
+
     public int getIndexedVectorCount(int dim) {
         return dimensionIdMap.getOrDefault(dim, new ArrayList<>()).size();
     }
@@ -276,6 +288,21 @@ public class ForwardSecureANNSystem {
         return indexService.getEncryptedPoint(id);
     }
 
+    public void flush() throws IOException {
+        logger.info("📤 ForwardSecureANNSystem flush started");
+
+        // Step 1: Flush EncryptedPointBuffer to persist .points files
+        pointBuffer.flushAll();
+
+        // Step 2: Flush index buffers (e.g., in-memory buckets to disk if needed)
+        indexService.flushBuffers();
+
+        // Step 3 (optional): Save current index metadata
+        metadataManager.saveIndexVersion(currentVersion);
+
+        logger.info("✅ ForwardSecureANNSystem flush completed");
+    }
+
     public static void main(String[] args) throws Exception {
         if (args.length < 6) {
             System.err.println("Usage: <configPath> <dataPath> <queryPath> <keysFilePath> <dimensions> <metadataPath>");
@@ -296,6 +323,7 @@ public class ForwardSecureANNSystem {
         RocksDBMetadataManager metadataManager;
         try {
             metadataManager = new RocksDBMetadataManager(metadataPath.toString());
+            metadataManager.mergeVectorMetadata("testVec", Map.of("version", "2")); // check if compiles
         } catch (IOException e) {
             logger.error("Failed to initialize RocksDBMetadataManager", e);
             throw new RuntimeException("Failed to initialize RocksDBMetadataManager", e);
@@ -315,6 +343,7 @@ public class ForwardSecureANNSystem {
                 configFile, dataPath, keysFile, dimensions, metadataPath, false,
                 metadataManager, cryptoService
         );
+
 
         // Run end-to-end tests with data
         int dim = dimensions.get(0);

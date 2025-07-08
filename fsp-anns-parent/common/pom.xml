@@ -47,7 +47,7 @@
         <dependency>
             <groupId>org.rocksdb</groupId>
             <artifactId>rocksdbjni</artifactId>
-            <version>9.7.2</version>
+            <version>9.7.2</version> <!-- Latest as of mid-2025 -->
         </dependency>
     </dependencies>
 

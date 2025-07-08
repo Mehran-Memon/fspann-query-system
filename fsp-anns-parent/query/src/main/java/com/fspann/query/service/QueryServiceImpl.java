@@ -2,7 +2,7 @@ package com.fspann.query.service;
 
 import com.fspann.common.*;
 import com.fspann.crypto.CryptoService;
-import com.fspann.index.service.IndexService;
+import com.fspann.common.IndexService;
 
 import javax.crypto.SecretKey;
 import java.util.List;
