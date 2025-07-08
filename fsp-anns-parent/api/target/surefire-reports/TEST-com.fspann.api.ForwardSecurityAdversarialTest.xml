@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.fspann.api.ForwardSecurityAdversarialTest" time="0.089" tests="1" errors="0" skipped="0" failures="1">
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.fspann.api.ForwardSecurityAdversarialTest" time="0.078" tests="1" errors="0" skipped="0" failures="0">
   <properties>
     <property name="java.specification.version" value="21"/>
     <property name="sun.cpu.isalist" value="amd64"/>
@@ -17,7 +17,7 @@
     <property name="sun.java.launcher" value="SUN_STANDARD"/>
     <property name="user.country" value="US"/>
     <property name="sun.boot.library.path" value="C:\Program Files\Java\jdk-21\bin"/>
-    <property name="sun.java.command" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire15175067918809351232\surefirebooter12068047822352766774.jar C:\Users\Mehran Memon\AppData\Local\Temp\surefire15175067918809351232 2025-07-08T03-16-10_486-jvmRun1 surefire5985404020692384453tmp surefire_71786463563886852963tmp"/>
+    <property name="sun.java.command" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire16274525354700197925\surefirebooter2932628445465086861.jar C:\Users\Mehran Memon\AppData\Local\Temp\surefire16274525354700197925 2025-07-08T16-52-46_018-jvmRun1 surefire4424002871415982676tmp surefire_710598170502466263663tmp"/>
     <property name="jdk.debug" value="release"/>
     <property name="surefire.test.class.path" value="C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\api\target\test-classes;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\api\target\classes;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\query\target\query-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\index\target\index-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-math3\3.6.1\commons-math3-3.6.1.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\crypto\target\crypto-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\bouncycastle\bcprov-jdk18on\1.78\bcprov-jdk18on-1.78.jar;C:\Users\Mehran Memon\.m2\repository\net\bytebuddy\byte-buddy\1.14.15\byte-buddy-1.14.15.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\common\target\common-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-lang3\3.17.0\commons-lang3-3.17.0.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-core\2.17.2\jackson-core-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\org\rocksdb\rocksdbjni\8.11.3\rocksdbjni-8.11.3.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\keymanagement\target\keymanagement-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\jetbrains\annotations\26.0.2\annotations-26.0.2.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\config\target\config-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\dataformat\jackson-dataformat-yaml\2.17.1\jackson-dataformat-yaml-2.17.1.jar;C:\Users\Mehran Memon\.m2\repository\org\yaml\snakeyaml\2.2\snakeyaml-2.2.jar;C:\Users\Mehran Memon\.m2\repository\org\slf4j\slf4j-api\2.0.13\slf4j-api-2.0.13.jar;C:\Users\Mehran Memon\.m2\repository\ch\qos\logback\logback-classic\1.5.13\logback-classic-1.5.13.jar;C:\Users\Mehran Memon\.m2\repository\ch\qos\logback\logback-core\1.5.13\logback-core-1.5.13.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-databind\2.17.2\jackson-databind-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-annotations\2.17.2\jackson-annotations-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\com\google\code\gson\gson\2.11.0\gson-2.11.0.jar;C:\Users\Mehran Memon\.m2\repository\com\google\errorprone\error_prone_annotations\2.27.0\error_prone_annotations-2.27.0.jar;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\loader\target\loader-0.0.1-SNAPSHOT.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-compress\1.26.1\commons-compress-1.26.1.jar;C:\Users\Mehran Memon\.m2\repository\commons-codec\commons-codec\1.16.1\commons-codec-1.16.1.jar;C:\Users\Mehran Memon\.m2\repository\commons-io\commons-io\2.15.1\commons-io-2.15.1.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-core\1.11.0\micrometer-core-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-commons\1.11.0\micrometer-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-observation\1.11.0\micrometer-observation-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\hdrhistogram\HdrHistogram\2.1.12\HdrHistogram-2.1.12.jar;C:\Users\Mehran Memon\.m2\repository\org\latencyutils\LatencyUtils\2.0.3\LatencyUtils-2.0.3.jar;C:\Users\Mehran Memon\.m2\repository\io\micrometer\micrometer-registry-prometheus\1.11.0\micrometer-registry-prometheus-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_common\0.16.0\simpleclient_common-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient\0.16.0\simpleclient-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_otel\0.16.0\simpleclient_tracer_otel-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_common\0.16.0\simpleclient_tracer_common-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\io\prometheus\simpleclient_tracer_otel_agent\0.16.0\simpleclient_tracer_otel_agent-0.16.0.jar;C:\Users\Mehran Memon\.m2\repository\org\jfree\jfreechart\1.5.3\jfreechart-1.5.3.jar;C:\Users\Mehran Memon\.m2\repository\junit\junit\4.0\junit-4.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter\5.11.0\junit-jupiter-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-params\5.11.0\junit-jupiter-params-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-engine\5.11.0\junit-jupiter-engine-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\platform\junit-platform-engine\1.11.0\junit-platform-engine-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-api\5.11.0\junit-jupiter-api-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\opentest4j\opentest4j\1.3.0\opentest4j-1.3.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\platform\junit-platform-commons\1.11.0\junit-platform-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\apiguardian\apiguardian-api\1.1.2\apiguardian-api-1.1.2.jar;"/>
     <property name="sun.cpu.endian" value="little"/>
@@ -32,7 +32,7 @@
     <property name="line.separator" value="&#10;"/>
     <property name="java.vm.specification.vendor" value="Oracle Corporation"/>
     <property name="java.specification.name" value="Java Platform API Specification"/>
-    <property name="surefire.real.class.path" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire15175067918809351232\surefirebooter12068047822352766774.jar"/>
+    <property name="surefire.real.class.path" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire16274525354700197925\surefirebooter2932628445465086861.jar"/>
     <property name="user.script" value=""/>
     <property name="sun.management.compiler" value="HotSpot 64-Bit Tiered Compilers"/>
     <property name="java.runtime.version" value="21.0.7+8-LTS-245"/>
@@ -61,33 +61,27 @@
     <property name="sun.io.unicode.encoding" value="UnicodeLittle"/>
     <property name="java.class.version" value="65.0"/>
   </properties>
-  <testcase name="testForwardSecurityAgainstKeyCompromise(Path)" classname="com.fspann.api.ForwardSecurityAdversarialTest" time="0.081">
-    <failure type="org.opentest4j.AssertionFailedError"><![CDATA[org.opentest4j.AssertionFailedError: Pre-compromise point should be found in the query results. ==> expected: <true> but was: <false>
-	at com.fspann.api.ForwardSecurityAdversarialTest.testForwardSecurityAgainstKeyCompromise(ForwardSecurityAdversarialTest.java:100)
-]]></failure>
+  <testcase name="testForwardSecurityAgainstKeyCompromise(Path)" classname="com.fspann.api.ForwardSecurityAdversarialTest" time="0.077">
     <system-out><![CDATA[========== Forward Security Test ==========
-2025-07-08 03:16:31 [main] INFO  c.f.common.RocksDBMetadataManager - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\junit-7692271138836923421
-2025-07-08 03:16:31 [main] INFO  com.fspann.key.KeyManager - Initialized new key store (version 1)
-2025-07-08 03:16:31 [main] INFO  c.fspann.api.ForwardSecureANNSystem - BatchInsert with 1 vectors for dim=3
-2025-07-08 03:16:31 [main] INFO  c.f.i.service.SecureLSHIndexService - 1 points in 1 ms (index: 0 ms, metaMap: 0 ms, save: 0 ms)
-2025-07-08 03:16:31 [main] INFO  c.fspann.api.ForwardSecureANNSystem -  1 - 3 ms - 47 MB
+2025-07-08 16:53:07 [main] INFO  c.f.common.RocksDBMetadataManager - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\junit-8220405479724467955
+2025-07-08 16:53:07 [main] INFO  com.fspann.key.KeyManager - Initialized new key store (version 1)
+2025-07-08 16:53:07 [main] INFO  c.fspann.api.ForwardSecureANNSystem - BatchInsert with 1 vectors for dim=3
+2025-07-08 16:53:07 [main] INFO  c.f.i.service.SecureLSHIndexService - 1 points in 0 ms (index: 0 ms, metaMap: 0 ms, save: 0 ms)
+2025-07-08 16:53:07 [main] INFO  c.fspann.api.ForwardSecureANNSystem -  1 - 2 ms - 47 MB
 
-2025-07-08 03:16:31 [main] INFO  c.fspann.api.ForwardSecureANNSystem - 1 3 ms
-2025-07-08 03:16:31 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=53ed769e-21ff-4779-a76c-5641a421e39e in 1.7784 ms
-Compromised key (base64): StycZ+YXxh5Lr3YZ5avpke+p3NgQrjmnYa8Xlw4ZNNQ=
-2025-07-08 03:16:31 [main] INFO  c.fspann.api.ForwardSecureANNSystem - 📤 ForwardSecureANNSystem flush started
-2025-07-08 03:16:31 [main] INFO  c.fspann.api.ForwardSecureANNSystem - ✅ ForwardSecureANNSystem flush completed
-2025-07-08 03:16:31 [main] INFO  c.fspann.key.KeyRotationServiceImpl - 🔐 Starting manual re-encryption of all vectors
-2025-07-08 03:16:31 [main] INFO  c.f.common.RocksDBMetadataManager - ✅ Total encrypted points loaded: 2
-2025-07-08 03:16:31 [main] INFO  c.fspann.key.KeyRotationServiceImpl - Re-encrypted + saved + merged metadata for 4dbca031-2cef-45f6-9dac-edea9ceba6ae → {shardId=0, version=2}
-2025-07-08 03:16:31 [main] INFO  c.fspann.key.KeyRotationServiceImpl - Re-encrypted + saved + merged metadata for 53ed769e-21ff-4779-a76c-5641a421e39e → {shardId=4, version=2}
-2025-07-08 03:16:31 [main] INFO  c.fspann.key.KeyRotationServiceImpl - ✅ Re-encryption completed for 2 vectors
+2025-07-08 16:53:07 [main] INFO  c.fspann.api.ForwardSecureANNSystem - 1 2 ms
+2025-07-08 16:53:07 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=30e1cd61-214d-466a-8dee-576d36f6c009 in 1.440499 ms
+Compromised key (base64): q8dgSDooK5e485EbiHHr5daZYFMTvgkVm+9Xs1y8Tsk=
+2025-07-08 16:53:07 [main] INFO  c.fspann.api.ForwardSecureANNSystem - 📤 ForwardSecureANNSystem flush started
+2025-07-08 16:53:07 [main] INFO  c.fspann.api.ForwardSecureANNSystem - ✅ ForwardSecureANNSystem flush completed
+2025-07-08 16:53:07 [main] INFO  c.fspann.key.KeyRotationServiceImpl - 🔐 Starting manual re-encryption of all vectors
+2025-07-08 16:53:07 [main] INFO  c.fspann.key.KeyRotationServiceImpl - ✅ Re-encryption completed for 2 vectors
 Key Version Before: 1, After: 2
 CryptoService current version before post-rotation insert: 2
-2025-07-08 03:16:31 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=d97fe451-ccc6-4393-8067-e30a0c41a0a0 in 1.3112 ms
-2025-07-08 03:16:31 [main] INFO  c.fspann.api.ForwardSecureANNSystem - 📤 ForwardSecureANNSystem flush started
-2025-07-08 03:16:31 [main] INFO  c.fspann.api.ForwardSecureANNSystem - ✅ ForwardSecureANNSystem flush completed
-2025-07-08 03:16:31 [main] ERROR c.fspann.crypto.AesGcmCryptoService - Decryption failed for point 4dbca031-2cef-45f6-9dac-edea9ceba6ae
+2025-07-08 16:53:07 [main] INFO  c.fspann.api.ForwardSecureANNSystem - Insert complete for id=e5a8f024-a91d-43db-b08b-29753bb174b5 in 1.24 ms
+2025-07-08 16:53:07 [main] INFO  c.fspann.api.ForwardSecureANNSystem - 📤 ForwardSecureANNSystem flush started
+2025-07-08 16:53:07 [main] INFO  c.fspann.api.ForwardSecureANNSystem - ✅ ForwardSecureANNSystem flush completed
+2025-07-08 16:53:07 [main] ERROR c.fspann.crypto.AesGcmCryptoService - Decryption failed for point 30e1cd61-214d-466a-8dee-576d36f6c009
 javax.crypto.AEADBadTagException: Tag mismatch
 	at java.base/com.sun.crypto.provider.GaloisCounterMode$GCMDecrypt.doFinal(GaloisCounterMode.java:1545)
 	at java.base/com.sun.crypto.provider.GaloisCounterMode.engineDoFinal(GaloisCounterMode.java:417)
@@ -108,7 +102,7 @@ javax.crypto.AEADBadTagException: Tag mismatch
 	at java.base/java.util.stream.ReferencePipeline.collect(ReferencePipeline.java:682)
 	at com.fspann.query.service.QueryServiceImpl.search(QueryServiceImpl.java:79)
 	at com.fspann.api.ForwardSecureANNSystem.query(ForwardSecureANNSystem.java:190)
-	at com.fspann.api.ForwardSecurityAdversarialTest.testForwardSecurityAgainstKeyCompromise(ForwardSecurityAdversarialTest.java:96)
+	at com.fspann.api.ForwardSecurityAdversarialTest.testForwardSecurityAgainstKeyCompromise(ForwardSecurityAdversarialTest.java:95)
 	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
 	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
 	at org.junit.platform.commons.util.ReflectionUtils.invokeMethod(ReflectionUtils.java:766)
@@ -178,8 +172,8 @@ javax.crypto.AEADBadTagException: Tag mismatch
 	at org.apache.maven.surefire.booter.ForkedBooter.execute(ForkedBooter.java:162)
 	at org.apache.maven.surefire.booter.ForkedBooter.run(ForkedBooter.java:562)
 	at org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:548)
-2025-07-08 03:16:31 [main] WARN  c.f.query.service.QueryServiceImpl - Skipped 4dbca031-2cef-45f6-9dac-edea9ceba6ae due to decryption failure
-com.fspann.crypto.AesGcmCryptoService$CryptoException: Decryption failed for point: 4dbca031-2cef-45f6-9dac-edea9ceba6ae
+2025-07-08 16:53:07 [main] WARN  c.f.query.service.QueryServiceImpl - Skipped 30e1cd61-214d-466a-8dee-576d36f6c009 due to decryption failure
+com.fspann.crypto.AesGcmCryptoService$CryptoException: Decryption failed for point: 30e1cd61-214d-466a-8dee-576d36f6c009
 	at com.fspann.crypto.AesGcmCryptoService.lambda$decryptFromPoint$2(AesGcmCryptoService.java:95)
 	at io.micrometer.core.instrument.AbstractTimer.record(AbstractTimer.java:168)
 	at com.fspann.crypto.AesGcmCryptoService.decryptFromPoint(AesGcmCryptoService.java:89)
@@ -195,7 +189,192 @@ com.fspann.crypto.AesGcmCryptoService$CryptoException: Decryption failed for poi
 	at java.base/java.util.stream.ReferencePipeline.collect(ReferencePipeline.java:682)
 	at com.fspann.query.service.QueryServiceImpl.search(QueryServiceImpl.java:79)
 	at com.fspann.api.ForwardSecureANNSystem.query(ForwardSecureANNSystem.java:190)
-	at com.fspann.api.ForwardSecurityAdversarialTest.testForwardSecurityAgainstKeyCompromise(ForwardSecurityAdversarialTest.java:96)
+	at com.fspann.api.ForwardSecurityAdversarialTest.testForwardSecurityAgainstKeyCompromise(ForwardSecurityAdversarialTest.java:95)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.junit.platform.commons.util.ReflectionUtils.invokeMethod(ReflectionUtils.java:766)
+	at org.junit.jupiter.engine.execution.MethodInvocation.proceed(MethodInvocation.java:60)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain$ValidatingInvocation.proceed(InvocationInterceptorChain.java:131)
+	at org.junit.jupiter.engine.extension.TimeoutExtension.intercept(TimeoutExtension.java:156)
+	at org.junit.jupiter.engine.extension.TimeoutExtension.interceptTestableMethod(TimeoutExtension.java:147)
+	at org.junit.jupiter.engine.extension.TimeoutExtension.interceptTestMethod(TimeoutExtension.java:86)
+	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker$ReflectiveInterceptorCall.lambda$ofVoidMethod$0(InterceptingExecutableInvoker.java:103)
+	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.lambda$invoke$0(InterceptingExecutableInvoker.java:93)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain$InterceptedInvocation.proceed(InvocationInterceptorChain.java:106)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.proceed(InvocationInterceptorChain.java:64)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.chainAndInvoke(InvocationInterceptorChain.java:45)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.invoke(InvocationInterceptorChain.java:37)
+	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.invoke(InterceptingExecutableInvoker.java:92)
+	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.invoke(InterceptingExecutableInvoker.java:86)
+	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.lambda$invokeTestMethod$8(TestMethodTestDescriptor.java:217)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
+	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.invokeTestMethod(TestMethodTestDescriptor.java:213)
+	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.execute(TestMethodTestDescriptor.java:138)
+	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.execute(TestMethodTestDescriptor.java:68)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$6(NodeTestTask.java:151)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$8(NodeTestTask.java:141)
+	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:137)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$9(NodeTestTask.java:139)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:138)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:95)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.invokeAll(SameThreadHierarchicalTestExecutorService.java:41)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$6(NodeTestTask.java:155)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$8(NodeTestTask.java:141)
+	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:137)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$9(NodeTestTask.java:139)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:138)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:95)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.invokeAll(SameThreadHierarchicalTestExecutorService.java:41)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$6(NodeTestTask.java:155)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$8(NodeTestTask.java:141)
+	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:137)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$9(NodeTestTask.java:139)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:138)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:95)
+	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.submit(SameThreadHierarchicalTestExecutorService.java:35)
+	at org.junit.platform.engine.support.hierarchical.HierarchicalTestExecutor.execute(HierarchicalTestExecutor.java:57)
+	at org.junit.platform.engine.support.hierarchical.HierarchicalTestEngine.execute(HierarchicalTestEngine.java:54)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:198)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:169)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:93)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.lambda$execute$0(EngineExecutionOrchestrator.java:58)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.withInterceptedStreams(EngineExecutionOrchestrator.java:141)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:57)
+	at org.junit.platform.launcher.core.DefaultLauncher.execute(DefaultLauncher.java:103)
+	at org.junit.platform.launcher.core.DefaultLauncher.execute(DefaultLauncher.java:85)
+	at org.junit.platform.launcher.core.DelegatingLauncher.execute(DelegatingLauncher.java:47)
+	at org.junit.platform.launcher.core.SessionPerRequestLauncher.execute(SessionPerRequestLauncher.java:63)
+	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.execute(JUnitPlatformProvider.java:188)
+	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.invokeAllTests(JUnitPlatformProvider.java:154)
+	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.invoke(JUnitPlatformProvider.java:128)
+	at org.apache.maven.surefire.booter.ForkedBooter.runSuitesInProcess(ForkedBooter.java:428)
+	at org.apache.maven.surefire.booter.ForkedBooter.execute(ForkedBooter.java:162)
+	at org.apache.maven.surefire.booter.ForkedBooter.run(ForkedBooter.java:562)
+	at org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:548)
+Caused by: javax.crypto.AEADBadTagException: Tag mismatch
+	at java.base/com.sun.crypto.provider.GaloisCounterMode$GCMDecrypt.doFinal(GaloisCounterMode.java:1545)
+	at java.base/com.sun.crypto.provider.GaloisCounterMode.engineDoFinal(GaloisCounterMode.java:417)
+	at java.base/javax.crypto.Cipher.doFinal(Cipher.java:2244)
+	at com.fspann.crypto.EncryptionUtils.decryptVector(EncryptionUtils.java:74)
+	at com.fspann.crypto.AesGcmCryptoService.lambda$decryptFromPoint$2(AesGcmCryptoService.java:92)
+	... 84 common frames omitted
+2025-07-08 16:53:07 [main] ERROR c.fspann.crypto.AesGcmCryptoService - Decryption failed for point 2070c2b0-3e8b-4d8d-b036-c85fd5d4c748
+javax.crypto.AEADBadTagException: Tag mismatch
+	at java.base/com.sun.crypto.provider.GaloisCounterMode$GCMDecrypt.doFinal(GaloisCounterMode.java:1545)
+	at java.base/com.sun.crypto.provider.GaloisCounterMode.engineDoFinal(GaloisCounterMode.java:417)
+	at java.base/javax.crypto.Cipher.doFinal(Cipher.java:2244)
+	at com.fspann.crypto.EncryptionUtils.decryptVector(EncryptionUtils.java:74)
+	at com.fspann.crypto.AesGcmCryptoService.lambda$decryptFromPoint$2(AesGcmCryptoService.java:92)
+	at io.micrometer.core.instrument.AbstractTimer.record(AbstractTimer.java:168)
+	at com.fspann.crypto.AesGcmCryptoService.decryptFromPoint(AesGcmCryptoService.java:89)
+	at com.fspann.query.service.QueryServiceImpl.lambda$search$0(QueryServiceImpl.java:65)
+	at java.base/java.util.stream.ReferencePipeline$3$1.accept(ReferencePipeline.java:197)
+	at java.base/java.util.ArrayList$ArrayListSpliterator.tryAdvance(ArrayList.java:1685)
+	at java.base/java.util.stream.ReferencePipeline.forEachWithCancel(ReferencePipeline.java:129)
+	at java.base/java.util.stream.AbstractPipeline.copyIntoWithCancel(AbstractPipeline.java:527)
+	at java.base/java.util.stream.AbstractPipeline.copyInto(AbstractPipeline.java:513)
+	at java.base/java.util.stream.AbstractPipeline.wrapAndCopyInto(AbstractPipeline.java:499)
+	at java.base/java.util.stream.ReduceOps$ReduceOp.evaluateSequential(ReduceOps.java:921)
+	at java.base/java.util.stream.AbstractPipeline.evaluate(AbstractPipeline.java:234)
+	at java.base/java.util.stream.ReferencePipeline.collect(ReferencePipeline.java:682)
+	at com.fspann.query.service.QueryServiceImpl.search(QueryServiceImpl.java:79)
+	at com.fspann.api.ForwardSecureANNSystem.query(ForwardSecureANNSystem.java:190)
+	at com.fspann.api.ForwardSecurityAdversarialTest.testForwardSecurityAgainstKeyCompromise(ForwardSecurityAdversarialTest.java:95)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.junit.platform.commons.util.ReflectionUtils.invokeMethod(ReflectionUtils.java:766)
+	at org.junit.jupiter.engine.execution.MethodInvocation.proceed(MethodInvocation.java:60)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain$ValidatingInvocation.proceed(InvocationInterceptorChain.java:131)
+	at org.junit.jupiter.engine.extension.TimeoutExtension.intercept(TimeoutExtension.java:156)
+	at org.junit.jupiter.engine.extension.TimeoutExtension.interceptTestableMethod(TimeoutExtension.java:147)
+	at org.junit.jupiter.engine.extension.TimeoutExtension.interceptTestMethod(TimeoutExtension.java:86)
+	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker$ReflectiveInterceptorCall.lambda$ofVoidMethod$0(InterceptingExecutableInvoker.java:103)
+	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.lambda$invoke$0(InterceptingExecutableInvoker.java:93)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain$InterceptedInvocation.proceed(InvocationInterceptorChain.java:106)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.proceed(InvocationInterceptorChain.java:64)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.chainAndInvoke(InvocationInterceptorChain.java:45)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.invoke(InvocationInterceptorChain.java:37)
+	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.invoke(InterceptingExecutableInvoker.java:92)
+	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.invoke(InterceptingExecutableInvoker.java:86)
+	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.lambda$invokeTestMethod$8(TestMethodTestDescriptor.java:217)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
+	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.invokeTestMethod(TestMethodTestDescriptor.java:213)
+	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.execute(TestMethodTestDescriptor.java:138)
+	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.execute(TestMethodTestDescriptor.java:68)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$6(NodeTestTask.java:151)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$8(NodeTestTask.java:141)
+	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:137)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$9(NodeTestTask.java:139)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:138)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:95)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.invokeAll(SameThreadHierarchicalTestExecutorService.java:41)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$6(NodeTestTask.java:155)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$8(NodeTestTask.java:141)
+	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:137)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$9(NodeTestTask.java:139)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:138)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:95)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.invokeAll(SameThreadHierarchicalTestExecutorService.java:41)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$6(NodeTestTask.java:155)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$8(NodeTestTask.java:141)
+	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:137)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$9(NodeTestTask.java:139)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:138)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:95)
+	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.submit(SameThreadHierarchicalTestExecutorService.java:35)
+	at org.junit.platform.engine.support.hierarchical.HierarchicalTestExecutor.execute(HierarchicalTestExecutor.java:57)
+	at org.junit.platform.engine.support.hierarchical.HierarchicalTestEngine.execute(HierarchicalTestEngine.java:54)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:198)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:169)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:93)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.lambda$execute$0(EngineExecutionOrchestrator.java:58)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.withInterceptedStreams(EngineExecutionOrchestrator.java:141)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:57)
+	at org.junit.platform.launcher.core.DefaultLauncher.execute(DefaultLauncher.java:103)
+	at org.junit.platform.launcher.core.DefaultLauncher.execute(DefaultLauncher.java:85)
+	at org.junit.platform.launcher.core.DelegatingLauncher.execute(DelegatingLauncher.java:47)
+	at org.junit.platform.launcher.core.SessionPerRequestLauncher.execute(SessionPerRequestLauncher.java:63)
+	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.execute(JUnitPlatformProvider.java:188)
+	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.invokeAllTests(JUnitPlatformProvider.java:154)
+	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.invoke(JUnitPlatformProvider.java:128)
+	at org.apache.maven.surefire.booter.ForkedBooter.runSuitesInProcess(ForkedBooter.java:428)
+	at org.apache.maven.surefire.booter.ForkedBooter.execute(ForkedBooter.java:162)
+	at org.apache.maven.surefire.booter.ForkedBooter.run(ForkedBooter.java:562)
+	at org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:548)
+2025-07-08 16:53:07 [main] WARN  c.f.query.service.QueryServiceImpl - Skipped 2070c2b0-3e8b-4d8d-b036-c85fd5d4c748 due to decryption failure
+com.fspann.crypto.AesGcmCryptoService$CryptoException: Decryption failed for point: 2070c2b0-3e8b-4d8d-b036-c85fd5d4c748
+	at com.fspann.crypto.AesGcmCryptoService.lambda$decryptFromPoint$2(AesGcmCryptoService.java:95)
+	at io.micrometer.core.instrument.AbstractTimer.record(AbstractTimer.java:168)
+	at com.fspann.crypto.AesGcmCryptoService.decryptFromPoint(AesGcmCryptoService.java:89)
+	at com.fspann.query.service.QueryServiceImpl.lambda$search$0(QueryServiceImpl.java:65)
+	at java.base/java.util.stream.ReferencePipeline$3$1.accept(ReferencePipeline.java:197)
+	at java.base/java.util.ArrayList$ArrayListSpliterator.tryAdvance(ArrayList.java:1685)
+	at java.base/java.util.stream.ReferencePipeline.forEachWithCancel(ReferencePipeline.java:129)
+	at java.base/java.util.stream.AbstractPipeline.copyIntoWithCancel(AbstractPipeline.java:527)
+	at java.base/java.util.stream.AbstractPipeline.copyInto(AbstractPipeline.java:513)
+	at java.base/java.util.stream.AbstractPipeline.wrapAndCopyInto(AbstractPipeline.java:499)
+	at java.base/java.util.stream.ReduceOps$ReduceOp.evaluateSequential(ReduceOps.java:921)
+	at java.base/java.util.stream.AbstractPipeline.evaluate(AbstractPipeline.java:234)
+	at java.base/java.util.stream.ReferencePipeline.collect(ReferencePipeline.java:682)
+	at com.fspann.query.service.QueryServiceImpl.search(QueryServiceImpl.java:79)
+	at com.fspann.api.ForwardSecureANNSystem.query(ForwardSecureANNSystem.java:190)
+	at com.fspann.api.ForwardSecurityAdversarialTest.testForwardSecurityAgainstKeyCompromise(ForwardSecurityAdversarialTest.java:95)
 	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
 	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
 	at org.junit.platform.commons.util.ReflectionUtils.invokeMethod(ReflectionUtils.java:766)
@@ -273,7 +452,21 @@ Caused by: javax.crypto.AEADBadTagException: Tag mismatch
 	at com.fspann.crypto.AesGcmCryptoService.lambda$decryptFromPoint$2(AesGcmCryptoService.java:92)
 	... 84 common frames omitted
 Query results:
-Returned ID: 4dbca031-2cef-45f6-9dac-edea9ceba6ae | Distance: 0.259808
+Returned ID: 30e1cd61-214d-466a-8dee-576d36f6c009 | Distance: 0.000000
+Returned ID: 2070c2b0-3e8b-4d8d-b036-c85fd5d4c748 | Distance: 0.259808
+Decryption of pre-rotation point with compromised key: BLOCKED
+Decryption of post-rotation point with current key: SUCCESS
+========= FORWARD SECURITY VALIDATED =========
+
+=== System Shutdown ===
+Total indexing time: 5 ms
+Total query time: 8 ms
+
+2025-07-08 16:53:07 [main] INFO  c.f.common.RocksDBMetadataManager - Closing RocksDB instance...
+2025-07-08 16:53:07 [main] INFO  c.f.common.RocksDBMetadataManager - RocksDB instance closed at C:\Users\MEHRAN~1\AppData\Local\Temp\junit-8220405479724467955
+📤 Profiler data written to profiler_metrics.csv
+==== Batch Duration Summary ====
+Batch 01: 2 ms
 ]]></system-out>
   </testcase>
 </testsuite>

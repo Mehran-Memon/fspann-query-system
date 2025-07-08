@@ -1,135 +1,15 @@
 Query 1 Results (dim=2)
 Neighbor ID	Distance
-e0b787bb-a588-486d-8750-126fb5db586e	0.070711
+2adcbfca-22d0-42d7-970d-f49a403200e3	0.070711
 
 
 Query 1 Results (dim=2)
 Neighbor ID	Distance
-e2b73837-6a29-4e98-8ab1-cd4efe25ca25	0.070711
+87327eba-cba2-4a9e-a506-cede5c31f1ab	0.070711
 
 
 Query 1 Results (dim=2)
 Neighbor ID	Distance
-3c2819b5-df24-4581-b28f-92228403cefa	0.070711
-
-
-Query 1 Results (dim=2)
-Neighbor ID	Distance
-74394268-078f-4722-9497-ebf3683c78d8	0.042061
-
-
-Query 1 Results (dim=2)
-Neighbor ID	Distance
-8c945ef2-0132-48b7-9dec-8964d5acdb80	0.070711
-
-
-Query 1 Results (dim=2)
-Neighbor ID	Distance
-29df1d34-6292-4535-b6b5-e9eea0ec9cb8	0.008804
-
-
-Query 1 Results (dim=2)
-Neighbor ID	Distance
-54cb10f0-5931-46c3-a854-fd90556ee309	0.031927
-
-
-Query 1 Results (dim=2)
-Neighbor ID	Distance
-0fe1b05b-4cae-4eae-9200-d889092db1eb	0.057642
-
-
-Query 1 Results (dim=2)
-Neighbor ID	Distance
-fbc4dbad-60e5-4a0d-880e-f70864698df7	0.047215
-
-
-Query 1 Results (dim=2)
-Neighbor ID	Distance
-6529fcc5-4a80-4d0d-a1bc-f5890a951cf1	0.040719
-
-
-Query 1 Results (dim=2)
-Neighbor ID	Distance
-56cfd5f8-a2eb-4707-9844-96389fe477e8	0.064294
-
-
-Query 1 Results (dim=2)
-Neighbor ID	Distance
-e1a353a1-7b2f-42db-b2f8-eadf194ca3fd	0.070711
-
-
-Query 1 Results (dim=2)
-Neighbor ID	Distance
-0f87430d-ca2a-4827-ad4d-a6e0f5c6e403	0.070711
-
-
-Query 1 Results (dim=2)
-Neighbor ID	Distance
-6251083e-e899-490a-ab1f-cd9f162409c7	0.027663
-
-
-Query 1 Results (dim=2)
-Neighbor ID	Distance
-7666ed6f-f6e3-4bc6-832d-065a7156aac7	0.070711
-
-
-Query 1 Results (dim=2)
-Neighbor ID	Distance
-fefb050b-0f7e-4acc-888c-6db501a90e48	0.010729
-
-
-Query 1 Results (dim=2)
-Neighbor ID	Distance
-2295df2f-db13-45c2-8910-66682e1ddb3a	0.070711
-
-
-Query 1 Results (dim=2)
-Neighbor ID	Distance
-d5cb6000-9f3b-4e0f-ac58-a75b50c50892	0.048081
-
-
-Query 1 Results (dim=2)
-Neighbor ID	Distance
-b1c82efa-0e02-4ae8-b4cf-de0b03fe626d	0.070711
-
-
-Query 1 Results (dim=2)
-Neighbor ID	Distance
-57780a33-2ade-4c0d-80f9-2e01e4cad880	0.035633
-
-
-Query 1 Results (dim=2)
-Neighbor ID	Distance
-127cee42-789c-438f-a03c-b5ee0111e134	0.070711
-
-
-Query 1 Results (dim=2)
-Neighbor ID	Distance
-533a9508-54d4-42ff-b7e8-a27d8f289e97	0.054297
-
-
-Query 1 Results (dim=2)
-Neighbor ID	Distance
-cd26320b-03ff-445c-9821-c3c760fad2af	0.035830
-
-
-Query 1 Results (dim=2)
-Neighbor ID	Distance
-c73d9e43-af90-45cb-80db-70c5439feba1	0.035919
-
-
-Query 1 Results (dim=2)
-Neighbor ID	Distance
-60dbd86e-a9b9-4a37-b8be-65028761f957	0.045484
-
-
-Query 1 Results (dim=2)
-Neighbor ID	Distance
-b558c035-c906-4679-8d4d-7d1e8a0326e1	0.032234
-
-
-Query 1 Results (dim=2)
-Neighbor ID	Distance
-90dce76c-304c-42d1-9217-2bf8dc592258	0.008262
+c54e7e3e-5153-46e1-9170-2435f0ada8b4	0.070711
 
 

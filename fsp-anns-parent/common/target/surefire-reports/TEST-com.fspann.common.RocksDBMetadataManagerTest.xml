@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.fspann.common.RocksDBMetadataManagerTest" time="4.423" tests="7" errors="0" skipped="0" failures="0">
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.fspann.common.RocksDBMetadataManagerTest" time="4.425" tests="7" errors="0" skipped="0" failures="0">
   <properties>
     <property name="java.specification.version" value="21"/>
     <property name="sun.cpu.isalist" value="amd64"/>
@@ -16,7 +16,7 @@
     <property name="sun.java.launcher" value="SUN_STANDARD"/>
     <property name="user.country" value="US"/>
     <property name="sun.boot.library.path" value="C:\Program Files\Java\jdk-21\bin"/>
-    <property name="sun.java.command" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire7774945095428068459\surefirebooter6325776683436939084.jar C:\Users\Mehran Memon\AppData\Local\Temp\surefire7774945095428068459 2025-07-08T03-16-10_486-jvmRun1 surefire12701011978266883175tmp surefire_09866664235734140804tmp"/>
+    <property name="sun.java.command" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire5160139666246759956\surefirebooter6212793771033314522.jar C:\Users\Mehran Memon\AppData\Local\Temp\surefire5160139666246759956 2025-07-08T16-52-46_018-jvmRun1 surefire18063410205360456141tmp surefire_018323015960666077262tmp"/>
     <property name="jdk.debug" value="release"/>
     <property name="surefire.test.class.path" value="C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\common\target\test-classes;C:\Users\Mehran Memon\eclipse-workspace\fspann-query-system\fsp-anns-parent\common\target\classes;C:\Users\Mehran Memon\.m2\repository\org\slf4j\slf4j-api\2.0.13\slf4j-api-2.0.13.jar;C:\Users\Mehran Memon\.m2\repository\org\apache\commons\commons-lang3\3.17.0\commons-lang3-3.17.0.jar;C:\Users\Mehran Memon\.m2\repository\org\slf4j\slf4j-simple\2.0.13\slf4j-simple-2.0.13.jar;C:\Users\Mehran Memon\.m2\repository\com\fasterxml\jackson\core\jackson-core\2.17.2\jackson-core-2.17.2.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\jupiter\junit-jupiter-api\5.11.0\junit-jupiter-api-5.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\opentest4j\opentest4j\1.3.0\opentest4j-1.3.0.jar;C:\Users\Mehran Memon\.m2\repository\org\junit\platform\junit-platform-commons\1.11.0\junit-platform-commons-1.11.0.jar;C:\Users\Mehran Memon\.m2\repository\org\apiguardian\apiguardian-api\1.1.2\apiguardian-api-1.1.2.jar;C:\Users\Mehran Memon\.m2\repository\org\rocksdb\rocksdbjni\9.7.2\rocksdbjni-9.7.2.jar;"/>
     <property name="sun.cpu.endian" value="little"/>
@@ -31,7 +31,7 @@
     <property name="line.separator" value="&#10;"/>
     <property name="java.vm.specification.vendor" value="Oracle Corporation"/>
     <property name="java.specification.name" value="Java Platform API Specification"/>
-    <property name="surefire.real.class.path" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire7774945095428068459\surefirebooter6325776683436939084.jar"/>
+    <property name="surefire.real.class.path" value="C:\Users\Mehran Memon\AppData\Local\Temp\surefire5160139666246759956\surefirebooter6212793771033314522.jar"/>
     <property name="user.script" value=""/>
     <property name="sun.management.compiler" value="HotSpot 64-Bit Tiered Compilers"/>
     <property name="java.runtime.version" value="21.0.7+8-LTS-245"/>
@@ -60,65 +60,65 @@
     <property name="sun.io.unicode.encoding" value="UnicodeLittle"/>
     <property name="java.class.version" value="65.0"/>
   </properties>
-  <testcase name="testUpdateVectorMetadata" classname="com.fspann.common.RocksDBMetadataManagerTest" time="0.548">
-    <system-err><![CDATA[[main] INFO com.fspann.common.RocksDBMetadataManager - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_16689310481566523773
-[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_16689310481566523773 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_12345407189464002142
-[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Cleaning up RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_16689310481566523773 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_12345407189464002142
+  <testcase name="testUpdateVectorMetadata" classname="com.fspann.common.RocksDBMetadataManagerTest" time="0.552">
+    <system-err><![CDATA[[main] INFO com.fspann.common.RocksDBMetadataManager - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_13481878286763692034
+[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_13481878286763692034 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_3355668208362364860
+[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Cleaning up RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_13481878286763692034 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_3355668208362364860
 [main] INFO com.fspann.common.RocksDBMetadataManager - Closing RocksDB instance...
-[main] INFO com.fspann.common.RocksDBMetadataManager - RocksDB instance closed at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_16689310481566523773
+[main] INFO com.fspann.common.RocksDBMetadataManager - RocksDB instance closed at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_13481878286763692034
 ]]></system-err>
   </testcase>
-  <testcase name="testPutAndGetVectorMetadata" classname="com.fspann.common.RocksDBMetadataManagerTest" time="0.545">
-    <system-err><![CDATA[[main] INFO com.fspann.common.RocksDBMetadataManager - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_12456571550026235856
-[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_12456571550026235856 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_7621880201500602234
-[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Cleaning up RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_12456571550026235856 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_7621880201500602234
+  <testcase name="testPutAndGetVectorMetadata" classname="com.fspann.common.RocksDBMetadataManagerTest" time="0.543">
+    <system-err><![CDATA[[main] INFO com.fspann.common.RocksDBMetadataManager - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_17568675426258133692
+[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_17568675426258133692 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_17954772691056668492
+[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Cleaning up RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_17568675426258133692 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_17954772691056668492
 [main] INFO com.fspann.common.RocksDBMetadataManager - Closing RocksDB instance...
-[main] INFO com.fspann.common.RocksDBMetadataManager - RocksDB instance closed at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_12456571550026235856
+[main] INFO com.fspann.common.RocksDBMetadataManager - RocksDB instance closed at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_17568675426258133692
 ]]></system-err>
   </testcase>
-  <testcase name="testShutdown" classname="com.fspann.common.RocksDBMetadataManagerTest" time="0.547">
-    <system-err><![CDATA[[main] INFO com.fspann.common.RocksDBMetadataManager - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_1578070892918871818
-[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_1578070892918871818 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_7267621532964280593
+  <testcase name="testShutdown" classname="com.fspann.common.RocksDBMetadataManagerTest" time="0.565">
+    <system-err><![CDATA[[main] INFO com.fspann.common.RocksDBMetadataManager - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_2932021307956043006
+[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_2932021307956043006 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_18268270976123286278
 [main] INFO com.fspann.common.RocksDBMetadataManager - Closing RocksDB instance...
-[main] INFO com.fspann.common.RocksDBMetadataManager - RocksDB instance closed at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_1578070892918871818
-[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Cleaning up RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_1578070892918871818 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_7267621532964280593
+[main] INFO com.fspann.common.RocksDBMetadataManager - RocksDB instance closed at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_2932021307956043006
+[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Cleaning up RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_2932021307956043006 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_18268270976123286278
 ]]></system-err>
   </testcase>
   <testcase name="testMergeVectorMetadata" classname="com.fspann.common.RocksDBMetadataManagerTest" time="0.559">
-    <system-err><![CDATA[[main] INFO com.fspann.common.RocksDBMetadataManager - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_6994034543366716536
-[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_6994034543366716536 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_13007000271091619157
-[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Cleaning up RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_6994034543366716536 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_13007000271091619157
+    <system-err><![CDATA[[main] INFO com.fspann.common.RocksDBMetadataManager - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_12861696236895322119
+[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_12861696236895322119 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_8750550362594890811
+[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Cleaning up RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_12861696236895322119 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_8750550362594890811
 [main] INFO com.fspann.common.RocksDBMetadataManager - Closing RocksDB instance...
-[main] INFO com.fspann.common.RocksDBMetadataManager - RocksDB instance closed at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_6994034543366716536
+[main] INFO com.fspann.common.RocksDBMetadataManager - RocksDB instance closed at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_12861696236895322119
 ]]></system-err>
   </testcase>
-  <testcase name="testPutAndGetMetadata(Path)" classname="com.fspann.common.RocksDBMetadataManagerTest" time="0.58">
-    <system-err><![CDATA[[main] INFO com.fspann.common.RocksDBMetadataManager - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_5847220756314096614
-[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_5847220756314096614 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_201092552372858396
-[main] INFO com.fspann.common.RocksDBMetadataManager - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10381869508428242100\rocksdb
+  <testcase name="testPutAndGetMetadata(Path)" classname="com.fspann.common.RocksDBMetadataManagerTest" time="0.585">
+    <system-err><![CDATA[[main] INFO com.fspann.common.RocksDBMetadataManager - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_7686906186420753597
+[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_7686906186420753597 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_16695790809821917161
+[main] INFO com.fspann.common.RocksDBMetadataManager - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\junit-13095205721995902643\rocksdb
 [main] INFO com.fspann.common.RocksDBMetadataManager - Closing RocksDB instance...
-[main] INFO com.fspann.common.RocksDBMetadataManager - RocksDB instance closed at C:\Users\MEHRAN~1\AppData\Local\Temp\junit-10381869508428242100\rocksdb
-[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Cleaning up RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_5847220756314096614 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_201092552372858396
+[main] INFO com.fspann.common.RocksDBMetadataManager - RocksDB instance closed at C:\Users\MEHRAN~1\AppData\Local\Temp\junit-13095205721995902643\rocksdb
+[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Cleaning up RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_7686906186420753597 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_16695790809821917161
 [main] INFO com.fspann.common.RocksDBMetadataManager - Closing RocksDB instance...
-[main] INFO com.fspann.common.RocksDBMetadataManager - RocksDB instance closed at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_5847220756314096614
+[main] INFO com.fspann.common.RocksDBMetadataManager - RocksDB instance closed at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_7686906186420753597
 ]]></system-err>
   </testcase>
-  <testcase name="testRemoveVectorMetadata" classname="com.fspann.common.RocksDBMetadataManagerTest" time="0.551">
-    <system-err><![CDATA[[main] INFO com.fspann.common.RocksDBMetadataManager - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_18269626247713195733
-[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_18269626247713195733 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_62553004380383846
+  <testcase name="testRemoveVectorMetadata" classname="com.fspann.common.RocksDBMetadataManagerTest" time="0.538">
+    <system-err><![CDATA[[main] INFO com.fspann.common.RocksDBMetadataManager - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_8050248486544661264
+[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_8050248486544661264 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_4673859279053896466
 [main] INFO com.fspann.common.RocksDBMetadataManager - 🧹 Deleted metadata for vectorId=vec123
-[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Cleaning up RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_18269626247713195733 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_62553004380383846
+[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Cleaning up RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_8050248486544661264 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_4673859279053896466
 [main] INFO com.fspann.common.RocksDBMetadataManager - Closing RocksDB instance...
-[main] INFO com.fspann.common.RocksDBMetadataManager - RocksDB instance closed at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_18269626247713195733
+[main] INFO com.fspann.common.RocksDBMetadataManager - RocksDB instance closed at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_8050248486544661264
 ]]></system-err>
   </testcase>
-  <testcase name="testGetAllEncryptedPoints" classname="com.fspann.common.RocksDBMetadataManagerTest" time="0.565">
-    <system-err><![CDATA[[main] INFO com.fspann.common.RocksDBMetadataManager - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_11866461119018331016
-[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_11866461119018331016 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_1291665543108121073
-[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Saved encrypted point: vec123 at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_1291665543108121073\vv1\vec123.point
-[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Cleaning up RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_11866461119018331016 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_1291665543108121073
+  <testcase name="testGetAllEncryptedPoints" classname="com.fspann.common.RocksDBMetadataManagerTest" time="0.557">
+    <system-err><![CDATA[[main] INFO com.fspann.common.RocksDBMetadataManager - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_2690693120181693654
+[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Initialized RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_2690693120181693654 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_4449101114567390980
+[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Saved encrypted point: vec123 at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_4449101114567390980\vv1\vec123.point
+[main] INFO com.fspann.common.RocksDBMetadataManagerTest - Cleaning up RocksDB at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_2690693120181693654 and points at C:\Users\MEHRAN~1\AppData\Local\Temp\points_test_4449101114567390980
 [main] INFO com.fspann.common.RocksDBMetadataManager - Closing RocksDB instance...
-[main] INFO com.fspann.common.RocksDBMetadataManager - RocksDB instance closed at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_11866461119018331016
+[main] INFO com.fspann.common.RocksDBMetadataManager - RocksDB instance closed at C:\Users\MEHRAN~1\AppData\Local\Temp\rocksdb_test_2690693120181693654
 ]]></system-err>
   </testcase>
 </testsuite>

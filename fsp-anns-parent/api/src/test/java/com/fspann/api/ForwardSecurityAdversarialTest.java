@@ -38,7 +38,7 @@ public class ForwardSecurityAdversarialTest {
         Path keys = tempDir.resolve("keys.ser");
         List<Integer> dimensions = Collections.singletonList(3);
 
-        RocksDBMetadataManager metadataManager = new RocksDBMetadataManager(tempDir.toString());
+        RocksDBMetadataManager metadataManager = new RocksDBMetadataManager(tempDir.toString(), tempDir.toString());
 
         KeyManager keyManager = new KeyManager(keys.toString());
         KeyRotationPolicy policy = new KeyRotationPolicy(999999, 999999);
@@ -57,7 +57,6 @@ public class ForwardSecurityAdversarialTest {
                 cryptoService
         );
 
-        // Ensure indexService is injected for re-encryption
         keyService.setIndexService(system.getIndexService());
 
         int dim = 3;
