@@ -68,4 +68,7 @@ public interface CryptoService {
 
     KeyLifeCycleService getKeyService();
 
+    EncryptedPoint encrypt(String id, double[] vector);
+
+
 }

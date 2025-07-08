@@ -98,9 +98,9 @@ public class EncryptedPointBuffer {
                 metadataManager.putVectorMetadata(pt.getId(), meta);
             }
 
-            logger.info("Flushed {} points for v{} to {}", points.size(), version, batchFileName);
+//            logger.info("Flushed {} points for v{} to {}", points.size(), version, batchFileName);
         } catch (IOException e) {
-            logger.error("Failed to flush EncryptedPoints for version {}", version, e);
+//            logger.error("Failed to flush EncryptedPoints for version {}", version, e);
         }
 
         globalBufferCount -= points.size(); // Update global count

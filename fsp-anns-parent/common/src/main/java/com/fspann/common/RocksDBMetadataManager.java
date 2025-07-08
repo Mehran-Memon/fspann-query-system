@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class RocksDBMetadataManager implements AutoCloseable {
@@ -21,7 +22,7 @@ public class RocksDBMetadataManager implements AutoCloseable {
     static {
         try {
             RocksDB.loadLibrary();
-            logger.info("RocksDB native library loaded successfully");
+            logger.info("RocksDB native library loaded successfully.");
         } catch (Exception e) {
             logger.error("Failed to load RocksDB native library", e);
             throw new RuntimeException("RocksDB initialization failed", e);
@@ -45,7 +46,7 @@ public class RocksDBMetadataManager implements AutoCloseable {
             logger.error("Failed to initialize RocksDB at {}", dbPath, e);
             throw new IOException("RocksDB initialization failed", e);
         } finally {
-            options.close(); // ✅ prevents native memory leaks
+            options.close();
         }
     }
 
@@ -56,26 +57,37 @@ public class RocksDBMetadataManager implements AutoCloseable {
             Map<String, String> existing = getVectorMetadata(vectorId);
             existing.putAll(metadata);
             db.put(vectorId.getBytes(StandardCharsets.UTF_8), serializeMetadata(existing));
+            logger.debug("🟡 db.put({}): {}", vectorId, existing);
         } catch (Exception e) {
             logger.error("Failed to put metadata for vectorId={}", vectorId, e);
         }
     }
 
     public Map<String, String> getVectorMetadata(String vectorId) {
+        if (closed) throw new IllegalStateException("RocksDBMetadataManager is closed");
         try {
-            Objects.requireNonNull(vectorId);
             byte[] value = db.get(vectorId.getBytes(StandardCharsets.UTF_8));
-            return value != null ? deserializeMetadata(value) : new HashMap<>();
+            return (value != null) ? deserializeMetadata(value) : new HashMap<>();
         } catch (Exception e) {
             logger.warn("Failed to get metadata for vectorId={}", vectorId, e);
             return new HashMap<>();
         }
     }
 
+    public void removeVectorMetadata(String vectorId) {
+        try {
+            db.delete(vectorId.getBytes(StandardCharsets.UTF_8));
+            logger.info("🧹 Deleted metadata for vectorId={}", vectorId);
+        } catch (Exception e) {
+            logger.warn("Failed to delete metadata for vectorId={}", vectorId, e);
+        }
+    }
+
     private byte[] serializeMetadata(Map<String, String> metadata) {
-        StringBuilder sb = new StringBuilder();
-        metadata.forEach((k, v) -> sb.append(escape(k)).append('=').append(escape(v)).append(';'));
-        return sb.toString().getBytes(StandardCharsets.UTF_8);
+        return metadata.entrySet().stream()
+                .map(e -> escape(e.getKey()) + "=" + escape(e.getValue()))
+                .collect(Collectors.joining(";"))
+                .getBytes(StandardCharsets.UTF_8);
     }
 
     private Map<String, String> deserializeMetadata(byte[] data) {
@@ -93,109 +105,60 @@ public class RocksDBMetadataManager implements AutoCloseable {
     }
 
     private String escape(String s) {
-        return s == null ? "" : s.replace("=", "\\=").replace(";", "\\;");
+        return s.replace("=", "\\=").replace(";", "\\;");
     }
 
     private String unescape(String s) {
         return s.replace("\\=", "=").replace("\\;", ";");
     }
 
-    public void updateVectorMetadata(String vectorId, Map<String, String> updates) {
-        try {
-            Objects.requireNonNull(vectorId);
-            Objects.requireNonNull(updates);
-            Map<String, String> existing = getVectorMetadata(vectorId);
-            existing.putAll(updates);
-            putVectorMetadata(vectorId, existing);
-        } catch (Exception e) {
-            logger.error("Failed to update metadata for vectorId={}", vectorId, e);
-        }
-    }
-
-    public Set<String> getAllVectorIds() {
-        Set<String> keys = new HashSet<>();
-        try (RocksIterator it = db.newIterator()) {
-            for (it.seekToFirst(); it.isValid(); it.next()) {
-                keys.add(new String(it.key(), StandardCharsets.UTF_8));
-            }
-        } catch (Exception e) {
-            logger.error("Failed to iterate vector IDs", e);
-        }
-        return keys;
-    }
-
-    public void removeVectorMetadata(String vectorId) {
-        try {
-            Objects.requireNonNull(vectorId);
-            db.delete(vectorId.getBytes(StandardCharsets.UTF_8));
-        } catch (Exception e) {
-            logger.warn("Failed to delete metadata for vectorId={}", vectorId, e);
-        }
-    }
-
-    @Override
-    public void close() {
-        if (closed) return;
-        try {
-            if (db != null) {
-                db.flush(new FlushOptions());
-                db.close();
-                logger.info("RocksDB closed at {}", dbPath);
-            }
-        } catch (Exception e) {
-            logger.error("Failed to close RocksDB", e);
-        } finally {
-            closed = true;
-        }
-    }
-
-
     public void saveEncryptedPoint(EncryptedPoint pt) throws IOException {
         Objects.requireNonNull(pt);
         String versionStr = getVectorMetadata(pt.getId()).getOrDefault("version", "v1");
-        if (!versionStr.matches("[a-zA-Z0-9_]+")) {
-            throw new IllegalArgumentException("Invalid version format: " + versionStr);
-        }
-
-        Path versionDir = Paths.get(baseDir).resolve("v" + versionStr);
+        String safeVersion = versionStr.startsWith("v") ? versionStr : "v" + versionStr;
+        Path versionDir = Paths.get(baseDir, safeVersion);
         Files.createDirectories(versionDir);
-
         Path filePath = versionDir.resolve(pt.getId() + ".point");
         PersistenceUtils.saveObject(pt, filePath.toString());
-        logger.info("Saved encrypted point: {} at {}", pt.getId(), filePath);
     }
 
+    @SuppressWarnings("unchecked")
     public List<EncryptedPoint> getAllEncryptedPoints() {
-        List<EncryptedPoint> points = new ArrayList<>();
-        try (Stream<Path> paths = Files.walk(Paths.get(baseDir))) {
-            paths.filter(Files::isRegularFile).forEach(path -> {
+        List<EncryptedPoint> allPoints = new ArrayList<>();
+        int count = 0;
+        try (Stream<Path> stream = Files.walk(Paths.get(baseDir), 3)) {
+            for (Path path : stream.filter(Files::isRegularFile).collect(Collectors.toList())) {
                 try {
-                    if (path.toString().endsWith(".points")) {
-                        List<EncryptedPoint> batchPoints = PersistenceUtils.loadObject(path.toString());
-                        if (batchPoints != null) points.addAll(batchPoints);
-                    } else if (path.toString().endsWith(".point")) {
-                        EncryptedPoint pt = PersistenceUtils.loadObject(path.toString());
-                        if (pt != null) points.add(pt);
+                    if (path.toString().endsWith(".point")) {
+                        EncryptedPoint pt = (EncryptedPoint) PersistenceUtils.loadObject(path.toString());
+                        if (pt != null) allPoints.add(pt);
+                    } else if (path.toString().endsWith(".points")) {
+                        List<EncryptedPoint> pts = (List<EncryptedPoint>) PersistenceUtils.loadObject(path.toString());
+                        if (pts != null) allPoints.addAll(pts);
                     }
+                    count++;
+                    if (count >= 10000) break;  // 💥 FAILSAFE: prevent loading too many points
                 } catch (Exception e) {
-                    logger.error("Failed to load encrypted point from: {}", path, e);
+//                    logger.warn("⚠️ Failed to load point(s) from {}: {}", path, e.getMessage());
                 }
-            });
+            }
         } catch (IOException e) {
-            logger.error("Failed to walk through points directory", e);
+//            logger.error("Failed to walk metadata directory: {}", e.getMessage(), e);
         }
-        return points;
+
+        logger.info("✅ Total encrypted points loaded: {}", allPoints.size());
+        return allPoints;
     }
 
-    public EncryptedPoint loadEncryptedPoint(String id) throws IOException, ClassNotFoundException {
-        Objects.requireNonNull(id, "EncryptedPoint ID must not be null");
 
-        try (Stream<Path> paths = Files.walk(Paths.get(baseDir))) {
+    @SuppressWarnings("unchecked")
+    public EncryptedPoint loadEncryptedPoint(String id) throws IOException, ClassNotFoundException {
+        try (Stream<Path> paths = Files.walk(Paths.get(baseDir), 3)) {
             return paths
                     .filter(p -> p.getFileName().toString().equals(id + ".point"))
                     .map(p -> {
                         try {
-                            return PersistenceUtils.<EncryptedPoint>loadObject(p.toString());
+                            return (EncryptedPoint) PersistenceUtils.loadObject(p.toString());
                         } catch (Exception e) {
                             logger.error("Failed to load encrypted point: {}", p, e);
                             return null;
@@ -207,45 +170,87 @@ public class RocksDBMetadataManager implements AutoCloseable {
         }
     }
 
-    public Stream<String> streamAllVectorIds() {
-        RocksIterator it = db.newIterator();
-        it.seekToFirst();
-        return Stream.generate(() -> {
-            if (it.isValid()) {
-                String key = new String(it.key(), StandardCharsets.UTF_8);
-                it.next();
-                return key;
-            }
-            return null;
-        }).takeWhile(Objects::nonNull).onClose(it::close);
+    public void saveIndexVersion(int version) {
+        try {
+            db.put("index".getBytes(StandardCharsets.UTF_8), String.valueOf(version).getBytes(StandardCharsets.UTF_8));
+//            logger.info("💾 Saved current index version: {}", version);
+        } catch (RocksDBException e) {
+//            logger.error("Failed to save index version", e);
+        }
     }
 
-    public Stream<EncryptedPoint> streamAllEncryptedPoints() {
+    public void updateVectorMetadata(String vectorId, Map<String, String> updates) {
+        if (closed) {
+            throw new IllegalStateException("MetadataManager is closed");
+        }
         try {
-            return Files.walk(Paths.get(baseDir))
-                    .filter(Files::isRegularFile)
-                    .flatMap(path -> {
-                        try {
-                            if (path.toString().endsWith(".points")) {
-                                List<EncryptedPoint> list = PersistenceUtils.loadObject(path.toString());
-                                return list != null ? list.stream() : Stream.empty();
-                            } else if (path.toString().endsWith(".point")) {
-                                EncryptedPoint pt = PersistenceUtils.loadObject(path.toString());
-                                return pt != null ? Stream.of(pt) : Stream.empty();
-                            }
-                        } catch (Exception e) {
-                            logger.error("Failed to load encrypted point from: {}", path, e);
-                        }
-                        return Stream.empty();
-                    });
-        } catch (IOException e) {
-            logger.error("Failed to walk points directory: {}", baseDir, e);
-            return Stream.empty();
+            Objects.requireNonNull(vectorId, "Vector ID must not be null");
+            Objects.requireNonNull(updates, "Updates must not be null");
+            Map<String, String> existing = getVectorMetadata(vectorId);
+            if (existing.isEmpty()) {
+//                logger.warn("No existing metadata found for vectorId={}, creating new entry.", vectorId);
+            }
+            existing.putAll(updates);
+            putVectorMetadata(vectorId, existing);
+        } catch (Exception e) {
+//            logger.error("Failed to update metadata for vectorId={}", vectorId, e);
+        }
+    }
+
+    public void mergeVectorMetadata(String vectorId, Map<String, String> updates) {
+        if (closed) {
+            throw new IllegalStateException("MetadataManager is closed");
+        }
+        try {
+            Objects.requireNonNull(vectorId, "Vector ID must not be null");
+            Objects.requireNonNull(updates, "Updates must not be null");
+
+            Map<String, String> existing = getVectorMetadata(vectorId);
+            updates.forEach(existing::putIfAbsent);  // merge only missing keys
+            db.put(vectorId.getBytes(StandardCharsets.UTF_8), serializeMetadata(existing));
+
+            if (logger.isDebugEnabled()) {
+                logger.debug("Merged metadata for vectorId={}: {}", vectorId, existing);
+            }
+        } catch (Exception e) {
+            logger.error("Failed to merge metadata for vectorId={}", vectorId, e);
+        }
+    }
+
+
+    public int loadIndexVersion() {
+        try {
+            byte[] data = db.get("index".getBytes(StandardCharsets.UTF_8));
+            return (data != null) ? Integer.parseInt(new String(data, StandardCharsets.UTF_8)) : 1;
+        } catch (Exception e) {
+            logger.warn("Failed to load index version, defaulting to 1", e);
+            return 1;
+        }
+    }
+
+    public List<String> getAllVectorIds() {
+        List<String> keys = new ArrayList<>();
+        try (RocksIterator it = db.newIterator()) {
+            for (it.seekToFirst(); it.isValid(); it.next()) {
+                keys.add(new String(it.key(), StandardCharsets.UTF_8));
+            }
+        } catch (Exception e) {
+            logger.error("Failed to iterate vector IDs", e);
+        }
+        return keys;
+    }
+
+    @Override
+    public void close() {
+        if (!closed) {
+            logger.info("Closing RocksDB instance...");
+            db.close();
+            closed = true;
+            logger.info("RocksDB instance closed at {}", dbPath);
         }
     }
 
     public String getDbPath() {
         return dbPath;
     }
-
 }

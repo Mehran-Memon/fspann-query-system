@@ -16,11 +16,8 @@
         <module name="crypto" />
       </profile>
     </annotationProcessing>
-    <bytecodeTargetLevel target="22">
+    <bytecodeTargetLevel target="21">
       <module name="data" target="17" />
-      <module name="Gdata" target="22" />
-      <module name="generate_data" target="22" />
-      <module name="metadata" target="22" />
     </bytecodeTargetLevel>
   </component>
   <component name="JavacSettings">

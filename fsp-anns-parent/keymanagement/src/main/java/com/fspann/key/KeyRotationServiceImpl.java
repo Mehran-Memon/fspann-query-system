@@ -7,6 +7,7 @@ import com.fspann.common.PersistenceUtils;
 import com.fspann.crypto.AesGcmCryptoService;
 import com.fspann.crypto.CryptoService;
 import com.fspann.common.RocksDBMetadataManager;
+import com.fspann.common.IndexService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -26,6 +27,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
     private final String rotationMetaDir;
     private final RocksDBMetadataManager metadataManager;
     private CryptoService cryptoService;
+    private IndexService indexService;
 
     private Instant lastRotation = Instant.now();
     private final AtomicInteger operationCount = new AtomicInteger(0);
@@ -69,6 +71,10 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
             try {
                 EncryptedPoint updated = cryptoService.reEncrypt(pt, newVer.getKey());
                 metadataManager.saveEncryptedPoint(updated);
+                Map<String, String> newMetadata = new HashMap<>();
+                newMetadata.put("version", String.valueOf(updated.getVersion()));
+                newMetadata.put("shardId", String.valueOf(updated.getShardId()));
+                metadataManager.mergeVectorMetadata(updated.getId(), newMetadata);
                 reEncrypted.add(updated);
             } catch (IOException e) {
                 logger.warn("Skipping point {} (v={}) due to save failure: {}", pt.getId(), pt.getVersion(), e.getMessage());
@@ -87,8 +93,8 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
     public void reEncryptAll() {
         logger.info("🔐 Starting manual re-encryption of all vectors");
 
-        if (cryptoService == null || metadataManager == null) {
-            logger.warn("Re-encryption skipped: cryptoService or metadataManager not initialized");
+        if (cryptoService == null || metadataManager == null || indexService == null) {
+            logger.warn("Re-encryption skipped: cryptoService, metadataManager, or indexService not initialized");
             return;
         }
 
@@ -98,25 +104,31 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
         for (EncryptedPoint pt : allPoints) {
             try {
                 EncryptedPoint updated = cryptoService.reEncrypt(pt, getCurrentVersion().getKey());
+
+                // ✅ Step 1: Save re-encrypted point to disk
+                metadataManager.saveEncryptedPoint(updated);
+
+                // ✅ Step 2: Only update metadata if save succeeded
+                Map<String, String> metadata = new HashMap<>();
+                metadata.put("version", String.valueOf(updated.getVersion()));
+                metadata.put("shardId", String.valueOf(updated.getShardId()));
+                metadataManager.mergeVectorMetadata(updated.getId(), metadata);
+
+                logger.info("Re-encrypted + saved + merged metadata for {} → {}", updated.getId(), metadata);
+
+                // ✅ Step 3: Reinsert into index
+                indexService.insert(updated);
+
                 reEncrypted.add(updated);
-            } catch (AesGcmCryptoService.CryptoException e) {
-                logger.warn("Skipping point {} (v={}) due to re-encryption failure: {}",
-                        pt.getId(), pt.getVersion(), e.getMessage());
+
+            } catch (Exception e) {
+                logger.warn("Failed to re-encrypt/save point {} (v={}): {}", pt.getId(), pt.getVersion(), e.getMessage());
             }
         }
 
-        for (EncryptedPoint pt : reEncrypted) {
-            try {
-                metadataManager.saveEncryptedPoint(pt);
-                Map<String, String> metadata = new HashMap<>();
-                metadata.put("version", String.valueOf(pt.getVersion()));
-                metadataManager.putVectorMetadata(pt.getId(), metadata);
-            } catch (IOException e) {
-                logger.warn("Failed to save point {} (v={}) or update metadata: {}", pt.getId(), pt.getVersion(), e.getMessage());
-            }
-        }
-        logger.info("Re-encryption completed for {} vectors", reEncrypted.size());
+        logger.info("✅ Re-encryption completed for {} vectors", reEncrypted.size());
     }
+
 
     @Override
     public KeyVersion getPreviousVersion() {
@@ -146,4 +158,10 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
         operationCount.set(0);
         return newVersion;
     }
+
+    public void setIndexService(IndexService indexService) {
+        this.indexService = indexService;
+    }
+
+
 }

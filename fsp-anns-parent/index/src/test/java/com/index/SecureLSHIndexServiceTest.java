@@ -12,14 +12,11 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
 import javax.crypto.SecretKey;
-import javax.crypto.spec.SecretKeySpec;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.UUID;
 
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.argThat;
-import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class SecureLSHIndexServiceTest {
@@ -39,26 +36,20 @@ class SecureLSHIndexServiceTest {
     void setUp() {
         MockitoAnnotations.openMocks(this);
         service = new SecureLSHIndexService(crypto, keyService, metadataManager, index, lsh, buffer);
-
-        when(keyService.getCurrentVersion()).thenReturn(new KeyVersion(1, new SecretKeySpec(new byte[16], "AES")));
-        when(crypto.encryptToPoint(any(String.class), any(double[].class), any(SecretKey.class)))
-                .thenReturn(new EncryptedPoint("test", 0, testIv, testCiphertext, 1, 2));
     }
 
     @Test
     void testInsert_VectorEncryptedCorrectly() {
         double[] vector = {1.0, 2.0};
-        SecretKeySpec key = new SecretKeySpec(new byte[16], "AES");
-        KeyVersion version = new KeyVersion(1, key);
         String id = "test";
 
-        when(keyService.getCurrentVersion()).thenReturn(version);
         when(lsh.getBucketId(eq(vector))).thenReturn(1);
         EncryptedPoint template = new EncryptedPoint(id, 0, testIv, testCiphertext, 1, 2);
-        when(crypto.encryptToPoint(eq(id), eq(vector), eq(key))).thenReturn(template);
+        when(crypto.encrypt(eq(id), eq(vector))).thenReturn(template);
 
         service.insert(id, vector);
 
+        verify(crypto).encrypt(eq(id), eq(vector));
         verify(index).addPoint(argThat(pt ->
                 pt.getId().equals("test") &&
                         pt.getShardId() == 1 &&
@@ -76,16 +67,13 @@ class SecureLSHIndexServiceTest {
     @Test
     void testInsert_UpdatesMetadataAndMarksShardDirty() {
         double[] vector = {5.5, 7.7};
-        SecretKeySpec key = new SecretKeySpec(new byte[16], "AES");
-        KeyVersion version = new KeyVersion(99, key);
         String id = "vec123";
         byte[] cipher = new byte[16];
         Arrays.fill(cipher, (byte) 2);
 
-        when(keyService.getCurrentVersion()).thenReturn(version);
         when(lsh.getBucketId(eq(vector))).thenReturn(4);
         EncryptedPoint template = new EncryptedPoint(id, 0, testIv, cipher, 99, 2);
-        when(crypto.encryptToPoint(eq(id), eq(vector), eq(key))).thenReturn(template);
+        when(crypto.encrypt(eq(id), eq(vector))).thenReturn(template);
 
         System.out.println("Calling insert with id: " + id);
         service.insert(id, vector);
@@ -109,15 +97,12 @@ class SecureLSHIndexServiceTest {
     void testInsertHandlesDifferentDimensions() {
         double[] vector = new double[128];
         String id = UUID.randomUUID().toString();
-        SecretKeySpec key = new SecretKeySpec(new byte[16], "AES");
-        KeyVersion version = new KeyVersion(7, key);
         byte[] cipher = new byte[64];
         Arrays.fill(cipher, (byte) 2);
 
-        when(keyService.getCurrentVersion()).thenReturn(version);
         when(lsh.getBucketId(eq(vector))).thenReturn(11);
         EncryptedPoint template = new EncryptedPoint(id, 0, testIv, cipher, 7, 128);
-        when(crypto.encryptToPoint(eq(id), eq(vector), eq(key))).thenReturn(template);
+        when(crypto.encrypt(eq(id), eq(vector))).thenReturn(template);
 
         System.out.println("Calling insert with id: " + id);
         service.insert(id, vector);

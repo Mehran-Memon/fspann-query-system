@@ -39,7 +39,9 @@
   <!-- 2. Versions & Properties -->
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <maven.compiler.release>22</maven.compiler.release>
+    <maven.compiler.source>21</maven.compiler.source>
+    <maven.compiler.target>21</maven.compiler.target>
+    <maven.compiler.release>21</maven.compiler.release>
     <commons-compress.version>1.26.1</commons-compress.version>
     <commons-lang3.version>3.17.0</commons-lang3.version>
 
@@ -219,6 +221,24 @@
           <version>3.1.0</version>
         </plugin>
 
+
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-enforcer-plugin</artifactId>
+          <version>3.4.1</version>
+          <executions>
+            <execution>
+              <goals><goal>enforce</goal></goals>
+              <configuration>
+                <rules>
+                  <requireJavaVersion>
+                    <version>[21,22)</version> <!-- Allow only JDK 21 -->
+                  </requireJavaVersion>
+                </rules>
+              </configuration>
+            </execution>
+          </executions>
+        </plugin>
 
       </plugins>
     </pluginManagement>
