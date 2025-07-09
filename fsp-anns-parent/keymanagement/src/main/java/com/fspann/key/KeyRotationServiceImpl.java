@@ -122,13 +122,14 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
 
                     EncryptedPoint updated = cryptoService.reEncrypt(pt, getCurrentVersion().getKey());
 
-                    metadataManager.saveEncryptedPoint(updated);
-
                     Map<String, String> metadata = Map.of(
                             "version", String.valueOf(updated.getVersion()),
                             "shardId", String.valueOf(updated.getShardId())
                     );
-                    metadataManager.updateVectorMetadata(updated.getId(), metadata);
+                    metadataManager.putVectorMetadata(updated.getId(), metadata);  // put before save
+
+                    metadataManager.saveEncryptedPoint(updated);  // Save .point file after metadata is updated
+
 
                     EncryptedPoint reloaded = metadataManager.loadEncryptedPoint(updated.getId());
                     Map<String, String> checkMeta = metadataManager.getVectorMetadata(updated.getId());
