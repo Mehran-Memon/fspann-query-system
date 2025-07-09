@@ -176,11 +176,11 @@ public class SecureLSHIndexService implements IndexService {
         keyService.rotateIfNeeded();
 
         try {
-            // ✅ Encrypt and get accurate version
+            //Encrypt and get accurate version
             EncryptedPoint encryptedPoint = crypto.encrypt(id, vector);
             int shardId = ctx.getLsh().getBucketId(vector);
 
-            // ✅ Use encryptedPoint's version
+            //Use encryptedPoint's version
             EncryptedPoint withShard = new EncryptedPoint(
                     encryptedPoint.getId(),
                     shardId,
@@ -196,7 +196,6 @@ public class SecureLSHIndexService implements IndexService {
             throw new RuntimeException("Encryption failed for id=" + id, e);
         }
     }
-
 
     @Override
     public void delete(String id) {

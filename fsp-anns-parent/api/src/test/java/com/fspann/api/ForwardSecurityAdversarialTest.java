@@ -4,22 +4,45 @@ import com.fspann.common.*;
 import com.fspann.crypto.AesGcmCryptoService;
 import com.fspann.crypto.CryptoService;
 import com.fspann.crypto.KeyUtils;
-import com.fspann.index.service.SecureLSHIndexService;
 import com.fspann.key.KeyManager;
 import com.fspann.key.KeyRotationPolicy;
 import com.fspann.key.KeyRotationServiceImpl;
+import com.fspann.common.RocksDBMetadataManager;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import javax.crypto.SecretKey;
+import java.io.File;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.*;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+
 public class ForwardSecurityAdversarialTest {
+    private RocksDBMetadataManager metadataManager;
+
+
+    @BeforeEach
+    public void cleanMetadataDir(@TempDir Path tempDir) throws IOException {
+        metadataManager = new RocksDBMetadataManager(tempDir.toString(), tempDir.toString()); // ✅ initialize it here
+        Path baseDir = Paths.get(metadataManager.getPointsBaseDir());
+
+        if (Files.exists(baseDir)) {
+            try (Stream<Path> files = Files.walk(baseDir)) {
+                files.sorted(Comparator.reverseOrder())
+                        .map(Path::toFile)
+                        .forEach(File::delete);
+            }
+        }
+        Files.createDirectories(baseDir); // ensure directory exists
+    }
 
     @Test
     public void testForwardSecurityAgainstKeyCompromise(@TempDir Path tempDir) throws Exception {
@@ -37,8 +60,6 @@ public class ForwardSecurityAdversarialTest {
 
         Path keys = tempDir.resolve("keys.ser");
         List<Integer> dimensions = Collections.singletonList(3);
-
-        RocksDBMetadataManager metadataManager = new RocksDBMetadataManager(tempDir.toString(), tempDir.toString());
 
         KeyManager keyManager = new KeyManager(keys.toString());
         KeyRotationPolicy policy = new KeyRotationPolicy(999999, 999999);
