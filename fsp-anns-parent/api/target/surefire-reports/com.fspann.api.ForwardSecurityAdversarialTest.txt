@@ -1,8 +1,4 @@
 -------------------------------------------------------------------------------
 Test set: com.fspann.api.ForwardSecurityAdversarialTest
 -------------------------------------------------------------------------------
-Tests run: 1, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 0.066 s <<< FAILURE! - in com.fspann.api.ForwardSecurityAdversarialTest
-com.fspann.api.ForwardSecurityAdversarialTest.testForwardSecurityAgainstKeyCompromise(Path)  Time elapsed: 0.063 s  <<< FAILURE!
-org.opentest4j.AssertionFailedError: Pre-compromise point should be found in the query results. ==> expected: <true> but was: <false>
-	at com.fspann.api.ForwardSecurityAdversarialTest.testForwardSecurityAgainstKeyCompromise(ForwardSecurityAdversarialTest.java:120)
-
+Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.075 s - in com.fspann.api.ForwardSecurityAdversarialTest
