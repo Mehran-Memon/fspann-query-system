@@ -4,7 +4,6 @@ import com.fspann.common.EncryptedPoint;
 import com.fspann.common.KeyLifeCycleService;
 import com.fspann.common.KeyVersion;
 import com.fspann.common.PersistenceUtils;
-import com.fspann.crypto.AesGcmCryptoService;
 import com.fspann.crypto.CryptoService;
 import com.fspann.common.RocksDBMetadataManager;
 import com.fspann.common.IndexService;
@@ -89,12 +88,12 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
 
     @Override
     public void rotateIfNeeded() {
-        rotateIfNeededAndReturnUpdated(); // delegates and discards result
+        rotateIfNeededAndReturnUpdated();
     }
 
     @Override
     public void reEncryptAll() {
-        logger.info("🔐 Starting manual re-encryption of all vectors");
+        logger.info("\uD83D\uDD10 Starting manual re-encryption of all vectors");
 
         if (cryptoService == null || metadataManager == null || indexService == null) {
             logger.warn("Re-encryption skipped: cryptoService, metadataManager, or indexService not initialized");
@@ -112,8 +111,14 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
 
             for (Path file : pointFiles) {
                 try {
-                    EncryptedPoint pt = PersistenceUtils.loadObject(file.toString());
-                    if (pt == null || !seen.add(pt.getId())) continue;
+                    EncryptedPoint pt;
+                    try {
+                        pt = PersistenceUtils.loadObject(file.toString());
+                        if (pt == null || !seen.add(pt.getId())) continue;
+                    } catch (Exception e) {
+                        logger.warn("Skipping unreadable or corrupt point file: {}", file);
+                        continue;
+                    }
 
                     EncryptedPoint updated = cryptoService.reEncrypt(pt, getCurrentVersion().getKey());
 
@@ -123,30 +128,36 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
                             "version", String.valueOf(updated.getVersion()),
                             "shardId", String.valueOf(updated.getShardId())
                     );
-                    metadataManager.mergeVectorMetadata(updated.getId(), metadata);
+                    metadataManager.updateVectorMetadata(updated.getId(), metadata);
+
+                    EncryptedPoint reloaded = metadataManager.loadEncryptedPoint(updated.getId());
+                    Map<String, String> checkMeta = metadataManager.getVectorMetadata(updated.getId());
+                    if (!Objects.equals(checkMeta.get("version"), String.valueOf(reloaded.getVersion()))) {
+                        logger.error("\u274C Metadata mismatch after save/merge: {} vs {}", checkMeta.get("version"), reloaded.getVersion());
+                    }
 
                     indexService.insert(updated);
                     totalReEncrypted++;
 
                     if (totalReEncrypted % 100 == 0) {
                         logger.info("Re-encrypted {} points so far...", totalReEncrypted);
-                        System.gc(); // Hint to JVM
-                        Thread.sleep(50); // Allow GC to catch up
+                        System.gc();
+                        Thread.sleep(50);
                     }
 
                 } catch (Exception e) {
-                    logger.warn("❌ Failed to re-encrypt from file {}: {}", file, e.getMessage());
+                    logger.warn("Failed to re-encrypt from file {}: {}", file, e.getMessage());
                 }
             }
 
+            metadataManager.cleanupStaleMetadata(seen);
+
         } catch (IOException e) {
-            logger.error("🚫 Failed to walk encrypted points directory", e);
+            logger.error("Failed to walk encrypted points directory", e);
         }
 
         logger.info("✅ Re-encryption completed for {} vectors", totalReEncrypted);
     }
-
-
 
     @Override
     public KeyVersion getPreviousVersion() {
@@ -180,6 +191,4 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
     public void setIndexService(IndexService indexService) {
         this.indexService = indexService;
     }
-
-
 }

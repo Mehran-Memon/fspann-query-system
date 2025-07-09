@@ -160,6 +160,22 @@ public class RocksDBMetadataManager implements AutoCloseable {
         return uniquePoints;
     }
 
+    public void cleanupStaleMetadata(Set<String> validIds) {
+        int removed = 0;
+        try (RocksIterator it = db.newIterator()) {
+            for (it.seekToFirst(); it.isValid(); it.next()) {
+                String key = new String(it.key(), StandardCharsets.UTF_8);
+                if (!validIds.contains(key)) {
+                    db.delete(key.getBytes(StandardCharsets.UTF_8));
+                    removed++;
+                }
+            }
+        } catch (Exception e) {
+            logger.error("Error while cleaning up stale metadata entries", e);
+        }
+        logger.info("🧹 Cleaned up {} stale metadata entries.", removed);
+    }
+
     @SuppressWarnings("unchecked")
     public EncryptedPoint loadEncryptedPoint(String id) throws IOException, ClassNotFoundException {
         try (Stream<Path> paths = Files.walk(Paths.get(baseDir), 3)) {
@@ -182,9 +198,7 @@ public class RocksDBMetadataManager implements AutoCloseable {
     public void saveIndexVersion(int version) {
         try {
             db.put("index".getBytes(StandardCharsets.UTF_8), String.valueOf(version).getBytes(StandardCharsets.UTF_8));
-//            logger.info("💾 Saved current index version: {}", version);
         } catch (RocksDBException e) {
-//            logger.error("Failed to save index version", e);
         }
     }
 
@@ -197,12 +211,10 @@ public class RocksDBMetadataManager implements AutoCloseable {
             Objects.requireNonNull(updates, "Updates must not be null");
             Map<String, String> existing = getVectorMetadata(vectorId);
             if (existing.isEmpty()) {
-//                logger.warn("No existing metadata found for vectorId={}, creating new entry.", vectorId);
             }
             existing.putAll(updates);
             putVectorMetadata(vectorId, existing);
         } catch (Exception e) {
-//            logger.error("Failed to update metadata for vectorId={}", vectorId, e);
         }
     }
 
@@ -215,7 +227,7 @@ public class RocksDBMetadataManager implements AutoCloseable {
             Objects.requireNonNull(updates, "Updates must not be null");
 
             Map<String, String> existing = getVectorMetadata(vectorId);
-            updates.forEach(existing::putIfAbsent);  // merge only missing keys
+            updates.forEach(existing::putIfAbsent);
             db.put(vectorId.getBytes(StandardCharsets.UTF_8), serializeMetadata(existing));
 
             if (logger.isDebugEnabled()) {

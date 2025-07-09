@@ -316,40 +316,52 @@ public class ForwardSecureANNSystem {
         List<Integer> dimensions = Arrays.stream(args[4].split(",")).map(Integer::parseInt).collect(Collectors.toList());
         Path metadataPath = Path.of(args[5]);
 
-        // Ensure metadata directory exists
         Files.createDirectories(metadataPath);
 
-        // Initialize RocksDBMetadataManager with metadataPath
         RocksDBMetadataManager metadataManager;
         try {
             metadataManager = new RocksDBMetadataManager(metadataPath.toString());
-            metadataManager.mergeVectorMetadata("testVec", Map.of("version", "2")); // check if compiles
         } catch (IOException e) {
-            logger.error("Failed to initialize RocksDBMetadataManager", e);
             throw new RuntimeException("Failed to initialize RocksDBMetadataManager", e);
         }
 
-        // Setup key management and rotation
         KeyManager keyManager = new KeyManager(keysFile);
         KeyRotationPolicy policy = new KeyRotationPolicy(100000, 999_999);
         KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(keyManager, policy, metadataPath.toString(), metadataManager, null);
 
-        // Setup Crypto Service
         CryptoService cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
-        keyService.setCryptoService(cryptoService); // IMPORTANT
+        keyService.setCryptoService(cryptoService);
 
-        // Initialize the ANN system
         ForwardSecureANNSystem sys = new ForwardSecureANNSystem(
                 configFile, dataPath, keysFile, dimensions, metadataPath, false,
                 metadataManager, cryptoService
         );
 
-
-        // Run end-to-end tests with data
         int dim = dimensions.get(0);
-        sys.runEndToEnd(dataPath, queryPath, DEFAULT_TOP_K, dim);
 
-        // Shutdown the system after execution
+        // Time query fetches
+        List<double[]> queries = new DefaultDataLoader().loadData(queryPath, dim);
+        long totalQueryTimeMs = 0;
+        int matchCount = 0;
+        int topK = DEFAULT_TOP_K;
+
+        for (double[] query : queries) {
+            long startTime = System.nanoTime();
+            List<QueryResult> results = sys.query(query, topK, dim);
+            long endTime = System.nanoTime();
+            totalQueryTimeMs += (endTime - startTime) / 1_000_000;
+
+            if (!results.isEmpty()) matchCount++; // Very simple recall check
+        }
+
+        double avgQueryTime = (double) totalQueryTimeMs / queries.size();
+        double recallRatio = (double) matchCount / queries.size();
+
+        System.out.printf("\n==== QUERY PERFORMANCE METRICS ====\n");
+        System.out.printf("Average Query Fetch Time: %.2f ms\n", avgQueryTime);
+        System.out.printf("Recall Ratio (matched / total): %.4f\n", recallRatio);
+        System.out.printf("Expected < 1000ms/query and Recall ≈ 1.0\n");
+
         sys.shutdown();
     }
 }
