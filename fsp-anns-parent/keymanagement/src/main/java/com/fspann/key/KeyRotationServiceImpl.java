@@ -134,7 +134,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
                     EncryptedPoint reloaded = metadataManager.loadEncryptedPoint(updated.getId());
                     Map<String, String> checkMeta = metadataManager.getVectorMetadata(updated.getId());
                     if (!Objects.equals(checkMeta.get("version"), String.valueOf(reloaded.getVersion()))) {
-                        logger.error("\u274C Metadata mismatch after save/merge: {} vs {}", checkMeta.get("version"), reloaded.getVersion());
+                        logger.error("Metadata mismatch after save/merge: {} vs {}", checkMeta.get("version"), reloaded.getVersion());
                     }
 
                     indexService.insert(updated);
