@@ -10,6 +10,10 @@ import java.util.*;
 public class Profiler {
     private final Map<String, Long> startTimes = new HashMap<>();
     private final Map<String, List<Long>> timings = new HashMap<>();
+    private final List<QueryMetric> queryMetrics = new ArrayList<>();
+    private final List<Double> clientQueryTimes = new ArrayList<>();
+    private final List<Double> serverQueryTimes = new ArrayList<>();
+    private final List<Double> queryRatios = new ArrayList<>();
 
     public void start(String label) {
         startTimes.put(label, System.nanoTime());
@@ -48,7 +52,59 @@ public class Profiler {
         }
     }
 
-    public List<Long> getTimings(String operation) {
-        return timings.getOrDefault(operation, Collections.emptyList());
+
+    public List<Long> getTimings(String label) {
+        return timings.getOrDefault(label, Collections.emptyList());
     }
+
+    public void recordQueryMetric(String label, double serverMs, double clientMs, double ratio) {
+        serverQueryTimes.add(serverMs);
+        clientQueryTimes.add(clientMs);
+        queryRatios.add(ratio);
+    }
+
+    public void exportQueryMetrics(String filePath) {
+        try (FileWriter fw = new FileWriter(filePath)) {
+            fw.write("Query,ServerART(ms),ClientART(ms),Ratio\n");
+            for (int i = 0; i < clientQueryTimes.size(); i++) {
+                fw.write(String.format("Q%d,%.4f,%.4f,%.4f\n",
+                        i + 1,
+                        serverQueryTimes.get(i),
+                        clientQueryTimes.get(i),
+                        queryRatios.get(i)));
+            }
+            System.out.println("📤 Query metrics written to " + filePath);
+        } catch (IOException ex) {
+            System.err.println("Failed to write query metrics CSV: " + ex.getMessage());
+        }
+    }
+
+
+    public List<Double> getAllClientQueryTimes() {
+        return clientQueryTimes;
+    }
+
+    public List<Double> getAllServerQueryTimes() {
+        return serverQueryTimes;
+    }
+
+    public List<Double> getAllQueryRatios() {
+        return queryRatios;
+    }
+
+    private static class QueryMetric {
+        String id;
+        double serverMs;
+        double clientMs;
+        double ratio;
+
+        public QueryMetric(String id, double serverMs, double clientMs, double ratio) {
+            this.id = id;
+            this.serverMs = serverMs;
+            this.clientMs = clientMs;
+            this.ratio = ratio;
+        }
+    }
+
+
 }

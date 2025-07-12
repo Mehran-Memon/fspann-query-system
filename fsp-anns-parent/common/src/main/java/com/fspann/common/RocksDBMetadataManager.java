@@ -50,6 +50,31 @@ public class RocksDBMetadataManager implements AutoCloseable {
         }
     }
 
+
+    public void compactMetadataDB() {
+        try {
+            db.compactRange(); // full-range compaction
+            logger.info("✅ RocksDB compaction complete");
+        } catch (Exception e) {
+            logger.warn("⚠️ RocksDB compaction failed", e);
+        }
+    }
+
+    public void batchPutMetadata(Map<String, Map<String, String>> allMetadata) {
+        try (WriteBatch batch = new WriteBatch(); WriteOptions opts = new WriteOptions()) {
+            for (Map.Entry<String, Map<String, String>> entry : allMetadata.entrySet()) {
+                String key = entry.getKey();
+                Map<String, String> valMap = entry.getValue();
+                byte[] value = serializeMetadata(valMap);
+                batch.put(key.getBytes(), value);
+            }
+            db.write(opts, batch);
+        } catch (RocksDBException e) {
+            logger.error("Batch metadata insert failed", e);
+        }
+    }
+
+
     public void putVectorMetadata(String vectorId, Map<String, String> metadata) {
         try {
             Objects.requireNonNull(vectorId);
@@ -262,6 +287,24 @@ public class RocksDBMetadataManager implements AutoCloseable {
             logger.error("Failed to iterate vector IDs", e);
         }
         return keys;
+    }
+
+    public void logStats() {
+        try {
+            String stats = db.getProperty("rocksdb.stats");
+            logger.info("\n====== ROCKSDB STATS ======\n{}\n===========================\n", stats);
+        } catch (Exception e) {
+            logger.warn("Could not retrieve RocksDB stats", e);
+        }
+    }
+
+    public void printSummary() {
+        try {
+            logger.info("📊 Metadata contains approx {} keys", db.getLongProperty("rocksdb.estimate-num-keys"));
+            logger.info("📦 Metadata live SST files: {}", db.getProperty("rocksdb.num-live-sst-files"));
+        } catch (RocksDBException e) {
+            logger.error("Failed to read RocksDB summary", e);
+        }
     }
 
     @Override

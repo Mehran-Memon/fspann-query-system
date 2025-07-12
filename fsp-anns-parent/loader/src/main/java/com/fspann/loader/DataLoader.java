@@ -18,6 +18,8 @@ public interface DataLoader {
      */
     List<double[]> loadData(String path, int batchSize) throws IOException;
 
+    List<double[]> loadData(String path, int expectedDim, int batchSize) throws IOException;
+
     /**
      * Load ground-truth nearest neighbor indices from an .ivecs file.
      *

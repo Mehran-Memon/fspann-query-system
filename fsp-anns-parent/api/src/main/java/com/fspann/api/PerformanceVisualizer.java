@@ -47,7 +47,6 @@ public class PerformanceVisualizer {
         saveChart(chart, "results_timings.png");
     }
 
-
     public static void visualizeConfusionMatrix(int[][] confusionMatrix, int topK) {
         if (confusionMatrix == null || confusionMatrix.length == 0) {
             logger.warn("No confusion matrix data to visualize");
@@ -92,6 +91,7 @@ public class PerformanceVisualizer {
 
         saveChart(chart, "results_confusion_matrix.png");
     }
+
     public static void visualizeQueryResults(List<QueryResult> results) {
         if (results == null || results.isEmpty()) {
             logger.warn("No query results to visualize");
@@ -192,6 +192,59 @@ public class PerformanceVisualizer {
 
         saveChart(chart, "results_indexed_" + label.replace(" ", "_") + "_d" + dim + ".png");
     }
+
+    public static void visualizeQueryLatencies(List<Double> clientMs, List<Double> serverMs) {
+        if (clientMs == null || clientMs.isEmpty()) {
+            logger.warn("No latency data to visualize");
+            return;
+        }
+
+        DefaultCategoryDataset dataset = new DefaultCategoryDataset();
+        for (int i = 0; i < clientMs.size(); i++) {
+            dataset.addValue(clientMs.get(i), "Client ART (ms)", "Q" + (i + 1));
+            if (serverMs != null && serverMs.size() > i) {
+                dataset.addValue(serverMs.get(i), "Server ART (ms)", "Q" + (i + 1));
+            }
+        }
+
+        JFreeChart chart = ChartFactory.createBarChart(
+                "Query Latency per Query",
+                "Query",
+                "Time (ms)",
+                dataset
+        );
+
+        saveChart(chart, "results_query_latency.png");
+    }
+
+    public static void visualizeRatioDistribution(List<Double> ratios) {
+        if (ratios == null || ratios.isEmpty()) {
+            logger.warn("No ratio data to visualize");
+            return;
+        }
+
+        int[] bins = new int[10];
+        for (double r : ratios) {
+            int idx = Math.min((int) Math.floor(r), bins.length - 1);
+            bins[idx]++;
+        }
+
+        DefaultCategoryDataset dataset = new DefaultCategoryDataset();
+        for (int i = 0; i < bins.length; i++) {
+            String range = i + "-" + (i + 1);
+            dataset.addValue(bins[i], "Count", range);
+        }
+
+        JFreeChart chart = ChartFactory.createBarChart(
+                "Ratio Distribution (Predicted / True Distance)",
+                "Ratio Bucket",
+                "Count",
+                dataset
+        );
+
+        saveChart(chart, "results_ratio_distribution.png");
+    }
+
 
     public static void saveChart(JFreeChart chart, String filename) {
         try {
