@@ -23,6 +23,7 @@ public class EncryptedPointBuffer {
     private static final double MEMORY_THRESHOLD_RATIO = 0.80;
     private final int flushThreshold;
     private int globalBufferCount = 0; // total points buffered across all versions
+    private int totalFlushedPoints = 0;
 
     /**
      * Constructor with default flush threshold (1000).
@@ -80,6 +81,7 @@ public class EncryptedPointBuffer {
         List<EncryptedPoint> points = versionBuffer.getOrDefault(version, Collections.emptyList());
         if (points.isEmpty()) return;
 
+        int flushedSize = points.size();  // capture before clearing
         String batchFileName = String.format("v%d_batch_%03d.points", version, batchCounters.getOrDefault(version, 0));
         Path versionDir = baseDir.resolve("v" + version);
         Path batchFile = versionDir.resolve(batchFileName);
@@ -91,19 +93,23 @@ public class EncryptedPointBuffer {
                 oos.writeObject(points);
             }
 
+            Map<String, Map<String, String>> allMeta = new HashMap<>();
             for (EncryptedPoint pt : points) {
                 Map<String, String> meta = new HashMap<>();
                 meta.put("shardId", String.valueOf(pt.getShardId()));
                 meta.put("version", String.valueOf(pt.getVersion()));
-                metadataManager.putVectorMetadata(pt.getId(), meta);
+                allMeta.put(pt.getId(), meta);
             }
+            metadataManager.batchPutMetadata(allMeta);
+
 
 //            logger.info("Flushed {} points for v{} to {}", points.size(), version, batchFileName);
         } catch (IOException e) {
 //            logger.error("Failed to flush EncryptedPoints for version {}", version, e);
         }
 
-        globalBufferCount -= points.size(); // Update global count
+        globalBufferCount -= flushedSize;
+        totalFlushedPoints += flushedSize;
         batchCounters.put(version, batchCounters.getOrDefault(version, 0) + 1);
         versionBuffer.remove(version);
     }
@@ -113,6 +119,10 @@ public class EncryptedPointBuffer {
      */
     public int getBufferSize() {
         return globalBufferCount;
+    }
+
+    public int getTotalFlushedPoints() {
+        return totalFlushedPoints;
     }
 
     /**

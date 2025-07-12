@@ -24,16 +24,22 @@ public class DefaultDataLoader implements DataLoader {
     }
 
     @Override
-    public List<double[]> loadData(String path, int expectedDim) throws IOException {
+    public List<double[]> loadData(String path, int expectedDim, int batchSize) throws IOException {
         String ext = detectExtension(path);
         FormatLoader loader = registry.get(ext);
         if (loader == null) {
             logger.error("Unsupported file extension '{}'", ext);
             throw new UnsupportedOperationException("Unsupported format: " + ext);
         }
-//        logger.info("Loading data from {} using loader for {}", path, ext);
-        return loader.loadVectors(path, expectedDim);
+        return loader.loadVectors(path, batchSize);
     }
+
+    @Override
+    public List<double[]> loadData(String path, int batchSize) throws IOException {
+        // Default to 0 as expectedDim, for streaming loaders
+        return loadData(path, 0, batchSize);
+    }
+
 
     @Override
     public List<int[]> loadGroundTruth(String path, int batchSize) throws IOException {
