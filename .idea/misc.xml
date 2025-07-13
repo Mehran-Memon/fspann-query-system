@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
+<<<<<<< HEAD
   <component name="ExternalStorageConfigurationManager" enabled="true" />
   <component name="FrameworkDetectionExcludesConfiguration">
     <file type="web" url="file://$PROJECT_DIR$/fsp-anns-parent/data" />
@@ -27,5 +28,9 @@
   </component>
   <component name="ProjectRootManager" version="2" languageLevel="JDK_21_PREVIEW" project-jdk-name="21 (2)" project-jdk-type="JavaSDK">
     <output url="file://$PROJECT_DIR$/../../../../Program Files/Java/jdk-21" />
+=======
+  <component name="ProjectRootManager">
+    <output url="file://$PROJECT_DIR$/out" />
+>>>>>>> 0179f7f (First Raw Structure of the Project. Coded all necessary java files and classes)
   </component>
 </project>
