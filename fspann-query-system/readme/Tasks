@@ -1,0 +1,5 @@
+1. integrate the SIFT dataset into the model
+2. the model should be designed carefully to work on multiple dimensions from 128 onwards
+3. once integration and coding is done focus on learning and understanding the code line by line
+4. prepare the defense for the code, implementation techniques and the tactics, libraries used. WHY?
+5.
