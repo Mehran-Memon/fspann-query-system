@@ -1,7 +1,0 @@
-com\fspann\index\core\BucketConstructor.class
-com\fspann\index\core\DimensionContext.class
-com\fspann\index\core\EvenLSH.class
-com\fspann\index\core\SecureLSHIndex.class
-com\fspann\index\service\IndexService.class
-com\fspann\index\service\SecureLSHIndexService.class
-com\fspann\index\core\LSHUtils.class
