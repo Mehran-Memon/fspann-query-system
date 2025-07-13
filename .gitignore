@@ -16,3 +16,7 @@ workspace.xml
 # Maven build directory
 /target/
 **/target/
+
+/target/
+**/target/
+*.class
