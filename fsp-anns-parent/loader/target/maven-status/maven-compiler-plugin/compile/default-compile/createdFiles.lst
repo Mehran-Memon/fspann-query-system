@@ -1,0 +1,10 @@
+com\fspann\loader\EncryptedVector.class
+com\fspann\loader\FormatLoader.class
+com\fspann\loader\FvecsLoader.class
+com\fspann\loader\JsonLoader.class
+com\fspann\loader\ParquetLoader.class
+com\fspann\loader\IvecsLoader.class
+com\fspann\loader\NpzLoader.class
+com\fspann\loader\CsvLoader.class
+com\fspann\loader\DefaultDataLoader.class
+com\fspann\loader\DataLoader.class

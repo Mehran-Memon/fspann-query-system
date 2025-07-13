@@ -1,0 +1,4 @@
+com\fspann\key\KeyRotationPolicy.class
+com\fspann\key\KeyManager.class
+com\fspann\key\KeyManager$KeyStoreBlob.class
+com\fspann\key\KeyRotationServiceImpl.class
