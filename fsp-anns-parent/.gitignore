@@ -1,8 +1,38 @@
-*.class
-*.lst
-*.csv
-*.txt
+# ===========================================
+# OS-Specific Files
+# ===========================================
+desktop.ini
+
+# ===========================================
+# IDE Configuration Files
+# ===========================================
+.idea/
+*.iml
+.project
+.classpath
+.settings/
+
+# ===========================================
+# Build Artifacts
+# ===========================================
 target/
-**/target/
-**/maven-status/
+*.class
+*.log
 *.ser
+
+# ===========================================
+# RocksDB & Metadata
+# ===========================================
+metadata/
+fsp-anns-parent/api/metadata/
+
+# ===========================================
+# Data Files
+# ===========================================
+data/
+!data/.gitkeep  # Optional: if you want to preserve folder structure
+
+# ===========================================
+# Result & Evaluation Outputs
+# ===========================================
+Results/
