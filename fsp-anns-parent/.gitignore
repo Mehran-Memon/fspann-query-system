@@ -1,0 +1,8 @@
+*.class
+*.lst
+*.csv
+*.txt
+target/
+**/target/
+**/maven-status/
+*.ser
