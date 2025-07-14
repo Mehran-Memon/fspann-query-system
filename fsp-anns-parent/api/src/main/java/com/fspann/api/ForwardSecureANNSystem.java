@@ -95,15 +95,14 @@ public class ForwardSecureANNSystem {
         DefaultDataLoader loader = new DefaultDataLoader();
         for (int dim : dimensions) {
             List<double[]> vectors;
-            int offset = 0;
+            int batch = 0;
             do {
                 vectors = loader.loadData(dataPath, dim, BATCH_SIZE);
                 if (!vectors.isEmpty()) {
                     batchInsert(vectors, dim);
-                    offset += vectors.size();
+                    batch++;
                 }
             } while (!vectors.isEmpty());
-
         }
     }
 

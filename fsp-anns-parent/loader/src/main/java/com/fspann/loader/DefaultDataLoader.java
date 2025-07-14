@@ -16,11 +16,9 @@ public class DefaultDataLoader implements DataLoader {
 
     public DefaultDataLoader() {
         registry.put("CSV",  new CsvLoader());
-        registry.put("JSON", new JsonLoader());
         registry.put("FVECS", new FvecsLoader());
         registry.put("IVECS", new IvecsLoader());
-        registry.put("NPZ",  new NpzLoader());
-        registry.put("PARQUET", new ParquetLoader());
+
     }
 
     @Override

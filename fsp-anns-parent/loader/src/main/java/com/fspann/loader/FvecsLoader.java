@@ -2,23 +2,40 @@ package com.fspann.loader;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 import java.io.BufferedInputStream;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * Loader for FVECS format: binary float vectors with each entry prefixed by dimension.
+ * Now supports streaming with per-path offset.
+ */
 public class FvecsLoader implements FormatLoader {
     private static final Logger logger = LoggerFactory.getLogger(FvecsLoader.class);
+    private final Map<String, Integer> fileOffsets = new ConcurrentHashMap<>();
 
     @Override
-    public List<double[]> loadVectors(String path, int expectedDim) throws IOException {
-        List<double[]> data = new ArrayList<>();
+    public List<double[]> loadVectors(String path, int batchSize) throws IOException {
+        List<double[]> data = new ArrayList<>(batchSize);
+        int offset = fileOffsets.getOrDefault(path, 0);
+
         try (BufferedInputStream bis = new BufferedInputStream(new FileInputStream(path))) {
-            byte[] dimBuf = new byte[4];
-            while (bis.read(dimBuf) == 4) {
+            // Skip past already-read vectors
+            for (int i = 0; i < offset; i++) {
+                int dim = readInt(bis);
+                if (dim <= 0) throw new IOException("Invalid vector dimension while skipping: " + dim);
+                long skipped = bis.skip(dim * 4L);
+                if (skipped < dim * 4L) break;
+            }
+
+            for (int i = 0; i < batchSize; i++) {
+                byte[] dimBuf = new byte[4];
+                if (bis.read(dimBuf) != 4) break;
                 int dim = ByteBuffer.wrap(dimBuf).order(ByteOrder.LITTLE_ENDIAN).getInt();
                 if (dim <= 0) throw new IOException("Invalid vector dimension: " + dim);
 
@@ -30,17 +47,20 @@ public class FvecsLoader implements FormatLoader {
                 ByteBuffer.wrap(vecBuf).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer().get(tmp);
 
                 double[] vec = new double[dim];
-                for (int i = 0; i < dim; i++) vec[i] = tmp[i];
+                for (int j = 0; j < dim; j++) vec[j] = tmp[j];
 
                 data.add(vec);
-                // Validate against expectedDim
-                if (expectedDim > 0 && dim != expectedDim) {
-                    throw new IOException(String.format("Dimension mismatch in file %s: expected %d, got %d", path, expectedDim, dim));
-                }
             }
         }
-//        logger.info("Loaded {} vectors from {}", data.size(), path);
+
+        fileOffsets.put(path, offset + data.size());
         return data;
+    }
+
+    private int readInt(BufferedInputStream bis) throws IOException {
+        byte[] buf = new byte[4];
+        if (bis.read(buf) != 4) throw new IOException("Unexpected end of file while reading int");
+        return ByteBuffer.wrap(buf).order(ByteOrder.LITTLE_ENDIAN).getInt();
     }
 
     @Override
