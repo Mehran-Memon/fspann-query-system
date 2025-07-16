@@ -86,13 +86,6 @@ public class EncryptedPointBuffer {
         Path versionDir = baseDir.resolve("v" + version);
         Path batchFile = versionDir.resolve(batchFileName);
 
-        try {
-            Files.createDirectories(versionDir);
-            try (OutputStream fos = Files.newOutputStream(batchFile);
-                 ObjectOutputStream oos = new ObjectOutputStream(fos)) {
-                oos.writeObject(points);
-            }
-
             Map<String, Map<String, String>> allMeta = new HashMap<>();
             for (EncryptedPoint pt : points) {
                 Map<String, String> meta = new HashMap<>();
@@ -101,6 +94,13 @@ public class EncryptedPointBuffer {
                 allMeta.put(pt.getId(), meta);
             }
             metadataManager.batchPutMetadata(allMeta);
+
+        try {
+            Files.createDirectories(versionDir);
+            try (OutputStream fos = Files.newOutputStream(batchFile);
+                 ObjectOutputStream oos = new ObjectOutputStream(fos)) {
+                oos.writeObject(points);
+            }
 
 //            logger.info("Flushed {} points for v{} to {}", points.size(), version, batchFileName);
         } catch (IOException e) {

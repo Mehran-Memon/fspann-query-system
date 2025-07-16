@@ -235,7 +235,7 @@ public class ForwardSecureANNSystem {
         DefaultDataLoader loader = new DefaultDataLoader();
         List<double[]> vectors = loader.loadData(dataPath, dim);
         batchInsert(vectors, dim);
-        insertFakePointsInBatches(DEFAULT_FAKE_POINT_COUNT, dim);
+//        insertFakePointsInBatches(DEFAULT_FAKE_POINT_COUNT, dim);
 
         List<double[]> queries = loader.loadData(queryPath, dim);
         List<int[]> groundTruth = new IvecsLoader().loadIndices("groundtruth.ivecs", queries.size());
@@ -325,14 +325,13 @@ public class ForwardSecureANNSystem {
         logger.info("✅ ForwardSecureANNSystem flushAll completed");
     }
 
-
     public void shutdown() {
         try {
             System.out.printf("\n=== System Shutdown ===\nTotal indexing time: %d ms\nTotal query time: %d ms\n\n",
                     TimeUnit.NANOSECONDS.toMillis(totalIndexingTime),
                     TimeUnit.NANOSECONDS.toMillis(totalQueryTime));
 
-            // Start emergency timeout flush (safety guard)
+            // Start the emergency timeout flush (safety guard)
             Thread shutdownGuard = new Thread(() -> {
                 try {
                     Thread.sleep(10_000);  // 10-second timeout
@@ -421,7 +420,7 @@ public class ForwardSecureANNSystem {
         keyService.setCryptoService(cryptoService);
 
         ForwardSecureANNSystem sys = new ForwardSecureANNSystem(
-                configFile, dataPath, keysFile, dimensions, metadataPath, false,
+                configFile, dataPath, keysFile, dimensions, metadataPath, true,
                 metadataManager, cryptoService, batchSize
         );
 

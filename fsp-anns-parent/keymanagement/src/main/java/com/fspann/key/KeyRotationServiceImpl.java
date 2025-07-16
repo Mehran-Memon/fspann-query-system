@@ -120,24 +120,48 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
                         continue;
                     }
 
+                    // Re-encrypt
                     EncryptedPoint updated = cryptoService.reEncrypt(pt, getCurrentVersion().getKey());
 
-                    Map<String, String> metadata = Map.of(
-                            "version", String.valueOf(updated.getVersion()),
-                            "shardId", String.valueOf(updated.getShardId())
+                    // Recompute shardId from decrypted vector
+                    double[] rawVec = cryptoService.decryptFromPoint(updated, getCurrentVersion().getKey());
+                    int newShardId = indexService.getShardIdForVector(rawVec);
+
+                    // Reconstruct point with new shard
+                    EncryptedPoint reindexed = new EncryptedPoint(
+                            updated.getId(),
+                            newShardId,
+                            updated.getIv(),
+                            updated.getCiphertext(),
+                            updated.getVersion(),
+                            updated.getVectorLength()
                     );
-                    metadataManager.putVectorMetadata(updated.getId(), metadata);  // put before save
 
-                    metadataManager.saveEncryptedPoint(updated);  // Save .point file after metadata is updated
+                    // Save metadata and point
+                    Map<String, String> metadata = Map.of(
+                            "version", String.valueOf(reindexed.getVersion()),
+                            "shardId", String.valueOf(reindexed.getShardId())
+                    );
+                    // Save metadata FIRST — always before saving .point
+                    metadataManager.putVectorMetadata(reindexed.getId(), metadata);
+                    // Then save .point file
+                    metadataManager.saveEncryptedPoint(reindexed);
 
-
-                    EncryptedPoint reloaded = metadataManager.loadEncryptedPoint(updated.getId());
-                    Map<String, String> checkMeta = metadataManager.getVectorMetadata(updated.getId());
+                    logger.info("Re-encrypting point {}: old version {}, new version {}, old shard {}, new shard {}",
+                            pt.getId(), pt.getVersion(), reindexed.getVersion(), pt.getShardId(), reindexed.getShardId());
+                    EncryptedPoint reloaded = metadataManager.loadEncryptedPoint(reindexed.getId());
+                    if (!Objects.equals(reindexed.getCiphertext(), reloaded.getCiphertext())) {
+                        logger.error("Re-encrypted point {} ciphertext mismatch", reindexed.getId());
+                    }                    if (reloaded.getVersion() != reindexed.getVersion()) {
+                        logger.warn("Version mismatch on reload: {} vs {}", reloaded.getVersion(), reindexed.getVersion());
+                    }
+                    System.out.printf("📎 Point %s loaded from disk with version %d\n", reloaded.getId(), reloaded.getVersion());
+                    Map<String, String> checkMeta = metadataManager.getVectorMetadata(reindexed.getId());
                     if (!Objects.equals(checkMeta.get("version"), String.valueOf(reloaded.getVersion()))) {
                         logger.error("Metadata mismatch after save/merge: {} vs {}", checkMeta.get("version"), reloaded.getVersion());
                     }
 
-                    indexService.insert(updated);
+                    indexService.insert(reindexed);
                     totalReEncrypted++;
 
                     if (totalReEncrypted % 100 == 0) {
@@ -146,11 +170,13 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
                         Thread.sleep(50);
                     }
 
+
+
                 } catch (Exception e) {
                     logger.warn("Failed to re-encrypt from file {}: {}", file, e.getMessage());
                 }
             }
-
+            indexService.clearCache();
             metadataManager.cleanupStaleMetadata(seen);
 
         } catch (IOException e) {

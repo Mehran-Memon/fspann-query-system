@@ -8,6 +8,7 @@ import com.fspann.key.KeyManager;
 import com.fspann.key.KeyRotationPolicy;
 import com.fspann.key.KeyRotationServiceImpl;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -31,11 +32,24 @@ class ForwardSecureANNSystemIntegrationTest {
     }
 
     @AfterEach
-    public void cleanup() {
+    public void cleanup() throws InterruptedException {
         if (system != null) {
             system.shutdown();
+            system = null;
         }
+
+        // Clean up RocksDB native resources and finalize threads
+        System.gc();
+        Thread.sleep(250); // Ensure RocksDB native finalization completes
     }
+
+
+    @AfterAll
+    public static void afterAll() throws InterruptedException {
+        System.gc();
+        Thread.sleep(250);
+    }
+
 
     @Test
     public void simpleEndToEndNearestNeighbor(@TempDir Path tempDir) throws Exception {

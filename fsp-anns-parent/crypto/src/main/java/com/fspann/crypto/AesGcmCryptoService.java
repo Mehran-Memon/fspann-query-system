@@ -87,6 +87,8 @@ public class AesGcmCryptoService implements CryptoService {
     @Override
     public double[] decryptFromPoint(EncryptedPoint pt, SecretKey key) {
         return decryptTimer.record(() -> {
+            logger.info("Attempting decryption for point {} with key version {} and key: {}",
+                    pt.getId(), pt.getVersion(), Base64.getEncoder().encodeToString(key.getEncoded()));
             try {
                 logger.debug("Decrypting point {} with key version {}", pt.getId(), pt.getVersion());
                 return EncryptionUtils.decryptVector(pt.getCiphertext(), pt.getIv(), key);

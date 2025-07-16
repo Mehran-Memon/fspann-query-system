@@ -50,16 +50,6 @@ public class RocksDBMetadataManager implements AutoCloseable {
         }
     }
 
-
-    public void compactMetadataDB() {
-        try {
-            db.compactRange(); // full-range compaction
-            logger.info("✅ RocksDB compaction complete");
-        } catch (Exception e) {
-            logger.warn("⚠️ RocksDB compaction failed", e);
-        }
-    }
-
     public void batchPutMetadata(Map<String, Map<String, String>> allMetadata) {
         try (WriteBatch batch = new WriteBatch(); WriteOptions opts = new WriteOptions()) {
             for (Map.Entry<String, Map<String, String>> entry : allMetadata.entrySet()) {
@@ -73,7 +63,6 @@ public class RocksDBMetadataManager implements AutoCloseable {
             logger.error("Batch metadata insert failed", e);
         }
     }
-
 
     public void putVectorMetadata(String vectorId, Map<String, String> metadata) {
         try {
@@ -139,8 +128,15 @@ public class RocksDBMetadataManager implements AutoCloseable {
 
     public void saveEncryptedPoint(EncryptedPoint pt) throws IOException {
         Objects.requireNonNull(pt);
-        String versionStr = getVectorMetadata(pt.getId()).getOrDefault("version", "v1");
-        String safeVersion = versionStr.startsWith("v") ? versionStr : "v" + versionStr;
+        String safeVersion = "v" + pt.getVersion();
+
+        // 1. Save metadata first
+        Map<String, String> meta = new HashMap<>();
+        meta.put("version", String.valueOf(pt.getVersion()));
+        meta.put("shardId", String.valueOf(pt.getShardId()));
+        putVectorMetadata(pt.getId(), meta);
+
+        // 2. Save file
         Path versionDir = Paths.get(baseDir, safeVersion);
         Files.createDirectories(versionDir);
         Path filePath = versionDir.resolve(pt.getId() + ".point");
@@ -201,23 +197,21 @@ public class RocksDBMetadataManager implements AutoCloseable {
         logger.info("🧹 Cleaned up {} stale metadata entries.", removed);
     }
 
-    @SuppressWarnings("unchecked")
     public EncryptedPoint loadEncryptedPoint(String id) throws IOException, ClassNotFoundException {
-        try (Stream<Path> paths = Files.walk(Paths.get(baseDir), 3)) {
-            return paths
-                    .filter(p -> p.getFileName().toString().equals(id + ".point"))
-                    .map(p -> {
-                        try {
-                            return (EncryptedPoint) PersistenceUtils.loadObject(p.toString());
-                        } catch (Exception e) {
-                            logger.error("Failed to load encrypted point: {}", p, e);
-                            return null;
-                        }
-                    })
-                    .filter(Objects::nonNull)
-                    .findFirst()
-                    .orElse(null);
+        Map<String, String> meta = getVectorMetadata(id);
+        if (meta == null || !meta.containsKey("version")) {
+            logger.warn("Missing version metadata for id={}", id);
+            return null;
         }
+        String safeVersion = meta.get("version").startsWith("v") ? meta.get("version") : "v" + meta.get("version");
+        Path filePath = Paths.get(baseDir, safeVersion, id + ".point");
+
+        if (!Files.exists(filePath)) {
+            logger.warn("Expected encrypted point file does not exist: {}", filePath);
+            return null;
+        }
+
+        return PersistenceUtils.loadObject(filePath.toString());
     }
 
     public void saveIndexVersion(int version) {
@@ -300,8 +294,8 @@ public class RocksDBMetadataManager implements AutoCloseable {
 
     public void printSummary() {
         try {
-            logger.info("Metadata contains approx {} keys", db.getLongProperty("rocksdb.estimate-num-keys"));
-            logger.info("Metadata live SST files: {}", db.getProperty("rocksdb.num-live-sst-files"));
+            logger.info("📊 Metadata contains approx {} keys", db.getLongProperty("rocksdb.estimate-num-keys"));
+            logger.info("📦 Metadata live SST files: {}", db.getProperty("rocksdb.num-live-sst-files"));
         } catch (RocksDBException e) {
             logger.error("Failed to read RocksDB summary", e);
         }

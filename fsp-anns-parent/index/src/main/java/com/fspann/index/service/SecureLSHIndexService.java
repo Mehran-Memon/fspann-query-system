@@ -108,6 +108,7 @@ public class SecureLSHIndexService implements IndexService {
             SecureLSHIndex idx = ctx.getIndex();
 
             long t1 = System.nanoTime();
+
             for (EncryptedPoint pt : entry.getValue()) {
                 indexedPoints.put(pt.getId(), pt);
                 idx.addPoint(pt);
@@ -115,18 +116,21 @@ public class SecureLSHIndexService implements IndexService {
             }
             long t2 = System.nanoTime();
 
+            // Write metadata FIRST
             for (EncryptedPoint pt : entry.getValue()) {
                 Map<String, String> meta = new HashMap<>();
                 meta.put("shardId", String.valueOf(pt.getShardId()));
                 meta.put("version", String.valueOf(pt.getVersion()));
                 metadataManager.putVectorMetadata(pt.getId(), meta);
             }
+
             long t3 = System.nanoTime();
 
+            // Now persist to disk
             for (EncryptedPoint pt : entry.getValue()) {
                 buffer.add(pt);
                 try {
-                    metadataManager.saveEncryptedPoint(pt); // Ensure disk persistence
+                    metadataManager.saveEncryptedPoint(pt);  // uses the version written above
                 } catch (IOException e) {
                     logger.error("Failed to persist encrypted point {}", pt.getId(), e);
                 }
@@ -143,6 +147,7 @@ public class SecureLSHIndexService implements IndexService {
             );
         }
 
+
         buffer.flushAll();
     }
 
@@ -158,14 +163,18 @@ public class SecureLSHIndexService implements IndexService {
         Map<String, String> meta = new HashMap<>();
         meta.put("shardId", String.valueOf(pt.getShardId()));
         meta.put("version", String.valueOf(pt.getVersion()));
+
+        // ALWAYS store metadata FIRST
         metadataManager.putVectorMetadata(pt.getId(), meta);
 
-        buffer.add(pt);
+        // THEN write .point the file
         try {
-            metadataManager.saveEncryptedPoint(pt); // Save to .point file
+            metadataManager.saveEncryptedPoint(pt);
         } catch (IOException e) {
             logger.error("Failed to persist encrypted point {}", pt.getId(), e);
         }
+
+        buffer.add(pt);
     }
 
     @Override
@@ -176,7 +185,7 @@ public class SecureLSHIndexService implements IndexService {
         keyService.rotateIfNeeded();
 
         try {
-            //Encrypt and get accurate version
+            //Encrypt and get the accurate version
             EncryptedPoint encryptedPoint = crypto.encrypt(id, vector);
             int shardId = ctx.getLsh().getBucketId(vector);
 
@@ -244,6 +253,13 @@ public class SecureLSHIndexService implements IndexService {
         return ctx.getIndex().getPointCount();
     }
 
+    public int getShardIdForVector(double[] vector) {
+        int dim = vector.length;
+        DimensionContext ctx = getOrCreateContext(dim);
+        return ctx.getLsh().getBucketId(vector);
+            }
+
+
     @Override
     public EncryptedPoint getEncryptedPoint(String id) {
         EncryptedPoint cached = indexedPoints.get(id);
@@ -262,6 +278,11 @@ public class SecureLSHIndexService implements IndexService {
 
     public void flushBuffers() {
         buffer.flushAll();
+    }
+
+    public void clearCache() {
+        indexedPoints.clear();
+        logger.info("Cleared {} cached points", indexedPoints.size());
     }
 
     public void shutdown() {

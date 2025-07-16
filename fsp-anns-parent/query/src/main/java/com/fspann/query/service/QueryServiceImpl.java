@@ -80,6 +80,12 @@ public class QueryServiceImpl implements QueryService {
                 .limit(token.getTopK())
                 .collect(Collectors.toList());
 
+        logger.info("Query token version: {}, candidates: {}",
+                queryVersion.getVersion(),
+                candidates.stream()
+                        .map(pt -> pt.getId() + ":v" + pt.getVersion())
+                        .collect(Collectors.joining(", ")));
+
         lastQueryDurationNs = System.nanoTime() - startTime; // ⏱️ End timing
         return results;
     }

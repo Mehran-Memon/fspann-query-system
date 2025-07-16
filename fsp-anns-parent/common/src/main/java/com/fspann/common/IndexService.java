@@ -51,4 +51,7 @@ public interface IndexService {
 
     EncryptedPoint getEncryptedPoint(String id);
 
+    int getShardIdForVector(double[] vector);
+
+    void clearCache();
 }

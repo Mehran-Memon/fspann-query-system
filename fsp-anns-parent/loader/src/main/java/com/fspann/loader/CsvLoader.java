@@ -14,9 +14,12 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class CsvLoader implements FormatLoader {
     private final Map<String, Integer> fileOffsets = new ConcurrentHashMap<>();
+    private final Set<String> finishedPaths = ConcurrentHashMap.newKeySet();
 
     @Override
     public List<double[]> loadVectors(String path, int batchSize) throws IOException {
+        if (finishedPaths.contains(path)) return Collections.emptyList();
+
         int offset = fileOffsets.getOrDefault(path, 0);
         List<double[]> batch = new ArrayList<>(batchSize);
 
@@ -29,24 +32,25 @@ public class CsvLoader implements FormatLoader {
                 String[] tokens = line.split(",");
                 double[] vec = new double[tokens.length];
                 for (int i = 0; i < tokens.length; i++) {
-                    try {
-                        vec[i] = Double.parseDouble(tokens[i].trim());
-                    } catch (NumberFormatException e) {
-                        throw new IOException("Invalid number at line: " + line, e);
-                    }
+                    vec[i] = Double.parseDouble(tokens[i].trim());
                 }
 
                 batch.add(vec);
-                if (batch.size() >= batchSize) {
-                    break;
-                }
+                if (batch.size() >= batchSize) break;
             }
 
-            fileOffsets.put(path, offset + batch.size());
+            offset += batch.size();
+            fileOffsets.put(path, offset);
+
+            // End of the file check
+            if (batch.size() < batchSize) {
+                finishedPaths.add(path);
+            }
         }
 
         return batch;
     }
+
 
     @Override
     public List<int[]> loadIndices(String path, int batchSize) {

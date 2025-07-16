@@ -34,8 +34,7 @@ public class EncryptedPoint implements Serializable {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof EncryptedPoint)) return false;
-        EncryptedPoint that = (EncryptedPoint) o;
+        if (!(o instanceof EncryptedPoint that)) return false;
         return shardId == that.shardId &&
                 version == that.version &&
                 vectorLength == that.vectorLength &&
