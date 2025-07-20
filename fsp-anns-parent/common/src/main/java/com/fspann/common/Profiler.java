@@ -14,6 +14,7 @@ public class Profiler {
     private final List<Double> clientQueryTimes = new ArrayList<>();
     private final List<Double> serverQueryTimes = new ArrayList<>();
     private final List<Double> queryRatios = new ArrayList<>();
+    private final List<String[]> topKRecords = new ArrayList<>();
 
     public void start(String label) {
         startTimes.put(label, System.nanoTime());
@@ -49,6 +50,32 @@ public class Profiler {
             System.out.println("📤 Profiler data written to " + filePath);
         } catch (IOException ex) {
             System.err.println("Failed to write profiler CSV: " + ex.getMessage());
+        }
+    }
+
+
+    public void recordTopKVariants(String queryId, List<QueryEvaluationResult> results) {
+        for (QueryEvaluationResult r : results) {
+            topKRecords.add(new String[]{
+                    queryId,
+                    String.valueOf(r.getTopKRequested()),
+                    String.valueOf(r.getRetrieved()),
+                    String.format("%.4f", r.getRatio()),
+                    String.format("%.4f", r.getRecall()),
+                    String.valueOf(r.getTimeMs())
+            });
+        }
+    }
+
+    public void exportTopKVariants(String filePath) {
+        try (FileWriter fw = new FileWriter(filePath)) {
+            fw.write("QueryID,TopK,Retrieved,Ratio,Recall,TimeMs\n");
+            for (String[] row : topKRecords) {
+                fw.write(String.join(",", row) + "\n");
+            }
+            System.out.println("📤 Top-K evaluation written to " + filePath);
+        } catch (IOException ex) {
+            System.err.println("Failed to write top-K evaluation CSV: " + ex.getMessage());
         }
     }
 

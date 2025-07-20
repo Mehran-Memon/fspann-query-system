@@ -21,6 +21,11 @@
             <artifactId>index</artifactId>
         </dependency>
 
+        <dependency>
+            <groupId>com.fspann</groupId>
+            <artifactId>loader</artifactId>
+        </dependency>
+
         <!-- Key management & crypto -->
         <dependency>
             <groupId>com.fspann</groupId>

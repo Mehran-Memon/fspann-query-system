@@ -3,14 +3,14 @@ package com.fspann.query.service;
 import com.fspann.common.*;
 import com.fspann.crypto.CryptoService;
 import com.fspann.common.IndexService;
-
+import com.fspann.loader.GroundtruthManager;
 import javax.crypto.SecretKey;
-import java.util.List;
-import java.util.Objects;
+import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import com.fspann.query.core.QueryEvaluationResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -34,8 +34,7 @@ public class QueryServiceImpl implements QueryService {
 
     @Override
     public List<QueryResult> search(QueryToken token) {
-        long startTime = System.nanoTime(); // ⏱️ Start timing
-
+        long startTime = System.nanoTime();
         Objects.requireNonNull(token, "QueryToken cannot be null");
 
         if (token.getTopK() <= 0 || token.getEncryptedQuery() == null || token.getIv() == null) {
@@ -57,28 +56,30 @@ public class QueryServiceImpl implements QueryService {
         List<EncryptedPoint> candidates = indexService.lookup(token);
         if (candidates.isEmpty()) {
             logger.warn("No candidates retrieved for the query token");
-            lastQueryDurationNs = System.nanoTime() - startTime; // Still record time
+            lastQueryDurationNs = System.nanoTime() - startTime;
             return List.of();
         }
 
-        List<QueryResult> results = candidates.stream()
-                .map(pt -> {
-                    try {
-                        double[] ptVec = cryptoService.decryptFromPoint(pt, key);
-                        double dist = computeDistance(queryVec, ptVec);
-                        return new QueryResult(pt.getId(), dist);
-                    } catch (Exception e) {
-                        if (e instanceof IllegalArgumentException) {
-                            throw (IllegalArgumentException) e;
-                        }
-                        logger.warn("Skipped {} due to decryption failure", pt.getId(), e);
-                        return null;
-                    }
-                })
-                .filter(Objects::nonNull)
-                .sorted()
-                .limit(token.getTopK())
-                .collect(Collectors.toList());
+        // PriorityQueue for top-K selection (faster than sorting the entire list)
+        PriorityQueue<QueryResult> topKQueue = new PriorityQueue<>(Comparator.reverseOrder());
+
+        for (EncryptedPoint pt : candidates) {
+            try {
+                double[] ptVec = cryptoService.decryptFromPoint(pt, key);
+                double dist = computeDistance(queryVec, ptVec);
+                QueryResult result = new QueryResult(pt.getId(), dist);
+
+                topKQueue.offer(result);
+                if (topKQueue.size() > token.getTopK()) {
+                    topKQueue.poll();
+                }
+            } catch (Exception e) {
+                logger.warn("Skipped {} due to decryption failure", pt.getId(), e);
+            }
+        }
+
+        List<QueryResult> results = new ArrayList<>(topKQueue);
+        results.sort(Comparator.naturalOrder());
 
         logger.info("Query token version: {}, candidates: {}",
                 queryVersion.getVersion(),
@@ -86,15 +87,14 @@ public class QueryServiceImpl implements QueryService {
                         .map(pt -> pt.getId() + ":v" + pt.getVersion())
                         .collect(Collectors.joining(", ")));
 
-        lastQueryDurationNs = System.nanoTime() - startTime; // ⏱️ End timing
+        lastQueryDurationNs = System.nanoTime() - startTime;
         return results;
     }
-
 
     private KeyVersion resolveKeyVersion(String context) {
         Matcher matcher = VERSION_PATTERN.matcher(context);
         if (!matcher.matches()) {
-            throw new NumberFormatException("Invalid encryption context format: " + context);  // Reverted to NumberFormatException
+            throw new NumberFormatException("Invalid encryption context format: " + context);
         }
         int version = Integer.parseInt(matcher.group(1));
         return keyService.getVersion(version);
@@ -112,9 +112,59 @@ public class QueryServiceImpl implements QueryService {
         return Math.sqrt(sum);
     }
 
-    public long getLastQueryDurationNs() {
-        return lastQueryDurationNs;
+    public List<QueryEvaluationResult> searchWithTopKVariants(
+            QueryToken baseToken,
+            int queryIndex,
+            GroundtruthManager groundtruthManager
+    ) {
+        List<Integer> topKVariants = List.of(1, 20, 40, 60, 80, 100);
+        List<QueryEvaluationResult> results = new ArrayList<>();
+
+        for (int k : topKVariants) {
+            QueryToken token = new QueryToken(
+                    baseToken.getEncryptedQuery(),
+                    baseToken.getIv(),
+                    baseToken.getEncryptionContext(),
+                    k,
+                    baseToken.getDimension(),
+                    baseToken.getShardId(),
+                    baseToken.getVersion()
+            );
+
+            long start = System.nanoTime();
+            List<QueryResult> retrieved = search(token);
+            long duration = System.nanoTime() - start;
+
+            // -- Evaluate actual recall
+            int[] groundtruth = groundtruthManager.getGroundtruth(queryIndex, k);
+            Set<String> truthIds = Arrays.stream(groundtruth)
+                    .mapToObj(String::valueOf)
+                    .collect(Collectors.toSet());
+
+            long matchCount = retrieved.stream()
+                    .map(QueryResult::getId)
+                    .filter(truthIds::contains)
+                    .count();
+
+            double ratio = (double) retrieved.size() / k;
+            double recall = (double) matchCount / k;
+
+            results.add(new QueryEvaluationResult(
+                    k,                       // topKRequested
+                    retrieved.size(),        // retrieved
+                    ratio,                   // ratio
+                    recall,                  // recall
+                    duration / 1_000_000,    // timeMs
+                    queryIndex,              // query ID for reference
+                    System.currentTimeMillis() // timestamp or epoch if needed
+            ));
+        }
+
+        return results;
     }
 
 
+    public long getLastQueryDurationNs() {
+        return lastQueryDurationNs;
+    }
 }

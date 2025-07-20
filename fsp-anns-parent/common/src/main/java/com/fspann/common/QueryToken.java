@@ -15,6 +15,9 @@ public class QueryToken {
     private final int topK;
     private final int numTables;
     private final String encryptionContext;
+    private final int dimension;
+    private final int shardId;
+    private final int version;
 
     public QueryToken(List<Integer> candidateBuckets,
                       byte[] iv,
@@ -22,7 +25,7 @@ public class QueryToken {
                       double[] plaintextQuery,
                       int topK,
                       int numTables,
-                      String encryptionContext) {
+                      String encryptionContext,  int dimension, int shardId, int version) {
         if (candidateBuckets == null || candidateBuckets.isEmpty()) {
             throw new IllegalArgumentException("candidateBuckets cannot be null or empty");
         }
@@ -43,6 +46,9 @@ public class QueryToken {
         this.numTables = numTables;
         this.encryptionContext = (encryptionContext != null && !encryptionContext.isEmpty())
                 ? encryptionContext : "epoch_0";
+        this.dimension = dimension;
+        this.shardId = shardId;
+        this.version = version;
     }
 
     public List<Integer> getBuckets() {
@@ -83,6 +89,18 @@ public class QueryToken {
 
     public String getEncryptionContext() {
         return encryptionContext;
+    }
+
+    public int getDimension() {
+        return dimension;
+    }
+
+    public int getShardId() {
+        return shardId;
+    }
+
+    public int getVersion() {
+        return version;
     }
 
     @Override

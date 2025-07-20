@@ -12,7 +12,10 @@ import com.fspann.key.KeyManager;
 import com.fspann.key.KeyRotationPolicy;
 import com.fspann.key.KeyRotationServiceImpl;
 import com.fspann.loader.DefaultDataLoader;
+import com.fspann.loader.GroundtruthManager;
+import com.fspann.query.core.QueryEvaluationResult;
 import com.fspann.query.core.QueryTokenFactory;
+import com.fspann.query.core.TopKProfiler;
 import com.fspann.query.service.QueryService;
 import com.fspann.query.service.QueryServiceImpl;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -57,6 +60,7 @@ public class ForwardSecureANNSystem {
     private long totalIndexingTime = 0;
     private long totalQueryTime = 0;
     private int indexingCount = 0;
+    private final TopKProfiler topKProfiler = new TopKProfiler();
 
     public ForwardSecureANNSystem(
             String configPath,
@@ -231,42 +235,45 @@ public class ForwardSecureANNSystem {
         return results;
     }
 
-    public void runEndToEnd(String dataPath, String queryPath, int topK, int dim) throws Exception {
+    public void runEndToEnd(String dataPath, String queryPath, int dim, String groundtruthPath) throws Exception {
         DefaultDataLoader loader = new DefaultDataLoader();
         List<double[]> vectors = loader.loadData(dataPath, dim);
         batchInsert(vectors, dim);
-//        insertFakePointsInBatches(DEFAULT_FAKE_POINT_COUNT, dim);
 
         List<double[]> queries = loader.loadData(queryPath, dim);
-        List<int[]> groundTruth = new IvecsLoader().loadIndices("groundtruth.ivecs", queries.size());
+        GroundtruthManager groundtruth = new GroundtruthManager();
+        groundtruth.load(groundtruthPath);
 
         ResultWriter rw = new ResultWriter(Path.of("results_table.txt"));
 
         for (int q = 0; q < queries.size(); q++) {
-            double[] queryVector = queries.get(q);
+            double[] queryVec = queries.get(q);
+
             long clientStart = System.nanoTime();
-
-            List<QueryResult> results = query(queryVector, topK, dim);
-
+            QueryToken token = tokenFactory.create(queryVec, DEFAULT_TOP_K);
+            List<QueryEvaluationResult> evals = queryService.searchWithTopKVariants(token, q, groundtruth);
             long clientEnd = System.nanoTime();
-            double clientMs = (clientEnd - clientStart) / 1_000_000.0;
-            long serverNs = ((QueryServiceImpl) queryService).getLastQueryDurationNs();
-            double serverMs = serverNs / 1_000_000.0;
 
-            double ratio = computeRatio(queryVector, results, vectors, groundTruth.get(q));
-            if (profiler != null) {
-                profiler.recordQueryMetric("q" + q, serverMs, clientMs, ratio);
-            }
+            double clientMs = (clientEnd - clientStart) / 1_000_000.0;
+            double serverMs = ((QueryServiceImpl) queryService).getLastQueryDurationNs() / 1_000_000.0;
+            double avgRatio = evals.stream().mapToDouble(QueryEvaluationResult::getRatio).average().orElse(0.0);
+
+            if (profiler != null)
+                profiler.recordQueryMetric("Q" + q, serverMs, clientMs, avgRatio);
+
+            topKProfiler.record("Q" + q, evals);
 
             rw.writeTable("Query " + (q + 1) + " Results (dim=" + dim + ")",
-                    new String[]{"Neighbor ID", "Distance"},
-                    results.stream()
-                            .map(r -> new String[]{r.getId(), String.format("%.6f", r.getDistance())})
+                    new String[]{"TopK", "Retrieved", "Ratio", "Recall", "TimeMs"},
+                    evals.stream()
+                            .map(r -> new String[]{
+                                    String.valueOf(r.getTopKRequested()),
+                                    String.valueOf(r.getRetrieved()),
+                                    String.format("%.4f", r.getRatio()),
+                                    String.format("%.4f", r.getRecall()),
+                                    String.valueOf(r.getTimeMs())
+                            })
                             .collect(Collectors.toList()));
-
-            if (q < 3) {
-                PerformanceVisualizer.visualizeQueryResults(results);
-            }
         }
     }
 
@@ -324,7 +331,6 @@ public class ForwardSecureANNSystem {
         metadataManager.saveIndexVersion(currentVersion);  // Persist current index version
         logger.info("✅ ForwardSecureANNSystem flushAll completed");
     }
-
     public void shutdown() {
         try {
             System.out.printf("\n=== System Shutdown ===\nTotal indexing time: %d ms\nTotal query time: %d ms\n\n",
@@ -354,6 +360,7 @@ public class ForwardSecureANNSystem {
             if (profiler != null) {
                 profiler.exportToCSV("profiler_metrics.csv");
                 profiler.exportQueryMetrics("query_metrics.csv");
+                topKProfiler.export("topk_evaluation.csv");
 
                 if (!profiler.getAllClientQueryTimes().isEmpty()) {
                     PerformanceVisualizer.visualizeQueryLatencies(
@@ -390,8 +397,8 @@ public class ForwardSecureANNSystem {
     }
 
     public static void main(String[] args) throws Exception {
-        if (args.length < 6) {
-            System.err.println("Usage: <configPath> <dataPath> <queryPath> <keysFilePath> <dimensions> <metadataPath>");
+        if (args.length < 7) {
+            System.err.println("Usage: <configPath> <dataPath> <queryPath> <keysFilePath> <dimensions> <metadataPath> <groundtruthPath>");
             System.exit(1);
         }
 
@@ -401,16 +408,12 @@ public class ForwardSecureANNSystem {
         String keysFile = args[3];
         List<Integer> dimensions = Arrays.stream(args[4].split(",")).map(Integer::parseInt).collect(Collectors.toList());
         Path metadataPath = Path.of(args[5]);
-        int batchSize = args.length >= 7 ? Integer.parseInt(args[6]) : 10000;
+        String groundtruthPath = args[6];
+        int batchSize = args.length >= 8 ? Integer.parseInt(args[7]) : 10000;
 
         Files.createDirectories(metadataPath);
 
-        RocksDBMetadataManager metadataManager;
-        try {
-            metadataManager = new RocksDBMetadataManager(metadataPath.toString());
-        } catch (IOException e) {
-            throw new RuntimeException("Failed to initialize RocksDBMetadataManager", e);
-        }
+        RocksDBMetadataManager metadataManager = new RocksDBMetadataManager(metadataPath.toString());
 
         KeyManager keyManager = new KeyManager(keysFile);
         KeyRotationPolicy policy = new KeyRotationPolicy(100000, 999_999);
@@ -424,29 +427,12 @@ public class ForwardSecureANNSystem {
                 metadataManager, cryptoService, batchSize
         );
 
-
         int dim = dimensions.get(0);
-
-        // Time query fetches
-        List<double[]> queries = new DefaultDataLoader().loadData(queryPath, dim);
-        long totalQueryTimeMs = 0;
-        int matchCount = 0;
-
-        for (double[] query : queries) {
-            long startTime = System.nanoTime();
-            List<QueryResult> results = sys.query(query, DEFAULT_TOP_K, dim);
-            long endTime = System.nanoTime();
-            totalQueryTimeMs += (endTime - startTime) / 1_000_000;
-
-            if (!results.isEmpty()) matchCount++; // Very simple recall check
-        }
-
-        double avgQueryTime = (double) totalQueryTimeMs / queries.size();
-        double recallRatio = (double) matchCount / queries.size();
+        sys.runEndToEnd(dataPath, queryPath, dim, groundtruthPath);
 
         System.out.print("\n==== QUERY PERFORMANCE METRICS ====\n");
-        System.out.printf("Average Query Fetch Time: %.2f ms\n", avgQueryTime);
-        System.out.printf("Recall Ratio (matched / total): %.4f\n", recallRatio);
+        System.out.printf("Average Query Fetch Time: %.2f ms\n", sys.profiler.getAllClientQueryTimes().stream().mapToDouble(d -> d).average().orElse(0.0));
+        System.out.printf("Recall Ratio (matched / total): %.4f\n", sys.profiler.getAllQueryRatios().stream().mapToDouble(d -> d).average().orElse(0.0));
         System.out.print("Expected < 1000ms/query and Recall ≈ 1.0\n");
 
         long start = System.currentTimeMillis();
