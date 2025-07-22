@@ -122,10 +122,13 @@ public class QueryServiceImpl implements QueryService {
 
         for (int k : topKVariants) {
             QueryToken token = new QueryToken(
-                    baseToken.getEncryptedQuery(),
+                    baseToken.getCandidateBuckets(),
                     baseToken.getIv(),
-                    baseToken.getEncryptionContext(),
+                    baseToken.getEncryptedQuery(),
+                    baseToken.getPlaintextQuery(),
                     k,
+                    baseToken.getNumTables(),
+                    baseToken.getEncryptionContext(),
                     baseToken.getDimension(),
                     baseToken.getShardId(),
                     baseToken.getVersion()

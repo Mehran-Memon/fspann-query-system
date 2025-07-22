@@ -38,7 +38,7 @@ class SecureLSHIndexTest {
         byte[] iv = new byte[12];
         byte[] encryptedQuery = new byte[32];
         double[] plaintextQuery = {1.0, 2.0};
-        QueryToken token = new QueryToken(candidateBuckets, iv, encryptedQuery, plaintextQuery, 100, 2, "epoch_0");
+        QueryToken token = new QueryToken(candidateBuckets, iv, encryptedQuery, plaintextQuery, 100, 2, "epoch_0", 2 ,0 , 7);
         assertEquals(100, index.queryEncrypted(token).size()); // Match all points
     }
 }

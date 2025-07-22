@@ -86,6 +86,7 @@ public class AesGcmCryptoService implements CryptoService {
 
     @Override
     public double[] decryptFromPoint(EncryptedPoint pt, SecretKey key) {
+        logger.info("Decrypting point: id={}, version={}, IV={}", pt.getId(), pt.getVersion(), Base64.getEncoder().encodeToString(pt.getIv()));
         return decryptTimer.record(() -> {
             logger.info("Attempting decryption for point {} with key version {} and key: {}",
                     pt.getId(), pt.getVersion(), Base64.getEncoder().encodeToString(key.getEncoded()));
@@ -137,7 +138,7 @@ public class AesGcmCryptoService implements CryptoService {
     }
 
     @Override
-    public EncryptedPoint reEncrypt(EncryptedPoint pt, SecretKey newKey) {
+    public EncryptedPoint reEncrypt(EncryptedPoint pt, SecretKey newKey, byte[] newIv) {
         return encryptTimer.record(() -> {
             int oldVersion = pt.getVersion();
             SecretKey oldKey;
@@ -150,7 +151,6 @@ public class AesGcmCryptoService implements CryptoService {
 
             try {
                 double[] plaintext = EncryptionUtils.decryptVector(pt.getCiphertext(), pt.getIv(), oldKey);
-                byte[] newIv = EncryptionUtils.generateIV();
                 byte[] ciphertext = EncryptionUtils.encryptVector(plaintext, newIv, newKey);
 
                 int newVersion = keyService.getCurrentVersion().getVersion();
@@ -159,7 +159,7 @@ public class AesGcmCryptoService implements CryptoService {
                 );
 
                 metadataManager.updateVectorMetadata(pt.getId(), Map.of("version", String.valueOf(newVersion)));
-                logger.debug("Re-encrypted point {} from v{} to v{}", pt.getId(), oldVersion, newVersion);
+                logger.debug("Re-encrypted (custom IV) point {} from v{} to v{}", pt.getId(), oldVersion, newVersion);
                 return reEncrypted;
             } catch (IOException | GeneralSecurityException e) {
                 logger.error("Re-encryption failed for point {}", pt.getId(), e);
@@ -181,7 +181,7 @@ public class AesGcmCryptoService implements CryptoService {
         }
     }
 
-    public void setKeyService(KeyLifeCycleService keyService) {
+        public void setKeyService(KeyLifeCycleService keyService) {
         this.keyService = keyService;
     }
 

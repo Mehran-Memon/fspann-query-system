@@ -62,13 +62,13 @@ public class AesGcmCryptoServiceTest {
 
         double[] vector = {1.0, 2.0};
         EncryptedPoint pt = cryptoService.encryptToPoint("test", vector, key1);
-        assertEquals(1, pt.getVersion()); // ✅ now this should pass
+        assertEquals(1, pt.getVersion()); // now this should pass
 
         // Then simulate version 2 for re-encryption
         when(keyService.getVersion(2)).thenReturn(new KeyVersion(2, key2));
         when(keyService.getCurrentVersion()).thenReturn(new KeyVersion(2, key2));
 
-        EncryptedPoint reEncrypted = cryptoService.reEncrypt(pt, key2);
+        EncryptedPoint reEncrypted = cryptoService.reEncrypt(pt, key2, cryptoService.generateIV());
 
         assertNotEquals(pt.getCiphertext(), reEncrypted.getCiphertext());
         assertNotNull(reEncrypted.getIv());
@@ -85,7 +85,7 @@ public class AesGcmCryptoServiceTest {
         when(keyService.getVersion(999)).thenThrow(new IllegalArgumentException("Version not found"));
 
         assertThrows(AesGcmCryptoService.CryptoException.class,
-                () -> cryptoService.reEncrypt(pt, key2));
+                () -> cryptoService.reEncrypt(pt, key2, cryptoService.generateIV()));
     }
 
 
@@ -133,6 +133,34 @@ public class AesGcmCryptoServiceTest {
         assertThrows(AesGcmCryptoService.CryptoException.class, () -> {
             cryptoService.decryptFromPoint(pt, key2);
         });
+    }
+
+    @Test
+    public void testReEncryptWithCustomIV() {
+        // Step 1: encrypt with version 1
+        when(keyService.getVersion(1)).thenReturn(new KeyVersion(1, key1));
+        when(keyService.getCurrentVersion()).thenReturn(new KeyVersion(1, key1));
+
+        double[] vector = {7.7, 8.8};
+        EncryptedPoint original = cryptoService.encryptToPoint("pt-custom", vector, key1);
+
+        // Step 2: simulate upgrade to version 2
+        when(keyService.getVersion(2)).thenReturn(new KeyVersion(2, key2));
+        when(keyService.getCurrentVersion()).thenReturn(new KeyVersion(2, key2));
+
+        byte[] newIv = cryptoService.generateIV();
+        EncryptedPoint reenc = cryptoService.reEncrypt(original, key2, newIv);
+
+        assertEquals(2, reenc.getVersion());
+        assertEquals(original.getId(), reenc.getId());
+        assertEquals(original.getShardId(), reenc.getShardId());
+
+        assertNotNull(reenc.getIv());
+        assertNotEquals(new String(original.getIv()), new String(reenc.getIv()));
+        assertNotEquals(original.getCiphertext(), reenc.getCiphertext());
+
+        double[] decrypted = cryptoService.decryptFromPoint(reenc, key2);
+        assertArrayEquals(vector, decrypted, 1e-9);
     }
 
 //    @Test

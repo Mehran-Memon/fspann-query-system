@@ -14,6 +14,7 @@ import java.util.*;
 public class GroundtruthManager {
     private static final Logger logger = LoggerFactory.getLogger(GroundtruthManager.class);
     private final List<int[]> groundtruthList = new ArrayList<>();
+    private final Map<Integer, int[]> indexToGroundtruth = new HashMap<>();
 
     /**
      * Load all groundtruth entries from .ivecs file into memory.
@@ -57,6 +58,10 @@ public class GroundtruthManager {
         }
         int[] full = groundtruthList.get(queryIndex);
         return Arrays.copyOfRange(full, 0, Math.min(topK, full.length));
+    }
+
+    public void put(int queryIndex, int[] groundtruth) {
+        indexToGroundtruth.put(queryIndex, groundtruth);
     }
 
     public int totalQueries() {

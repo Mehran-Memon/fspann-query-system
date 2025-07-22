@@ -15,6 +15,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
@@ -71,7 +72,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
         List<EncryptedPoint> reEncrypted = new ArrayList<>();
         for (EncryptedPoint pt : metadataManager.getAllEncryptedPoints()) {
             try {
-                EncryptedPoint updated = cryptoService.reEncrypt(pt, newVer.getKey());
+                EncryptedPoint updated = cryptoService.reEncrypt(pt, newVer.getKey(), cryptoService.generateIV());
                 metadataManager.saveEncryptedPoint(updated);
                 Map<String, String> newMetadata = new HashMap<>();
                 newMetadata.put("version", String.valueOf(updated.getVersion()));
@@ -93,7 +94,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
 
     @Override
     public void reEncryptAll() {
-        logger.info("\uD83D\uDD10 Starting manual re-encryption of all vectors");
+        logger.info("Starting manual re-encryption of all vectors");
 
         if (cryptoService == null || metadataManager == null || indexService == null) {
             logger.warn("Re-encryption skipped: cryptoService, metadataManager, or indexService not initialized");
@@ -102,8 +103,9 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
 
         int totalReEncrypted = 0;
         Set<String> seen = new HashSet<>();
+        Path baseDir = Paths.get(metadataManager.getPointsBaseDir());
 
-        try (Stream<Path> stream = Files.walk(Paths.get(metadataManager.getPointsBaseDir()))) {
+        try (Stream<Path> stream = Files.walk(baseDir)) {
             List<Path> pointFiles = stream
                     .filter(Files::isRegularFile)
                     .filter(p -> p.toString().endsWith(".point"))
@@ -111,79 +113,83 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
 
             for (Path file : pointFiles) {
                 try {
-                    EncryptedPoint pt;
-                    try {
-                        pt = PersistenceUtils.loadObject(file.toString());
-                        if (pt == null || !seen.add(pt.getId())) continue;
-                    } catch (Exception e) {
-                        logger.warn("Skipping unreadable or corrupt point file: {}", file);
-                        continue;
-                    }
+                    // 1) Load original point
+                    EncryptedPoint original = PersistenceUtils.loadObject(file.toString());
+                    if (original == null || !seen.add(original.getId())) continue;
 
-                    // Re-encrypt
-                    EncryptedPoint updated = cryptoService.reEncrypt(pt, getCurrentVersion().getKey());
+                    // 2) Re-encrypt under new key & IV
+                    byte[] newIv = cryptoService.generateIV();
+                    EncryptedPoint updated = cryptoService.reEncrypt(
+                            original,
+                            getCurrentVersion().getKey(),
+                            newIv
+                    );
 
-                    // Recompute shardId from decrypted vector
+                    // 3) Determine new shard from the decrypted vector
                     double[] rawVec = cryptoService.decryptFromPoint(updated, getCurrentVersion().getKey());
-                    int newShardId = indexService.getShardIdForVector(rawVec);
+                    int newShard = indexService.getShardIdForVector(rawVec);
 
-                    // Reconstruct point with new shard
+                    // 4) Build final reindexed point
                     EncryptedPoint reindexed = new EncryptedPoint(
                             updated.getId(),
-                            newShardId,
+                            newShard,
                             updated.getIv(),
                             updated.getCiphertext(),
                             updated.getVersion(),
                             updated.getVectorLength()
                     );
 
-                    // Save metadata and point
-                    Map<String, String> metadata = Map.of(
+                    // 5) Update metadata in RocksDB before touching the file
+                    Map<String, String> meta = Map.of(
                             "version", String.valueOf(reindexed.getVersion()),
                             "shardId", String.valueOf(reindexed.getShardId())
                     );
-                    // Save metadata FIRST — always before saving .point
-                    metadataManager.putVectorMetadata(reindexed.getId(), metadata);
-                    // Then save .point file
-                    metadataManager.saveEncryptedPoint(reindexed);
+                    metadataManager.putVectorMetadata(reindexed.getId(), meta);
 
-                    logger.info("Re-encrypting point {}: old version {}, new version {}, old shard {}, new shard {}",
-                            pt.getId(), pt.getVersion(), reindexed.getVersion(), pt.getShardId(), reindexed.getShardId());
-                    EncryptedPoint reloaded = metadataManager.loadEncryptedPoint(reindexed.getId());
-                    if (!Objects.equals(reindexed.getCiphertext(), reloaded.getCiphertext())) {
-                        logger.error("Re-encrypted point {} ciphertext mismatch", reindexed.getId());
-                    }                    if (reloaded.getVersion() != reindexed.getVersion()) {
-                        logger.warn("Version mismatch on reload: {} vs {}", reloaded.getVersion(), reindexed.getVersion());
-                    }
-                    System.out.printf("📎 Point %s loaded from disk with version %d\n", reloaded.getId(), reloaded.getVersion());
-                    Map<String, String> checkMeta = metadataManager.getVectorMetadata(reindexed.getId());
-                    if (!Objects.equals(checkMeta.get("version"), String.valueOf(reloaded.getVersion()))) {
-                        logger.error("Metadata mismatch after save/merge: {} vs {}", checkMeta.get("version"), reloaded.getVersion());
-                    }
+                    // 6) Atomically overwrite the .point file via a .tmp swap
+                    Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
+                    PersistenceUtils.saveObject(reindexed, tmp.toString());  // ← object, then path
+                    Files.move(
+                            tmp,
+                            file,
+                            StandardCopyOption.ATOMIC_MOVE,
+                            StandardCopyOption.REPLACE_EXISTING
+                    );
 
+                    logger.info(
+                            "Re-encrypted point {}: v{}→v{}, shard {}→{}",
+                            reindexed.getId(),
+                            original.getVersion(),
+                            reindexed.getVersion(),
+                            original.getShardId(),
+                            reindexed.getShardId()
+                    );
+
+                    // 7) Reinstate into in-memory index
                     indexService.insert(reindexed);
                     totalReEncrypted++;
 
+                    // 8) Throttle & occasional GC
                     if (totalReEncrypted % 100 == 0) {
-                        logger.info("Re-encrypted {} points so far...", totalReEncrypted);
+                        logger.info("🌀 Re-encrypted {} points so far…", totalReEncrypted);
                         System.gc();
                         Thread.sleep(50);
                     }
 
-
-
                 } catch (Exception e) {
-                    logger.warn("Failed to re-encrypt from file {}: {}", file, e.getMessage());
+                    logger.warn("Failed to re-encrypt {}: {}", file, e.getMessage());
                 }
             }
+
+            // 9) Final cleanup
             indexService.clearCache();
             metadataManager.cleanupStaleMetadata(seen);
 
         } catch (IOException e) {
-            logger.error("Failed to walk encrypted points directory", e);
+            logger.error("Failed walking encrypted-points dir", e);
         }
 
-        logger.info("✅ Re-encryption completed for {} vectors", totalReEncrypted);
+        logger.info("Re-encryption completed for {} vectors", totalReEncrypted);
     }
 
     @Override

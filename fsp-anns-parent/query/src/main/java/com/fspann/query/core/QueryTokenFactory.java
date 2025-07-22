@@ -41,14 +41,30 @@ public class QueryTokenFactory {
         keyService.rotateIfNeeded();
         KeyVersion currentVersion = keyService.getCurrentVersion();
         SecretKey key = currentVersion.getKey();
-        String encryptionContext = String.format("epoch_%d_dim_%d", currentVersion.getVersion(), vector.length);
+        int version = currentVersion.getVersion();
+
+        String encryptionContext = String.format("epoch_%d_dim_%d", version, vector.length);
 
         EncryptedPoint encrypted = cryptoService.encryptToPoint("index", vector, key);
-        byte[] iv = encrypted.getIv();  // FIXED: correct IV
+        byte[] iv = encrypted.getIv();
         byte[] encryptedQuery = encrypted.getCiphertext();
 
         List<Integer> buckets = lsh.getBuckets(vector);
 
-        return new QueryToken(buckets, iv, encryptedQuery, vector.clone(), topK, numTables, encryptionContext);
+        int shardId = buckets.get(0);  // If multiple buckets, select representative shard
+        int dimension = vector.length;
+
+        return new QueryToken(
+                buckets,
+                iv,
+                encryptedQuery,
+                vector.clone(),
+                topK,
+                numTables,
+                encryptionContext,
+                dimension,
+                shardId,
+                version
+        );
     }
 }

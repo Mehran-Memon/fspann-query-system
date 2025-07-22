@@ -47,7 +47,7 @@ class QueryServiceImplTest {
 
         double[] plaintextQuery = new double[]{1.0, 2.0};
         String encryptionContext = String.format("epoch_%d_dim_%d", 7, plaintextQuery.length);
-        QueryToken token = new QueryToken(List.of(1, 2), iv, encQuery, plaintextQuery, 2, 1, encryptionContext);
+        QueryToken token = new QueryToken(List.of(1, 2), iv, encQuery, plaintextQuery, 2, 1, encryptionContext, 2,0,7);
 
         SecretKey queryKey = new SecretKeySpec(new byte[32], "AES");
         KeyVersion queryVersion = new KeyVersion(7, queryKey);
@@ -89,7 +89,7 @@ class QueryServiceImplTest {
         double[] plaintextQuery = new double[]{1.0, 2.0, 3.0};
         String encryptionContext = String.format("epoch_%d_dim_%d", 7, plaintextQuery.length);
 
-        QueryToken token = new QueryToken(List.of(1, 2), iv, encQuery, plaintextQuery, 2, 1,encryptionContext );
+        QueryToken token = new QueryToken(List.of(1, 2), iv, encQuery, plaintextQuery, 2, 1,encryptionContext , 2 , 0 , 7 );
 
         SecretKey queryKey = new SecretKeySpec(new byte[32], "AES");
         KeyVersion queryVersion = new KeyVersion(7, queryKey);
@@ -118,7 +118,7 @@ class QueryServiceImplTest {
 
     @Test
     void testInvalidEncryptionContextFormat() {
-        QueryToken token = new QueryToken(List.of(1), new byte[12], new byte[32], new double[]{1, 2}, 1, 1, "bad_context");
+        QueryToken token = new QueryToken(List.of(1), new byte[12], new byte[32], new double[]{1, 2}, 1, 1, "bad_context", 10, 0, 1);
 
         assertThrows(NumberFormatException.class, () -> service.search(token));
     }
@@ -130,7 +130,7 @@ class QueryServiceImplTest {
         double[] vector = new double[]{1, 2};
         String encryptionContext = String.format("epoch_%d_dim_%d", 7, vector.length);
 
-        QueryToken token = new QueryToken(List.of(1), iv, encQuery, vector, 1, 1, encryptionContext);
+        QueryToken token = new QueryToken(List.of(1), iv, encQuery, vector, 1, 1, encryptionContext, 2,0,7);
         SecretKey key = new SecretKeySpec(new byte[32], "AES");
         KeyVersion version = new KeyVersion(7, key);
 
@@ -148,7 +148,7 @@ class QueryServiceImplTest {
         double[] query = new double[]{0.5, 0.6};
 
         String encryptionContext = String.format("epoch_%d_dim_%d", 1, query.length);
-        QueryToken token = new QueryToken(List.of(5), iv, encQuery, query, 10, 1, encryptionContext);
+        QueryToken token = new QueryToken(List.of(5), iv, encQuery, query, 10, 1, encryptionContext,2,0,7);
         SecretKey key = new SecretKeySpec(new byte[32], "AES");
         KeyVersion version = new KeyVersion(1, key);
 
@@ -168,7 +168,7 @@ class QueryServiceImplTest {
         byte[] encQuery = new byte[32];
         double[] plaintextQuery = new double[]{1.0, 2.0};
 
-        QueryToken token = new QueryToken(List.of(1, 2), iv, encQuery, plaintextQuery, 1, 1, "epoch_v7");
+        QueryToken token = new QueryToken(List.of(1, 2), iv, encQuery, plaintextQuery, 1, 1, "epoch_v7",2 ,0,7);
         SecretKey key = new SecretKeySpec(new byte[32], "AES");
         KeyVersion version = new KeyVersion(7, key);
 

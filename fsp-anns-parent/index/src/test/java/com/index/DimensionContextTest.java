@@ -52,7 +52,7 @@ class DimensionContextTest {
                 .thenReturn(new byte[32]);
         when(crypto.generateIV()).thenReturn(oldIv);
 
-        when(crypto.reEncrypt(any(EncryptedPoint.class), any(SecretKey.class)))
+        when(crypto.reEncrypt(any(EncryptedPoint.class), any(SecretKey.class), any(byte[].class)))
                 .thenReturn(new EncryptedPoint("test", 5, newIv, newQ, 1, 2));
 
         context = new DimensionContext(index, crypto, keyService, lsh);
@@ -68,7 +68,7 @@ class DimensionContextTest {
                 token.getBuckets().equals(List.of(5)) &&
                         token.getEncryptionContext().equals("epoch_0")
         ))).thenReturn(List.of(pt));
-        when(crypto.reEncrypt(eq(pt), eq(dummyKey))).thenReturn(rePt);
+        when(crypto.reEncrypt(eq(pt), eq(dummyKey), any(byte[].class))).thenReturn(rePt);
 
         context.reEncryptAll();
 
@@ -117,8 +117,8 @@ class DimensionContextTest {
                 token.getBuckets().equals(List.of(5)) &&
                         token.getEncryptionContext().equals("epoch_0")
         ))).thenReturn(List.of(pt1, pt2));
-        when(crypto.reEncrypt(eq(pt1), eq(dummyKey))).thenReturn(rePt1);
-        when(crypto.reEncrypt(eq(pt2), eq(dummyKey))).thenReturn(rePt2);
+        when(crypto.reEncrypt(eq(pt1), eq(dummyKey), any(byte[].class))).thenReturn(rePt1);
+        when(crypto.reEncrypt(eq(pt2), eq(dummyKey), any(byte[].class))).thenReturn(rePt2);
 
         context.reEncryptAll();
 

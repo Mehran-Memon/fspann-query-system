@@ -57,7 +57,7 @@ public interface CryptoService {
      * @param newKey New AES-GCM key to use.
      * @return Re-encrypted point.
      */
-    EncryptedPoint reEncrypt(EncryptedPoint pt, SecretKey newKey);
+    EncryptedPoint reEncrypt(EncryptedPoint pt, SecretKey newKey, byte[] newIv);
 
     /**
      * Generates a secure IV for AES-GCM encryption.

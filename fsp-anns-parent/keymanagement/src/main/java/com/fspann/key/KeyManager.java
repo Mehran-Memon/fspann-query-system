@@ -81,7 +81,9 @@ public class KeyManager {
     }
 
     public SecretKey getSessionKey(int version) {
+        logger.info("Fetching key for version: {}", version);
         return sessionKeys.get(version);
+
     }
 
     public KeyVersion getCurrentVersion() {

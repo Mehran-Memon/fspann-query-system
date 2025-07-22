@@ -1,5 +1,4 @@
 package com.fspann.common;
-
 import java.io.FileWriter;
 import java.io.IOException;
 import java.util.*;
@@ -53,19 +52,17 @@ public class Profiler {
         }
     }
 
-
-    public void recordTopKVariants(String queryId, List<QueryEvaluationResult> results) {
-        for (QueryEvaluationResult r : results) {
-            topKRecords.add(new String[]{
-                    queryId,
-                    String.valueOf(r.getTopKRequested()),
-                    String.valueOf(r.getRetrieved()),
-                    String.format("%.4f", r.getRatio()),
-                    String.format("%.4f", r.getRecall()),
-                    String.valueOf(r.getTimeMs())
-            });
-        }
+    public void recordTopKVariants(String queryId, int topK, int retrieved, double ratio, double recall, long timeMs) {
+        topKRecords.add(new String[]{
+                queryId,
+                String.valueOf(topK),
+                String.valueOf(retrieved),
+                String.format("%.4f", ratio),
+                String.format("%.4f", recall),
+                String.valueOf(timeMs)
+        });
     }
+
 
     public void exportTopKVariants(String filePath) {
         try (FileWriter fw = new FileWriter(filePath)) {
@@ -106,7 +103,6 @@ public class Profiler {
         }
     }
 
-
     public List<Double> getAllClientQueryTimes() {
         return clientQueryTimes;
     }
@@ -132,6 +128,5 @@ public class Profiler {
             this.ratio = ratio;
         }
     }
-
 
 }

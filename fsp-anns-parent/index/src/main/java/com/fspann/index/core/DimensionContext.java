@@ -57,13 +57,22 @@ public class DimensionContext {
             String context = "epoch_" + previous.getVersion(); // Match test expectation
 
             QueryToken token = new QueryToken(
-                    buckets, iv, encryptedQuery, dummyQuery, topK, numTables, context
+                    buckets,                         // candidateBuckets
+                    iv,
+                    encryptedQuery,
+                    dummyQuery,
+                    topK,
+                    numTables,
+                    context,
+                    lsh.getDimensions(),             // dimension
+                    shard,                           // shardId
+                    previous.getVersion()            // version
             );
 
             List<EncryptedPoint> pts = index.queryEncrypted(token);
             for (EncryptedPoint pt : pts) {
                 if (pt.getVersion() <= previous.getVersion()) { // Process points with older or equal version
-                    EncryptedPoint reEnc = crypto.reEncrypt(pt, current.getKey());
+                    EncryptedPoint reEnc = crypto.reEncrypt(pt, current.getKey(), crypto.generateIV());
                     index.removePoint(pt.getId());
                     index.addPoint(reEnc);
                 }

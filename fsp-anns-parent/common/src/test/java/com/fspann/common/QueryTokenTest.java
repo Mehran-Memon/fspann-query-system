@@ -1,4 +1,3 @@
-// File: src/test/java/com/fspann/common/QueryTokenTest.java
 package com.fspann.common;
 
 import org.junit.jupiter.api.Test;
@@ -11,11 +10,11 @@ import static org.junit.jupiter.api.Assertions.*;
 class QueryTokenTest {
     @Test
     void constructorValidatesAndClones() {
-        // Use a mutable list so we can modify it in the immutability check
         List<Integer> buckets = new ArrayList<>(List.of(1, 2, 3));
         byte[] iv            = new byte[] { 0x00 };
         byte[] encryptedQry  = new byte[] { 9, 8 };
         double[] plainQry    = new double[] { 1.0, 2.0 };
+
         QueryToken token = new QueryToken(
                 buckets,
                 iv,
@@ -23,19 +22,24 @@ class QueryTokenTest {
                 plainQry,
                 4,
                 2,
-                "ctx"
+                "ctx",
+                128,
+                0,
+                1
         );
 
-        // basic getters
-        assertEquals(buckets,          token.getCandidateBuckets());
+        assertEquals(List.of(1, 2, 3), token.getCandidateBuckets());
         assertArrayEquals(iv,          token.getIv());
         assertArrayEquals(encryptedQry, token.getEncryptedQuery());
         assertArrayEquals(plainQry,    token.getPlaintextQuery());
         assertEquals(4,                token.getTopK());
         assertEquals(2,                token.getNumTables());
         assertEquals("ctx",            token.getEncryptionContext());
+        assertEquals(128,              token.getDimension());
+        assertEquals(0,                token.getShardId());
+        assertEquals(1,                token.getVersion());
 
-        // immutability: modifying originals must NOT affect the token
+        // Immutability checks
         buckets.set(0, 99);
         assertNotEquals(buckets, token.getCandidateBuckets());
 
@@ -55,21 +59,17 @@ class QueryTokenTest {
         byte[] encryptedQry  = new byte[] { 0x01 };
         double[] plainQry    = new double[] { 0.1 };
 
-        // null buckets
         assertThrows(IllegalArgumentException.class, () ->
-                new QueryToken(null, iv, encryptedQry, plainQry, 1, 1, "ctx")
+                new QueryToken(null, iv, encryptedQry, plainQry, 1, 1, "ctx", 128, 0, 1)
         );
-        // empty buckets
         assertThrows(IllegalArgumentException.class, () ->
-                new QueryToken(List.of(), iv, encryptedQry, plainQry, 1, 1, "ctx")
+                new QueryToken(List.of(), iv, encryptedQry, plainQry, 1, 1, "ctx", 128, 0, 1)
         );
-        // negative topK
         assertThrows(IllegalArgumentException.class, () ->
-                new QueryToken(List.of(1), iv, encryptedQry, plainQry, -1, 1, "ctx")
+                new QueryToken(List.of(1), iv, encryptedQry, plainQry, -1, 1, "ctx", 128, 0, 1)
         );
-        // zero numTables
         assertThrows(IllegalArgumentException.class, () ->
-                new QueryToken(List.of(1), iv, encryptedQry, plainQry, 1, 0, "ctx")
+                new QueryToken(List.of(1), iv, encryptedQry, plainQry, 1, 0, "ctx", 128, 0, 1)
         );
     }
 
@@ -79,6 +79,7 @@ class QueryTokenTest {
         byte[] iv                 = new byte[] { 0x42 };
         byte[] encryptedQry       = new byte[] { 0x13, 0x37 };
         double[] plainQry         = new double[] { 3.14, 2.71 };
+
         QueryToken tok = new QueryToken(
                 buckets,
                 iv,
@@ -86,10 +87,12 @@ class QueryTokenTest {
                 plainQry,
                 3,
                 2,
-                "epoch_1"
+                "epoch_1",
+                128,
+                0,
+                2
         );
 
-        // values
         assertEquals(buckets,             tok.getCandidateBuckets());
         assertArrayEquals(iv,             tok.getIv());
         assertArrayEquals(encryptedQry,   tok.getEncryptedQuery());
@@ -97,8 +100,11 @@ class QueryTokenTest {
         assertEquals(3,                   tok.getTopK());
         assertEquals(2,                   tok.getNumTables());
         assertEquals("epoch_1",           tok.getEncryptionContext());
+        assertEquals(128,                 tok.getDimension());
+        assertEquals(0,                   tok.getShardId());
+        assertEquals(2,                   tok.getVersion());
 
-        // ensure clones returned
+        // Mutation protection
         byte[] ivClone       = tok.getIv();
         byte[] qryClone      = tok.getEncryptedQuery();
         double[] plainClone  = tok.getPlaintextQuery();

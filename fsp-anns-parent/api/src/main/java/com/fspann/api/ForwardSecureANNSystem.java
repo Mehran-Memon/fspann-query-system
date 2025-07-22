@@ -21,7 +21,6 @@ import com.fspann.query.service.QueryServiceImpl;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import com.fspann.loader.IvecsLoader;
 import java.util.concurrent.TimeUnit;
 
 import java.io.BufferedWriter;
@@ -72,41 +71,56 @@ public class ForwardSecureANNSystem {
             RocksDBMetadataManager metadataManager,
             CryptoService cryptoService,
             int batchSize
-
     ) throws Exception {
-        this.verbose = verbose;
+        // 1) basic params
+        this.verbose    = verbose;
         this.BATCH_SIZE = batchSize;
 
+        // 2) load the JSON config
         ApiSystemConfig apiConfig = new ApiSystemConfig(configPath);
         this.config = apiConfig.getConfig();
 
+        // 3) make sure metadata folder exists
         Files.createDirectories(metadataPath);
 
-        KeyManager keyManager = new KeyManager(keysFilePath);
-        KeyRotationPolicy policy = new KeyRotationPolicy((int) config.getOpsThreshold(), config.getAgeThresholdMs());
-        this.keyService = new KeyRotationServiceImpl(keyManager, policy, metadataPath.toString(), metadataManager, cryptoService);
-        this.cryptoService = cryptoService;
+        // 4) wire in the exact same KeyLifeCycleService your CryptoService uses
+        this.cryptoService   = cryptoService;
         this.metadataManager = metadataManager;
-        this.pointBuffer = new EncryptedPointBuffer(metadataPath.toString(), metadataManager);
-        this.currentVersion = keyService.getCurrentVersion().getVersion();
+        KeyLifeCycleService injectedKeySvc = cryptoService.getKeyService();
+        if (injectedKeySvc == null) {
+            throw new IllegalStateException(
+                    "CryptoService.getKeyService() must return a non-null KeyLifeCycleService"
+            );
+        }
+        this.keyService = injectedKeySvc;
+
+        // 5) build your encrypted‐point buffer and secure LSH index
+        this.pointBuffer  = new EncryptedPointBuffer(metadataPath.toString(), metadataManager);
         this.indexService = new SecureLSHIndexService(cryptoService, keyService, metadataManager);
-        ((KeyRotationServiceImpl) keyService).setIndexService(indexService);
-        this.cache = new LRUCache<>(10000);
-        this.profiler = config.isProfilerEnabled() ? new Profiler() : null;
-        this.tokenFactory = new QueryTokenFactory(cryptoService, keyService, new EvenLSH(Collections.max(dimensions), config.getNumShards()), 1, 1);
+        if (keyService instanceof KeyRotationServiceImpl) {
+            ((KeyRotationServiceImpl) keyService).setIndexService(indexService);
+        }
+
+        // 6) cache, profiler, query token factory, query service
+        this.cache        = new LRUCache<>(10_000);
+        this.profiler     = config.isProfilerEnabled() ? new Profiler() : null;
+        this.tokenFactory = new QueryTokenFactory(
+                cryptoService,
+                keyService,
+                new EvenLSH(Collections.max(dimensions), config.getNumShards()),
+                1,  // numRowsPerBand
+                1   // numBands (tune as you like)
+        );
         this.queryService = new QueryServiceImpl(indexService, cryptoService, keyService);
 
+        // 7) single pass loading in batches
         DefaultDataLoader loader = new DefaultDataLoader();
         for (int dim : dimensions) {
-            List<double[]> vectors;
-            int batch = 0;
-            do {
-                vectors = loader.loadData(dataPath, dim, BATCH_SIZE);
-                if (!vectors.isEmpty()) {
-                    batchInsert(vectors, dim);
-                    batch++;
-                }
-            } while (!vectors.isEmpty());
+            List<double[]> batch;
+            // loadData returns at most BATCH_SIZE vectors, or empty when done
+            while (!(batch = loader.loadData(dataPath, dim, BATCH_SIZE)).isEmpty()) {
+                batchInsert(batch, dim);
+            }
         }
     }
 
@@ -261,7 +275,16 @@ public class ForwardSecureANNSystem {
             if (profiler != null)
                 profiler.recordQueryMetric("Q" + q, serverMs, clientMs, avgRatio);
 
-            topKProfiler.record("Q" + q, evals);
+            for (QueryEvaluationResult r : evals) {
+                profiler.recordTopKVariants(
+                        "Q" + q,
+                        r.getTopKRequested(),
+                        r.getRetrieved(),
+                        r.getRatio(),
+                        r.getRecall(),
+                        r.getTimeMs()
+                );
+            }
 
             rw.writeTable("Query " + (q + 1) + " Results (dim=" + dim + ")",
                     new String[]{"TopK", "Retrieved", "Ratio", "Recall", "TimeMs"},
@@ -305,7 +328,15 @@ public class ForwardSecureANNSystem {
         return Math.sqrt(sum);
     }
 
-    public class ResultWriter {
+    public QueryService getQueryService() {
+        return this.queryService;
+    }
+
+    public Profiler getProfiler() {
+        return this.profiler;
+    }
+
+    public static class ResultWriter {
         private final Path outputPath;
 
         public ResultWriter(Path outputPath) {
@@ -332,26 +363,17 @@ public class ForwardSecureANNSystem {
         logger.info("✅ ForwardSecureANNSystem flushAll completed");
     }
     public void shutdown() {
+        // 1) Print summary stats
+        System.out.printf(
+                "\n=== System Shutdown ===%n" +
+                        "Total indexing time: %d ms%n" +
+                        "Total query time: %d ms%n%n",
+                TimeUnit.NANOSECONDS.toMillis(totalIndexingTime),
+                TimeUnit.NANOSECONDS.toMillis(totalQueryTime)
+        );
+
         try {
-            System.out.printf("\n=== System Shutdown ===\nTotal indexing time: %d ms\nTotal query time: %d ms\n\n",
-                    TimeUnit.NANOSECONDS.toMillis(totalIndexingTime),
-                    TimeUnit.NANOSECONDS.toMillis(totalQueryTime));
-
-            // Start the emergency timeout flush (safety guard)
-            Thread shutdownGuard = new Thread(() -> {
-                try {
-                    Thread.sleep(10_000);  // 10-second timeout
-                    System.err.println("⚠️ Shutdown taking too long, forcing flush and exit...");
-                    flushAll(); // safe to call multiple times
-                    System.exit(0);
-                } catch (Exception ex) {
-                    logger.error("Emergency flush failed", ex);
-                }
-            });
-            shutdownGuard.setDaemon(true);
-            shutdownGuard.start();
-
-            // Normal shutdown logic
+            // 2) Normal shutdown sequence without forcing VM exit
             if (indexService != null) {
                 indexService.flushBuffers();
                 indexService.shutdown();
@@ -368,7 +390,6 @@ public class ForwardSecureANNSystem {
                             profiler.getAllServerQueryTimes()
                     );
                 }
-
                 if (!profiler.getAllQueryRatios().isEmpty()) {
                     PerformanceVisualizer.visualizeRatioDistribution(
                             profiler.getAllQueryRatios()
@@ -383,16 +404,23 @@ public class ForwardSecureANNSystem {
                 }
             }
 
-            System.out.printf("Total vectors flushed: %d\n", pointBuffer.getTotalFlushedPoints());
-            System.out.printf("Final indexed count: %d\n", getIndexedVectorCount());
+            System.out.printf("Total vectors flushed: %d%n", pointBuffer.getTotalFlushedPoints());
+            System.out.printf("Final indexed count: %d%n", getIndexedVectorCount());
 
-            metadataManager.printSummary();
-            metadataManager.logStats();
+            if (metadataManager != null) {
+                metadataManager.printSummary();
+                metadataManager.logStats();
+            }
+
+            // 3) Final flush for any remaining data
+            logger.info("🔧 Performing final flushAll()");
+            flushAll();
 
         } catch (Exception e) {
             logger.error("Unexpected error during shutdown", e);
         } finally {
-            System.gc(); // encourage cleanup
+            System.gc();
+            logger.info("✅ Shutdown complete");
         }
     }
 
@@ -423,7 +451,7 @@ public class ForwardSecureANNSystem {
         keyService.setCryptoService(cryptoService);
 
         ForwardSecureANNSystem sys = new ForwardSecureANNSystem(
-                configFile, dataPath, keysFile, dimensions, metadataPath, true,
+                configFile, dataPath, keysFile, dimensions, metadataPath, false,
                 metadataManager, cryptoService, batchSize
         );
 
@@ -431,8 +459,12 @@ public class ForwardSecureANNSystem {
         sys.runEndToEnd(dataPath, queryPath, dim, groundtruthPath);
 
         System.out.print("\n==== QUERY PERFORMANCE METRICS ====\n");
-        System.out.printf("Average Query Fetch Time: %.2f ms\n", sys.profiler.getAllClientQueryTimes().stream().mapToDouble(d -> d).average().orElse(0.0));
-        System.out.printf("Recall Ratio (matched / total): %.4f\n", sys.profiler.getAllQueryRatios().stream().mapToDouble(d -> d).average().orElse(0.0));
+        System.out.printf("Average Query Fetch Time: %.2f ms\n",
+                sys.getProfiler().getAllClientQueryTimes().stream().mapToDouble(d -> d).average().orElse(0.0));
+
+        System.out.printf("Recall Ratio (matched / total): %.4f\n",
+                sys.getProfiler().getAllQueryRatios().stream().mapToDouble(d -> d).average().orElse(0.0));
+
         System.out.print("Expected < 1000ms/query and Recall ≈ 1.0\n");
 
         long start = System.currentTimeMillis();
