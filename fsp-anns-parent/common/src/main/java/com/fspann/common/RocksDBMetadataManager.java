@@ -13,7 +13,6 @@ import java.util.stream.Stream;
 
 public class RocksDBMetadataManager implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(RocksDBMetadataManager.class);
-
     private final RocksDB db;
     private final String dbPath;
     private final String baseDir;

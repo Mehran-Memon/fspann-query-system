@@ -76,7 +76,7 @@ public class ForwardSecureANNSystemPerformanceIntegrationTest {
                 false,
                 metadataManager,
                 cryptoService,
-                500 // or your preferred batch size
+                100 // or your preferred batch size
         );
 
         logger.info("🚀 System initialized successfully");

@@ -1,20 +1,28 @@
 package com.loader;
 
 import com.fspann.loader.DefaultDataLoader;
+
+import java.io.IOException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.List;
 
 public class TestClient {
-    public static void main(String[] args) throws Exception {
+    public static void main(String[] args) throws IOException {
         DefaultDataLoader loader = new DefaultDataLoader();
-        String path = "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\data\\sift_dataset\\sift\\sift_base.fvecs"; // Replace with actual path or use a test file
+        Path dataFile = Paths.get("E:/Research Work/Datasets/sift_dataset/sift_base.fvecs");
         int batchSize = 100;
-        List<double[]> vectors;
+
+        List<double[]> batch;
+        int total = 0;
         do {
-            vectors = loader.loadData(path, batchSize);
-            for (double[] vec : vectors) {
-                // Process each vector (e.g., index it)
+            batch = loader.loadData(dataFile.toString(), batchSize);
+            for (double[] vec : batch) {
                 System.out.println(java.util.Arrays.toString(vec));
             }
-        } while (vectors.size() == batchSize); // Continue until < batchSize
+            total += batch.size();
+        } while (batch.size() == batchSize);
+
+        System.out.println("Total vectors read: " + total);
     }
 }

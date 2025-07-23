@@ -1,37 +1,72 @@
 package com.loader;
 
 import com.fspann.loader.DefaultDataLoader;
+import com.fspann.loader.FormatLoader;
 import org.junit.jupiter.api.Test;
+
 import java.io.IOException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Iterator;
+import java.util.List;
+import java.util.concurrent.*;
 import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class DefaultDataLoaderTest {
+
     @Test
-    void testConcurrentLoading() throws InterruptedException {
+    void testConcurrentStreaming() throws InterruptedException {
         DefaultDataLoader loader = new DefaultDataLoader();
-        String path = "C:\\Users\\Mehran Memon\\eclipse-workspace\\fspann-query-system\\data\\sift_dataset\\sift\\sift_base.fvecs"; // Ensure file exists
-        ExecutorService executor = Executors.newFixedThreadPool(4);
-        IntStream.range(0, 4).forEach(i -> executor.submit(() -> {
+        Path dataFile = Paths.get(
+                "E:\\Research Work\\Datasets\\sift_dataset\\sift_base.fvecs"
+        );
+
+        // ✅ FIX: Use lookup() instead of loadData(Path)
+        FormatLoader fl = loader.lookup(dataFile);
+        assertNotNull(fl);
+
+        ExecutorService exec = Executors.newFixedThreadPool(4);
+        CountDownLatch latch = new CountDownLatch(4);
+
+        Runnable task = () -> {
             try {
-                loader.loadData(path, 100);
+                Iterator<double[]> it = fl.openVectorIterator(dataFile);
+                int count = 0;
+                while (it.hasNext() && count < 100) {
+                    it.next();
+                    count++;
+                }
+                assertEquals(100, count);
             } catch (IOException e) {
-                fail("Loading failed: " + e.getMessage());
+                fail("Streaming failed: " + e.getMessage());
+            } finally {
+                latch.countDown();
             }
-        }));
-        executor.shutdown();
-        executor.awaitTermination(5, TimeUnit.SECONDS);
-        assertTrue(true); // No exceptions indicate success
+        };
+
+        IntStream.range(0, 4).forEach(i -> exec.submit(task));
+        assertTrue(latch.await(5, TimeUnit.SECONDS), "Threads timed out");
+        exec.shutdownNow();
     }
 
     @Test
     void testInvalidFormatExtension() {
         DefaultDataLoader loader = new DefaultDataLoader();
-        String path = "dataset.unknown";
-        assertThrows(UnsupportedOperationException.class, () -> loader.loadData(path, 100));
+        assertThrows(IllegalArgumentException.class, // ✅ updated to match your actual exception
+                () -> loader.loadData("somefile.xyz", 50));
+    }
+
+    @Test
+    void testBatchLoadingCsv() throws IOException {
+        DefaultDataLoader loader = new DefaultDataLoader();
+        String path = "E:\\Research Work\\Datasets\\synthetic_data\\synthetic_128d\\synthetic_gaussian_128d_storage.csv";
+
+        List<double[]> first = loader.loadData(path, 3);
+        assertTrue(first.size() <= 3);
+
+        List<double[]> second = loader.loadData(path, 3);
+        assertTrue(second.size() <= 3);
     }
 }

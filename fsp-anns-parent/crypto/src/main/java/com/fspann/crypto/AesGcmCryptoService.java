@@ -83,7 +83,6 @@ public class AesGcmCryptoService implements CryptoService {
         });
     }
 
-
     @Override
     public double[] decryptFromPoint(EncryptedPoint pt, SecretKey key) {
         logger.info("Decrypting point: id={}, version={}, IV={}", pt.getId(), pt.getVersion(), Base64.getEncoder().encodeToString(pt.getIv()));
@@ -181,7 +180,7 @@ public class AesGcmCryptoService implements CryptoService {
         }
     }
 
-        public void setKeyService(KeyLifeCycleService keyService) {
+    public void setKeyService(KeyLifeCycleService keyService) {
         this.keyService = keyService;
     }
 

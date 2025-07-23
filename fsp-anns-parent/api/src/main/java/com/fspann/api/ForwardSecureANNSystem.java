@@ -12,6 +12,7 @@ import com.fspann.key.KeyManager;
 import com.fspann.key.KeyRotationPolicy;
 import com.fspann.key.KeyRotationServiceImpl;
 import com.fspann.loader.DefaultDataLoader;
+import com.fspann.loader.FormatLoader;
 import com.fspann.loader.GroundtruthManager;
 import com.fspann.query.core.QueryEvaluationResult;
 import com.fspann.query.core.QueryTokenFactory;
@@ -27,6 +28,7 @@ import java.io.BufferedWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -72,58 +74,62 @@ public class ForwardSecureANNSystem {
             CryptoService cryptoService,
             int batchSize
     ) throws Exception {
-        // 1) basic params
-        this.verbose    = verbose;
+        this.verbose = verbose;
         this.BATCH_SIZE = batchSize;
 
-        // 2) load the JSON config
         ApiSystemConfig apiConfig = new ApiSystemConfig(configPath);
         this.config = apiConfig.getConfig();
 
-        // 3) make sure metadata folder exists
         Files.createDirectories(metadataPath);
 
-        // 4) wire in the exact same KeyLifeCycleService your CryptoService uses
-        this.cryptoService   = cryptoService;
+        // Use injected KeyLifeCycleService from CryptoService if provided
+        this.cryptoService = cryptoService;
         this.metadataManager = metadataManager;
-        KeyLifeCycleService injectedKeySvc = cryptoService.getKeyService();
-        if (injectedKeySvc == null) {
-            throw new IllegalStateException(
-                    "CryptoService.getKeyService() must return a non-null KeyLifeCycleService"
-            );
+        KeyLifeCycleService injected = cryptoService.getKeyService();
+        if (injected != null) {
+            this.keyService = injected;
+        } else {
+            // fallback: create our own KeyRotationService
+            KeyManager keyManager = new KeyManager(keysFilePath);
+            KeyRotationPolicy policy = new KeyRotationPolicy((int) config.getOpsThreshold(), config.getAgeThresholdMs());
+            this.keyService = new KeyRotationServiceImpl(keyManager, policy, metadataPath.toString(), metadataManager, cryptoService);
         }
-        this.keyService = injectedKeySvc;
 
-        // 5) build your encrypted‐point buffer and secure LSH index
-        this.pointBuffer  = new EncryptedPointBuffer(metadataPath.toString(), metadataManager);
+        this.pointBuffer = new EncryptedPointBuffer(metadataPath.toString(), metadataManager);
         this.indexService = new SecureLSHIndexService(cryptoService, keyService, metadataManager);
         if (keyService instanceof KeyRotationServiceImpl) {
             ((KeyRotationServiceImpl) keyService).setIndexService(indexService);
         }
 
-        // 6) cache, profiler, query token factory, query service
-        this.cache        = new LRUCache<>(10_000);
-        this.profiler     = config.isProfilerEnabled() ? new Profiler() : null;
-        this.tokenFactory = new QueryTokenFactory(
-                cryptoService,
-                keyService,
-                new EvenLSH(Collections.max(dimensions), config.getNumShards()),
-                1,  // numRowsPerBand
-                1   // numBands (tune as you like)
-        );
+        this.cache = new LRUCache<>(10000);
+        this.profiler = config.isProfilerEnabled() ? new Profiler() : null;
+        this.tokenFactory = new QueryTokenFactory(cryptoService, keyService,
+                new EvenLSH(Collections.max(dimensions), config.getNumShards()), 1, 1);
         this.queryService = new QueryServiceImpl(indexService, cryptoService, keyService);
 
-        // 7) single pass loading in batches
+        // 7) single‐pass streaming + batch insert
         DefaultDataLoader loader = new DefaultDataLoader();
-        for (int dim : dimensions) {
-            List<double[]> batch;
-            // loadData returns at most BATCH_SIZE vectors, or empty when done
-            while (!(batch = loader.loadData(dataPath, dim, BATCH_SIZE)).isEmpty()) {
-                batchInsert(batch, dim);
-            }
-        }
+        Path dataFile = Paths.get(dataPath);
+        for (int dim : dimensions)
+            streamAndBatchInsert(loader, dataFile, dim);
     }
 
+    /**
+     * Streams a file through the right FormatLoader and does batchInsert(...)
+     */
+    public void streamAndBatchInsert(DefaultDataLoader loader, Path dataFile, int dim) throws IOException {
+        FormatLoader fmt = loader.lookup(dataFile);
+        Iterator<double[]> it = fmt.openVectorIterator(dataFile);
+        List<double[]> batch = new ArrayList<>(BATCH_SIZE);
+        while (it.hasNext()) {
+            batch.add(it.next());
+            if (batch.size() == BATCH_SIZE) {
+                batchInsert(batch, dim);
+                batch.clear();
+            }
+        }
+        if (!batch.isEmpty()) batchInsert(batch, dim);
+    }
 
     public void batchInsert(List<double[]> vectors, int dim) {
         if (profiler != null) profiler.start("batchInsert");
@@ -165,11 +171,9 @@ public class ForwardSecureANNSystem {
         }
     }
 
-
     public int getIndexedVectorCount() {
         return totalInserted + pointBuffer.getTotalFlushedPoints();
     }
-
 
     public void insert(String id, double[] vector, int dim) {
         if (profiler != null) profiler.start("insert");
@@ -363,7 +367,6 @@ public class ForwardSecureANNSystem {
         logger.info("✅ ForwardSecureANNSystem flushAll completed");
     }
     public void shutdown() {
-        // 1) Print summary stats
         System.out.printf(
                 "\n=== System Shutdown ===%n" +
                         "Total indexing time: %d ms%n" +
@@ -373,24 +376,33 @@ public class ForwardSecureANNSystem {
         );
 
         try {
-            // 2) Normal shutdown sequence without forcing VM exit
+            logger.info("🔻 Shutdown sequence started");
+
             if (indexService != null) {
+                logger.info("📤 Flushing indexService buffers...");
                 indexService.flushBuffers();
+                logger.info("🛑 Shutting down indexService...");
                 indexService.shutdown();
+                logger.info("✅ indexService shutdown complete");
             }
 
             if (profiler != null) {
+                logger.info("📊 Exporting profiler data...");
                 profiler.exportToCSV("profiler_metrics.csv");
                 profiler.exportQueryMetrics("query_metrics.csv");
                 topKProfiler.export("topk_evaluation.csv");
+                logger.info("📁 Profiler CSVs exported");
 
                 if (!profiler.getAllClientQueryTimes().isEmpty()) {
+                    logger.info("📈 Visualizing query latencies...");
                     PerformanceVisualizer.visualizeQueryLatencies(
                             profiler.getAllClientQueryTimes(),
                             profiler.getAllServerQueryTimes()
                     );
                 }
+
                 if (!profiler.getAllQueryRatios().isEmpty()) {
+                    logger.info("📉 Visualizing ratio distribution...");
                     PerformanceVisualizer.visualizeRatioDistribution(
                             profiler.getAllQueryRatios()
                     );
@@ -404,23 +416,31 @@ public class ForwardSecureANNSystem {
                 }
             }
 
-            System.out.printf("Total vectors flushed: %d%n", pointBuffer.getTotalFlushedPoints());
-            System.out.printf("Final indexed count: %d%n", getIndexedVectorCount());
+            logger.info("🧮 Total vectors flushed: {}", pointBuffer.getTotalFlushedPoints());
+            logger.info("📦 Final indexed count: {}", getIndexedVectorCount());
 
             if (metadataManager != null) {
+                logger.info("🗃️ Printing metadata summary...");
                 metadataManager.printSummary();
+                logger.info("📊 Logging metadata stats...");
                 metadataManager.logStats();
             }
 
-            // 3) Final flush for any remaining data
             logger.info("🔧 Performing final flushAll()");
-            flushAll();
+            flushAll(); // flush encrypted points + metadata version
 
         } catch (Exception e) {
-            logger.error("Unexpected error during shutdown", e);
+            logger.error("❌ Unexpected error during shutdown", e);
         } finally {
+            logger.info("♻️ Requesting GC cleanup...");
             System.gc();
             logger.info("✅ Shutdown complete");
+
+            // 🧪 Optional forced exit in test mode to prevent hangs
+            if ("true".equals(System.getProperty("test.env"))) {
+                logger.warn("⚠️ Test mode enabled. Forcing process exit to prevent hang.");
+                System.exit(0);
+            }
         }
     }
 

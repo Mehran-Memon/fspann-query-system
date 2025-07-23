@@ -3,11 +3,11 @@ package com.fspann.loader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.BufferedInputStream;
-import java.io.FileInputStream;
-import java.io.IOException;
+import java.io.*;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -16,55 +16,40 @@ import java.util.concurrent.ConcurrentHashMap;
  * Now supports streaming with per-path offset.
  */
 public class FvecsLoader implements FormatLoader {
-    private static final Logger logger = LoggerFactory.getLogger(FvecsLoader.class);
-    private final Map<String, Integer> fileOffsets = new ConcurrentHashMap<>();
-
     @Override
-    public List<double[]> loadVectors(String path, int batchSize) throws IOException {
-        List<double[]> data = new ArrayList<>(batchSize);
-        int offset = fileOffsets.getOrDefault(path, 0);
-
-        try (BufferedInputStream bis = new BufferedInputStream(new FileInputStream(path))) {
-            // Skip past already-read vectors
-            for (int i = 0; i < offset; i++) {
-                int dim = readInt(bis);
-                if (dim <= 0) throw new IOException("Invalid vector dimension while skipping: " + dim);
-                long skipped = bis.skip(dim * 4L);
-                if (skipped < dim * 4L) break;
+    public Iterator<double[]> openVectorIterator(Path file) throws IOException {
+        DataInputStream in = new DataInputStream(
+                new BufferedInputStream(Files.newInputStream(file))
+        );
+        return new Iterator<>() {
+            private double[] next = readOne();
+            private double[] readOne() {
+                try {
+                    int dim = Integer.reverseBytes(in.readInt());
+                    double[] v = new double[dim];
+                    for(int i=0;i<dim;i++){
+                        v[i] = Float.intBitsToFloat(Integer.reverseBytes(in.readInt()));
+                    }
+                    return v;
+                } catch (EOFException eof) {
+                    close(); return null;
+                } catch (IOException e) {
+                    close();
+                    throw new UncheckedIOException(e);
+                }
             }
-
-            for (int i = 0; i < batchSize; i++) {
-                byte[] dimBuf = new byte[4];
-                if (bis.read(dimBuf) != 4) break;
-                int dim = ByteBuffer.wrap(dimBuf).order(ByteOrder.LITTLE_ENDIAN).getInt();
-                if (dim <= 0) throw new IOException("Invalid vector dimension: " + dim);
-
-                byte[] vecBuf = new byte[dim * 4];
-                int read = bis.read(vecBuf);
-                if (read != dim * 4) break;
-
-                float[] tmp = new float[dim];
-                ByteBuffer.wrap(vecBuf).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer().get(tmp);
-
-                double[] vec = new double[dim];
-                for (int j = 0; j < dim; j++) vec[j] = tmp[j];
-
-                data.add(vec);
+            private void close() {
+                try { in.close(); } catch(IOException ignored){}
             }
-        }
-
-        fileOffsets.put(path, offset + data.size());
-        return data;
+            @Override public boolean hasNext() { return next != null; }
+            @Override public double[] next() {
+                if(next==null) throw new NoSuchElementException();
+                double[] v=next; next=readOne(); return v;
+            }
+        };
     }
 
-    private int readInt(BufferedInputStream bis) throws IOException {
-        byte[] buf = new byte[4];
-        if (bis.read(buf) != 4) throw new IOException("Unexpected end of file while reading int");
-        return ByteBuffer.wrap(buf).order(ByteOrder.LITTLE_ENDIAN).getInt();
-    }
-
-    @Override
-    public List<int[]> loadIndices(String path, int batchSize) {
-        throw new UnsupportedOperationException("FVECS does not support loading indices");
+    @Override public Iterator<int[]> openIndexIterator(Path file) {
+        throw new UnsupportedOperationException("FVECS has no indices");
     }
 }

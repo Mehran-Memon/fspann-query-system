@@ -1,30 +1,39 @@
 package com.fspann.loader;
 
 import java.io.IOException;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 
 /**
- * Strategy interface for file-format–specific loading logic.
- * Supports streaming via offset-aware batch loading.
+ * Unified interface for file‐format streaming.
+ * We provide default batch methods on top of the two iterators.
  */
 public interface FormatLoader {
-    /**
-     * Loads a batch of vectors from a given file.
-     *
-     * @param path       file a path
-     * @param batchSize  number of vectors to load in this batch
-     * @return a list of double[] vectors
-     * @throws IOException if reading fails or the file is malformed
-     */
-    List<double[]> loadVectors(String path, int batchSize) throws IOException;
+    /** Stream all vectors one at a time. */
+    Iterator<double[]> openVectorIterator(Path file) throws IOException;
 
-    /**
-     * Loads a batch of integer index arrays (e.g., ground-truth neighbors).
-     *
-     * @param path       file path (typically IVECS format)
-     * @param batchSize  number of index arrays to load
-     * @return list of int arrays
-     * @throws IOException if reading fails
-     */
-    List<int[]> loadIndices(String path, int batchSize) throws IOException;
+    /** Stream all ground‐truth indices one array at a time. */
+    Iterator<int[]> openIndexIterator(Path file) throws IOException;
+
+    /** Default “batch” wrapper over the vector iterator. */
+    default List<double[]> loadVectors(Path file, int batchSize) throws IOException {
+        Iterator<double[]> it = openVectorIterator(file);
+        List<double[]> batch = new ArrayList<>(batchSize);
+        while (it.hasNext() && batch.size() < batchSize) {
+            batch.add(it.next());
+        }
+        return batch;
+    }
+
+    /** Default “batch” wrapper over the index iterator. */
+    default List<int[]> loadIndices(Path file, int batchSize) throws IOException {
+        Iterator<int[]> it = openIndexIterator(file);
+        List<int[]> batch = new ArrayList<>(batchSize);
+        while (it.hasNext() && batch.size() < batchSize) {
+            batch.add(it.next());
+        }
+        return batch;
+    }
 }

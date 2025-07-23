@@ -80,7 +80,6 @@ public final class EncryptionUtils {
         }
         return result;
     }
-    // --- Helper Methods ---
 
     private static byte[] doubleArrayToBytes(double[] vector) {
         ByteBuffer buffer = ByteBuffer.allocate(vector.length * Double.BYTES);

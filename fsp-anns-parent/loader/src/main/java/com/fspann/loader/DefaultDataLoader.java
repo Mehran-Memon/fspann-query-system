@@ -1,57 +1,56 @@
 package com.fspann.loader;
 
 import java.io.IOException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-/**
- * Default implementation of DataLoader that delegates to format-specific loaders.
- */
 public class DefaultDataLoader implements DataLoader {
-    private static final Logger logger = LoggerFactory.getLogger(DefaultDataLoader.class);
-    private final Map<String, FormatLoader> registry = new ConcurrentHashMap<>();
+    private final Map<String,FormatLoader> registry = new ConcurrentHashMap<>();
 
     public DefaultDataLoader() {
-        registry.put("CSV",  new CsvLoader());
+        registry.put("CSV",   new CsvLoader());
         registry.put("FVECS", new FvecsLoader());
         registry.put("IVECS", new IvecsLoader());
+    }
 
+    /** Publicly expose the same logic you had there before. */
+    public FormatLoader lookup(Path file) {
+        String name = file.getFileName().toString();
+        int dot = name.lastIndexOf('.');
+        String ext = (dot>=0 ? name.substring(dot+1) : "").toUpperCase();
+        FormatLoader f = registry.get(ext);
+        if (f==null) throw new IllegalArgumentException("No loader for “" + ext + "”");
+        return f;
     }
 
     @Override
     public List<double[]> loadData(String path, int expectedDim, int batchSize) throws IOException {
-        String ext = detectExtension(path);
-        FormatLoader loader = registry.get(ext);
-        if (loader == null) {
-            logger.error("Unsupported file extension '{}'", ext);
-            throw new UnsupportedOperationException("Unsupported format: " + ext);
-        }
-        return loader.loadVectors(path, batchSize);
+        Path file = Paths.get(path);
+        return lookup(file).loadVectors(file, batchSize);
     }
 
     @Override
     public List<double[]> loadData(String path, int batchSize) throws IOException {
-        // Default to 0 as expectedDim, for streaming loaders
         return loadData(path, 0, batchSize);
     }
 
+    private FormatLoader getLoader(Path file) {
+        String name = file.getFileName().toString();
+        int dot = name.lastIndexOf('.');
+        String ext = (dot >= 0 ? name.substring(dot + 1) : "").toUpperCase();
+        FormatLoader fl = registry.get(ext);
+        if (fl == null) {
+            throw new UnsupportedOperationException("No loader for extension: " + ext);
+        }
+        return fl;
+    }
 
     @Override
     public List<int[]> loadGroundTruth(String path, int batchSize) throws IOException {
-//        logger.info("Loading ground-truth indices from {}", path);
-        FormatLoader loader = registry.get("IVECS"); // Hardcoded loader
-        return loader.loadIndices(path, batchSize);
-    }
-
-    private String detectExtension(String path) {
-        int idx = path.lastIndexOf('.') + 1;
-        if (idx <= 0 || idx >= path.length()) {
-//            logger.warn("No valid file extension found in {}", path);
-            return "";
-        }
-        return path.substring(idx).toUpperCase();
+        Path file = Paths.get(path);
+        return lookup(file).loadIndices(file, batchSize);
     }
 }
