@@ -51,7 +51,7 @@ public class AesGcmCryptoService implements CryptoService {
                 byte[] iv = EncryptionUtils.generateIV();
                 byte[] ciphertext = EncryptionUtils.encryptVector(vector, iv, key);
                 int version = keyService.getCurrentVersion().getVersion();
-                EncryptedPoint point = new EncryptedPoint(id, 0, iv, ciphertext, version, vector.length);
+                EncryptedPoint point = new EncryptedPoint(id, 0, iv, ciphertext, version, vector.length, null);
                 metadataManager.updateVectorMetadata(id, Map.of("version", String.valueOf(version)));
                 logger.debug("Encrypted point {} with key version {}", id, version);
                 return point;
@@ -61,7 +61,6 @@ public class AesGcmCryptoService implements CryptoService {
             }
         });
     }
-
 
     @Override
     public EncryptedPoint encrypt(String id, double[] vector) {
@@ -98,7 +97,7 @@ public class AesGcmCryptoService implements CryptoService {
                 byte[] ciphertext = EncryptionUtils.encryptVector(vector, iv, key);
 
                 // Create EncryptedPoint with current version
-                EncryptedPoint point = new EncryptedPoint(id, 0, iv, ciphertext, cachedVersion.getVersion(), vector.length);
+                EncryptedPoint point = new EncryptedPoint(id, 0, iv, ciphertext, cachedVersion.getVersion(), vector.length, null);
 
                 // Update metadata (defer to batch if possible)
                 metadataManager.updateVectorMetadata(id, Map.of("version", String.valueOf(cachedVersion.getVersion())));
@@ -182,7 +181,7 @@ public class AesGcmCryptoService implements CryptoService {
 
                 int newVersion = keyService.getCurrentVersion().getVersion();
                 EncryptedPoint reEncrypted = new EncryptedPoint(
-                        pt.getId(), pt.getShardId(), newIv, ciphertext, newVersion, pt.getVectorLength()
+                        pt.getId(), pt.getShardId(), newIv, ciphertext, newVersion, pt.getVectorLength(), null
                 );
 
                 metadataManager.updateVectorMetadata(pt.getId(), Map.of("version", String.valueOf(newVersion)));
@@ -219,10 +218,9 @@ public class AesGcmCryptoService implements CryptoService {
 
     private static RocksDBMetadataManager createDefaultMetadataManager() {
         try {
-            return new RocksDBMetadataManager("metadata/rocksdb");
+            return new RocksDBMetadataManager("metadata/rocksdb", "metadata/points");
         } catch (IOException e) {
             throw new RuntimeException("Failed to initialize RocksDBMetadataManager", e);
         }
     }
-
 }

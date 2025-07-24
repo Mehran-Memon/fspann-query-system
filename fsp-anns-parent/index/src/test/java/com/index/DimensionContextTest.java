@@ -53,15 +53,15 @@ class DimensionContextTest {
         when(crypto.generateIV()).thenReturn(oldIv);
 
         when(crypto.reEncrypt(any(EncryptedPoint.class), any(SecretKey.class), any(byte[].class)))
-                .thenReturn(new EncryptedPoint("test", 5, newIv, newQ, 1, 2));
+                .thenReturn(new EncryptedPoint("test", 5, newIv, newQ, 1, 2, null));
 
         context = new DimensionContext(index, crypto, keyService, lsh);
     }
 
     @Test
     void testReEncryptAll() {
-        EncryptedPoint pt = new EncryptedPoint("test", 5, oldIv, oldQ, 0, 2);
-        EncryptedPoint rePt = new EncryptedPoint("test", 5, newIv, newQ, 1, 2);
+        EncryptedPoint pt = new EncryptedPoint("test", 5, oldIv, oldQ, 0, 2, null);
+        EncryptedPoint rePt = new EncryptedPoint("test", 5, newIv, newQ, 1, 2, null);
 
         when(index.getDirtyShards()).thenReturn(Set.of(5));
         when(index.queryEncrypted(argThat(token ->
@@ -107,10 +107,10 @@ class DimensionContextTest {
 
     @Test
     void testReEncryptAll_MultiplePoints() {
-        EncryptedPoint pt1 = new EncryptedPoint("pt1", 5, oldIv, oldQ, 0, 2);
-        EncryptedPoint pt2 = new EncryptedPoint("pt2", 5, oldIv, oldQ, 0, 2);
-        EncryptedPoint rePt1 = new EncryptedPoint("pt1", 5, newIv, newQ, 1, 2);
-        EncryptedPoint rePt2 = new EncryptedPoint("pt2", 5, newIv, newQ, 1, 2);
+        EncryptedPoint pt1 = new EncryptedPoint("pt1", 5, oldIv, oldQ, 0, 2, null);
+        EncryptedPoint pt2 = new EncryptedPoint("pt2", 5, oldIv, oldQ, 0, 2, null);
+        EncryptedPoint rePt1 = new EncryptedPoint("pt1", 5, newIv, newQ, 1, 2, null);
+        EncryptedPoint rePt2 = new EncryptedPoint("pt2", 5, newIv, newQ, 1, 2, null);
 
         when(index.getDirtyShards()).thenReturn(Set.of(5));
         when(index.queryEncrypted(argThat(token ->

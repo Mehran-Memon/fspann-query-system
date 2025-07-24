@@ -19,7 +19,8 @@ class PersistenceUtilsTest {
     @Test
     void saveAndLoadEncryptedPoint() throws IOException, ClassNotFoundException {
         Path file = tempDir.resolve("point.ser");
-        EncryptedPoint original = new EncryptedPoint("vec123", 1, new byte[]{0, 1, 2}, new byte[]{3, 4, 5}, 1, 128);
+        List<Integer> buckets = Arrays.asList(1, 2, 3);
+        EncryptedPoint original = new EncryptedPoint("vec123", 1, new byte[]{0, 1, 2}, new byte[]{3, 4, 5}, 1, 128, buckets);
 
         PersistenceUtils.saveObject(original, file.toString(), tempDir.toString());
         EncryptedPoint loaded = PersistenceUtils.loadObject(file.toString(), tempDir.toString(), EncryptedPoint.class);
@@ -30,14 +31,16 @@ class PersistenceUtilsTest {
         assertArrayEquals(original.getCiphertext(), loaded.getCiphertext(), "Ciphertext mismatch");
         assertEquals(original.getVersion(), loaded.getVersion(), "Version mismatch");
         assertEquals(original.getVectorLength(), loaded.getVectorLength(), "Vector length mismatch");
+        assertEquals(original.getBuckets(), loaded.getBuckets(), "Buckets mismatch");
     }
 
     @Test
     void saveAndLoadEncryptedPointList() throws IOException, ClassNotFoundException {
         Path file = tempDir.resolve("points.ser");
-        EncryptedPoint point1 = new EncryptedPoint("vec1", 1, new byte[]{0, 1, 2}, new byte[]{3, 4, 5}, 1, 128);
-        EncryptedPoint point2 = new EncryptedPoint("vec2", 1, new byte[]{6, 7, 8}, new byte[]{9, 10, 11}, 1, 128);
-        List<EncryptedPoint> original = Arrays.asList(point1, point2);
+        List<Integer> buckets = Arrays.asList(1, 2, 3);
+        EncryptedPoint point1 = new EncryptedPoint("vec1", 1, new byte[]{0, 1, 2}, new byte[]{3, 4, 5}, 1, 128, buckets);
+        EncryptedPoint point2 = new EncryptedPoint("vec2", 1, new byte[]{6, 7, 8}, new byte[]{9, 10, 11}, 1, 128, buckets);
+        List<EncryptedPoint> original = new ArrayList<>(Arrays.asList(point1, point2));
 
         PersistenceUtils.saveObject((Serializable) original, file.toString(), tempDir.toString());
         List<EncryptedPoint> loaded = PersistenceUtils.loadObject(file.toString(), tempDir.toString(), ArrayList.class);
@@ -55,6 +58,8 @@ class PersistenceUtilsTest {
         assertEquals(point2.getVersion(), loaded.get(1).getVersion(), "Second point version mismatch");
         assertEquals(point1.getVectorLength(), loaded.get(0).getVectorLength(), "First point vector length mismatch");
         assertEquals(point2.getVectorLength(), loaded.get(1).getVectorLength(), "Second point vector length mismatch");
+        assertEquals(point1.getBuckets(), loaded.get(0).getBuckets(), "First point buckets mismatch");
+        assertEquals(point2.getBuckets(), loaded.get(1).getBuckets(), "Second point buckets mismatch");
     }
 
     @Test

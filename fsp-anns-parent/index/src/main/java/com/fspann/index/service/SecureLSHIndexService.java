@@ -94,7 +94,8 @@ public class SecureLSHIndexService implements IndexService {
                         encryptedPoint.getIv(),
                         encryptedPoint.getCiphertext(),
                         version.getVersion(),
-                        dimension
+                        dimension,
+                        Collections.singletonList(shardId)
                 );
 
                 byDim.computeIfAbsent(dimension, k -> new ArrayList<>()).add(withShard);
@@ -199,7 +200,8 @@ public class SecureLSHIndexService implements IndexService {
                     encryptedPoint.getIv(),
                     encryptedPoint.getCiphertext(),
                     encryptedPoint.getVersion(),
-                    vector.length
+                    vector.length,
+                    Collections.singletonList(shardId)
             );
 
             insert(withShard);

@@ -7,9 +7,9 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 
 import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.Logger;
@@ -28,7 +28,7 @@ public class EncryptedPointBufferTest {
     public void setup() throws Exception {
         tempDbPath = Files.createTempDirectory("rocksdb_test_");
         tempPointsDir = Files.createTempDirectory("points_test_");
-        metadataManager = new RocksDBMetadataManager(tempDbPath.toString());
+        metadataManager = new RocksDBMetadataManager(tempDbPath.toString(), tempPointsDir.toString());
         buffer = new EncryptedPointBuffer(tempPointsDir.toString(), metadataManager, 2);
         logger.info("Initialized RocksDB at {} and points at {}", tempDbPath, tempPointsDir);
     }
@@ -71,14 +71,15 @@ public class EncryptedPointBufferTest {
     void testBufferFlush(@TempDir Path tempDir) throws IOException {
         String dbPath = tempDir.resolve("rocksdb").toString();
         String pointsPath = tempDir.resolve("points").toString();
-        RocksDBMetadataManager manager = new RocksDBMetadataManager(dbPath); // Adjust based on actual constructor
+        RocksDBMetadataManager manager = new RocksDBMetadataManager(dbPath, pointsPath);
         EncryptedPointBuffer buffer = new EncryptedPointBuffer(pointsPath, manager, 2);
-        EncryptedPoint p1 = new EncryptedPoint("vec1", 1, new byte[]{0, 1}, new byte[]{2, 3}, 1, 128);
-        EncryptedPoint p2 = new EncryptedPoint("vec2", 1, new byte[]{4, 5}, new byte[]{6, 7}, 1, 128);
+        List<Integer> buckets = Arrays.asList(1, 2, 3);
+        EncryptedPoint p1 = new EncryptedPoint("vec1", 1, new byte[]{0, 1}, new byte[]{2, 3}, 1, 128, buckets);
+        EncryptedPoint p2 = new EncryptedPoint("vec2", 1, new byte[]{4, 5}, new byte[]{6, 7}, 1, 128, buckets);
         buffer.add(p1);
         buffer.add(p2);
         buffer.flush(1);
         assertEquals(0, buffer.getBufferSize(), "Expected buffer to be empty after flush");
-        manager.close(); // Use close() instead of shutdown()
+        manager.close();
     }
 }

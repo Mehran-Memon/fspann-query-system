@@ -84,8 +84,7 @@ public class AesGcmCryptoServiceTest {
     @Test
     public void testReEncryptWithInvalidOldKeyVersion() {
         // Simulate encrypted point with bad version (999)
-        EncryptedPoint pt = new EncryptedPoint("bad", 0, cryptoService.generateIV(), new byte[16], 999, 2);
-        when(keyService.getVersion(999)).thenThrow(new IllegalArgumentException("Version not found"));
+        EncryptedPoint pt = new EncryptedPoint("bad", 0, cryptoService.generateIV(), new byte[16], 999, 2, null);        when(keyService.getVersion(999)).thenThrow(new IllegalArgumentException("Version not found"));
 
         assertThrows(AesGcmCryptoService.CryptoException.class,
                 () -> cryptoService.reEncrypt(pt, key2, cryptoService.generateIV()));

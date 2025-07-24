@@ -1,8 +1,7 @@
 package com.fspann.common;
 
 import java.io.Serializable;
-import java.util.Arrays;
-import java.util.Objects;
+import java.util.*;
 
 public class EncryptedPoint implements Serializable {
     private final String id;
@@ -11,8 +10,9 @@ public class EncryptedPoint implements Serializable {
     private final byte[] ciphertext;
     private final int version;
     private final int vectorLength;
+    private final List<Integer> buckets;
 
-    public EncryptedPoint(String id, int shardId, byte[] iv, byte[] ciphertext, int version, int vectorLength) {
+    public EncryptedPoint(String id, int shardId, byte[] iv, byte[] ciphertext, int version, int vectorLength, List<Integer> buckets) {
         this.id = Objects.requireNonNull(id, "ID must not be null");
         this.shardId = shardId;
         this.iv = Objects.requireNonNull(iv, "IV must not be null").clone();
@@ -21,29 +21,33 @@ public class EncryptedPoint implements Serializable {
         if (vectorLength <= 0) throw new IllegalArgumentException("Vector length must be positive");
         this.version = version;
         this.vectorLength = vectorLength;
+        this.buckets = buckets != null ? Collections.unmodifiableList(new ArrayList<>(buckets)) : null;
     }
 
     public String getId() { return id; }
     public int getShardId() { return shardId; }
-    public byte[] getIv() { return iv != null ? iv.clone() : null; }
-    public byte[] getCiphertext() { return ciphertext != null ? ciphertext.clone() : null; }
+    public byte[] getIv() { return iv.clone(); }
+    public byte[] getCiphertext() { return ciphertext.clone(); }
     public int getVersion() { return version; }
     public int getVectorLength() { return vectorLength; }
+    public List<Integer> getBuckets() { return buckets != null ? new ArrayList<>(buckets) : null; }
 
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof EncryptedPoint that)) return false;
+        if (!(o instanceof EncryptedPoint)) return false;
+        EncryptedPoint that = (EncryptedPoint) o;
         return shardId == that.shardId &&
                 version == that.version &&
                 vectorLength == that.vectorLength &&
                 Objects.equals(id, that.id) &&
                 Arrays.equals(iv, that.iv) &&
-                Arrays.equals(ciphertext, that.ciphertext);
+                Arrays.equals(ciphertext, that.ciphertext) &&
+                Objects.equals(buckets, that.buckets);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(id, shardId, version, vectorLength, Arrays.hashCode(iv), Arrays.hashCode(ciphertext));
+        return Objects.hash(id, shardId, Arrays.hashCode(iv), Arrays.hashCode(ciphertext), version, vectorLength, buckets);
     }
 }

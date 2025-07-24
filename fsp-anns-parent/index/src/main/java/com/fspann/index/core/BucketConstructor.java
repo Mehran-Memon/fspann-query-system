@@ -78,7 +78,8 @@ public final class BucketConstructor {
                         newIv,
                         fakeCiphertext,
                         version,
-                        template.getVectorLength()
+                        template.getVectorLength(),
+                null
                 );
                 bucket.add(fake);
             }

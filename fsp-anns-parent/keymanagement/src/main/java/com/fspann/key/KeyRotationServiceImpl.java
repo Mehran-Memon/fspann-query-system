@@ -141,7 +141,8 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
                             updated.getIv(),
                             updated.getCiphertext(),
                             updated.getVersion(),
-                            updated.getVectorLength()
+                            updated.getVectorLength(),
+                            null
                     );
 
                     pendingMetadata.put(reindexed.getId(), Map.of(

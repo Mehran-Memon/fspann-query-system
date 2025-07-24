@@ -29,7 +29,7 @@ class SecureLSHIndexTest {
     void testConcurrentAdd() throws InterruptedException {
         ExecutorService executor = Executors.newFixedThreadPool(4);
         IntStream.range(0, 100).forEach(i -> executor.submit(() -> {
-            EncryptedPoint pt = new EncryptedPoint("pt" + i, i % 32, new byte[12], new byte[16], 1, 2);
+            EncryptedPoint pt = new EncryptedPoint("pt" + i, i % 32, new byte[12], new byte[16], 1, 2, Collections.singletonList(i % 32));
             index.addPoint(pt);
         }));
         executor.shutdown();
