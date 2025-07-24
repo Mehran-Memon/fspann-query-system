@@ -16,15 +16,17 @@ import org.slf4j.LoggerFactory;
 import java.awt.*;
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import org.jfree.data.xy.DefaultXYZDataset;
 
-/**
- * Visualizes performance metrics and query results using JFreeChart.
- */
 public class PerformanceVisualizer {
     private static final Logger logger = LoggerFactory.getLogger(PerformanceVisualizer.class);
+    private static final String BASE_DIR = "results/";
 
     public static void visualizeTimings(List<Long> timings) {
         if (timings == null || timings.isEmpty()) {
@@ -48,7 +50,7 @@ public class PerformanceVisualizer {
     }
 
     public static void visualizeConfusionMatrix(int[][] confusionMatrix, int topK) {
-        if (confusionMatrix == null || confusionMatrix.length == 0) {
+        if (confusionMatrix == null || confusionMatrix.length == 0 || confusionMatrix[0].length == 0) {
             logger.warn("No confusion matrix data to visualize");
             return;
         }
@@ -65,9 +67,9 @@ public class PerformanceVisualizer {
         int index = 0;
         for (int i = 0; i < rows; i++) {
             for (int j = 0; j < cols; j++) {
-                xValues[index] = j;  // X = True Rank
-                yValues[index] = i;  // Y = Predicted Rank
-                zValues[index] = confusionMatrix[i][j]; // Value
+                xValues[index] = j;
+                yValues[index] = i;
+                zValues[index] = confusionMatrix[i][j];
                 index++;
             }
         }
@@ -135,14 +137,15 @@ public class PerformanceVisualizer {
     }
 
     public static void visualizeFakePoints(List<double[]> fakePoints, List<double[]> indexedPoints, int dim) {
-        logger.info("Visualizing fake points vs indexed points — saved as PNG");
+        if (fakePoints == null || fakePoints.isEmpty() || indexedPoints == null || indexedPoints.isEmpty()) {
+            logger.warn("No fake or indexed points to visualize");
+            return;
+        }
 
         DefaultCategoryDataset dataset = new DefaultCategoryDataset();
-
         for (int i = 0; i < fakePoints.size(); i++) {
             dataset.addValue(fakePoints.get(i)[0], "Fake Point", "F" + i);
         }
-
         for (int i = 0; i < indexedPoints.size(); i++) {
             dataset.addValue(indexedPoints.get(i)[0], "Indexed Point", "P" + i);
         }
@@ -158,7 +161,10 @@ public class PerformanceVisualizer {
     }
 
     public static void visualizeRawData(List<double[]> vectors, int dim, String label) {
-        logger.info("Saving raw data visualization: {}", label);
+        if (vectors == null || vectors.isEmpty()) {
+            logger.warn("No raw data to visualize");
+            return;
+        }
 
         DefaultCategoryDataset dataset = new DefaultCategoryDataset();
         for (int i = 0; i < vectors.size(); i++) {
@@ -176,7 +182,10 @@ public class PerformanceVisualizer {
     }
 
     public static void visualizeIndexedData(List<double[]> vectors, int dim, String label) {
-        logger.info("Saving indexed data visualization: {}", label);
+        if (vectors == null || vectors.isEmpty()) {
+            logger.warn("No indexed data to visualize");
+            return;
+        }
 
         DefaultCategoryDataset dataset = new DefaultCategoryDataset();
         for (int i = 0; i < vectors.size(); i++) {
@@ -202,7 +211,7 @@ public class PerformanceVisualizer {
         DefaultCategoryDataset dataset = new DefaultCategoryDataset();
         for (int i = 0; i < clientMs.size(); i++) {
             dataset.addValue(clientMs.get(i), "Client ART (ms)", "Q" + (i + 1));
-            if (serverMs != null && serverMs.size() > i) {
+            if (serverMs != null && i < serverMs.size()) {
                 dataset.addValue(serverMs.get(i), "Server ART (ms)", "Q" + (i + 1));
             }
         }
@@ -245,13 +254,36 @@ public class PerformanceVisualizer {
         saveChart(chart, "results_ratio_distribution.png");
     }
 
-
     public static void saveChart(JFreeChart chart, String filename) {
-        try {
-            ChartUtils.saveChartAsPNG(new File(filename), chart, 1000, 600);
-            logger.info("Chart saved to: {}", filename);
-        } catch (IOException e) {
-            logger.error("Failed to save chart: {}", filename, e);
+        Objects.requireNonNull(chart, "Chart cannot be null");
+        Objects.requireNonNull(filename, "Filename cannot be null");
+        Path path = Paths.get(BASE_DIR, filename).normalize();
+        Path basePath = Paths.get(BASE_DIR).normalize();
+        if (!path.startsWith(basePath)) {
+            logger.error("Path traversal detected: {}", filename);
+            throw new IllegalArgumentException("Invalid chart filename: " + filename);
         }
+        try {
+            Files.createDirectories(path.getParent());
+            ChartUtils.saveChartAsPNG(new File(path.toString()), chart, 1000, 600);
+            logger.info("Chart saved to: {}", path);
+        } catch (IOException e) {
+            logger.error("Failed to save chart: {}", path, e);
+            throw new RuntimeException("Failed to save chart: " + path, e);
+        }
+    }
+
+    public static void visualizePerformanceByDimension(List<Double> latencies, List<Integer> dimensions) {
+        DefaultCategoryDataset dataset = new DefaultCategoryDataset();
+        for (int i = 0; i < latencies.size(); i++) {
+            dataset.addValue(latencies.get(i), "Latency (ms)", "Dim " + dimensions.get(i));
+        }
+        JFreeChart chart = ChartFactory.createBarChart(
+                "Query Latency by Dimension",
+                "Dimension",
+                "Time (ms)",
+                dataset
+        );
+        saveChart(chart, "results_latency_by_dimension.png");
     }
 }

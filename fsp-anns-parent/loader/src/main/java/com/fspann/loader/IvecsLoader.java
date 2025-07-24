@@ -1,15 +1,10 @@
 package com.fspann.loader;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.*;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+
 public class IvecsLoader implements FormatLoader {
     @Override public Iterator<double[]> openVectorIterator(Path file) {
         throw new UnsupportedOperationException("IVECS has no vectors");

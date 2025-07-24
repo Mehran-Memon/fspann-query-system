@@ -19,6 +19,7 @@ import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
@@ -32,8 +33,9 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
     private CryptoService cryptoService;
     private IndexService indexService;
 
-    private Instant lastRotation = Instant.now();
+    private volatile Instant lastRotation = Instant.now();
     private final AtomicInteger operationCount = new AtomicInteger(0);
+    private final Map<String, Map<String, String>> pendingMetadata = new ConcurrentHashMap<>();
 
     public KeyRotationServiceImpl(KeyManager keyManager,
                                   KeyRotationPolicy policy,
@@ -64,7 +66,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
 
         try {
             String fileName = Paths.get(rotationMetaDir, "rotation_" + newVer.getVersion() + ".meta").toString();
-            PersistenceUtils.saveObject(newVer, fileName);
+            PersistenceUtils.saveObject(newVer, fileName, rotationMetaDir);
         } catch (IOException e) {
             throw new RuntimeException("Key rotation persistence failed", e);
         }
@@ -74,14 +76,21 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
             try {
                 EncryptedPoint updated = cryptoService.reEncrypt(pt, newVer.getKey(), cryptoService.generateIV());
                 metadataManager.saveEncryptedPoint(updated);
-                Map<String, String> newMetadata = new HashMap<>();
-                newMetadata.put("version", String.valueOf(updated.getVersion()));
-                newMetadata.put("shardId", String.valueOf(updated.getShardId()));
-                metadataManager.updateVectorMetadata(updated.getId(), newMetadata);
+                pendingMetadata.put(updated.getId(), Map.of(
+                        "version", String.valueOf(updated.getVersion()),
+                        "shardId", String.valueOf(updated.getShardId())
+                ));
                 reEncrypted.add(updated);
             } catch (IOException e) {
                 logger.warn("Skipping point {} (v={}) due to save failure: {}", pt.getId(), pt.getVersion(), e.getMessage());
             }
+        }
+
+        try {
+            metadataManager.batchUpdateVectorMetadata(pendingMetadata);
+            pendingMetadata.clear();
+        } catch (IOException e) {
+            logger.error("Failed to batch update metadata", e);
         }
 
         return reEncrypted;
@@ -97,7 +106,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
         logger.info("Starting manual re-encryption of all vectors");
 
         if (cryptoService == null || metadataManager == null || indexService == null) {
-            logger.warn("Re-encryption skipped: cryptoService, metadataManager, or indexService not initialized");
+            logger.warn("Re-encryption skipped: services not initialized");
             return;
         }
 
@@ -113,11 +122,9 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
 
             for (Path file : pointFiles) {
                 try {
-                    // 1) Load original point
-                    EncryptedPoint original = PersistenceUtils.loadObject(file.toString());
+                    EncryptedPoint original = PersistenceUtils.loadObject(file.toString(), baseDir.toString(), EncryptedPoint.class);
                     if (original == null || !seen.add(original.getId())) continue;
 
-                    // 2) Re-encrypt under new key & IV
                     byte[] newIv = cryptoService.generateIV();
                     EncryptedPoint updated = cryptoService.reEncrypt(
                             original,
@@ -125,11 +132,9 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
                             newIv
                     );
 
-                    // 3) Determine new shard from the decrypted vector
                     double[] rawVec = cryptoService.decryptFromPoint(updated, getCurrentVersion().getKey());
                     int newShard = indexService.getShardIdForVector(rawVec);
 
-                    // 4) Build final reindexed point
                     EncryptedPoint reindexed = new EncryptedPoint(
                             updated.getId(),
                             newShard,
@@ -139,16 +144,13 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
                             updated.getVectorLength()
                     );
 
-                    // 5) Update metadata in RocksDB before touching the file
-                    Map<String, String> meta = Map.of(
+                    pendingMetadata.put(reindexed.getId(), Map.of(
                             "version", String.valueOf(reindexed.getVersion()),
                             "shardId", String.valueOf(reindexed.getShardId())
-                    );
-                    metadataManager.putVectorMetadata(reindexed.getId(), meta);
+                    ));
 
-                    // 6) Atomically overwrite the .point file via a .tmp swap
                     Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
-                    PersistenceUtils.saveObject(reindexed, tmp.toString());  // ← object, then path
+                    PersistenceUtils.saveObject(reindexed, tmp.toString(), baseDir.toString());
                     Files.move(
                             tmp,
                             file,
@@ -156,8 +158,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
                             StandardCopyOption.REPLACE_EXISTING
                     );
 
-                    logger.info(
-                            "Re-encrypted point {}: v{}→v{}, shard {}→{}",
+                    logger.debug("Re-encrypted point {}: v{}→v{}, shard {}→{}",
                             reindexed.getId(),
                             original.getVersion(),
                             reindexed.getVersion(),
@@ -165,23 +166,25 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
                             reindexed.getShardId()
                     );
 
-                    // 7) Reinstate into in-memory index
                     indexService.insert(reindexed);
                     totalReEncrypted++;
 
-                    // 8) Throttle & occasional GC
-                    if (totalReEncrypted % 100 == 0) {
-                        logger.info("🌀 Re-encrypted {} points so far…", totalReEncrypted);
-                        System.gc();
+                    if (totalReEncrypted % 10000 == 0) {
+                        metadataManager.batchUpdateVectorMetadata(pendingMetadata);
+                        pendingMetadata.clear();
+                        logger.info("Re-encrypted {} points so far", totalReEncrypted);
                         Thread.sleep(50);
                     }
-
-                } catch (Exception e) {
+                } catch (IOException | InterruptedException | ClassNotFoundException e) {
                     logger.warn("Failed to re-encrypt {}: {}", file, e.getMessage());
                 }
             }
 
-            // 9) Final cleanup
+            if (!pendingMetadata.isEmpty()) {
+                metadataManager.batchUpdateVectorMetadata(pendingMetadata);
+                pendingMetadata.clear();
+            }
+
             indexService.clearCache();
             metadataManager.cleanupStaleMetadata(seen);
 
@@ -206,7 +209,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
         return new KeyVersion(version, key);
     }
 
-    public void incrementOperation() {
+    public synchronized void incrementOperation() {
         operationCount.incrementAndGet();
     }
 
@@ -223,5 +226,10 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
 
     public void setIndexService(IndexService indexService) {
         this.indexService = indexService;
+    }
+
+    // Added for testing purposes
+    public void setLastRotationTime(long timestamp) {
+        this.lastRotation = Instant.ofEpochMilli(timestamp);
     }
 }

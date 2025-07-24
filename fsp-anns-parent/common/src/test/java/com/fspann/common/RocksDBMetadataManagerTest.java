@@ -2,16 +2,13 @@ package com.fspann.common;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.rocksdb.Options;
 import org.rocksdb.RocksDB;
-import org.rocksdb.RocksDBException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import static java.lang.System.gc;
-import org.junit.jupiter.api.AfterAll;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -22,8 +19,6 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-
-//@Disabled("Disabled due to JVM crash during RocksDB interaction in JDK 21")
 public class RocksDBMetadataManagerTest {
     private static final Logger logger = LoggerFactory.getLogger(RocksDBMetadataManagerTest.class);
     private RocksDBMetadataManager metadataManager;
@@ -31,10 +26,12 @@ public class RocksDBMetadataManagerTest {
     private Path tempPointsDir;
 
     @BeforeEach
-    public void setup() throws Exception {
-        tempDbPath = Files.createTempDirectory("rocksdb_test_");
-        tempPointsDir = Files.createTempDirectory("points_test_");
-        metadataManager = new RocksDBMetadataManager(tempDbPath.toString()) {
+    public void setup(@TempDir Path tempDir) throws Exception {
+        tempDbPath = tempDir.resolve("rocksdb");
+        tempPointsDir = tempDir.resolve("points");
+        Files.createDirectories(tempDbPath);
+        Files.createDirectories(tempPointsDir);
+        metadataManager = new RocksDBMetadataManager(tempDbPath.toString(), tempPointsDir.toString()) {
             @Override
             public void saveEncryptedPoint(EncryptedPoint pt) throws IOException {
                 String versionStr = getVectorMetadata(pt.getId()).getOrDefault("version", "v1");
@@ -44,7 +41,7 @@ public class RocksDBMetadataManagerTest {
                 Path versionDir = tempPointsDir.resolve("v" + versionStr);
                 Files.createDirectories(versionDir);
                 Path filePath = versionDir.resolve(pt.getId() + ".point");
-                PersistenceUtils.saveObject(pt, filePath.toString());
+                PersistenceUtils.saveObject(pt, filePath.toString(), tempPointsDir.toString());
                 logger.info("Saved encrypted point: {} at {}", pt.getId(), filePath);
             }
 
@@ -54,7 +51,7 @@ public class RocksDBMetadataManagerTest {
                 try (var paths = Files.walk(tempPointsDir)) {
                     paths.filter(Files::isRegularFile).forEach(path -> {
                         try {
-                            EncryptedPoint point = PersistenceUtils.loadObject(path.toString());
+                            EncryptedPoint point = PersistenceUtils.loadObject(path.toString(), tempPointsDir.toString(), EncryptedPoint.class);
                             if (point != null) points.add(point);
                         } catch (IOException | ClassNotFoundException e) {
                             logger.error("Failed to load encrypted point from file: {}", path, e);
@@ -92,16 +89,8 @@ public class RocksDBMetadataManagerTest {
                     }
                 });
 
-        System.gc();        // 🔁 Trigger finalization
-        Thread.sleep(500);  // 🔂 Allow RocksDB cleanup time
-    }
-
-    @AfterAll
-    static void forceRocksDBCleanup() throws InterruptedException {
-        logger.info("⏳ Forcing GC + finalization to clean native RocksDB state...");
-        System.gc();          // Request GC to finalize RocksDB handles
-        Thread.sleep(500);    // Give RocksDB time to finalize
-        logger.info("✅ RocksDB cleanup completed safely before JVM shutdown.");
+        System.gc();
+        Thread.sleep(500);
     }
 
     @Test
@@ -146,11 +135,14 @@ public class RocksDBMetadataManagerTest {
     void testPutAndGetMetadata(@TempDir Path tempDir) throws Exception {
         Path dbPath = tempDir.resolve("rocksdb");
         Path pointsPath = tempDir.resolve("points");
+        Files.createDirectories(dbPath);
+        Files.createDirectories(pointsPath);
 
         try (RocksDBMetadataManager manager = new RocksDBMetadataManager(dbPath.toString(), pointsPath.toString())) {
             manager.putVectorMetadata("vec1", Map.of("shardId", "1", "version", "v1"));
             Map<String, String> metadata = manager.getVectorMetadata("vec1");
             assertEquals("1", metadata.get("shardId"));
+            assertEquals("v1", metadata.get("version"));
         }
     }
 
@@ -159,9 +151,7 @@ public class RocksDBMetadataManagerTest {
         String vectorId = "vec123";
         metadataManager.putVectorMetadata(vectorId, Map.of("shardId", "1", "version", "v1"));
         metadataManager.close();
-
-        // Do NOT call methods on closed metadataManager
-        assertDoesNotThrow(() -> metadataManager.close()); // Safe double-close
+        assertDoesNotThrow(() -> metadataManager.close());
     }
 
     @Test
@@ -179,9 +169,8 @@ public class RocksDBMetadataManagerTest {
         metadataManager.mergeVectorMetadata(vectorId, Map.of("version", "v2", "label", "secure"));
 
         Map<String, String> merged = metadataManager.getVectorMetadata(vectorId);
-        assertEquals("v1", merged.get("version"));  // original retained
+        assertEquals("v1", merged.get("version")); // original retained
         assertEquals("2", merged.get("shardId"));
-        assertEquals("secure", merged.get("label"));  // new added
+        assertEquals("secure", merged.get("label")); // new added
     }
-
 }

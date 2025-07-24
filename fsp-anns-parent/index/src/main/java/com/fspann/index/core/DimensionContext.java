@@ -38,40 +38,20 @@ public class DimensionContext {
     }
 
     public void reEncryptAll() {
-        keyService.rotateIfNeeded();
-        KeyVersion previous = keyService.getPreviousVersion();
         KeyVersion current = keyService.getCurrentVersion();
-
+        KeyVersion previous = keyService.getPreviousVersion();
         if (previous == null || current == null) {
-            return; // No re-encryption needed if keys are not available
+            return;
         }
-
         for (int shard : index.getDirtyShards()) {
             List<Integer> buckets = Collections.singletonList(shard);
             byte[] iv = crypto.generateIV();
             double[] dummyQuery = new double[lsh.getDimensions()];
             byte[] encryptedQuery = crypto.encrypt(dummyQuery, previous.getKey(), iv);
-
-            int topK = lsh.getNumBuckets() / 2;
-            int numTables = index.getNumHashTables();
-            String context = "epoch_" + previous.getVersion(); // Match test expectation
-
-            QueryToken token = new QueryToken(
-                    buckets,                         // candidateBuckets
-                    iv,
-                    encryptedQuery,
-                    dummyQuery,
-                    topK,
-                    numTables,
-                    context,
-                    lsh.getDimensions(),             // dimension
-                    shard,                           // shardId
-                    previous.getVersion()            // version
-            );
-
+            QueryToken token = new QueryToken(buckets, iv, encryptedQuery, dummyQuery, lsh.getNumBuckets() / 2, index.getNumHashTables(), "epoch_" + previous.getVersion(), lsh.getDimensions(), shard, previous.getVersion());
             List<EncryptedPoint> pts = index.queryEncrypted(token);
             for (EncryptedPoint pt : pts) {
-                if (pt.getVersion() <= previous.getVersion()) { // Process points with older or equal version
+                if (pt.getVersion() <= previous.getVersion()) {
                     EncryptedPoint reEnc = crypto.reEncrypt(pt, current.getKey(), crypto.generateIV());
                     index.removePoint(pt.getId());
                     index.addPoint(reEnc);

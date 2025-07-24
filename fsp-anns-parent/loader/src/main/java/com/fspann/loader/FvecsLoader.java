@@ -1,15 +1,9 @@
 package com.fspann.loader;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.*;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Loader for FVECS format: binary float vectors with each entry prefixed by dimension.

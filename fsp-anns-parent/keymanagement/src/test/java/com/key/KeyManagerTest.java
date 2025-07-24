@@ -11,6 +11,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -68,7 +72,6 @@ class KeyManagerTest {
         }
     }
 
-
     @Test
     void testUniqueKeyMaterialPerRotation() {
         KeyVersion v1 = keyManager.getCurrentVersion();
@@ -108,7 +111,6 @@ class KeyManagerTest {
         assertThrows(IllegalArgumentException.class, () -> new KeyManager(null));
     }
 
-
     @Test
     void testFileMissingOnDeserialization() throws IOException {
         Path missingPath = keyFile.resolveSibling("nonexistent.ser");
@@ -126,5 +128,14 @@ class KeyManagerTest {
         assertNotEquals(new String(k1.getEncoded()), new String(k2.getEncoded()));
         assertNotEquals(new String(k2.getEncoded()), new String(k3.getEncoded()));
         assertNotEquals(new String(k1.getEncoded()), new String(k3.getEncoded()));
+    }
+
+    @Test
+    void testConcurrentKeyRotation() throws InterruptedException {
+        ExecutorService executor = Executors.newFixedThreadPool(4);
+        IntStream.range(0, 100).forEach(i -> executor.submit(() -> keyManager.rotateKey()));
+        executor.shutdown();
+        executor.awaitTermination(5, TimeUnit.SECONDS);
+        assertEquals(101, keyManager.getCurrentVersion().getVersion());
     }
 }

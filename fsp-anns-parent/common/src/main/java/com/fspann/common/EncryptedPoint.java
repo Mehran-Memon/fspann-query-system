@@ -15,13 +15,12 @@ public class EncryptedPoint implements Serializable {
     public EncryptedPoint(String id, int shardId, byte[] iv, byte[] ciphertext, int version, int vectorLength) {
         this.id = Objects.requireNonNull(id, "ID must not be null");
         this.shardId = shardId;
-        this.iv = iv != null ? iv.clone() : null;
-        this.ciphertext = ciphertext != null ? ciphertext.clone() : null;
+        this.iv = Objects.requireNonNull(iv, "IV must not be null").clone();
+        this.ciphertext = Objects.requireNonNull(ciphertext, "Ciphertext must not be null").clone();
+        if (version < 0) throw new IllegalArgumentException("Version must be non-negative");
+        if (vectorLength <= 0) throw new IllegalArgumentException("Vector length must be positive");
         this.version = version;
         this.vectorLength = vectorLength;
-        if (iv == null || ciphertext == null) {
-            throw new NullPointerException("IV or ciphertext must not be null");
-        }
     }
 
     public String getId() { return id; }

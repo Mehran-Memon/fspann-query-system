@@ -9,11 +9,14 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
+import javax.net.ssl.KeyManager;
+import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.util.Map;
 
@@ -163,21 +166,15 @@ public class AesGcmCryptoServiceTest {
         assertArrayEquals(vector, decrypted, 1e-9);
     }
 
-//    @Test
-//    public void testCryptoService(@TempDir Path tempDir) throws Exception {
-//        Path keys = tempDir.resolve("keys.ser");
-//        KeyManager keyManager = new KeyManager(keys.toString());
-//        KeyRotationPolicy policy = new KeyRotationPolicy(Integer.MAX_VALUE, Long.MAX_VALUE);
-//        KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(keyManager, policy, tempDir.toString());
-//        AesGcmCryptoService cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, new MetadataManager());
-//
-//        double[] vector = {0.05, 0.05};
-//        SecretKey key = keyService.getCurrentVersion().getKey();
-//        byte[] iv = cryptoService.generateIV();
-//        byte[] ciphertext = cryptoService.encrypt(vector, key, iv);
-//        double[] decrypted = cryptoService.decryptQuery(ciphertext, iv, key);
-//
-//        assertArrayEquals(vector, decrypted, 0.0);
-//    }
+    @Test
+    public void testEncryptWithInvalidId() {
+        double[] vector = {1.0, 2.0};
+        assertThrows(IllegalArgumentException.class, () -> cryptoService.encrypt("invalid@id", vector));
+    }
 
+    @Test
+    public void testEncryptWithInvalidVector() {
+        double[] vector = {Double.NaN, 2.0};
+        assertThrows(IllegalArgumentException.class, () -> cryptoService.encrypt("valid-id", vector));
+    }
 }

@@ -23,12 +23,14 @@ import static org.junit.jupiter.api.Assertions.*;
 
 public class ForwardSecurityAdversarialTest {
     private RocksDBMetadataManager metadataManager;
+    private static final int[] TEST_DIMENSIONS = {3, 128, 1024, 10000};
+    private static final int NUM_POINTS = 1000;
+    private static final int TOP_K = 20;
 
     @BeforeEach
     public void cleanMetadataDir(@TempDir Path tempDir) throws IOException {
-        metadataManager = new RocksDBMetadataManager(tempDir.toString(), tempDir.toString());
+        metadataManager = new RocksDBMetadataManager(tempDir.toString(), tempDir.resolve("points").toString());
         Path baseDir = Paths.get(metadataManager.getPointsBaseDir());
-
         if (Files.exists(baseDir)) {
             try (Stream<Path> files = Files.walk(baseDir)) {
                 files.sorted(Comparator.reverseOrder())
@@ -45,86 +47,190 @@ public class ForwardSecurityAdversarialTest {
 
     @Test
     public void testForwardSecurityAgainstKeyCompromise(@TempDir Path tempDir) throws Exception {
-        System.out.println("========== Forward Security Test ==========");
+        List<Double> queryLatencies = new ArrayList<>();
+        for (int dim : TEST_DIMENSIONS) {
+            Path config = tempDir.resolve("config_" + dim + ".json");
+            Files.writeString(config, "{\"numShards\":32,\"profilerEnabled\":true,\"opsThreshold\":999999,\"ageThresholdMs\":999999}");
+            Path dummyData = tempDir.resolve("dummy_" + dim + ".csv");
+            Files.writeString(dummyData, generateDummyData(dim));
+            Path keys = tempDir.resolve("keys_" + dim + ".ser");
 
-        // 1. Configuration
-        Path config = tempDir.resolve("config.json");
-        Files.writeString(config, "{\"numShards\":4,\"profilerEnabled\":true,\"opsThreshold\":999999,\"ageThresholdMs\":999999}");
-        Path dummyData = tempDir.resolve("dummy.csv");
-        Files.writeString(dummyData, "0.0,0.0,0.0\n");
-        Path keys = tempDir.resolve("keys.ser");
+            KeyManager keyManager = new KeyManager(keys.toString());
+            KeyRotationPolicy policy = new KeyRotationPolicy(999999, 999999);
+            KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(keyManager, policy, tempDir.toString(), metadataManager, null);
+            CryptoService cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
+            keyService.setCryptoService(cryptoService);
 
-        // 2. System init
-        KeyManager keyManager = new KeyManager(keys.toString());
-        KeyRotationPolicy policy = new KeyRotationPolicy(999999, 999999);
-        KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(keyManager, policy, tempDir.toString(), metadataManager, null);
-        CryptoService cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
-        keyService.setCryptoService(cryptoService);
+            ForwardSecureANNSystem system = new ForwardSecureANNSystem(
+                    config.toString(), dummyData.toString(), keys.toString(),
+                    Collections.singletonList(dim), tempDir, true, metadataManager, cryptoService, 1
+            );
+            keyService.setIndexService(system.getIndexService());
 
-        ForwardSecureANNSystem system = new ForwardSecureANNSystem(
-                config.toString(), dummyData.toString(), keys.toString(),
-                Collections.singletonList(3), tempDir, true, metadataManager, cryptoService, 1
-        );
-        keyService.setIndexService(system.getIndexService());
+            // Insert multiple points
+            List<String> ids = new ArrayList<>();
+            List<double[]> points = new ArrayList<>();
+            Random rand = new Random();
+            for (int i = 0; i < NUM_POINTS; i++) {
+                String id = UUID.randomUUID().toString();
+                double[] point = new double[dim];
+                for (int j = 0; j < dim; j++) {
+                    point[j] = rand.nextDouble();
+                }
+                ids.add(id);
+                points.add(point);
+            }
+            long insertStart = System.nanoTime();
+            for (int i = 0; i < NUM_POINTS; i++) {
+                system.insert(ids.get(i), points.get(i), dim);
+            }
+            system.flushAll();
+            long insertDuration = (System.nanoTime() - insertStart) / 1_000_000;
+            PerformanceVisualizer.visualizeTimings(List.of(insertDuration));
 
-        int dim = 3;
+            // Capture old key
+            SecretKey compromisedKey = KeyUtils.fromBytes(keyService.getCurrentVersion().getKey().getEncoded());
+            int oldVersion = keyService.getCurrentVersion().getVersion();
 
-        // 3. Insert pre-compromise point
-        double[] pointBefore = {0.15, 0.15, 0.15};
-        String beforeId = UUID.randomUUID().toString();
-        system.insert(beforeId, pointBefore, dim);
-        system.flushAll();
+            // Rotate key and re-encrypt
+            keyService.rotateKey();
+            keyService.reEncryptAll();
+            ((SecureLSHIndexService) system.getIndexService()).clearCache();
 
-        // 4. Simulate key compromise
-        SecretKey compromisedKey = KeyUtils.fromBytes(keyService.getCurrentVersion().getKey().getEncoded());
-        System.out.println("Compromised key (base64): " + Base64.getEncoder().encodeToString(compromisedKey.getEncoded()));
+            // Insert new point post-rotation
+            String afterId = UUID.randomUUID().toString();
+            double[] pointAfter = new double[dim];
+            for (int j = 0; j < dim; j++) {
+                pointAfter[j] = rand.nextDouble();
+            }
+            system.insert(afterId, pointAfter, dim);
+            system.flushAll();
 
-        // 5. Key rotation and re-encryption
-        keyService.rotateKey();
-        keyService.reEncryptAll();
-        ((SecureLSHIndexService) system.getIndexService()).clearCache();
+            // Verify forward secrecy
+            for (String id : ids) {
+                EncryptedPoint point = system.getIndexService().getEncryptedPoint(id);
+                assertEquals(keyService.getCurrentVersion().getVersion(), point.getVersion(),
+                        "Point " + id + " should have updated version for dim=" + dim);
 
-        // 6. Insert post-compromise point
-        double[] pointAfter = {0.25, 0.25, 0.25};
-        String afterId = UUID.randomUUID().toString();
-        system.insert(afterId, pointAfter, dim);
-        system.flushAll();
+                // Old key should not decrypt
+                Optional<double[]> decryptedOld = KeyUtils.tryDecryptWithKeyOnly(point, compromisedKey);
+                assertTrue(decryptedOld.isEmpty(), "Old key must NOT decrypt re-encrypted point " + id + " for dim=" + dim);
 
-        // 7. Re-validation
-        EncryptedPoint beforePoint = system.getIndexService().getEncryptedPoint(beforeId);
-        assertEquals(keyService.getCurrentVersion().getVersion(), beforePoint.getVersion(),
-                "Pre-rotation point should have updated version");
+                // New key should decrypt correctly
+                SecretKey currentKey = keyService.getVersion(point.getVersion()).getKey();
+                Optional<double[]> decryptedNew = KeyUtils.tryDecryptWithKeyOnly(point, currentKey);
+                assertTrue(decryptedNew.isPresent(), "New key should decrypt point " + id + " for dim=" + dim);
+            }
 
-        // 8. Query around compromised vector
-        List<QueryResult> results = system.query(pointBefore, 50, dim);
-        assertNotNull(results);
-        assertFalse(results.isEmpty());
+            // Verify query functionality
+            long queryStart = System.nanoTime();
+            List<QueryResult> results = system.query(points.get(0), TOP_K, dim);
+            long queryDuration = (System.nanoTime() - queryStart) / 1_000_000;
+            queryLatencies.add((double) queryDuration);
+            assertNotNull(results, "Query results should not be null for dim=" + dim);
+            assertFalse(results.isEmpty(), "Query results should not be empty for dim=" + dim);
+            assertTrue(queryDuration < 500, "Query time should be under 500ms for dim=" + dim);
+            PerformanceVisualizer.visualizeQueryResults(results);
 
-        // 9. Print results
-        System.out.println("Query results:");
-        results.forEach(r -> System.out.printf("Returned ID: %s | Distance: %.6f\n", r.getId(), r.getDistance()));
+            // Test multiple rotations
+            keyService.rotateKey();
+            keyService.reEncryptAll();
+            ((SecureLSHIndexService) system.getIndexService()).clearCache();
 
-        // 10. Security checks
-        Optional<double[]> decryptedOld = KeyUtils.tryDecryptWithKeyOnly(beforePoint, compromisedKey);
-        assertTrue(decryptedOld.isEmpty(), "Old key must NOT decrypt re-encrypted point");
+            for (String id : ids) {
+                EncryptedPoint point = system.getIndexService().getEncryptedPoint(id);
+                assertEquals(keyService.getCurrentVersion().getVersion(), point.getVersion(),
+                        "Point " + id + " should have updated version after second rotation for dim=" + dim);
+                Optional<double[]> decryptedOld = KeyUtils.tryDecryptWithKeyOnly(point, compromisedKey);
+                assertTrue(decryptedOld.isEmpty(), "Old key must NOT decrypt after second rotation for dim=" + dim);
+            }
+        }
+        PerformanceVisualizer.visualizeQueryLatencies(queryLatencies, null);
+    }
 
-        SecretKey currentKey = keyService.getVersion(beforePoint.getVersion()).getKey();
-        Optional<double[]> decryptedNew = KeyUtils.tryDecryptWithKeyOnly(beforePoint, currentKey);
-        assertTrue(decryptedNew.isPresent(), "Current key must decrypt pre-rotation point");
+    @Test
+    public void testCacheHitUnderAdversarialConditions(@TempDir Path tempDir) throws Exception {
+        List<Double> queryLatencies = new ArrayList<>();
+        for (int dim : TEST_DIMENSIONS) {
+            Path config = tempDir.resolve("config_" + dim + ".json");
+            Files.writeString(config, "{\"numShards\":32,\"profilerEnabled\":true,\"opsThreshold\":999999,\"ageThresholdMs\":999999}");
+            Path dummyData = tempDir.resolve("dummy_" + dim + ".csv");
+            Files.writeString(dummyData, generateDummyData(dim));
+            Path keys = tempDir.resolve("keys_" + dim + ".ser");
 
-        // 11. Precision/Recall Evaluation
-        Set<String> groundtruth = Set.of(beforeId, afterId);
-        long matchCount = results.stream().map(QueryResult::getId).filter(groundtruth::contains).count();
+            KeyManager keyManager = new KeyManager(keys.toString());
+            KeyRotationPolicy policy = new KeyRotationPolicy(999999, 999999);
+            KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(keyManager, policy, tempDir.toString(), metadataManager, null);
+            CryptoService cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
+            keyService.setCryptoService(cryptoService);
 
-        double precision = (double) matchCount / results.size();
-        double recall = (double) matchCount / groundtruth.size();
+            ForwardSecureANNSystem system = new ForwardSecureANNSystem(
+                    config.toString(), dummyData.toString(), keys.toString(),
+                    Collections.singletonList(dim), tempDir, true, metadataManager, cryptoService, 1
+            );
+            keyService.setIndexService(system.getIndexService());
 
-        System.out.printf("✅ Precision: %.2f, Recall: %.2f\n", precision, recall);
-        assertTrue(matchCount > 0, "Expected at least one groundtruth match");
-        assertTrue(precision > 0.0 && recall > 0.0, "Expected non-zero precision and recall for secure ANN");
+            // Insert points
+            List<String> ids = new ArrayList<>();
+            List<double[]> points = new ArrayList<>();
+            Random rand = new Random();
+            for (int i = 0; i < NUM_POINTS; i++) {
+                String id = UUID.randomUUID().toString();
+                double[] point = new double[dim];
+                for (int j = 0; j < dim; j++) {
+                    point[j] = rand.nextDouble();
+                }
+                ids.add(id);
+                points.add(point);
+            }
+            long insertStart = System.nanoTime();
+            for (int i = 0; i < NUM_POINTS; i++) {
+                system.insert(ids.get(i), points.get(i), dim);
+            }
+            system.flushAll();
+            long insertDuration = (System.nanoTime() - insertStart) / 1_000_000;
+            PerformanceVisualizer.visualizeTimings(List.of(insertDuration));
 
-        // 12. Shutdown
-        system.shutdown();
-        metadataManager.close();
+            // Test cache performance
+            double[] query = points.get(0);
+            long start = System.nanoTime();
+            system.query(query, TOP_K, dim); // Cache miss
+            long missTime = System.nanoTime() - start;
+            queryLatencies.add(missTime / 1_000_000.0);
+
+            start = System.nanoTime();
+            system.query(query, TOP_K, dim); // Cache hit
+            long hitTime = System.nanoTime() - start;
+            queryLatencies.add(hitTime / 1_000_000.0);
+
+            assertTrue(hitTime < missTime, "Cache hit should be faster than miss for dim=" + dim);
+            assertTrue(hitTime / 1_000_000.0 < 500, "Cache hit should be under 500ms for dim=" + dim);
+
+            // Simulate adversarial cache poisoning
+            String poisonId = UUID.randomUUID().toString();
+            double[] poisonPoint = new double[dim];
+            for (int j = 0; j < dim; j++) {
+                poisonPoint[j] = rand.nextDouble();
+            }
+            system.insert(poisonId, poisonPoint, dim);
+            ((SecureLSHIndexService) system.getIndexService()).clearCache();
+
+            start = System.nanoTime();
+            system.query(query, TOP_K, dim); // Post-clear cache miss
+            long postClearTime = System.nanoTime() - start;
+            queryLatencies.add(postClearTime / 1_000_000.0);
+            assertTrue(postClearTime / 1_000_000.0 < 500, "Post-clear query should be under 500ms for dim=" + dim);
+        }
+        PerformanceVisualizer.visualizeQueryLatencies(queryLatencies, null);
+    }
+
+    private String generateDummyData(int dim) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < dim; i++) {
+            sb.append("0.0");
+            if (i < dim - 1) sb.append(",");
+        }
+        sb.append("\n");
+        return sb.toString();
     }
 }

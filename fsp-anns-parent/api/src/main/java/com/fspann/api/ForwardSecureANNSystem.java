@@ -14,6 +14,7 @@ import com.fspann.key.KeyRotationServiceImpl;
 import com.fspann.loader.DefaultDataLoader;
 import com.fspann.loader.FormatLoader;
 import com.fspann.loader.GroundtruthManager;
+import com.fspann.loader.StreamingBatchLoader;
 import com.fspann.query.core.QueryEvaluationResult;
 import com.fspann.query.core.QueryTokenFactory;
 import com.fspann.query.core.TopKProfiler;
@@ -22,46 +23,38 @@ import com.fspann.query.service.QueryServiceImpl;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import java.util.concurrent.TimeUnit;
 
-import java.io.BufferedWriter;
 import java.io.IOException;
+import java.util.concurrent.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.stream.Collectors;
 
-
-/**
- * Facade for the Forward-Secure ANN system with enhanced security, efficiency, and visualization.
- */
 public class ForwardSecureANNSystem {
     private static final Logger logger = LoggerFactory.getLogger(ForwardSecureANNSystem.class);
     private static final double DEFAULT_NOISE_SCALE = 0.01;
-    private static final int DEFAULT_TOP_K = 5;
-    private static final int DEFAULT_FAKE_POINT_COUNT = 100;
-
     private final SecureLSHIndexService indexService;
     private final QueryTokenFactory tokenFactory;
     private final QueryService queryService;
     private final CryptoService cryptoService;
     private final KeyLifeCycleService keyService;
     private final SystemConfig config;
-    private final LRUCache<QueryToken, List<QueryResult>> cache;
+    private final ConcurrentMap<QueryToken, List<QueryResult>> cache;
     private final Profiler profiler;
     private final boolean verbose;
-    private final List<Long> batchDurations = new ArrayList<>();
+    private final List<Long> batchDurations = Collections.synchronizedList(new ArrayList<>());
     private final EncryptedPointBuffer pointBuffer;
     private final RocksDBMetadataManager metadataManager;
+    private final TopKProfiler topKProfiler;
     private int currentVersion;
-    private int totalInserted = 0; // Optional
+    private int totalInserted = 0;
     private final int BATCH_SIZE;
     private long totalIndexingTime = 0;
     private long totalQueryTime = 0;
     private int indexingCount = 0;
-    private final TopKProfiler topKProfiler = new TopKProfiler();
+    private final ExecutorService executor;
 
     public ForwardSecureANNSystem(
             String configPath,
@@ -73,24 +66,38 @@ public class ForwardSecureANNSystem {
             RocksDBMetadataManager metadataManager,
             CryptoService cryptoService,
             int batchSize
-    ) throws Exception {
+    ) throws IOException {
+        Objects.requireNonNull(configPath, "Config path cannot be null");
+        Objects.requireNonNull(dataPath, "Data path cannot be null");
+        Objects.requireNonNull(keysFilePath, "Keys file path cannot be null");
+        Objects.requireNonNull(dimensions, "Dimensions cannot be null");
+        Objects.requireNonNull(metadataPath, "Metadata path cannot be null");
+        if (batchSize <= 0) throw new IllegalArgumentException("Batch size must be positive");
+        if (dimensions.isEmpty()) throw new IllegalArgumentException("Dimensions list cannot be empty");
+
         this.verbose = verbose;
         this.BATCH_SIZE = batchSize;
+        this.executor = Executors.newFixedThreadPool(Math.max(1, Runtime.getRuntime().availableProcessors() / 2));
 
-        ApiSystemConfig apiConfig = new ApiSystemConfig(configPath);
-        this.config = apiConfig.getConfig();
+        SystemConfig tempConfig;
+        try {
+            ApiSystemConfig apiConfig = new ApiSystemConfig(sanitizePath(configPath));
+            tempConfig = apiConfig.getConfig();
+        } catch (IOException e) {
+            logger.error("Failed to initialize configuration: {}", configPath, e);
+            throw e;
+        }
+        this.config = tempConfig;
 
         Files.createDirectories(metadataPath);
 
-        // Use injected KeyLifeCycleService from CryptoService if provided
-        this.cryptoService = cryptoService;
-        this.metadataManager = metadataManager;
+        this.cryptoService = Objects.requireNonNull(cryptoService, "CryptoService cannot be null");
+        this.metadataManager = Objects.requireNonNull(metadataManager, "MetadataManager cannot be null");
         KeyLifeCycleService injected = cryptoService.getKeyService();
         if (injected != null) {
             this.keyService = injected;
         } else {
-            // fallback: create our own KeyRotationService
-            KeyManager keyManager = new KeyManager(keysFilePath);
+            KeyManager keyManager = new KeyManager(sanitizePath(keysFilePath));
             KeyRotationPolicy policy = new KeyRotationPolicy((int) config.getOpsThreshold(), config.getAgeThresholdMs());
             this.keyService = new KeyRotationServiceImpl(keyManager, policy, metadataPath.toString(), metadataManager, cryptoService);
         }
@@ -101,67 +108,103 @@ public class ForwardSecureANNSystem {
             ((KeyRotationServiceImpl) keyService).setIndexService(indexService);
         }
 
-        this.cache = new LRUCache<>(10000);
-        this.profiler = config.isProfilerEnabled() ? new Profiler() : null;
+        this.cache = new ConcurrentMapCache(config.getNumShards() * 1000);
+        this.profiler = config.isProfilerEnabled() ? new MicrometerProfiler(new SimpleMeterRegistry()) : null;
         this.tokenFactory = new QueryTokenFactory(cryptoService, keyService,
-                new EvenLSH(Collections.max(dimensions), config.getNumShards()), 1, 1);
+                new EvenLSH(Collections.max(dimensions), config.getNumShards()),
+                Math.max(1, config.getNumShards() / 4), 1);
         this.queryService = new QueryServiceImpl(indexService, cryptoService, keyService);
+        this.topKProfiler = new TopKProfiler(metadataPath.toString());
 
-        // 7) single‐pass streaming + batch insert
         DefaultDataLoader loader = new DefaultDataLoader();
-        Path dataFile = Paths.get(dataPath);
-        for (int dim : dimensions)
-            streamAndBatchInsert(loader, dataFile, dim);
-    }
-
-    /**
-     * Streams a file through the right FormatLoader and does batchInsert(...)
-     */
-    public void streamAndBatchInsert(DefaultDataLoader loader, Path dataFile, int dim) throws IOException {
-        FormatLoader fmt = loader.lookup(dataFile);
-        Iterator<double[]> it = fmt.openVectorIterator(dataFile);
-        List<double[]> batch = new ArrayList<>(BATCH_SIZE);
-        while (it.hasNext()) {
-            batch.add(it.next());
-            if (batch.size() == BATCH_SIZE) {
+        Path dataFile = Paths.get(sanitizePath(dataPath));
+        for (int dim : dimensions) {
+            FormatLoader fl = loader.lookup(dataFile);
+            StreamingBatchLoader batchLoader = new StreamingBatchLoader(fl.openVectorIterator(dataFile), batchSize);
+            List<double[]> batch;
+            while (!(batch = batchLoader.nextBatch()).isEmpty()) {
                 batchInsert(batch, dim);
-                batch.clear();
             }
         }
-        if (!batch.isEmpty()) batchInsert(batch, dim);
+    }
+
+    private String sanitizePath(String path) {
+        Path normalized = Paths.get(path).normalize();
+        Path base = Paths.get(System.getProperty("user.dir")).normalize();
+        if (!normalized.startsWith(base)) {
+            logger.error("Path traversal attempt: {}", path);
+            throw new IllegalArgumentException("Invalid path: " + path);
+        }
+        return normalized.toString();
+    }
+
+    private static class ConcurrentMapCache extends ConcurrentHashMap<QueryToken, List<QueryResult>> {
+        private final int maxSize;
+        private final ConcurrentMap<QueryToken, Long> timestamps = new ConcurrentHashMap<>();
+        private static final long CACHE_EXPIRY_MS = 10 * 60 * 1000;
+
+        ConcurrentMapCache(int maxSize) {
+            this.maxSize = maxSize;
+        }
+
+        @Override
+        public List<QueryResult> put(QueryToken key, List<QueryResult> value) {
+            cleanExpiredEntries();
+            if (size() >= maxSize) {
+                removeOldestEntry();
+            }
+            timestamps.put(key, System.currentTimeMillis());
+            return super.put(key, value);
+        }
+
+        private void cleanExpiredEntries() {
+            long now = System.currentTimeMillis();
+            timestamps.entrySet().removeIf(entry -> now - entry.getValue() > CACHE_EXPIRY_MS);
+        }
+
+        private void removeOldestEntry() {
+            timestamps.entrySet().stream()
+                    .min(Map.Entry.comparingByValue())
+                    .ifPresent(entry -> {
+                        remove(entry.getKey());
+                        timestamps.remove(entry.getKey());
+                    });
+        }
     }
 
     public void batchInsert(List<double[]> vectors, int dim) {
+        Objects.requireNonNull(vectors, "Vectors cannot be null");
+        if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
+
         if (profiler != null) profiler.start("batchInsert");
         long start = System.nanoTime();
 
-        List<String> allIds = new ArrayList<>();
-        List<String> ids = new ArrayList<>(BATCH_SIZE);
-        List<double[]> batch = new ArrayList<>(BATCH_SIZE);
+        List<List<double[]>> partitions = partitionList(vectors, BATCH_SIZE);
+        List<String> allIds = Collections.synchronizedList(new ArrayList<>());
 
-        for (int i = 0; i < vectors.size(); i++) {
-            String id = UUID.randomUUID().toString();
-            ids.add(id);
-            batch.add(vectors.get(i));
-
-            if (batch.size() == BATCH_SIZE || i == vectors.size() - 1) {
-                long batchStart = System.nanoTime();
-                indexService.batchInsert(ids, batch);
-                totalInserted += ids.size();
-                long batchEnd = System.nanoTime();
-                batchDurations.add(TimeUnit.NANOSECONDS.toMillis(batchEnd - batchStart));
-
-                logger.info("📦 Batch[{}]: {} pts - {} ms - {} MB free",
-                        (totalInserted / BATCH_SIZE),
-                        ids.size(),
-                        (batchEnd - batchStart) / 1_000_000,
-                        Runtime.getRuntime().freeMemory() / (1024 * 1024));
-
-                allIds.addAll(ids);
-                ids.clear();
-                batch.clear();
+        partitions.parallelStream().forEach(batch -> {
+            List<String> ids = new ArrayList<>(BATCH_SIZE);
+            List<double[]> validBatch = new ArrayList<>(BATCH_SIZE);
+            for (double[] vec : batch) {
+                if (vec == null || vec.length != dim) {
+                    logger.warn("Skipping invalid vector: null or dimension mismatch");
+                    continue;
+                }
+                ids.add(UUID.randomUUID().toString());
+                validBatch.add(vec);
             }
-        }
+            if (!ids.isEmpty()) {
+                long batchStart = System.nanoTime();
+                indexService.batchInsert(ids, validBatch);
+                synchronized (this) {
+                    totalInserted += ids.size();
+                    batchDurations.add(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - batchStart));
+                }
+                allIds.addAll(ids);
+                logger.debug("📦 Batch[{}]: {} pts - {} ms", (totalInserted / BATCH_SIZE), ids.size(),
+                        (System.nanoTime() - batchStart) / 1_000_000);
+            }
+        });
 
         if (profiler != null) {
             profiler.stop("batchInsert");
@@ -171,11 +214,24 @@ public class ForwardSecureANNSystem {
         }
     }
 
+    private <T> List<List<T>> partitionList(List<T> list, int size) {
+        List<List<T>> partitions = new ArrayList<>();
+        for (int i = 0; i < list.size(); i += size) {
+            partitions.add(list.subList(i, Math.min(i + size, list.size())));
+        }
+        return partitions;
+    }
+
     public int getIndexedVectorCount() {
         return totalInserted + pointBuffer.getTotalFlushedPoints();
     }
 
     public void insert(String id, double[] vector, int dim) {
+        Objects.requireNonNull(id, "ID cannot be null");
+        Objects.requireNonNull(vector, "Vector cannot be null");
+        if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
+        if (vector.length != dim) throw new IllegalArgumentException("Vector length must match dimension");
+
         if (profiler != null) profiler.start("insert");
 
         keyService.incrementOperation();
@@ -190,15 +246,17 @@ public class ForwardSecureANNSystem {
             long duration = profiler.getTimings("insert").getLast();
             totalIndexingTime += duration;
             indexingCount++;
-            if (verbose) logger.info("Insert complete for id={} in {} ms", id, duration / 1_000_000.0);
+            if (verbose) logger.debug("Insert complete for id={} in {} ms", id, duration / 1_000_000.0);
         }
     }
 
     public void insertFakePointsInBatches(int total, int dim) {
+        if (total <= 0) throw new IllegalArgumentException("Total must be positive");
+        if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
+
         int remaining = total;
         List<String> ids = new ArrayList<>(BATCH_SIZE);
         List<double[]> batch = new ArrayList<>(BATCH_SIZE);
-
         Random random = new Random();
 
         while (remaining > 0) {
@@ -222,85 +280,135 @@ public class ForwardSecureANNSystem {
         logger.info("✅ Inserted {} fake points for dim={}", total, dim);
     }
 
-    public QueryToken cloakQuery(double[] queryVector, int dim) {
+    public QueryToken cloakQuery(double[] queryVector, int dim, int topK) {
+        Objects.requireNonNull(queryVector, "Query vector cannot be null");
+        if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
+        if (queryVector.length != dim) throw new IllegalArgumentException("Query vector length must match dimension");
+        if (topK <= 0) throw new IllegalArgumentException("TopK must be positive");
+
+        double noiseScale = topK <= 20 ? DEFAULT_NOISE_SCALE / 2 : DEFAULT_NOISE_SCALE;
         double[] cloakedQuery = new double[queryVector.length];
         Random random = new Random();
         for (int i = 0; i < queryVector.length; i++) {
-            cloakedQuery[i] = queryVector[i] + (random.nextGaussian() * DEFAULT_NOISE_SCALE);
+            cloakedQuery[i] = queryVector[i] + (random.nextGaussian() * noiseScale);
         }
-        return tokenFactory.create(cloakedQuery, DEFAULT_TOP_K);
+        return tokenFactory.create(cloakedQuery, topK);
     }
 
     public List<QueryResult> query(double[] queryVector, int topK, int dim) {
+        Objects.requireNonNull(queryVector, "Query vector cannot be null");
+        if (topK <= 0) throw new IllegalArgumentException("TopK must be positive");
+        if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
+        if (queryVector.length != dim) throw new IllegalArgumentException("Query vector length must match dimension");
+
         long start = System.nanoTime();
         QueryToken token = tokenFactory.create(queryVector, topK);
         List<QueryResult> cached = cache.get(token);
-        if (cached != null) return cached;
+        if (cached != null) {
+            logger.debug("Cache hit for query token, topK={}", topK);
+            if (profiler != null) {
+                profiler.recordQueryMetric("Q_cache_" + topK, 0, (System.nanoTime() - start) / 1_000_000.0, 0);
+            }
+            return cached;
+        }
         List<QueryResult> results = queryService.search(token);
         cache.put(token, results);
         long elapsed = System.nanoTime() - start;
         totalQueryTime += elapsed;
+        if (profiler != null) {
+            profiler.recordQueryMetric("Q_" + topK, ((QueryServiceImpl) queryService).getLastQueryDurationNs() / 1_000_000.0,
+                    elapsed / 1_000_000.0, 0);
+        }
         return results;
     }
 
     public List<QueryResult> queryWithCloak(double[] queryVector, int topK, int dim) {
+        Objects.requireNonNull(queryVector, "Query vector cannot be null");
+        if (topK <= 0) throw new IllegalArgumentException("TopK must be positive");
+        if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
+        if (queryVector.length != dim) throw new IllegalArgumentException("Query vector length must match dimension");
+
         long start = System.nanoTime();
-        QueryToken token = cloakQuery(queryVector, dim);
+        QueryToken token = cloakQuery(queryVector, dim, topK);
+        List<QueryResult> cached = cache.get(token);
+        if (cached != null) {
+            logger.debug("Cache hit for cloaked query token, topK={}", topK);
+            if (profiler != null) {
+                profiler.recordQueryMetric("Q_cloak_cache_" + topK, 0, (System.nanoTime() - start) / 1_000_000.0, 0);
+            }
+            return cached;
+        }
         List<QueryResult> results = queryService.search(token);
-        if (verbose) logger.info("Cloaked query returned {} results", results.size());
+        cache.put(token, results);
         long elapsed = System.nanoTime() - start;
         totalQueryTime += elapsed;
+        if (profiler != null) {
+            profiler.recordQueryMetric("Q_cloak_" + topK, ((QueryServiceImpl) queryService).getLastQueryDurationNs() / 1_000_000.0,
+                    elapsed / 1_000_000.0, 0);
+        }
+        if (verbose) logger.debug("Cloaked query returned {} results for topK={}", results.size(), topK);
         return results;
     }
 
-    public void runEndToEnd(String dataPath, String queryPath, int dim, String groundtruthPath) throws Exception {
+    public void runEndToEnd(String dataPath, String queryPath, int dim, String groundtruthPath) throws IOException {
+        Objects.requireNonNull(dataPath, "Data path cannot be null");
+        Objects.requireNonNull(queryPath, "Query path cannot be null");
+        Objects.requireNonNull(groundtruthPath, "Groundtruth path cannot be null");
+        if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
+
         DefaultDataLoader loader = new DefaultDataLoader();
-        List<double[]> vectors = loader.loadData(dataPath, dim);
+        List<double[]> vectors = loader.loadData(sanitizePath(dataPath), dim);
         batchInsert(vectors, dim);
 
-        List<double[]> queries = loader.loadData(queryPath, dim);
+        List<double[]> queries = loader.loadData(sanitizePath(queryPath), dim);
         GroundtruthManager groundtruth = new GroundtruthManager();
-        groundtruth.load(groundtruthPath);
+        groundtruth.load(sanitizePath(groundtruthPath));
 
-        ResultWriter rw = new ResultWriter(Path.of("results_table.txt"));
+        ResultWriter rw = new ResultWriter(Paths.get("results_table.txt"));
+        int[] topKValues = {1, 20, 40, 60, 80, 100};
 
         for (int q = 0; q < queries.size(); q++) {
             double[] queryVec = queries.get(q);
 
-            long clientStart = System.nanoTime();
-            QueryToken token = tokenFactory.create(queryVec, DEFAULT_TOP_K);
-            List<QueryEvaluationResult> evals = queryService.searchWithTopKVariants(token, q, groundtruth);
-            long clientEnd = System.nanoTime();
+            for (int topK : topKValues) {
+                long clientStart = System.nanoTime();
+                QueryToken token = tokenFactory.create(queryVec, topK);
+                List<QueryEvaluationResult> evals = queryService.searchWithTopKVariants(token, q, groundtruth);
+                long clientEnd = System.nanoTime();
 
-            double clientMs = (clientEnd - clientStart) / 1_000_000.0;
-            double serverMs = ((QueryServiceImpl) queryService).getLastQueryDurationNs() / 1_000_000.0;
-            double avgRatio = evals.stream().mapToDouble(QueryEvaluationResult::getRatio).average().orElse(0.0);
+                double clientMs = (clientEnd - clientStart) / 1_000_000.0;
+                double serverMs = ((QueryServiceImpl) queryService).getLastQueryDurationNs() / 1_000_000.0;
+                double avgRatio = evals.stream().mapToDouble(QueryEvaluationResult::getRatio).average().orElse(0.0);
+                double avgRecall = evals.stream().mapToDouble(QueryEvaluationResult::getRecall).average().orElse(0.0);
 
-            if (profiler != null)
-                profiler.recordQueryMetric("Q" + q, serverMs, clientMs, avgRatio);
+                if (profiler != null) {
+                    profiler.recordQueryMetric("Q" + q + "_topK" + topK, serverMs, clientMs, avgRatio);
+                    for (QueryEvaluationResult r : evals) {
+                        profiler.recordTopKVariants(
+                                "Q" + q + "_topK" + topK,
+                                r.getTopKRequested(),
+                                r.getRetrieved(),
+                                r.getRatio(),
+                                r.getRecall(),
+                                r.getTimeMs()
+                        );
+                    }
+                }
 
-            for (QueryEvaluationResult r : evals) {
-                profiler.recordTopKVariants(
-                        "Q" + q,
-                        r.getTopKRequested(),
-                        r.getRetrieved(),
-                        r.getRatio(),
-                        r.getRecall(),
-                        r.getTimeMs()
-                );
+                topKProfiler.record("Q" + q + "_topK" + topK, evals);
+
+                rw.writeTable("Query " + (q + 1) + " Results (dim=" + dim + ", topK=" + topK + ")",
+                        new String[]{"TopK", "Retrieved", "Ratio", "Recall", "TimeMs"},
+                        evals.stream()
+                                .map(r -> new String[]{
+                                        String.valueOf(r.getTopKRequested()),
+                                        String.valueOf(r.getRetrieved()),
+                                        String.format("%.4f", r.getRatio()),
+                                        String.format("%.4f", r.getRecall()),
+                                        String.valueOf(r.getTimeMs())
+                                })
+                                .collect(Collectors.toList()));
             }
-
-            rw.writeTable("Query " + (q + 1) + " Results (dim=" + dim + ")",
-                    new String[]{"TopK", "Retrieved", "Ratio", "Recall", "TimeMs"},
-                    evals.stream()
-                            .map(r -> new String[]{
-                                    String.valueOf(r.getTopKRequested()),
-                                    String.valueOf(r.getRetrieved()),
-                                    String.format("%.4f", r.getRatio()),
-                                    String.format("%.4f", r.getRecall()),
-                                    String.valueOf(r.getTimeMs())
-                            })
-                            .collect(Collectors.toList()));
         }
     }
 
@@ -324,7 +432,8 @@ public class ForwardSecureANNSystem {
     }
 
     private double computeDistance(double[] a, double[] b) {
-        double sum = 0;
+        if (a.length != b.length) throw new IllegalArgumentException("Vector dimension mismatch");
+        double sum = 0.0;
         for (int i = 0; i < a.length; i++) {
             double diff = a[i] - b[i];
             sum += diff * diff;
@@ -340,32 +449,14 @@ public class ForwardSecureANNSystem {
         return this.profiler;
     }
 
-    public static class ResultWriter {
-        private final Path outputPath;
-
-        public ResultWriter(Path outputPath) {
-            this.outputPath = outputPath;
-        }
-
-        public void writeTable(String title, String[] columns, List<String[]> rows) throws IOException {
-            try (BufferedWriter writer = Files.newBufferedWriter(outputPath, StandardOpenOption.CREATE, StandardOpenOption.APPEND)) {
-                writer.write(title + "\n");
-                writer.write(String.join("\t", columns) + "\n");
-                for (String[] row : rows) {
-                    writer.write(String.join("\t", row) + "\n");
-                }
-                writer.write("\n\n");
-            }
-        }
-    }
-
     public void flushAll() throws IOException {
         logger.info("📤 ForwardSecureANNSystem flushAll started");
-        pointBuffer.flushAll();             // Flush all buffered encrypted points
-        indexService.flushBuffers();        // Flush any index buffers
-        metadataManager.saveIndexVersion(currentVersion);  // Persist current index version
+        pointBuffer.flushAll();
+        indexService.flushBuffers();
+        metadataManager.saveIndexVersion(currentVersion);
         logger.info("✅ ForwardSecureANNSystem flushAll completed");
     }
+
     public void shutdown() {
         System.out.printf(
                 "\n=== System Shutdown ===%n" +
@@ -389,7 +480,6 @@ public class ForwardSecureANNSystem {
             if (profiler != null) {
                 logger.info("📊 Exporting profiler data...");
                 profiler.exportToCSV("profiler_metrics.csv");
-                profiler.exportQueryMetrics("query_metrics.csv");
                 topKProfiler.export("topk_evaluation.csv");
                 logger.info("📁 Profiler CSVs exported");
 
@@ -416,29 +506,40 @@ public class ForwardSecureANNSystem {
                 }
             }
 
-            logger.info("🧮 Total vectors flushed: {}", pointBuffer.getTotalFlushedPoints());
-            logger.info("📦 Final indexed count: {}", getIndexedVectorCount());
+            logger.info("Total vectors flushed: {}", pointBuffer.getTotalFlushedPoints());
+            logger.info("Final indexed count: {}", getIndexedVectorCount());
 
             if (metadataManager != null) {
-                logger.info("🗃️ Printing metadata summary...");
+                logger.info("Printing metadata summary...");
                 metadataManager.printSummary();
-                logger.info("📊 Logging metadata stats...");
+                logger.info("Logging metadata stats...");
                 metadataManager.logStats();
+                metadataManager.close();
             }
 
-            logger.info("🔧 Performing final flushAll()");
-            flushAll(); // flush encrypted points + metadata version
+            logger.info("Performing final flushAll()");
+            flushAll();
 
         } catch (Exception e) {
-            logger.error("❌ Unexpected error during shutdown", e);
+            logger.error("Unexpected error during shutdown", e);
         } finally {
-            logger.info("♻️ Requesting GC cleanup...");
+            logger.info("Shutting down executor service...");
+            executor.shutdown();
+            try {
+                if (!executor.awaitTermination(10, TimeUnit.SECONDS)) {
+                    logger.warn("Executor did not terminate within timeout, forcing shutdown");
+                    executor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                logger.error("Interrupted during executor shutdown", e);
+                executor.shutdownNow();
+            }
+            logger.info("Requesting GC cleanup...");
             System.gc();
-            logger.info("✅ Shutdown complete");
+            logger.info("Shutdown complete");
 
-            // 🧪 Optional forced exit in test mode to prevent hangs
             if ("true".equals(System.getProperty("test.env"))) {
-                logger.warn("⚠️ Test mode enabled. Forcing process exit to prevent hang.");
+                logger.warn("Test mode enabled. Forcing process exit to prevent hang.");
                 System.exit(0);
             }
         }
@@ -455,7 +556,7 @@ public class ForwardSecureANNSystem {
         String queryPath = args[2];
         String keysFile = args[3];
         List<Integer> dimensions = Arrays.stream(args[4].split(",")).map(Integer::parseInt).collect(Collectors.toList());
-        Path metadataPath = Path.of(args[5]);
+        Path metadataPath = Paths.get(args[5]);
         String groundtruthPath = args[6];
         int batchSize = args.length >= 8 ? Integer.parseInt(args[7]) : 10000;
 
@@ -481,11 +582,9 @@ public class ForwardSecureANNSystem {
         System.out.print("\n==== QUERY PERFORMANCE METRICS ====\n");
         System.out.printf("Average Query Fetch Time: %.2f ms\n",
                 sys.getProfiler().getAllClientQueryTimes().stream().mapToDouble(d -> d).average().orElse(0.0));
-
-        System.out.printf("Recall Ratio (matched / total): %.4f\n",
+        System.out.printf("Average Recall: %.4f\n",
                 sys.getProfiler().getAllQueryRatios().stream().mapToDouble(d -> d).average().orElse(0.0));
-
-        System.out.print("Expected < 1000ms/query and Recall ≈ 1.0\n");
+        System.out.print("Expected < 500ms/query and Recall ≈ 1.0\n");
 
         long start = System.currentTimeMillis();
         logger.info("Calling system.shutdown()...");

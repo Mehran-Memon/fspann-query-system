@@ -27,12 +27,14 @@
             <groupId>com.fspann</groupId>
             <artifactId>crypto</artifactId>
         </dependency>
-
         <dependency>
             <groupId>com.fspann</groupId>
             <artifactId>keymanagement</artifactId>
         </dependency>
-
+        <dependency>
+            <groupId>com.fspann</groupId>
+            <artifactId>config</artifactId>
+        </dependency>
         <!-- Common DTOs -->
         <dependency>
             <groupId>com.fspann</groupId>

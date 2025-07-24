@@ -25,10 +25,11 @@ public class SecureLSHIndexService implements IndexService {
     private final RocksDBMetadataManager metadataManager;
     private final SecureLSHIndex index;
     private final EvenLSH lsh;
-
     private final Map<Integer, DimensionContext> dimensionContexts = new ConcurrentHashMap<>();
     private final Map<String, EncryptedPoint> indexedPoints = new ConcurrentHashMap<>();
     private final EncryptedPointBuffer buffer;
+    private final Map<String, Map<String, String>> pendingMetadata = new ConcurrentHashMap<>();
+    private static final int DEFAULT_NUM_SHARDS = 32;
 
     public SecureLSHIndexService(CryptoService crypto,
                                  KeyLifeCycleService keyService,
@@ -42,14 +43,12 @@ public class SecureLSHIndexService implements IndexService {
                                  SecureLSHIndex index,
                                  EvenLSH lsh,
                                  EncryptedPointBuffer buffer) {
-
         this.crypto = crypto != null ? crypto : new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
         this.keyService = keyService;
         this.metadataManager = metadataManager;
         this.index = index;
         this.lsh = lsh;
         this.buffer = buffer;
-
     }
 
     private static EncryptedPointBuffer createBuffer(RocksDBMetadataManager metadataManager) {
@@ -62,12 +61,14 @@ public class SecureLSHIndexService implements IndexService {
 
     private DimensionContext getOrCreateContext(int dimension) {
         return dimensionContexts.computeIfAbsent(dimension, dim -> {
-            int buckets = 32;
-            EvenLSH lshInstance = (lsh != null) ? lsh : new EvenLSH(dim, buckets);
+            int buckets = DEFAULT_NUM_SHARDS;
+            int projections = (int) Math.ceil(buckets * Math.log(Math.max(dim, 1) / 16.0) / Math.log(2));
+            EvenLSH lshInstance = (lsh != null) ? lsh : new EvenLSH(dim, buckets, projections);
             SecureLSHIndex idx = (index != null) ? index : new SecureLSHIndex(1, buckets, lshInstance);
             return new DimensionContext(idx, crypto, keyService, lshInstance);
         });
     }
+
 
     public void batchInsert(List<String> ids, List<double[]> vectors) {
         if (ids.size() != vectors.size()) {
@@ -82,7 +83,6 @@ public class SecureLSHIndexService implements IndexService {
             try {
                 int dimension = vector.length;
                 DimensionContext ctx = getOrCreateContext(dimension);
-                keyService.rotateIfNeeded();
                 KeyVersion version = keyService.getCurrentVersion();
                 SecretKey key = version.getKey();
 
@@ -113,24 +113,26 @@ public class SecureLSHIndexService implements IndexService {
                 indexedPoints.put(pt.getId(), pt);
                 idx.addPoint(pt);
                 idx.markShardDirty(pt.getShardId());
+                pendingMetadata.put(pt.getId(), Map.of(
+                        "shardId", String.valueOf(pt.getShardId()),
+                        "version", String.valueOf(pt.getVersion())
+                ));
             }
             long t2 = System.nanoTime();
 
-            // Write metadata FIRST
-            for (EncryptedPoint pt : entry.getValue()) {
-                Map<String, String> meta = new HashMap<>();
-                meta.put("shardId", String.valueOf(pt.getShardId()));
-                meta.put("version", String.valueOf(pt.getVersion()));
-                metadataManager.putVectorMetadata(pt.getId(), meta);
+            try {
+                metadataManager.batchUpdateVectorMetadata(pendingMetadata);
+                pendingMetadata.clear();
+            } catch (IOException e) {
+                logger.error("Failed to batch update metadata", e);
             }
 
             long t3 = System.nanoTime();
 
-            // Now persist to disk
             for (EncryptedPoint pt : entry.getValue()) {
                 buffer.add(pt);
                 try {
-                    metadataManager.saveEncryptedPoint(pt);  // uses the version written above
+                    metadataManager.saveEncryptedPoint(pt);
                 } catch (IOException e) {
                     logger.error("Failed to persist encrypted point {}", pt.getId(), e);
                 }
@@ -147,12 +149,12 @@ public class SecureLSHIndexService implements IndexService {
             );
         }
 
-
         buffer.flushAll();
     }
 
     @Override
     public void insert(EncryptedPoint pt) {
+        Objects.requireNonNull(pt, "EncryptedPoint cannot be null");
         int dimension = pt.getVectorLength();
         DimensionContext ctx = getOrCreateContext(dimension);
         indexedPoints.put(pt.getId(), pt);
@@ -160,36 +162,37 @@ public class SecureLSHIndexService implements IndexService {
         idx.addPoint(pt);
         idx.markShardDirty(pt.getShardId());
 
-        Map<String, String> meta = new HashMap<>();
-        meta.put("shardId", String.valueOf(pt.getShardId()));
-        meta.put("version", String.valueOf(pt.getVersion()));
+        pendingMetadata.put(pt.getId(), Map.of(
+                "shardId", String.valueOf(pt.getShardId()),
+                "version", String.valueOf(pt.getVersion())
+        ));
 
-        // ALWAYS store metadata FIRST
-        metadataManager.putVectorMetadata(pt.getId(), meta);
+        try {
+            metadataManager.batchUpdateVectorMetadata(pendingMetadata);
+            pendingMetadata.clear();
+        } catch (IOException e) {
+            logger.error("Failed to batch update metadata for point {}", pt.getId(), e);
+        }
 
-        // THEN write .point the file
+        buffer.add(pt);
         try {
             metadataManager.saveEncryptedPoint(pt);
         } catch (IOException e) {
             logger.error("Failed to persist encrypted point {}", pt.getId(), e);
         }
-
-        buffer.add(pt);
     }
 
     @Override
     public void insert(String id, double[] vector) {
+        Objects.requireNonNull(id, "Point ID cannot be null");
+        Objects.requireNonNull(vector, "Vector cannot be null");
         int dimension = vector.length;
         DimensionContext ctx = getOrCreateContext(dimension);
 
-        keyService.rotateIfNeeded();
-
         try {
-            //Encrypt and get the accurate version
             EncryptedPoint encryptedPoint = crypto.encrypt(id, vector);
             int shardId = ctx.getLsh().getBucketId(vector);
 
-            //Use encryptedPoint's version
             EncryptedPoint withShard = new EncryptedPoint(
                     encryptedPoint.getId(),
                     shardId,
@@ -200,7 +203,7 @@ public class SecureLSHIndexService implements IndexService {
             );
 
             insert(withShard);
-        } catch (Exception e) {
+        } catch (AesGcmCryptoService.CryptoException e) {
             logger.error("Failed to encrypt vector id={}", id, e);
             throw new RuntimeException("Encryption failed for id=" + id, e);
         }
@@ -208,18 +211,22 @@ public class SecureLSHIndexService implements IndexService {
 
     @Override
     public void delete(String id) {
+        Objects.requireNonNull(id, "Point ID cannot be null");
         EncryptedPoint pt = indexedPoints.remove(id);
         if (pt != null) {
             int dimension = pt.getVectorLength();
             DimensionContext ctx = dimensionContexts.get(dimension);
-            if (ctx != null) {
-                ctx.getIndex().removePoint(id);
+            if (ctx == null) {
+                logger.warn("No context found for dimension {} during delete", dimension);
+                return;
             }
+            ctx.getIndex().removePoint(id);
         }
     }
 
     @Override
     public List<EncryptedPoint> lookup(QueryToken token) {
+        Objects.requireNonNull(token, "QueryToken cannot be null");
         int dimension = token.getQueryVector().length;
         DimensionContext ctx = dimensionContexts.get(dimension);
         if (ctx == null) {
@@ -254,25 +261,27 @@ public class SecureLSHIndexService implements IndexService {
     }
 
     public int getShardIdForVector(double[] vector) {
+        Objects.requireNonNull(vector, "Vector cannot be null");
         int dim = vector.length;
         DimensionContext ctx = getOrCreateContext(dim);
         return ctx.getLsh().getBucketId(vector);
-            }
-
+    }
 
     @Override
     public EncryptedPoint getEncryptedPoint(String id) {
+        Objects.requireNonNull(id, "Point ID cannot be null");
         EncryptedPoint cached = indexedPoints.get(id);
         if (cached != null) return cached;
         try {
             return metadataManager.loadEncryptedPoint(id);
-        } catch (Exception e) {
+        } catch (IOException | ClassNotFoundException e) {
             logger.error("Failed to load encrypted point {} from disk", id, e);
             return null;
         }
     }
 
     public void updateCachedPoint(EncryptedPoint pt) {
+        Objects.requireNonNull(pt, "EncryptedPoint cannot be null");
         indexedPoints.put(pt.getId(), pt);
     }
 
@@ -281,12 +290,13 @@ public class SecureLSHIndexService implements IndexService {
     }
 
     public void clearCache() {
+        int size = indexedPoints.size();
         indexedPoints.clear();
-        logger.info("Cleared {} cached points", indexedPoints.size());
+        logger.info("Cleared {} cached points", size);
     }
 
     public void shutdown() {
         buffer.shutdown();
-        metadataManager.close(); // important: release RocksDB resources
+        metadataManager.close();
     }
 }

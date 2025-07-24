@@ -22,14 +22,10 @@ public class KeyUtils {
         try {
             byte[] iv = pt.getIv();
             byte[] ciphertext = pt.getCiphertext();
-
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             GCMParameterSpec spec = new GCMParameterSpec(128, iv);
             cipher.init(Cipher.DECRYPT_MODE, key, spec);
-
             byte[] plainBytes = cipher.doFinal(ciphertext);
-
-            // Reconstruct vector
             int dim = pt.getVectorLength();
             double[] vector = new double[dim];
             ByteBuffer buf = ByteBuffer.wrap(plainBytes);
@@ -37,8 +33,7 @@ public class KeyUtils {
                 vector[i] = buf.getDouble();
             }
             return Optional.of(vector);
-
-        } catch (GeneralSecurityException | RuntimeException ex) {
+        } catch (GeneralSecurityException ex) {
             return Optional.empty();
         }
     }
@@ -47,6 +42,9 @@ public class KeyUtils {
      * For testing: builds SecretKey from raw byte[]
      */
     public static SecretKey fromBytes(byte[] rawKeyBytes) {
+        if (rawKeyBytes == null || (rawKeyBytes.length != 16 && rawKeyBytes.length != 24 && rawKeyBytes.length != 32)) {
+            throw new IllegalArgumentException("Invalid AES key length: " + (rawKeyBytes == null ? 0 : rawKeyBytes.length));
+        }
         return new SecretKeySpec(rawKeyBytes, "AES");
     }
 }

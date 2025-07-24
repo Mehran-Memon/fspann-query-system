@@ -31,7 +31,7 @@ public class KeyManager {
     private static final String KEY_ALGORITHM = "AES";
     private static final String KDF_ALGORITHM = "HmacSHA256";
     private static final int KEY_SIZE = 256;
-
+    private final ConcurrentMap<Integer, SecretKey> derivedKeys = new ConcurrentHashMap<>();
     private final String storagePath;
     private SecretKey masterKey;
     private final ConcurrentMap<Integer, SecretKey> sessionKeys = new ConcurrentHashMap<>();
@@ -40,7 +40,7 @@ public class KeyManager {
 
     public KeyManager(String storagePath) throws IOException {
         if (storagePath == null) {
-            throw new IllegalArgumentException("Key path and rotation policy must not be null");
+            throw new IllegalArgumentException("Key path must not be null");
         }
         this.storagePath = storagePath;
         Path p = Paths.get(storagePath);
@@ -56,19 +56,16 @@ public class KeyManager {
             masterKey = generateMasterKey();
             sessionKeys.put(currentVersion, deriveSessionKey(currentVersion));
             persist();
-            logger.info("Initialized new key store (version {})", currentVersion);
-        } catch (NoSuchAlgorithmException e) {
-            logger.error("Algorithm not supported", e);
-            throw new IOException("Failed to initialize key store due to algorithm issue", e);
-        } catch (InvalidKeyException e) {
-            logger.error("Invalid key during initialization", e);
-            throw new IOException("Failed to initialize key store due to invalid key", e);
+            logger.debug("Initialized new key store (version {})", currentVersion);
+        } catch (NoSuchAlgorithmException | InvalidKeyException e) {
+            logger.error("Failed to initialize key store", e);
+            throw new IOException("Failed to initialize key store", e);
         }
     }
 
     private synchronized void loadKeys(Path path) throws IOException {
         try {
-            KeyStoreBlob blob = PersistenceUtils.loadObject(path.toString());
+            KeyStoreBlob blob = PersistenceUtils.loadObject(path.toString(), storagePath, KeyStoreBlob.class);
             this.masterKey = blob.getMasterKey();
             this.sessionKeys.putAll(blob.getSessionKeys());
             this.currentVersion = blob.getSessionKeys().keySet().stream()
@@ -81,9 +78,8 @@ public class KeyManager {
     }
 
     public SecretKey getSessionKey(int version) {
-        logger.info("Fetching key for version: {}", version);
+        logger.debug("Fetching key for version: {}", version);
         return sessionKeys.get(version);
-
     }
 
     public KeyVersion getCurrentVersion() {
@@ -116,14 +112,24 @@ public class KeyManager {
      * Derives a session key from the masterKey using HMAC-SHA256 KDF.
      */
     public SecretKey deriveSessionKey(int version) throws NoSuchAlgorithmException, InvalidKeyException {
-        // Use a consistent salt for each version to ensure deterministic key derivation
-        byte[] salt = ByteBuffer.allocate(4).putInt(version).array();
-        Mac mac = Mac.getInstance(KDF_ALGORITHM);
-        mac.init(masterKey);
-        byte[] derived = mac.doFinal(salt);
-        byte[] keyBytes = new byte[KEY_SIZE / 8];
-        System.arraycopy(derived, 0, keyBytes, 0, keyBytes.length);
-        return new SecretKeySpec(keyBytes, KEY_ALGORITHM);
+        return derivedKeys.computeIfAbsent(version, v -> {
+            byte[] salt = ByteBuffer.allocate(4).putInt(v).array();
+            Mac mac = null;
+            try {
+                mac = Mac.getInstance(KDF_ALGORITHM);
+            } catch (NoSuchAlgorithmException e) {
+                throw new RuntimeException(e);
+            }
+            try {
+                mac.init(masterKey);
+            } catch (InvalidKeyException e) {
+                throw new RuntimeException(e);
+            }
+            byte[] derived = mac.doFinal(salt);
+            byte[] keyBytes = new byte[KEY_SIZE / 8];
+            System.arraycopy(derived, 0, keyBytes, 0, keyBytes.length);
+            return new SecretKeySpec(keyBytes, KEY_ALGORITHM);
+        });
     }
 
     private SecretKey generateMasterKey() throws NoSuchAlgorithmException {
@@ -134,7 +140,7 @@ public class KeyManager {
 
     private synchronized void persist() throws IOException {
         KeyStoreBlob blob = new KeyStoreBlob(masterKey, sessionKeys);
-        PersistenceUtils.saveObject(blob, storagePath);
+        PersistenceUtils.saveObject(blob, storagePath, storagePath);
     }
 
     public void init() {
@@ -144,7 +150,7 @@ public class KeyManager {
                 sessionKeys.put(1, deriveSessionKey(1));
                 persist();
                 logger.debug("Initialized session key version 1 manually via init()");
-            } catch (Exception e) {
+            } catch (NoSuchAlgorithmException | InvalidKeyException | IOException e) {
                 throw new RuntimeException("Failed to initialize key version 1", e);
             }
         }

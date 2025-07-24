@@ -74,17 +74,16 @@ class KeyRotationServiceImplTest {
         }
     }
 
-//    @Test
-//    void testRotationOnTimeExceeded() throws Exception {
-//        when(keyManager.rotateKey()).thenReturn(new KeyVersion(3, mockKey));
-//        long fakePast = System.currentTimeMillis() - policy.getMaxIntervalMillis() - 1000;
-//        service.setLastRotationTime(fakePast);  // Add this setter
-//
-//        synchronized (service) {
-//            service.rotateIfNeeded();
-//            verify(keyManager).rotateKey();
-//        }
-//    }
+    @Test
+    void testRotationOnTimeExceeded() throws Exception {
+        when(keyManager.rotateKey()).thenReturn(new KeyVersion(3, mockKey));
+        long fakePast = System.currentTimeMillis() - policy.getMaxIntervalMillis() - 1000;
+        service.setLastRotationTime(fakePast);  // Add this setter
+        synchronized (service) {
+            service.rotateIfNeeded();
+            verify(keyManager).rotateKey();
+        }
+    }
 
 
 }

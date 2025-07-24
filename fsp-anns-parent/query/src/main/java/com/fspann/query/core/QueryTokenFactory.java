@@ -3,15 +3,18 @@ package com.fspann.query.core;
 import com.fspann.common.EncryptedPoint;
 import com.fspann.common.QueryToken;
 import com.fspann.crypto.CryptoService;
-import com.fspann.index.core.EvenLSH;
 import com.fspann.common.KeyLifeCycleService;
 import com.fspann.common.KeyVersion;
+import com.fspann.index.core.EvenLSH;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.crypto.SecretKey;
 import java.util.List;
 import java.util.Objects;
 
 public class QueryTokenFactory {
+    private static final Logger logger = LoggerFactory.getLogger(QueryTokenFactory.class);
     private final CryptoService cryptoService;
     private final KeyLifeCycleService keyService;
     private final EvenLSH lsh;
@@ -38,21 +41,19 @@ public class QueryTokenFactory {
             throw new IllegalArgumentException("topK must be greater than zero");
         }
 
-        keyService.rotateIfNeeded();
         KeyVersion currentVersion = keyService.getCurrentVersion();
         SecretKey key = currentVersion.getKey();
         int version = currentVersion.getVersion();
 
         String encryptionContext = String.format("epoch_%d_dim_%d", version, vector.length);
-
         EncryptedPoint encrypted = cryptoService.encryptToPoint("index", vector, key);
         byte[] iv = encrypted.getIv();
         byte[] encryptedQuery = encrypted.getCiphertext();
 
         List<Integer> buckets = lsh.getBuckets(vector);
+        int shardId = buckets.isEmpty() ? 0 : Math.abs(buckets.hashCode() % numTables);
 
-        int shardId = buckets.get(0);  // If multiple buckets, select representative shard
-        int dimension = vector.length;
+        logger.debug("Created QueryToken: version={}, dimension={}, shardId={}", version, vector.length, shardId);
 
         return new QueryToken(
                 buckets,
@@ -62,7 +63,7 @@ public class QueryTokenFactory {
                 topK,
                 numTables,
                 encryptionContext,
-                dimension,
+                vector.length,
                 shardId,
                 version
         );

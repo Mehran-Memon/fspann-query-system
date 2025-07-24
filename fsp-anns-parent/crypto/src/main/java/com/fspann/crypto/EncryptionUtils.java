@@ -63,11 +63,9 @@ public final class EncryptionUtils {
      * @return the decrypted vector
      * @throws GeneralSecurityException if decryption fails
      */
-    public static double[] decryptVector(byte[] ciphertext, byte[] iv, SecretKey key) throws Exception {
-        logger.debug("Decrypting with key: {}, IV: {}, ciphertext length: {}",
-                Base64.getEncoder().encodeToString(key.getEncoded()),
-                Base64.getEncoder().encodeToString(iv),
-                ciphertext.length);
+    public static double[] decryptVector(byte[] ciphertext, byte[] iv, SecretKey key) throws GeneralSecurityException {
+        logger.debug("Decrypting with ciphertext length: {}", ciphertext.length);
+        validateParams(ciphertext, iv, key);
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
         GCMParameterSpec spec = new GCMParameterSpec(128, iv);
         cipher.init(Cipher.DECRYPT_MODE, key, spec);
@@ -88,9 +86,14 @@ public final class EncryptionUtils {
     }
 
     private static double[] bytesToDoubleArray(byte[] bytes) {
+        if (bytes.length % Double.BYTES != 0) {
+            throw new IllegalArgumentException("Invalid byte array length for double array conversion");
+        }
         ByteBuffer buffer = ByteBuffer.wrap(bytes);
         double[] result = new double[bytes.length / Double.BYTES];
-        for (int i = 0; i < result.length; i++) result[i] = buffer.getDouble();
+        for (int i = 0; i < result.length; i++) {
+            result[i] = buffer.getDouble();
+        }
         return result;
     }
 
@@ -98,6 +101,10 @@ public final class EncryptionUtils {
         Objects.requireNonNull(input, "Input vector or ciphertext cannot be null");
         Objects.requireNonNull(iv, "IV cannot be null");
         Objects.requireNonNull(key, "SecretKey cannot be null");
-        if (iv.length != GCM_IV_LENGTH) throw new IllegalArgumentException("IV length must be " + GCM_IV_LENGTH + " bytes");
-    }
-}
+        if (iv.length != GCM_IV_LENGTH) {
+            throw new IllegalArgumentException("IV length must be " + GCM_IV_LENGTH + " bytes");
+        }
+        if (input instanceof byte[] && ((byte[]) input).length < GCM_TAG_LENGTH_BITS / 8) {
+            throw new IllegalArgumentException("Ciphertext too short");
+        }
+    }}

@@ -25,6 +25,7 @@ public class AesGcmCryptoService implements CryptoService {
     private final Timer decryptTimer;
     private KeyLifeCycleService keyService;
     private final RocksDBMetadataManager metadataManager;
+    private volatile KeyVersion cachedVersion;
 
     public AesGcmCryptoService(MeterRegistry registry, KeyLifeCycleService keyService, RocksDBMetadataManager metadataManager) {
         this.registry = registry != null ? registry : new SimpleMeterRegistry();
@@ -42,6 +43,9 @@ public class AesGcmCryptoService implements CryptoService {
 
     @Override
     public EncryptedPoint encryptToPoint(String id, double[] vector, SecretKey key) {
+        if (!id.matches("[a-zA-Z0-9_-]+")) {
+            throw new IllegalArgumentException("Invalid ID format");
+        }
         return encryptTimer.record(() -> {
             try {
                 byte[] iv = EncryptionUtils.generateIV();
@@ -58,27 +62,52 @@ public class AesGcmCryptoService implements CryptoService {
         });
     }
 
+
     @Override
     public EncryptedPoint encrypt(String id, double[] vector) {
         return encryptTimer.record(() -> {
             try {
-                keyService.rotateIfNeeded();  // Ensure key is rotated if needed
-                KeyVersion version = keyService.getCurrentVersion();
-                SecretKey key = version.getKey();
+                // Validate inputs
+                Objects.requireNonNull(id, "Point ID cannot be null");
+                if (!id.matches("[a-zA-Z0-9_-]+")) {
+                    throw new IllegalArgumentException("Invalid ID format: only alphanumeric, underscore, and hyphen allowed");
+                }
+                Objects.requireNonNull(vector, "Vector cannot be null");
+                if (vector.length == 0) {
+                    throw new IllegalArgumentException("Vector cannot be empty");
+                }
+                for (double v : vector) {
+                    if (Double.isNaN(v) || Double.isInfinite(v)) {
+                        throw new IllegalArgumentException("Vector contains invalid values (NaN or Infinite)");
+                    }
+                }
 
+                // Check key version without triggering rotation
+                KeyVersion current = keyService.getCurrentVersion();
+                if (cachedVersion == null || cachedVersion.getVersion() != current.getVersion()) {
+                    synchronized (this) {
+                        if (cachedVersion == null || cachedVersion.getVersion() != current.getVersion()) {
+                            cachedVersion = current; // Update cache without rotation
+                        }
+                    }
+                }
+                SecretKey key = cachedVersion.getKey();
+
+                // Encrypt vector
                 byte[] iv = EncryptionUtils.generateIV();
                 byte[] ciphertext = EncryptionUtils.encryptVector(vector, iv, key);
 
-                EncryptedPoint point = new EncryptedPoint(id, 0, iv, ciphertext, version.getVersion(), vector.length);
-                metadataManager.updateVectorMetadata(id, Map.of("version", String.valueOf(version.getVersion())));
+                // Create EncryptedPoint with current version
+                EncryptedPoint point = new EncryptedPoint(id, 0, iv, ciphertext, cachedVersion.getVersion(), vector.length);
 
-                logger.debug("Encrypted (auto-version) point {} with version {}", id, version.getVersion());
+                // Update metadata (defer to batch if possible)
+                metadataManager.updateVectorMetadata(id, Map.of("version", String.valueOf(cachedVersion.getVersion())));
+
+                logger.debug("Encrypted point {} with version {}", id, cachedVersion.getVersion());
                 return point;
             } catch (GeneralSecurityException e) {
-                logger.error("Auto-encryption failed for point {}", id, e);
-                throw new CryptoException("Auto-encryption failed for point: " + id, e);
-            } catch (Exception e) {
-                throw new RuntimeException(e);
+                logger.error("Encryption failed for point {}", id, e);
+                throw new CryptoException("Encryption failed for point: " + id, e);
             }
         });
     }
@@ -87,8 +116,7 @@ public class AesGcmCryptoService implements CryptoService {
     public double[] decryptFromPoint(EncryptedPoint pt, SecretKey key) {
         logger.info("Decrypting point: id={}, version={}, IV={}", pt.getId(), pt.getVersion(), Base64.getEncoder().encodeToString(pt.getIv()));
         return decryptTimer.record(() -> {
-            logger.info("Attempting decryption for point {} with key version {} and key: {}",
-                    pt.getId(), pt.getVersion(), Base64.getEncoder().encodeToString(key.getEncoded()));
+            logger.debug("Attempting decryption for point {} with key version {}", pt.getId(), pt.getVersion());
             try {
                 logger.debug("Decrypting point {} with key version {}", pt.getId(), pt.getVersion());
                 return EncryptionUtils.decryptVector(pt.getCiphertext(), pt.getIv(), key);
@@ -160,7 +188,7 @@ public class AesGcmCryptoService implements CryptoService {
                 metadataManager.updateVectorMetadata(pt.getId(), Map.of("version", String.valueOf(newVersion)));
                 logger.debug("Re-encrypted (custom IV) point {} from v{} to v{}", pt.getId(), oldVersion, newVersion);
                 return reEncrypted;
-            } catch (IOException | GeneralSecurityException e) {
+            } catch (GeneralSecurityException e) {
                 logger.error("Re-encryption failed for point {}", pt.getId(), e);
                 throw new CryptoException("Re-encryption failed", e);
             } catch (Exception e) {

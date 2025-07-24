@@ -15,6 +15,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
@@ -32,12 +33,10 @@ public class ForwardSecureANNSystemPerformanceIntegrationTest {
 
     @BeforeAll
     public static void setup(@TempDir Path tempDir) throws Exception {
-        // Create a configuration file
         Path configPath = tempDir.resolve("config.json");
-        Files.writeString(configPath, "{\"numShards\":4, \"profilerEnabled\":true}");
+        Files.writeString(configPath, "{\"numShards\":4, \"profilerEnabled\":true, \"opsThreshold\":2, \"ageThresholdMs\":1000}");
         logger.debug("Created config: {}", configPath);
 
-        // Prepare dataset with random vectors
         dataset = new ArrayList<>();
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < VECTOR_COUNT; i++) {
@@ -51,12 +50,10 @@ public class ForwardSecureANNSystemPerformanceIntegrationTest {
             dataset.add(vec);
         }
 
-        // Save dataset to a CSV file
         Path dataPath = tempDir.resolve("data.csv");
         Files.writeString(dataPath, sb.toString());
         logger.debug("Generated data file: {} with {} vectors", dataPath, dataset.size());
 
-        // Initialize RocksDBMetadataManager and key management system
         Path keysPath = tempDir.resolve("keys.ser");
         RocksDBMetadataManager metadataManager = new RocksDBMetadataManager(tempDir.toString());
 
@@ -66,7 +63,6 @@ public class ForwardSecureANNSystemPerformanceIntegrationTest {
         CryptoService cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
         keyService.setCryptoService(cryptoService);
 
-        // Initialize ForwardSecureANNSystem
         sys = new ForwardSecureANNSystem(
                 configPath.toString(),
                 dataPath.toString(),
@@ -76,19 +72,29 @@ public class ForwardSecureANNSystemPerformanceIntegrationTest {
                 false,
                 metadataManager,
                 cryptoService,
-                100 // or your preferred batch size
+                100
         );
 
         logger.info("🚀 System initialized successfully");
     }
 
     @AfterAll
-    public static void tearDown() {
+    public static void tearDown(@TempDir Path tempDir) throws Exception {
         if (sys != null) {
             logger.info("🧹 Shutting down system");
             sys.shutdown();
-            System.out.println("Performance integration test completed");
+            sys = null;
         }
+        Files.walk(tempDir)
+                .sorted(Comparator.reverseOrder())
+                .forEach(path -> {
+                    try {
+                        Files.deleteIfExists(path);
+                    } catch (IOException e) {
+                        System.err.println("Failed to delete " + path);
+                    }
+                });
+        System.out.println("Performance integration test completed");
     }
 
     @Test
@@ -122,9 +128,34 @@ public class ForwardSecureANNSystemPerformanceIntegrationTest {
     @Test
     public void testFakePointsInsertion() {
         int fakeCount = 100;
+        int initialCount = sys.getIndexedVectorCount();
         sys.insertFakePointsInBatches(fakeCount, DIMS);
         int total = sys.getIndexedVectorCount();
         logger.info("Total indexed vectors after fake insert: {}", total);
-        assertTrue(total >= fakeCount, String.format("Indexed count should be ≥ %d, got: %d", fakeCount, total));
+        assertEquals(initialCount + fakeCount, total,
+                String.format("Indexed count should be %d, got: %d", initialCount + fakeCount, total));
+    }
+
+    @Test
+    public void testKeyRotationPerformance() throws Exception {
+        int initialCount = sys.getIndexedVectorCount();
+        sys.insert("test-id", new double[DIMS], DIMS); // Trigger rotation
+        sys.insert("test-id2", new double[DIMS], DIMS); // Trigger rotation
+        int finalCount = sys.getIndexedVectorCount();
+        assertEquals(initialCount + 2, finalCount, "Indexed count should increase by 2");
+    }
+
+    @Test
+    public void testCacheHitPerformance() {
+        double[] query = new double[DIMS];
+        Arrays.fill(query, 0.5);
+        long start = System.nanoTime();
+        sys.query(query, 5, DIMS); // Cache miss
+        long missTime = System.nanoTime() - start;
+        start = System.nanoTime();
+        sys.query(query, 5, DIMS); // Cache hit
+        long hitTime = System.nanoTime() - start;
+        logger.info("Cache miss: {} ms, Cache hit: {} ms", missTime / 1e6, hitTime / 1e6);
+        assertTrue(hitTime < missTime, "Cache hit should be faster than miss");
     }
 }

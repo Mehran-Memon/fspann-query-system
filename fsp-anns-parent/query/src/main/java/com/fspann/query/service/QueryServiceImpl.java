@@ -15,21 +15,19 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class QueryServiceImpl implements QueryService {
-
     private static final Logger logger = LoggerFactory.getLogger(QueryServiceImpl.class);
     private static final Pattern VERSION_PATTERN = Pattern.compile("epoch_(\\d+)_dim_(\\d+)$");
+    private static final int SMALL_TOPK_THRESHOLD = 10;
 
     private final IndexService indexService;
     private final CryptoService cryptoService;
     private final KeyLifeCycleService keyService;
     private long lastQueryDurationNs = 0;
 
-    public QueryServiceImpl(IndexService indexService,
-                            CryptoService cryptoService,
-                            KeyLifeCycleService keyService) {
-        this.indexService = Objects.requireNonNull(indexService);
-        this.cryptoService = Objects.requireNonNull(cryptoService);
-        this.keyService = Objects.requireNonNull(keyService);
+    public QueryServiceImpl(IndexService indexService, CryptoService cryptoService, KeyLifeCycleService keyService) {
+        this.indexService = Objects.requireNonNull(indexService, "IndexService cannot be null");
+        this.cryptoService = Objects.requireNonNull(cryptoService, "CryptoService cannot be null");
+        this.keyService = Objects.requireNonNull(keyService, "KeyLifeCycleService cannot be null");
     }
 
     @Override
@@ -55,49 +53,73 @@ public class QueryServiceImpl implements QueryService {
 
         List<EncryptedPoint> candidates = indexService.lookup(token);
         if (candidates.isEmpty()) {
-            logger.warn("No candidates retrieved for the query token");
+            logger.debug("No candidates retrieved for query token version {}", queryVersion.getVersion());
             lastQueryDurationNs = System.nanoTime() - startTime;
             return List.of();
         }
 
-        // PriorityQueue for top-K selection (faster than sorting the entire list)
-        PriorityQueue<QueryResult> topKQueue = new PriorityQueue<>(Comparator.reverseOrder());
-
-        for (EncryptedPoint pt : candidates) {
-            try {
-                double[] ptVec = cryptoService.decryptFromPoint(pt, key);
-                double dist = computeDistance(queryVec, ptVec);
-                QueryResult result = new QueryResult(pt.getId(), dist);
-
-                topKQueue.offer(result);
-                if (topKQueue.size() > token.getTopK()) {
-                    topKQueue.poll();
+        List<QueryResult> results;
+        if (token.getTopK() <= SMALL_TOPK_THRESHOLD) {
+            results = new ArrayList<>();
+            for (EncryptedPoint pt : candidates) {
+                if (pt.getVersion() != queryVersion.getVersion()) {
+                    logger.warn("Skipping candidate {} with mismatched version {}", pt.getId(), pt.getVersion());
+                    continue;
                 }
-            } catch (Exception e) {
-                logger.warn("Skipped {} due to decryption failure", pt.getId(), e);
+                try {
+                    double[] ptVec = cryptoService.decryptFromPoint(pt, key);
+                    double dist = computeDistance(queryVec, ptVec);
+                    results.add(new QueryResult(pt.getId(), dist));
+                } catch (Exception e) {
+                    logger.warn("Skipped candidate {} due to decryption failure", pt.getId(), e);
+                }
             }
+            results.sort(Comparator.naturalOrder());
+            if (results.size() > token.getTopK()) {
+                results = results.subList(0, token.getTopK());
+            }
+        } else {
+            PriorityQueue<QueryResult> topKQueue = new PriorityQueue<>(Comparator.reverseOrder());
+            for (EncryptedPoint pt : candidates) {
+                if (pt.getVersion() != queryVersion.getVersion()) {
+                    logger.warn("Skipping candidate {} with mismatched version {}", pt.getId(), pt.getVersion());
+                    continue;
+                }
+                try {
+                    double[] ptVec = cryptoService.decryptFromPoint(pt, key);
+                    double dist = computeDistance(queryVec, ptVec);
+                    QueryResult result = new QueryResult(pt.getId(), dist);
+                    topKQueue.offer(result);
+                    if (topKQueue.size() > token.getTopK()) {
+                        topKQueue.poll();
+                    }
+                } catch (Exception e) {
+                    logger.warn("Skipped candidate {} due to decryption failure", pt.getId(), e);
+                }
+            }
+            results = new ArrayList<>(topKQueue);
+            results.sort(Comparator.naturalOrder());
         }
 
-        List<QueryResult> results = new ArrayList<>(topKQueue);
-        results.sort(Comparator.naturalOrder());
-
-        logger.info("Query token version: {}, candidates: {}",
-                queryVersion.getVersion(),
-                candidates.stream()
-                        .map(pt -> pt.getId() + ":v" + pt.getVersion())
-                        .collect(Collectors.joining(", ")));
-
+        logger.debug("Query processed: version={}, candidates={}, results={}",
+                queryVersion.getVersion(), candidates.size(), results.size());
         lastQueryDurationNs = System.nanoTime() - startTime;
         return results;
     }
 
     private KeyVersion resolveKeyVersion(String context) {
-        Matcher matcher = VERSION_PATTERN.matcher(context);
-        if (!matcher.matches()) {
-            throw new NumberFormatException("Invalid encryption context format: " + context);
+        try {
+            Matcher matcher = VERSION_PATTERN.matcher(context);
+            if (!matcher.matches()) {
+                logger.warn("Invalid encryption context format: {}, using current version", context);
+                return keyService.getCurrentVersion();
+            }
+            int version = Integer.parseInt(matcher.group(1));
+            return keyService.getVersion(version);
+        } catch (Exception e) {
+            logger.warn("Failed to parse encryption context: {}, using current version", context, e);
+            return keyService.getCurrentVersion();
         }
-        int version = Integer.parseInt(matcher.group(1));
-        return keyService.getVersion(version);
     }
 
     private double computeDistance(double[] a, double[] b) {
@@ -112,11 +134,14 @@ public class QueryServiceImpl implements QueryService {
         return Math.sqrt(sum);
     }
 
+    @Override
     public List<QueryEvaluationResult> searchWithTopKVariants(
             QueryToken baseToken,
             int queryIndex,
             GroundtruthManager groundtruthManager
     ) {
+        Objects.requireNonNull(baseToken, "Base token cannot be null");
+        Objects.requireNonNull(groundtruthManager, "GroundtruthManager cannot be null");
         List<Integer> topKVariants = List.of(1, 20, 40, 60, 80, 100);
         List<QueryEvaluationResult> results = new ArrayList<>();
 
@@ -138,7 +163,6 @@ public class QueryServiceImpl implements QueryService {
             List<QueryResult> retrieved = search(token);
             long duration = System.nanoTime() - start;
 
-            // -- Evaluate actual recall
             int[] groundtruth = groundtruthManager.getGroundtruth(queryIndex, k);
             Set<String> truthIds = Arrays.stream(groundtruth)
                     .mapToObj(String::valueOf)
@@ -153,19 +177,16 @@ public class QueryServiceImpl implements QueryService {
             double recall = (double) matchCount / k;
 
             results.add(new QueryEvaluationResult(
-                    k,                       // topKRequested
-                    retrieved.size(),        // retrieved
-                    ratio,                   // ratio
-                    recall,                  // recall
-                    duration / 1_000_000,    // timeMs
-                    queryIndex,              // query ID for reference
-                    System.currentTimeMillis() // timestamp or epoch if needed
+                    k,
+                    retrieved.size(),
+                    ratio,
+                    recall,
+                    duration / 1_000_000
             ));
         }
 
         return results;
     }
-
 
     public long getLastQueryDurationNs() {
         return lastQueryDurationNs;
