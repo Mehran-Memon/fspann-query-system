@@ -61,9 +61,9 @@ public class SecureLSHIndexService implements IndexService {
 
     private DimensionContext getOrCreateContext(int dimension) {
         return dimensionContexts.computeIfAbsent(dimension, dim -> {
-            int buckets = DEFAULT_NUM_SHARDS;
-            int projections = (int) Math.ceil(buckets * Math.log(Math.max(dim, 1) / 16.0) / Math.log(2));
-            EvenLSH lshInstance = (lsh != null) ? lsh : new EvenLSH(dim, buckets, projections);
+            int buckets = Math.max(1, DEFAULT_NUM_SHARDS);
+            int projections = Math.max(1, (int) Math.ceil(buckets * Math.log(Math.max(dim, 1) / 16.0) / Math.log(2)));
+            EvenLSH lshInstance = (lsh != null) ? lsh : new EvenLSH(dim, Math.max(1, buckets), Math.max(1, projections));
             SecureLSHIndex idx = (index != null) ? index : new SecureLSHIndex(1, buckets, lshInstance);
             return new DimensionContext(idx, crypto, keyService, lshInstance);
         });

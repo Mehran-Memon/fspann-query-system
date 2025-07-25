@@ -45,6 +45,18 @@ public class ForwardSecurityAdversarialTest {
         Files.createDirectories(baseDir);
     }
 
+    private String generateDummyData(int dim) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < NUM_POINTS; i++) {
+            for (int j = 0; j < dim; j++) {
+                sb.append("0.0");
+                if (j < dim - 1) sb.append(",");
+            }
+            sb.append("\n");
+        }
+        return sb.toString();
+    }
+
     @Test
     public void testForwardSecurityAgainstKeyCompromise(@TempDir Path tempDir) throws Exception {
         List<Double> queryLatencies = new ArrayList<>();
@@ -222,15 +234,5 @@ public class ForwardSecurityAdversarialTest {
             assertTrue(postClearTime / 1_000_000.0 < 500, "Post-clear query should be under 500ms for dim=" + dim);
         }
         PerformanceVisualizer.visualizeQueryLatencies(queryLatencies, null);
-    }
-
-    private String generateDummyData(int dim) {
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < dim; i++) {
-            sb.append("0.0");
-            if (i < dim - 1) sb.append(",");
-        }
-        sb.append("\n");
-        return sb.toString();
     }
 }
