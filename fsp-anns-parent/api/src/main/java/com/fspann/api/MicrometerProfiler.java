@@ -61,9 +61,13 @@ public class MicrometerProfiler extends Profiler {
     @Override
     public void exportToCSV(String filePath) {
         try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(filePath))) {
-            writer.write("Operation,DurationNs\n");
+            writer.write("Label,AvgTime(ms),Runs\n");
             for (Map.Entry<String, Timer> entry : timers.entrySet()) {
-                writer.write(String.format("%s,%d\n", entry.getKey(), entry.getValue().totalTime(TimeUnit.NANOSECONDS)));
+                String label = entry.getKey();
+                Timer timer = entry.getValue();
+                long count = timer.count();
+                double avgMs = count > 0 ? timer.totalTime(TimeUnit.MILLISECONDS) / count : 0.0;
+                writer.write(String.format("%s,%.2f,%d\n", label, avgMs, count));
             }
             logger.info("Exported metrics to CSV: {}", filePath);
         } catch (IOException e) {

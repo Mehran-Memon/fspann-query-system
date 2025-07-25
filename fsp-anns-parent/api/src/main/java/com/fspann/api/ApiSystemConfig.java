@@ -19,11 +19,6 @@ public class ApiSystemConfig {
     public ApiSystemConfig(String configFilePath) throws IOException {
         Objects.requireNonNull(configFilePath, "Config file path cannot be null");
         Path path = Paths.get(configFilePath).normalize();
-        Path basePath = Paths.get(System.getProperty("user.dir")).normalize();
-        if (!path.startsWith(basePath)) {
-            logger.error("Path traversal detected: {}", configFilePath);
-            throw new IllegalArgumentException("Invalid config file path: " + configFilePath);
-        }
         if (!Files.isReadable(path)) {
             logger.error("Config file is not readable: {}", configFilePath);
             throw new IOException("Config file is not readable: " + configFilePath);

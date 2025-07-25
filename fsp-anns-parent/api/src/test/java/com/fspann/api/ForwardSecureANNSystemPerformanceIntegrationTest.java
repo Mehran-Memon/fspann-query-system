@@ -50,7 +50,7 @@ public class ForwardSecureANNSystemPerformanceIntegrationTest {
             dataset.add(vec);
         }
 
-        Path dataPath = tempDir.resolve("data.csv");
+        Path dataPath = tempDir.resolve("synthetic_gaussian_128d_storage.csv");
         Files.writeString(dataPath, sb.toString());
         logger.debug("Generated data file: {} with {} vectors", dataPath, dataset.size());
 
