@@ -13,6 +13,7 @@ import org.mockito.MockitoAnnotations;
 
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
+import java.util.Collections;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -40,7 +41,7 @@ class QueryTokenFactoryTest {
         byte[] iv = new byte[12];
         byte[] ciphertext = new byte[32];
         when(cryptoService.encryptToPoint(eq("index"), eq(vector), any(SecretKey.class)))
-                .thenReturn(new EncryptedPoint("query", 0, iv, ciphertext, 7, vector.length));
+                .thenReturn(new EncryptedPoint("query", 0, iv, ciphertext, 7, vector.length, Collections.singletonList(0)));
 
         QueryToken token = factory.create(vector, 5);
 
@@ -62,7 +63,7 @@ class QueryTokenFactoryTest {
         byte[] iv = new byte[12];
         byte[] ciphertext = new byte[32];
         when(cryptoService.encryptToPoint(eq("index"), eq(vector), any(SecretKey.class)))
-                .thenReturn(new EncryptedPoint("query", 0, iv, ciphertext, 7, vector.length));
+                .thenReturn(new EncryptedPoint("query", 0, iv, ciphertext, 7, vector.length, Collections.singletonList(0)));
 
         QueryToken token = factory.create(vector, 5);
         assertEquals(5, token.getNumTables());

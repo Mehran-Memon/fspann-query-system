@@ -12,11 +12,13 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+import org.mockito.Mockito;
 
 import javax.crypto.SecretKey;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
@@ -42,6 +44,7 @@ class SecureLSHIndexServiceTest {
     @BeforeEach
     void setUp() {
         MockitoAnnotations.openMocks(this);
+        Mockito.reset(metadataManager, crypto, index, keyService, lsh, buffer);
         service = new SecureLSHIndexService(crypto, keyService, metadataManager, index, lsh, buffer);
     }
 
@@ -70,7 +73,10 @@ class SecureLSHIndexServiceTest {
 
         verify(metadataManager).batchUpdateVectorMetadata(metadataCaptor.capture());
         Map<String, Map<String, String>> capturedMeta = metadataCaptor.getValue();
-        assertEquals(Map.of(id, Map.of("shardId", "1", "version", "1")), capturedMeta);
+        System.out.println("Captured metadata: " + capturedMeta);
+        Map<String, Map<String, String>> copiedMeta = new HashMap<>(capturedMeta);
+        System.out.println("Copied metadata: " + copiedMeta);
+        assertEquals(Map.of(id, Map.of("shardId", "1", "version", "1")), copiedMeta);
 
         verify(metadataManager).saveEncryptedPoint(argThat(pt ->
                 pt.getId().equals("test") &&
@@ -111,7 +117,10 @@ class SecureLSHIndexServiceTest {
 
         verify(metadataManager).batchUpdateVectorMetadata(metadataCaptor.capture());
         Map<String, Map<String, String>> capturedMeta = metadataCaptor.getValue();
-        assertEquals(Map.of(id, Map.of("shardId", "4", "version", "99")), capturedMeta);
+        System.out.println("Captured metadata: " + capturedMeta);
+        Map<String, Map<String, String>> copiedMeta = new HashMap<>(capturedMeta);
+        System.out.println("Copied metadata: " + copiedMeta);
+        assertEquals(Map.of(id, Map.of("shardId", "4", "version", "99")), copiedMeta);
 
         verify(metadataManager).saveEncryptedPoint(argThat(pt ->
                 pt.getId().equals("vec123") &&
@@ -152,7 +161,10 @@ class SecureLSHIndexServiceTest {
 
         verify(metadataManager).batchUpdateVectorMetadata(metadataCaptor.capture());
         Map<String, Map<String, String>> capturedMeta = metadataCaptor.getValue();
-        assertEquals(Map.of(id, Map.of("shardId", "11", "version", "7")), capturedMeta);
+        System.out.println("Captured metadata: " + capturedMeta);
+        Map<String, Map<String, String>> copiedMeta = new HashMap<>(capturedMeta);
+        System.out.println("Copied metadata: " + copiedMeta);
+        assertEquals(Map.of(id, Map.of("shardId", "11", "version", "7")), copiedMeta);
 
         verify(metadataManager).saveEncryptedPoint(argThat(pt ->
                 pt.getId().equals(id) &&

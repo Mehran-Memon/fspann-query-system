@@ -167,10 +167,13 @@ public class SecureLSHIndexService implements IndexService {
                 "shardId", String.valueOf(pt.getShardId()),
                 "version", String.valueOf(pt.getVersion())
         ));
-
+        Map<String, Map<String, String>> metadataCopy = new HashMap<>(pendingMetadata);
+        logger.info("Before batchUpdateVectorMetadata: pendingMetadata={}", pendingMetadata);
         try {
-            metadataManager.batchUpdateVectorMetadata(pendingMetadata);
+            metadataManager.batchUpdateVectorMetadata(metadataCopy);
+            logger.info("After batchUpdateVectorMetadata: pendingMetadata={}", pendingMetadata);
             pendingMetadata.clear();
+            logger.info("After clear: pendingMetadata={}", pendingMetadata);
         } catch (IOException e) {
             logger.error("Failed to batch update metadata for point {}", pt.getId(), e);
         }

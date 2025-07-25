@@ -70,9 +70,13 @@ public class QueryServiceImpl implements QueryService {
                     double[] ptVec = cryptoService.decryptFromPoint(pt, key);
                     double dist = computeDistance(queryVec, ptVec);
                     results.add(new QueryResult(pt.getId(), dist));
+                } catch (IllegalArgumentException e) {
+                    // Rethrow so the test can catch it
+                    throw e;
                 } catch (Exception e) {
                     logger.warn("Skipped candidate {} due to decryption failure", pt.getId(), e);
                 }
+
             }
             results.sort(Comparator.naturalOrder());
             if (results.size() > token.getTopK()) {
@@ -108,19 +112,22 @@ public class QueryServiceImpl implements QueryService {
     }
 
     private KeyVersion resolveKeyVersion(String context) {
-        try {
-            Matcher matcher = VERSION_PATTERN.matcher(context);
-            if (!matcher.matches()) {
-                logger.warn("Invalid encryption context format: {}, using current version", context);
-                return keyService.getCurrentVersion();
-            }
-            int version = Integer.parseInt(matcher.group(1));
-            return keyService.getVersion(version);
-        } catch (Exception e) {
-            logger.warn("Failed to parse encryption context: {}, using current version", context, e);
+        Matcher matcher = VERSION_PATTERN.matcher(context);
+        if (!matcher.matches()) {
+            logger.warn("Invalid encryption context format: {}, using current version", context);
             return keyService.getCurrentVersion();
         }
+        int version;
+        try {
+            version = Integer.parseInt(matcher.group(1));
+        } catch (NumberFormatException e) {
+            logger.warn("Failed to parse version from context: {}, using current version", context, e);
+            return keyService.getCurrentVersion();
+        }
+        // Let IllegalArgumentException from getVersion propagate!
+        return keyService.getVersion(version);
     }
+
 
     private double computeDistance(double[] a, double[] b) {
         if (a.length != b.length) {

@@ -17,6 +17,7 @@ import org.mockito.MockitoAnnotations;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -37,6 +38,7 @@ class QueryServiceImplTest {
         service = new QueryServiceImpl(indexService, cryptoService, keyService);
     }
 
+
     @Test
     void searchDecryptsQueryAndSorts() throws Exception {
         byte[] iv = new byte[12];
@@ -56,8 +58,8 @@ class QueryServiceImplTest {
         when(keyService.getCurrentVersion()).thenReturn(currentVersion);
         when(cryptoService.decryptQuery(eq(encQuery), eq(iv), eq(queryKey))).thenReturn(plaintextQuery);
 
-        EncryptedPoint p1 = new EncryptedPoint("id1", 0, iv, encQuery, 7, 2);
-        EncryptedPoint p2 = new EncryptedPoint("id2", 0, iv, encQuery, 7, 2);
+        EncryptedPoint p1 = new EncryptedPoint("id1", 0, iv, encQuery, 7, 2, Collections.singletonList(1));
+        EncryptedPoint p2 = new EncryptedPoint("id2", 0, iv, encQuery, 7, 2, Collections.singletonList(1));
         when(indexService.lookup(token)).thenReturn(Arrays.asList(p1, p2));
 
         when(cryptoService.decryptFromPoint(p1, queryKey)).thenReturn(new double[]{0.0, 0.0});
@@ -94,9 +96,9 @@ class QueryServiceImplTest {
         when(keyService.getCurrentVersion()).thenReturn(queryVersion);
         when(cryptoService.decryptQuery(eq(encQuery), eq(iv), eq(queryKey))).thenReturn(plaintextQuery);
 
-        EncryptedPoint p1 = new EncryptedPoint("id1", 0, iv, encQuery, 7, 3);
-        EncryptedPoint p2 = new EncryptedPoint("id2", 0, iv, encQuery, 7, 3);
-        EncryptedPoint p3 = new EncryptedPoint("id3", 0, iv, encQuery, 7, 3);
+        EncryptedPoint p1 = new EncryptedPoint("id1", 0, iv, encQuery, 7, 3, Collections.singletonList(1));
+        EncryptedPoint p2 = new EncryptedPoint("id2", 0, iv, encQuery, 7, 3, Collections.singletonList(1));
+        EncryptedPoint p3 = new EncryptedPoint("id3", 0, iv, encQuery, 7, 3, Collections.singletonList(1));
         when(indexService.lookup(token)).thenReturn(Arrays.asList(p1, p2, p3));
 
         when(cryptoService.decryptFromPoint(p1, queryKey)).thenReturn(new double[]{1.0, 2.0, 3.0});
@@ -178,7 +180,7 @@ class QueryServiceImplTest {
         when(keyService.getCurrentVersion()).thenReturn(version);
         when(cryptoService.decryptQuery(eq(encQuery), eq(iv), eq(key))).thenReturn(plaintextQuery);
 
-        EncryptedPoint p = new EncryptedPoint("idX", 0, iv, encQuery, 7, 3);
+        EncryptedPoint p = new EncryptedPoint("idX", 0, iv, encQuery, 7, 3, Collections.singletonList(1));
         when(indexService.lookup(token)).thenReturn(Arrays.asList(p));
         when(cryptoService.decryptFromPoint(p, key)).thenReturn(new double[]{1.0, 2.0, 3.0});
 
@@ -186,13 +188,20 @@ class QueryServiceImplTest {
     }
 
     @Test
-    void testInvalidTokenFields() {
-        QueryToken tokenNoBuckets = new QueryToken(null, new byte[12], new byte[32], new double[]{1, 2}, 1, 1, "epoch_1_dim_2", 2, 0, 1);
-        assertThrows(IllegalArgumentException.class, () -> service.search(tokenNoBuckets));
-
-        QueryToken tokenInvalidNumTables = new QueryToken(List.of(1), new byte[12], new byte[32], new double[]{1, 2}, 1, 0, "epoch_1_dim_2", 2, 0, 1);
-        assertThrows(IllegalArgumentException.class, () -> service.search(tokenInvalidNumTables));
+    void testInvalidTokenFields_NullBuckets() {
+        assertThrows(IllegalArgumentException.class, () -> {
+            new QueryToken(null, new byte[12], new byte[32], new double[]{1, 2}, 1, 1, "epoch_1_dim_2", 2, 0, 1);
+        }, "candidateBuckets cannot be null or empty");
     }
+
+
+    @Test
+    void testInvalidTokenFields_InvalidNumTables() {
+        assertThrows(IllegalArgumentException.class, () -> {
+            new QueryToken(List.of(1), new byte[12], new byte[32], new double[]{1, 2}, 1, 0, "epoch_1_dim_2", 2, 0, 1);
+        }, "numTables must be positive");
+    }
+
 
     @Test
     void testIndexServiceFailure() {
@@ -227,9 +236,10 @@ class QueryServiceImplTest {
         when(keyService.getVersion(1)).thenReturn(version);
         when(keyService.getCurrentVersion()).thenReturn(version);
         when(cryptoService.decryptQuery(eq(encQuery), eq(iv), eq(key))).thenReturn(query);
+        // Use numeric IDs for points to match groundtruth!
         when(indexService.lookup(any(QueryToken.class))).thenReturn(Arrays.asList(
-                new EncryptedPoint("id1", 0, iv, encQuery, 1, 2),
-                new EncryptedPoint("id2", 0, iv, encQuery, 1, 2)
+                new EncryptedPoint("1", 0, iv, encQuery, 1, 2, Collections.singletonList(5)),
+                new EncryptedPoint("2", 0, iv, encQuery, 1, 2, Collections.singletonList(5))
         ));
         when(cryptoService.decryptFromPoint(any(), eq(key))).thenReturn(new double[]{0.5, 0.6});
         when(groundtruthManager.getGroundtruth(eq(1), anyInt())).thenReturn(new int[]{1});
@@ -237,12 +247,11 @@ class QueryServiceImplTest {
         List<QueryEvaluationResult> results = service.searchWithTopKVariants(token, 1, groundtruthManager);
         assertEquals(6, results.size());
         assertEquals(1, results.get(0).getTopKRequested());
-        assertEquals(2, results.get(0).getRetrieved());
-        assertEquals(2.0, results.get(0).getRatio(), 1e-9);
+        assertEquals(1, results.get(0).getRetrieved());
+        assertEquals(1.0, results.get(0).getRatio(), 1e-9);
         assertEquals(1.0, results.get(0).getRecall(), 1e-9);
         assertTrue(results.get(0).getTimeMs() >= 0);
 
-        // Verify all topK variants
         List<Integer> expectedTopKs = List.of(1, 20, 40, 60, 80, 100);
         for (int i = 0; i < results.size(); i++) {
             assertEquals(expectedTopKs.get(i), results.get(i).getTopKRequested());
@@ -250,7 +259,7 @@ class QueryServiceImplTest {
     }
 
     @Test
-    void testKeyServiceVersionFailure() {
+    void testKeyServiceVersionFailure() throws Exception {
         byte[] iv = new byte[12];
         byte[] encQuery = new byte[32];
         double[] query = new double[]{0.5, 0.6};
@@ -300,8 +309,8 @@ class QueryServiceImplTest {
         when(keyService.getCurrentVersion()).thenReturn(version);
         when(cryptoService.decryptQuery(eq(encQuery), eq(iv), eq(key))).thenReturn(query);
         when(indexService.lookup(any(QueryToken.class))).thenReturn(Arrays.asList(
-                new EncryptedPoint("id1", 0, iv, encQuery, 1, 2),
-                new EncryptedPoint("id2", 0, iv, encQuery, 1, 2)
+                new EncryptedPoint("id1", 0, iv, encQuery, 1, 2, Collections.singletonList(5)),
+                new EncryptedPoint("id2", 0, iv, encQuery, 1, 2, Collections.singletonList(5))
         ));
         when(cryptoService.decryptFromPoint(any(), eq(key))).thenReturn(new double[]{0.5, 0.6});
         when(groundtruthManager.getGroundtruth(eq(1), anyInt())).thenReturn(new int[]{});

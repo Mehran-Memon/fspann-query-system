@@ -66,10 +66,10 @@ class QueryEvaluationTest {
     }
 
     private ForwardSecureANNSystem setupSmallSystem(Path tempDir) throws Exception {
-        Path dataFile = tempDir.resolve("data.csv");
+        Path dataFile = tempDir.resolve("E:\\Research Work\\Datasets\\synthetic_data\\synthetic_128d\\synthetic_gaussian_128d_storage.csv");
         Files.writeString(dataFile, "0.0,0.0\n0.1,0.1\n1.0,1.0\n");
 
-        Path configFile = tempDir.resolve("config.json");
+        Path configFile = tempDir.resolve("F:\\fspann-query-system\\fsp-anns-parent\\config\\src\\main\\resources\\config.json");
         Files.writeString(configFile, "{" +
                 "\"numShards\":2," +
                 "\"profilerEnabled\":true," +
