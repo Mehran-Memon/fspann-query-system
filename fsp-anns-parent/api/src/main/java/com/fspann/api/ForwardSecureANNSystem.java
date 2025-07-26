@@ -122,8 +122,18 @@ public class ForwardSecureANNSystem {
             FormatLoader fl = loader.lookup(dataFile);
             StreamingBatchLoader batchLoader = new StreamingBatchLoader(fl.openVectorIterator(dataFile), batchSize);
             List<double[]> batch;
+            int batchCount = 0;
             while (!(batch = batchLoader.nextBatch()).isEmpty()) {
+                logger.debug("Loaded batch {} for dim={} with {} vectors", ++batchCount, dim, batch.size());
+                for (double[] vec : batch) {
+                    if (vec == null || vec.length != dim) {
+                        logger.warn("Invalid vector in batch {} for dim={}: {}", batchCount, dim, Arrays.toString(vec));
+                    }
+                }
                 batchInsert(batch, dim);
+            }
+            if (batchCount == 0) {
+                logger.warn("No batches loaded for dim={} from dataPath={}", dim, dataPath);
             }
         }
     }
@@ -141,7 +151,6 @@ public class ForwardSecureANNSystem {
         }
         return normalized.toString();
     }
-
 
     private static class ConcurrentMapCache extends ConcurrentHashMap<QueryToken, List<QueryResult>> {
         private final int maxSize;
@@ -186,8 +195,11 @@ public class ForwardSecureANNSystem {
             return;
         }
 
-        if (profiler != null) profiler.start("batchInsert");
         long start = System.nanoTime();
+        if (profiler != null) {
+            logger.debug("Starting profiler for batchInsert");
+            profiler.start("batchInsert");
+        }
 
         List<List<double[]>> partitions = partitionList(vectors, BATCH_SIZE);
         List<String> allIds = Collections.synchronizedList(new ArrayList<>());
@@ -196,8 +208,12 @@ public class ForwardSecureANNSystem {
             List<String> ids = new ArrayList<>(BATCH_SIZE);
             List<double[]> validBatch = new ArrayList<>(BATCH_SIZE);
             for (double[] vec : batch) {
-                if (vec == null || vec.length != dim) {
-                    logger.warn("Skipping invalid vector: null or dimension mismatch");
+                if (vec == null) {
+                    logger.warn("Skipping null vector!");
+                    continue;
+                }
+                if (vec.length != dim) {
+                    logger.warn("Skipping vector with dim {} (expected {}) - vector: {}", vec.length, dim, Arrays.toString(vec));
                     continue;
                 }
                 ids.add(UUID.randomUUID().toString());
@@ -211,7 +227,7 @@ public class ForwardSecureANNSystem {
                     batchDurations.add(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - batchStart));
                 }
                 allIds.addAll(ids);
-                logger.debug("📦 Batch[{}]: {} pts - {} ms", (totalInserted / BATCH_SIZE), ids.size(),
+                logger.debug("Batch[{}]: {} pts - {} ms", (totalInserted / BATCH_SIZE), ids.size(),
                         (System.nanoTime() - batchStart) / 1_000_000);
             }
         });
@@ -222,13 +238,18 @@ public class ForwardSecureANNSystem {
 
         if (profiler != null) {
             profiler.stop("batchInsert");
+            logger.debug("Stopped profiler for batchInsert");
             List<Long> timings = profiler.getTimings("batchInsert");
             if (!timings.isEmpty()) {
                 long duration = timings.getLast();
                 totalIndexingTime += duration;
                 indexingCount += vectors.size();
+                logger.debug("batchInsert timing recorded: {} ms", duration / 1_000_000.0);
             } else {
-                logger.warn("No timings recorded for batchInsert (likely empty or all invalid data)");
+                long duration = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+                logger.warn("No timings recorded for batchInsert (likely empty or all invalid data). Using fallback duration: {} ms", duration);
+                totalIndexingTime += duration; // Fallback to manual timing
+                indexingCount += vectors.size();
             }
         }
     }
@@ -277,6 +298,7 @@ public class ForwardSecureANNSystem {
         List<String> ids = new ArrayList<>(BATCH_SIZE);
         List<double[]> batch = new ArrayList<>(BATCH_SIZE);
         Random random = new Random();
+        int batchCount = 0;
 
         while (remaining > 0) {
             ids.clear();
@@ -290,13 +312,14 @@ public class ForwardSecureANNSystem {
                 ids.add(UUID.randomUUID().toString());
             }
 
+            logger.debug("Inserting fake batch {} with {} points for dim={}", ++batchCount, size, dim);
             indexService.batchInsert(ids, batch);
             remaining -= size;
 
             if (profiler != null) profiler.logMemory("After fake batch, remaining=" + remaining);
         }
 
-        logger.info("✅ Inserted {} fake points for dim={}", total, dim);
+        logger.info("Inserted {} fake points for dim={}", total, dim);
     }
 
     public QueryToken cloakQuery(double[] queryVector, int dim, int topK) {
@@ -469,11 +492,11 @@ public class ForwardSecureANNSystem {
     }
 
     public void flushAll() throws IOException {
-        logger.info("📤 ForwardSecureANNSystem flushAll started");
+        logger.info("ForwardSecureANNSystem flushAll started");
         pointBuffer.flushAll();
         indexService.flushBuffers();
         metadataManager.saveIndexVersion(currentVersion);
-        logger.info("✅ ForwardSecureANNSystem flushAll completed");
+        logger.info("ForwardSecureANNSystem flushAll completed");
     }
 
     public void shutdown() {
@@ -486,24 +509,32 @@ public class ForwardSecureANNSystem {
         );
 
         try {
-            logger.info("🔻 Shutdown sequence started");
+            logger.info("Shutdown sequence started");
+
+            // Wait for all executor tasks to complete
+            logger.info("Waiting for executor tasks to complete...");
+            executor.shutdown();
+            if (!executor.awaitTermination(30, TimeUnit.SECONDS)) {
+                logger.warn("Executor tasks did not complete within 30 seconds, forcing shutdown");
+                executor.shutdownNow();
+            }
 
             if (indexService != null) {
-                logger.info("📤 Flushing indexService buffers...");
+                logger.info("Flushing indexService buffers...");
                 indexService.flushBuffers();
-                logger.info("🛑 Shutting down indexService...");
+                logger.info("Shutting down indexService...");
                 indexService.shutdown();
-                logger.info("✅ indexService shutdown complete");
+                logger.info("IndexService shutdown complete");
             }
 
             if (profiler != null) {
-                logger.info("📊 Exporting profiler data...");
+                logger.info("Exporting profiler data...");
                 profiler.exportToCSV("profiler_metrics.csv");
                 topKProfiler.export("topk_evaluation.csv");
-                logger.info("📁 Profiler CSVs exported");
+                logger.info("Profiler CSVs exported");
 
                 if (!profiler.getAllClientQueryTimes().isEmpty()) {
-                    logger.info("📈 Visualizing query latencies...");
+                    logger.info("Visualizing query latencies...");
                     PerformanceVisualizer.visualizeQueryLatencies(
                             profiler.getAllClientQueryTimes(),
                             profiler.getAllServerQueryTimes()
@@ -511,7 +542,7 @@ public class ForwardSecureANNSystem {
                 }
 
                 if (!profiler.getAllQueryRatios().isEmpty()) {
-                    logger.info("📉 Visualizing ratio distribution...");
+                    logger.info("Visualizing ratio distribution...");
                     PerformanceVisualizer.visualizeRatioDistribution(
                             profiler.getAllQueryRatios()
                     );

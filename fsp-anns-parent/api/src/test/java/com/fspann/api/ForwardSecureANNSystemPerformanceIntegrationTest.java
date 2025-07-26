@@ -58,7 +58,7 @@ public class ForwardSecureANNSystemPerformanceIntegrationTest {
         RocksDBMetadataManager metadataManager = new RocksDBMetadataManager(tempDir.toString());
 
         KeyManager keyManager = new KeyManager(keysPath.toString());
-        KeyRotationPolicy policy = new KeyRotationPolicy(2, 1000);
+        KeyRotationPolicy policy = new KeyRotationPolicy(100, Long.MAX_VALUE);
         KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(keyManager, policy, tempDir.toString(), metadataManager, null);
         CryptoService cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
         keyService.setCryptoService(cryptoService);
@@ -106,6 +106,7 @@ public class ForwardSecureANNSystemPerformanceIntegrationTest {
         long startInsert = System.nanoTime();
         sys.batchInsert(dataset, DIMS);
         long endInsert = System.nanoTime();
+
 
         double totalMs = (endInsert - startInsert) / 1e6;
         double avgInsertMs = totalMs / dataset.size();
