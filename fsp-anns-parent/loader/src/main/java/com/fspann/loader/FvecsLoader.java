@@ -10,6 +10,7 @@ import java.util.*;
  * Now supports streaming with per-path offset.
  */
 public class FvecsLoader implements FormatLoader {
+
     @Override
     public Iterator<double[]> openVectorIterator(Path file) throws IOException {
         DataInputStream in = new DataInputStream(
@@ -20,25 +21,37 @@ public class FvecsLoader implements FormatLoader {
             private double[] readOne() {
                 try {
                     int dim = Integer.reverseBytes(in.readInt());
+                    if (dim <= 0 || dim > 1_000_000) {
+                        throw new IOException("Invalid dimension: " + dim);
+                    }
                     double[] v = new double[dim];
-                    for(int i=0;i<dim;i++){
+                    for (int i = 0; i < dim; i++) {
                         v[i] = Float.intBitsToFloat(Integer.reverseBytes(in.readInt()));
                     }
                     return v;
                 } catch (EOFException eof) {
-                    close(); return null;
+                    close();
+                    return null;
                 } catch (IOException e) {
                     close();
                     throw new UncheckedIOException(e);
                 }
             }
             private void close() {
-                try { in.close(); } catch(IOException ignored){}
+                try {
+                    in.close();
+                } catch (IOException ignored) {}
             }
-            @Override public boolean hasNext() { return next != null; }
-            @Override public double[] next() {
-                if(next==null) throw new NoSuchElementException();
-                double[] v=next; next=readOne(); return v;
+            @Override
+            public boolean hasNext() {
+                return next != null;
+            }
+            @Override
+            public double[] next() {
+                if (next == null) throw new NoSuchElementException();
+                double[] v = next;
+                next = readOne();
+                return v;
             }
         };
     }

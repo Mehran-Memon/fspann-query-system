@@ -66,7 +66,17 @@ public interface CryptoService {
      */
     byte[] generateIV();
 
+    /**
+     * Returns the key lifecycle service used for key management.
+     * @return The KeyLifeCycleService instance.
+     */
     KeyLifeCycleService getKeyService();
 
+    /**
+     * Encrypts a vector using the current key from the KeyLifeCycleService.
+     * @param id Unique identifier for the vector.
+     * @param vector The vector to encrypt.
+     * @return EncryptedPoint object containing ciphertext and metadata.
+     */
     EncryptedPoint encrypt(String id, double[] vector);
 }

@@ -20,25 +20,37 @@ public class IvecsLoader implements FormatLoader {
             private int[] readOne() {
                 try {
                     int dim = Integer.reverseBytes(in.readInt());
+                    if (dim <= 0 || dim > 1_000_000) {
+                        throw new IOException("Invalid dimension: " + dim);
+                    }
                     int[] v = new int[dim];
-                    for(int i=0;i<dim;i++){
+                    for (int i = 0; i < dim; i++) {
                         v[i] = Integer.reverseBytes(in.readInt());
                     }
                     return v;
-                } catch(EOFException eof) {
-                    close(); return null;
-                } catch(IOException e) {
+                } catch (EOFException eof) {
+                    close();
+                    return null;
+                } catch (IOException e) {
                     close();
                     throw new UncheckedIOException(e);
                 }
             }
             private void close() {
-                try{ in.close(); } catch(IOException ignored){}
+                try {
+                    in.close();
+                } catch (IOException ignored) {}
             }
-            @Override public boolean hasNext() { return next!=null; }
-            @Override public int[] next() {
-                if(next==null) throw new NoSuchElementException();
-                int[] v=next; next=readOne(); return v;
+            @Override
+            public boolean hasNext() {
+                return next != null;
+            }
+            @Override
+            public int[] next() {
+                if (next == null) throw new NoSuchElementException();
+                int[] v = next;
+                next = readOne();
+                return v;
             }
         };
     }
