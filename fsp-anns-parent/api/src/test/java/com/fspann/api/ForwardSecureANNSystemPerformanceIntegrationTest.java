@@ -7,10 +7,7 @@ import com.fspann.key.KeyManager;
 import com.fspann.key.KeyRotationPolicy;
 import com.fspann.key.KeyRotationServiceImpl;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,6 +16,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -30,6 +28,7 @@ public class ForwardSecureANNSystemPerformanceIntegrationTest {
     private static final int VECTOR_COUNT = 1000;
     private static final double MAX_INSERT_MS = 1000.0;
     private static final double MAX_QUERY_MS = 500.0;
+    private static RocksDBMetadataManager metadataManager;
 
     @BeforeAll
     public static void setup(@TempDir Path tempDir) throws Exception {
@@ -55,7 +54,7 @@ public class ForwardSecureANNSystemPerformanceIntegrationTest {
         logger.debug("Generated data file: {} with {} vectors", dataPath, dataset.size());
 
         Path keysPath = tempDir.resolve("keys.ser");
-        RocksDBMetadataManager metadataManager = new RocksDBMetadataManager(tempDir.toString());
+        metadataManager = new RocksDBMetadataManager(tempDir.toString(), tempDir.resolve("points").toString());
 
         KeyManager keyManager = new KeyManager(keysPath.toString());
         KeyRotationPolicy policy = new KeyRotationPolicy(100, Long.MAX_VALUE);
@@ -79,22 +78,35 @@ public class ForwardSecureANNSystemPerformanceIntegrationTest {
     }
 
     @AfterAll
-    public static void tearDown(@TempDir Path tempDir) throws Exception {
+    public static void tearDown(@TempDir Path tempDir) throws IOException {
         if (sys != null) {
-            logger.info("🧹 Shutting down system");
             sys.shutdown();
             sys = null;
         }
-        Files.walk(tempDir)
-                .sorted(Comparator.reverseOrder())
-                .forEach(path -> {
-                    try {
-                        Files.deleteIfExists(path);
-                    } catch (IOException e) {
-                        System.err.println("Failed to delete " + path);
-                    }
-                });
-        System.out.println("Performance integration test completed");
+        if (metadataManager != null) {
+            metadataManager.close();
+        }
+        for (int i = 0; i < 3; i++) {
+            try (Stream<Path> files = Files.walk(tempDir)) {
+                files.sorted(Comparator.reverseOrder())
+                        .forEach(path -> {
+                            try {
+                                Files.deleteIfExists(path);
+                            } catch (IOException e) {
+                                System.err.println("Failed to delete " + path);
+                            }
+                        });
+                return;
+            } catch (IOException e) {
+                if (i == 2) throw new IOException("Failed to delete temp directory after retries", e);
+                try {
+                    Thread.sleep(100); // Wait before retry
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
+        System.gc();
     }
 
     @Test
@@ -106,7 +118,6 @@ public class ForwardSecureANNSystemPerformanceIntegrationTest {
         long startInsert = System.nanoTime();
         sys.batchInsert(dataset, DIMS);
         long endInsert = System.nanoTime();
-
 
         double totalMs = (endInsert - startInsert) / 1e6;
         double avgInsertMs = totalMs / dataset.size();

@@ -16,11 +16,13 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class ForwardSecureANNSystemIntegrationTest {
     private ForwardSecureANNSystem system;
+    private RocksDBMetadataManager metadataManager;
 
     @BeforeEach
     void setup(@TempDir Path tempDir) throws Exception {
@@ -70,15 +72,29 @@ class ForwardSecureANNSystemIntegrationTest {
             system.shutdown();
             system = null;
         }
-        Files.walk(tempDir)
-                .sorted(Comparator.reverseOrder())
-                .forEach(path -> {
-                    try {
-                        Files.deleteIfExists(path);
-                    } catch (IOException e) {
-                        System.err.println("Failed to delete " + path);
-                    }
-                });
+        if (metadataManager != null) {
+            metadataManager.close();
+        }
+        for (int i = 0; i < 3; i++) {
+            try (Stream<Path> files = Files.walk(tempDir)) {
+                files.sorted(Comparator.reverseOrder())
+                        .forEach(path -> {
+                            try {
+                                Files.deleteIfExists(path);
+                            } catch (IOException e) {
+                                System.err.println("Failed to delete " + path);
+                            }
+                        });
+                return;
+            } catch (IOException e) {
+                if (i == 2) throw new IOException("Failed to delete temp directory after retries", e);
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
         System.gc();
     }
 

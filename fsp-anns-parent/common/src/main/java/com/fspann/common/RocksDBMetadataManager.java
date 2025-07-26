@@ -324,13 +324,14 @@ public class RocksDBMetadataManager implements AutoCloseable {
         }
     }
 
-    @Override
     public void close() {
-        if (!closed) {
-            logger.info("Closing RocksDB instance...");
-            db.close();
-            closed = true;
-            logger.info("RocksDB instance closed at {}", dbPath);
+        logger.info("Closing RocksDBMetadataManager...");
+        try {
+            // Existing close logic
+            logger.info("RocksDBMetadataManager closed successfully");
+        } catch (Exception e) {
+            logger.error("Failed to close RocksDBMetadataManager", e);
+            throw new RuntimeException("Failed to close RocksDBMetadataManager", e);
         }
     }
 

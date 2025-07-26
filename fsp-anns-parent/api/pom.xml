@@ -140,15 +140,14 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
-                <version>3.0.0-M5</version>
+                <version>3.2.5</version>
                 <configuration>
                     <forkCount>1</forkCount>
                     <reuseForks>false</reuseForks>
                     <trimStackTrace>false</trimStackTrace>
+                    <argLine>-Xmx2g -Xss2m -XX:+EnableDynamicAgentLoading</argLine>
                 </configuration>
             </plugin>
-
-
         </plugins>
     </build>
 </project>

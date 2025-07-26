@@ -10,23 +10,50 @@ import com.fspann.query.service.QueryServiceImpl;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
+import com.fspann.common.RocksDBMetadataManager;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Comparator;
 import java.util.List;
+import java.util.stream.Stream;
 import static org.junit.jupiter.api.Assertions.*;
 
 class QueryEvaluationTest {
 
     private ForwardSecureANNSystem system;
+    private RocksDBMetadataManager metadataManager;
 
     @AfterEach
-    void tearDown() throws Exception {
+    void tearDown(@TempDir Path tempDir) throws Exception {
         if (system != null) {
             system.shutdown();
             system = null;
         }
+        if (metadataManager != null) {
+            metadataManager.close();
+        }
+        for (int i = 0; i < 3; i++) {
+            try (Stream<Path> files = Files.walk(tempDir)) {
+                files.sorted(Comparator.reverseOrder())
+                        .forEach(path -> {
+                            try {
+                                Files.deleteIfExists(path);
+                            } catch (IOException e) {
+                                System.err.println("Failed to delete " + path);
+                            }
+                        });
+                return;
+            } catch (IOException e) {
+                if (i == 2) throw e;
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
         System.gc();
-        Thread.sleep(250);
     }
 
     @Test
@@ -66,10 +93,10 @@ class QueryEvaluationTest {
     }
 
     private ForwardSecureANNSystem setupSmallSystem(Path tempDir) throws Exception {
-        Path dataFile = tempDir.resolve("E:\\Research Work\\Datasets\\synthetic_data\\synthetic_128d\\synthetic_gaussian_128d_storage.csv");
+        Path dataFile = tempDir.resolve("data.csv");
         Files.writeString(dataFile, "0.0,0.0\n0.1,0.1\n1.0,1.0\n");
 
-        Path configFile = tempDir.resolve("F:\\fspann-query-system\\fsp-anns-parent\\config\\src\\main\\resources\\config.json");
+        Path configFile = tempDir.resolve("config.json");
         Files.writeString(configFile, "{" +
                 "\"numShards\":2," +
                 "\"profilerEnabled\":true," +
@@ -79,7 +106,7 @@ class QueryEvaluationTest {
         Path keys = tempDir.resolve("keys.ser");
         List<Integer> dimensions = List.of(2);
 
-        RocksDBMetadataManager metadataManager = new RocksDBMetadataManager(tempDir.toString());
+        metadataManager = new RocksDBMetadataManager(tempDir.toString(), tempDir.resolve("points").toString());
         KeyManager keyManager = new KeyManager(keys.toString());
         KeyRotationPolicy policy = new KeyRotationPolicy(2, 1000);
         KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(keyManager, policy, tempDir.toString(), metadataManager, null);

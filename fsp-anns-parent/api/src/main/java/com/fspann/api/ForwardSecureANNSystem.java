@@ -102,7 +102,7 @@ public class ForwardSecureANNSystem {
             this.keyService = new KeyRotationServiceImpl(keyManager, policy, metadataPath.toString(), metadataManager, cryptoService);
         }
 
-        this.pointBuffer = new EncryptedPointBuffer(metadataPath.toString(), metadataManager);
+        this.pointBuffer = new EncryptedPointBuffer(metadataPath.toString(), metadataManager, 500);
         this.indexService = new SecureLSHIndexService(cryptoService, keyService, metadataManager);
         if (keyService instanceof KeyRotationServiceImpl) {
             ((KeyRotationServiceImpl) keyService).setIndexService(indexService);
@@ -274,19 +274,29 @@ public class ForwardSecureANNSystem {
 
         if (profiler != null) profiler.start("insert");
 
-        keyService.incrementOperation();
-        List<EncryptedPoint> updatedPoints = ((KeyRotationServiceImpl) keyService).rotateIfNeededAndReturnUpdated();
-        for (EncryptedPoint pt : updatedPoints) {
-            indexService.updateCachedPoint(pt);
-        }
-        indexService.insert(id, vector);
-
-        if (profiler != null) {
-            profiler.stop("insert");
-            long duration = profiler.getTimings("insert").getLast();
-            totalIndexingTime += duration;
-            indexingCount++;
-            if (verbose) logger.debug("Insert complete for id={} in {} ms", id, duration / 1_000_000.0);
+        try {
+            keyService.incrementOperation();
+            List<EncryptedPoint> updatedPoints = ((KeyRotationServiceImpl) keyService).rotateIfNeededAndReturnUpdated();
+            for (EncryptedPoint pt : updatedPoints) {
+                indexService.updateCachedPoint(pt);
+            }
+            indexService.insert(id, vector);
+        } catch (Exception e) {
+            logger.error("Insert failed for id={}", id, e);
+            throw e;
+        } finally {
+            if (profiler != null) {
+                profiler.stop("insert");
+                List<Long> timings = profiler.getTimings("insert");
+                if (timings.isEmpty()) {
+                    logger.warn("No timings recorded for insert of id={}", id);
+                } else {
+                    long duration = timings.getLast();
+                    totalIndexingTime += duration;
+                    indexingCount++;
+                    if (verbose) logger.debug("Insert complete for id={} in {} ms", id, duration / 1_000_000.0);
+                }
+            }
         }
     }
 
@@ -511,7 +521,6 @@ public class ForwardSecureANNSystem {
         try {
             logger.info("Shutdown sequence started");
 
-            // Wait for all executor tasks to complete
             logger.info("Waiting for executor tasks to complete...");
             executor.shutdown();
             if (!executor.awaitTermination(30, TimeUnit.SECONDS)) {
@@ -587,11 +596,6 @@ public class ForwardSecureANNSystem {
             logger.info("Requesting GC cleanup...");
             System.gc();
             logger.info("Shutdown complete");
-
-            if ("true".equals(System.getProperty("test.env"))) {
-                logger.warn("Test mode enabled. Forcing process exit to prevent hang.");
-                System.exit(0);
-            }
         }
     }
 

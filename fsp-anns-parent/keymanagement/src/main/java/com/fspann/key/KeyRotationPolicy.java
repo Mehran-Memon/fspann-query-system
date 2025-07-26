@@ -22,7 +22,4 @@ public class KeyRotationPolicy {
         return maxIntervalMillis;
     }
 
-    public long getRotationInterval() {
-        return maxIntervalMillis;
-    }
 }

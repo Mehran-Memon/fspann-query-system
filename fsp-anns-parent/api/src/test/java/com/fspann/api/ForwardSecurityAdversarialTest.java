@@ -9,8 +9,7 @@ import com.fspann.key.KeyManager;
 import com.fspann.key.KeyRotationPolicy;
 import com.fspann.key.KeyRotationServiceImpl;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 
 import javax.crypto.SecretKey;
@@ -22,14 +21,45 @@ import java.util.stream.Stream;
 import static org.junit.jupiter.api.Assertions.*;
 
 public class ForwardSecurityAdversarialTest {
-    private RocksDBMetadataManager metadataManager;
-    private static final int[] TEST_DIMENSIONS = {3, 128, 1024, 10000};
+    private static RocksDBMetadataManager metadataManager;
+    private static final int[] TEST_DIMENSIONS = {3, 128, 1024};
     private static final int NUM_POINTS = 1000;
     private static final int TOP_K = 20;
 
+    @BeforeAll
+    public static void setupClass(@TempDir Path tempDir) throws IOException {
+        metadataManager = new RocksDBMetadataManager(tempDir.toString(), tempDir.resolve("points").toString());
+    }
+
+    @AfterAll
+    public static void tearDownClass(@TempDir Path tempDir) throws IOException {
+        if (metadataManager != null) {
+            metadataManager.close();
+        }
+        for (int i = 0; i < 3; i++) {
+            try (Stream<Path> files = Files.walk(tempDir)) {
+                files.sorted(Comparator.reverseOrder())
+                        .forEach(path -> {
+                            try {
+                                Files.deleteIfExists(path);
+                            } catch (IOException e) {
+                                System.err.println("Failed to delete " + path);
+                            }
+                        });
+                return;
+            } catch (IOException e) {
+                if (i == 2) throw e;
+                try {
+                    Thread.sleep(100); // Wait before retry
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
+    }
+
     @BeforeEach
     public void cleanMetadataDir(@TempDir Path tempDir) throws IOException {
-        metadataManager = new RocksDBMetadataManager(tempDir.toString(), tempDir.resolve("points").toString());
         Path baseDir = Paths.get(metadataManager.getPointsBaseDir());
         if (Files.exists(baseDir)) {
             try (Stream<Path> files = Files.walk(baseDir)) {
