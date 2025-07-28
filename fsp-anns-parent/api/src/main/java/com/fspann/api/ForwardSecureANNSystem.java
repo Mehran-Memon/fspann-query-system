@@ -542,7 +542,7 @@ public class ForwardSecureANNSystem {
                 metadataManager.printSummary();
                 logger.info("Logging metadata stats...");
                 metadataManager.logStats();
-                metadataManager.close();
+//                metadataManager.close();
             }
 
             logger.info("Performing final flushAll()");

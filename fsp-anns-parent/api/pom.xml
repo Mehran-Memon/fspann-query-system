@@ -136,11 +136,14 @@
                 <version>3.2.5</version>
                 <configuration>
                     <forkCount>1</forkCount>
-                    <reuseForks>true</reuseForks>
-                    <trimStackTrace>false</trimStackTrace>
-                    <argLine>-Xmx16g -Xss8m -XX:+EnableDynamicAgentLoading</argLine>
+                    <reuseForks>false</reuseForks>
+                    <redirectTestOutputToFile>true</redirectTestOutputToFile>
+                    <printSummary>true</printSummary>
+                    <reportsDirectory>${project.build.directory}/surefire-reports</reportsDirectory>
+                    <argLine>-Xmx8g -Xss4m -Dtest.env=true -XX:+CrashOnOutOfMemoryError</argLine>
                 </configuration>
             </plugin>
+
         </plugins>
     </build>
 </project>

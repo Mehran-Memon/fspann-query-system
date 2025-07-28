@@ -6,7 +6,9 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.*;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -29,36 +31,43 @@ public class RocksDBMetadataManager implements AutoCloseable {
     }
 
     public RocksDBMetadataManager(String dbPath) throws IOException {
-        this(dbPath, dbPath + "/points");
+        this(dbPath, Paths.get(dbPath, "points").toString());
     }
 
     public RocksDBMetadataManager(String dbPath, String pointsPath) throws IOException {
         this.dbPath = dbPath;
         this.baseDir = pointsPath;
-        Files.createDirectories(Path.of(dbPath));
-        Files.createDirectories(Path.of(pointsPath));
-        Options options = new Options().setCreateIfMissing(true);
+
+        Files.createDirectories(Paths.get(dbPath));
+        Files.createDirectories(Paths.get(pointsPath));
+
+        Options options = new Options()
+                .setCreateIfMissing(true)
+                .setWriteBufferSize(64 * 1024 * 1024)
+                .setMaxWriteBufferNumber(2)
+                .setTargetFileSizeBase(64 * 1024 * 1024);
+
         try {
-            db = RocksDB.open(options, dbPath);
+            this.db = RocksDB.open(options, dbPath);
             logger.info("Initialized RocksDB at {}", dbPath);
         } catch (RocksDBException e) {
             logger.error("Failed to initialize RocksDB at {}", dbPath, e);
             throw new IOException("RocksDB initialization failed", e);
-        } finally {
-            options.close();
         }
+        // Intentionally DO NOT close 'options' here immediately; defer until shutdown:
+        Runtime.getRuntime().addShutdownHook(new Thread(options::close));
     }
 
     public void batchPutMetadata(Map<String, Map<String, String>> allMetadata) {
-        Objects.requireNonNull(allMetadata, "Metadata map cannot be null");
         try (WriteBatch batch = new WriteBatch(); WriteOptions opts = new WriteOptions()) {
-            for (Map.Entry<String, Map<String, String>> entry : allMetadata.entrySet()) {
-                String key = Objects.requireNonNull(entry.getKey(), "Vector ID cannot be null");
-                Map<String, String> valMap = Objects.requireNonNull(entry.getValue(), "Metadata cannot be null");
-                batch.put(key.getBytes(StandardCharsets.UTF_8), serializeMetadata(valMap));
-            }
+            allMetadata.forEach((key, valMap) -> {
+                try {
+                    batch.put(key.getBytes(StandardCharsets.UTF_8), serializeMetadata(valMap));
+                } catch (RocksDBException e) {
+                    throw new RuntimeException(e);
+                }
+            });
             db.write(opts, batch);
-            logger.debug("Batch inserted {} metadata entries", allMetadata.size());
         } catch (RocksDBException e) {
             logger.error("Batch metadata insert failed", e);
             throw new RuntimeException("Batch metadata insert failed", e);
@@ -82,12 +91,8 @@ public class RocksDBMetadataManager implements AutoCloseable {
     }
 
     public void putVectorMetadata(String vectorId, Map<String, String> metadata) {
-        if (closed) throw new IllegalStateException("RocksDBMetadataManager is closed");
-        Objects.requireNonNull(vectorId, "Vector ID cannot be null");
-        Objects.requireNonNull(metadata, "Metadata cannot be null");
         try {
             db.put(vectorId.getBytes(StandardCharsets.UTF_8), serializeMetadata(metadata));
-            logger.debug("Updated metadata for vectorId={}", vectorId);
         } catch (RocksDBException e) {
             logger.error("Failed to put metadata for vectorId={}", vectorId, e);
             throw new RuntimeException("Failed to put metadata", e);
@@ -95,11 +100,9 @@ public class RocksDBMetadataManager implements AutoCloseable {
     }
 
     public Map<String, String> getVectorMetadata(String vectorId) {
-        if (closed) throw new IllegalStateException("RocksDBMetadataManager is closed");
-        Objects.requireNonNull(vectorId, "Vector ID cannot be null");
         try {
             byte[] value = db.get(vectorId.getBytes(StandardCharsets.UTF_8));
-            return (value != null) ? deserializeMetadata(value) : new HashMap<>();
+            return value != null ? deserializeMetadata(value) : new HashMap<>();
         } catch (RocksDBException e) {
             logger.warn("Failed to get metadata for vectorId={}", vectorId, e);
             return new HashMap<>();
@@ -118,7 +121,6 @@ public class RocksDBMetadataManager implements AutoCloseable {
     }
 
     private byte[] serializeMetadata(Map<String, String> metadata) {
-        Objects.requireNonNull(metadata, "Metadata cannot be null");
         return metadata.entrySet().stream()
                 .map(e -> escape(e.getKey()) + "=" + escape(e.getValue()))
                 .collect(Collectors.joining(";"))
@@ -126,18 +128,14 @@ public class RocksDBMetadataManager implements AutoCloseable {
     }
 
     private Map<String, String> deserializeMetadata(byte[] data) {
-        Objects.requireNonNull(data, "Data cannot be null");
         String str = new String(data, StandardCharsets.UTF_8);
-        Map<String, String> map = new HashMap<>();
-        if (!str.isEmpty()) {
-            for (String entry : str.split("(?<!\\\\);")) {
-                if (entry.contains("=")) {
-                    String[] kv = entry.split("(?<!\\\\)=", 2);
-                    map.put(unescape(kv[0]), unescape(kv[1]));
-                }
-            }
-        }
-        return map;
+        return Arrays.stream(str.split("(?<!\\\\);"))
+                .map(entry -> entry.split("(?<!\\\\)=", 2))
+                .filter(kv -> kv.length == 2)
+                .collect(Collectors.toMap(
+                        kv -> unescape(kv[0]),
+                        kv -> unescape(kv[1])
+                ));
     }
 
     private String escape(String s) {
@@ -147,7 +145,6 @@ public class RocksDBMetadataManager implements AutoCloseable {
     private String unescape(String s) {
         return s.replace("\\=", "=").replace("\\;", ";");
     }
-
     public void saveEncryptedPoint(EncryptedPoint pt) throws IOException {
         Objects.requireNonNull(pt, "EncryptedPoint cannot be null");
         String safeVersion = "v" + pt.getVersion();
@@ -327,15 +324,9 @@ public class RocksDBMetadataManager implements AutoCloseable {
     @Override
     public void close() {
         if (!closed) {
-            try {
-                logger.info("Closing RocksDB instance...");
-                db.close();
-            } catch (Exception e) {
-                logger.error("Error closing RocksDB", e);
-            } finally {
-                closed = true;
-                logger.info("RocksDB instance closed at {}", dbPath);
-            }
+            db.close();
+            closed = true;
+            logger.info("Closed RocksDB at {}", dbPath);
         }
     }
 
