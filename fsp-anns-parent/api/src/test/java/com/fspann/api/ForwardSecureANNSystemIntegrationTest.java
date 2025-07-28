@@ -20,12 +20,16 @@ import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class ForwardSecureANNSystemIntegrationTest {
     private ForwardSecureANNSystem system;
     private RocksDBMetadataManager metadataManager;
+    private Path tempDir; // Reuse for cleanup
 
     @BeforeEach
     void setup(@TempDir Path tempDir) throws Exception {
+        this.tempDir = tempDir; // store for cleanup in tearDown
+
         Path dataFile = tempDir.resolve("data.csv");
         Files.writeString(dataFile, "0.0,0.0\n0.1,0.1\n0.9,0.9\n");
 
@@ -44,14 +48,14 @@ class ForwardSecureANNSystemIntegrationTest {
 
         Path keys = tempDir.resolve("keys.ser");
         List<Integer> dimensions = List.of(2);
-        RocksDBMetadataManager metadataManager = new RocksDBMetadataManager(tempDir.toString(), tempDir.resolve("points").toString());
+        this.metadataManager = new RocksDBMetadataManager(tempDir.toString(), tempDir.resolve("points").toString());
         KeyManager keyManager = new KeyManager(keys.toString());
         KeyRotationPolicy policy = new KeyRotationPolicy(100, 10000);
         KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(keyManager, policy, tempDir.toString(), metadataManager, null);
         CryptoService cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
         keyService.setCryptoService(cryptoService);
 
-        system = new ForwardSecureANNSystem(
+        this.system = new ForwardSecureANNSystem(
                 config.toString(),
                 dataFile.toString(),
                 keys.toString(),
@@ -67,14 +71,17 @@ class ForwardSecureANNSystemIntegrationTest {
     }
 
     @AfterEach
-    void tearDown(@TempDir Path tempDir) throws Exception {
+    void tearDown() throws Exception {
         if (system != null) {
             system.shutdown();
             system = null;
         }
         if (metadataManager != null) {
             metadataManager.close();
+            metadataManager = null;
         }
+        // Attempt cleanup a few times in case of Windows file locks
+        IOException last = null;
         for (int i = 0; i < 3; i++) {
             try (Stream<Path> files = Files.walk(tempDir)) {
                 files.sorted(Comparator.reverseOrder())
@@ -82,24 +89,23 @@ class ForwardSecureANNSystemIntegrationTest {
                             try {
                                 Files.deleteIfExists(path);
                             } catch (IOException e) {
+                                // Just print for diagnostics
                                 System.err.println("Failed to delete " + path);
                             }
                         });
-                return;
+                last = null;
+                break;
             } catch (IOException e) {
-                if (i == 2) throw new IOException("Failed to delete temp directory after retries", e);
-                try {
-                    Thread.sleep(100);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                }
+                last = e;
+                try { Thread.sleep(100); } catch (InterruptedException ignored) {}
             }
         }
+        if (last != null) throw new IOException("Failed to delete temp directory after retries", last);
         System.gc();
     }
 
     @Test
-    void simpleQueryRecallEvaluation(@TempDir Path tempDir) throws Exception {
+    void simpleQueryRecallEvaluation() throws Exception {
         assertTrue(system.getIndexedVectorCount() > 0, "Indexed vector count should be positive");
 
         GroundtruthManager gt = new GroundtruthManager();
@@ -136,13 +142,14 @@ class ForwardSecureANNSystemIntegrationTest {
         }
 
         if (system.getProfiler() != null) {
-            system.getProfiler().exportTopKVariants(tempDir.resolve("topk.csv").toString());
-            assertTrue(Files.exists(tempDir.resolve("topk.csv")), "TopK CSV should exist");
+            Path out = tempDir.resolve("topk.csv");
+            system.getProfiler().exportTopKVariants(out.toString());
+            assertTrue(Files.exists(out), "TopK CSV should exist");
         }
     }
 
     @Test
-    void testQueryWithCloak(@TempDir Path tempDir) throws Exception {
+    void testQueryWithCloak() throws Exception {
         double[] query = new double[]{0.05, 0.05};
         List<QueryResult> results = system.queryWithCloak(query, 2, 2);
         assertNotNull(results, "Query results should not be null");
@@ -150,7 +157,7 @@ class ForwardSecureANNSystemIntegrationTest {
     }
 
     @Test
-    void testInsertFakePoints(@TempDir Path tempDir) throws Exception {
+    void testInsertFakePoints() throws Exception {
         int fakeCount = 10;
         int initialCount = system.getIndexedVectorCount();
         system.insertFakePointsInBatches(fakeCount, 2);

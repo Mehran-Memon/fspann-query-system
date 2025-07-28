@@ -13,8 +13,8 @@
     <name>FSP-ANN Common Utilities</name>
 
     <properties>
-        <maven.compiler.source>22</maven.compiler.source>
-        <maven.compiler.target>22</maven.compiler.target>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
     </properties>
 
     <dependencies>
@@ -47,7 +47,7 @@
         <dependency>
             <groupId>org.rocksdb</groupId>
             <artifactId>rocksdbjni</artifactId>
-            <version>7.10.2</version> <!-- Latest as of mid-2025 -->
+            <version>8.11.3</version> <!-- Latest as of mid-2025 -->
         </dependency>
     </dependencies>
 

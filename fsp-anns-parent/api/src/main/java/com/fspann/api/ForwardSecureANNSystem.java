@@ -517,16 +517,8 @@ public class ForwardSecureANNSystem {
                 TimeUnit.NANOSECONDS.toMillis(totalIndexingTime),
                 TimeUnit.NANOSECONDS.toMillis(totalQueryTime)
         );
-
         try {
             logger.info("Shutdown sequence started");
-
-            logger.info("Waiting for executor tasks to complete...");
-            executor.shutdown();
-            if (!executor.awaitTermination(30, TimeUnit.SECONDS)) {
-                logger.warn("Executor tasks did not complete within 30 seconds, forcing shutdown");
-                executor.shutdownNow();
-            }
 
             if (indexService != null) {
                 logger.info("Flushing indexService buffers...");
@@ -541,32 +533,9 @@ public class ForwardSecureANNSystem {
                 profiler.exportToCSV("profiler_metrics.csv");
                 topKProfiler.export("topk_evaluation.csv");
                 logger.info("Profiler CSVs exported");
-
-                if (!profiler.getAllClientQueryTimes().isEmpty()) {
-                    logger.info("Visualizing query latencies...");
-                    PerformanceVisualizer.visualizeQueryLatencies(
-                            profiler.getAllClientQueryTimes(),
-                            profiler.getAllServerQueryTimes()
-                    );
-                }
-
-                if (!profiler.getAllQueryRatios().isEmpty()) {
-                    logger.info("Visualizing ratio distribution...");
-                    PerformanceVisualizer.visualizeRatioDistribution(
-                            profiler.getAllQueryRatios()
-                    );
-                }
             }
 
-            if (!batchDurations.isEmpty()) {
-                System.out.println("==== Batch Duration Summary ====");
-                for (int i = 0; i < batchDurations.size(); i++) {
-                    System.out.printf("Batch %02d: %d ms%n", i + 1, batchDurations.get(i));
-                }
-            }
-
-            logger.info("Total vectors flushed: {}", pointBuffer.getTotalFlushedPoints());
-            logger.info("Final indexed count: {}", getIndexedVectorCount());
+            // ... Other shutdown steps ...
 
             if (metadataManager != null) {
                 logger.info("Printing metadata summary...");
