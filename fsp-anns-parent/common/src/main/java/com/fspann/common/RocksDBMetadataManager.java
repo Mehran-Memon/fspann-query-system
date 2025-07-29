@@ -18,7 +18,8 @@ public class RocksDBMetadataManager implements AutoCloseable {
     private final RocksDB db;
     private final String dbPath;
     private final String baseDir;
-    private boolean closed = false;
+    private volatile boolean closed = false;
+    private final Options options;
 
     static {
         try {
@@ -41,7 +42,7 @@ public class RocksDBMetadataManager implements AutoCloseable {
         Files.createDirectories(Paths.get(dbPath));
         Files.createDirectories(Paths.get(pointsPath));
 
-        Options options = new Options()
+        this.options = new Options()
                 .setCreateIfMissing(true)
                 .setWriteBufferSize(64 * 1024 * 1024)
                 .setMaxWriteBufferNumber(2)
@@ -145,6 +146,7 @@ public class RocksDBMetadataManager implements AutoCloseable {
     private String unescape(String s) {
         return s.replace("\\=", "=").replace("\\;", ";");
     }
+
     public void saveEncryptedPoint(EncryptedPoint pt) throws IOException {
         Objects.requireNonNull(pt, "EncryptedPoint cannot be null");
         String safeVersion = "v" + pt.getVersion();
@@ -324,9 +326,14 @@ public class RocksDBMetadataManager implements AutoCloseable {
     @Override
     public void close() {
         if (!closed) {
-            db.close();
-            closed = true;
-            logger.info("Closed RocksDB at {}", dbPath);
+            try {
+                if (db != null) db.close();
+                if (options != null) options.close();
+            } catch (Exception e) {
+                logger.error("Error during RocksDB close", e);
+            } finally {
+                closed = true;
+            }
         }
     }
 

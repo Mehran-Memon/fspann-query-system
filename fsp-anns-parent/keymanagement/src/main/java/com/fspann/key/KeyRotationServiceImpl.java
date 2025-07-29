@@ -98,6 +98,15 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
             try {
                 metadataManager.batchUpdateVectorMetadata(pendingMetadata);
                 logger.debug("Batch updated {} metadata entries", pendingMetadata.size());
+
+                // After metadata batch update
+                for (String updatedId : pendingMetadata.keySet()) {
+                    EncryptedPoint pt = indexService.getEncryptedPoint(updatedId);
+                    if (pt != null && pt.getVersion() != getCurrentVersion().getVersion()) {
+                        logger.warn("Version mismatch for point {}: expected={}, actual={}",
+                                updatedId, getCurrentVersion().getVersion(), pt.getVersion());
+                    }
+                }
             } catch (IOException e) {
                 logger.error("Failed to batch update metadata", e);
             } finally {
@@ -135,6 +144,8 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
                     .filter(p -> p.toString().endsWith(".point"))
                     .toList();
 
+            Map<String, Map<String, String>> pendingMetadata = new HashMap<>();
+
             for (Path file : pointFiles) {
                 try {
                     EncryptedPoint original = PersistenceUtils.loadObject(file.toString(), baseDir.toString(), EncryptedPoint.class);
@@ -147,12 +158,11 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
 
                     EncryptedPoint reindexed = new EncryptedPoint(
                             updated.getId(),
-                            newShard,
-                            updated.getIv(),
-                            updated.getCiphertext(),
-                            updated.getVersion(),
                             updated.getVectorLength(),
-                            null
+                            updated.getCiphertext(),
+                            updated.getIv(),
+                            newShard,
+                            updated.getVersion(), null
                     );
 
                     pendingMetadata.put(reindexed.getId(), Map.of(
@@ -163,6 +173,10 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
                     Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
                     PersistenceUtils.saveObject(reindexed, tmp.toString(), baseDir.toString());
                     Files.move(tmp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                    if (!Files.exists(file)) {
+                        logger.error("Failed to confirm overwrite: {}", file);
+                        throw new IOException("Failed to overwrite .point file: " + file);
+                    }
 
                     logger.debug("Re-encrypted point {}: v{}→v{}, shard {}→{}", reindexed.getId(), original.getVersion(), reindexed.getVersion(), original.getShardId(), reindexed.getShardId());
 
@@ -184,10 +198,8 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
                     metadataManager.batchUpdateVectorMetadata(pendingMetadata);
                     logger.debug("Final batch update for {} metadata entries", pendingMetadata.size());
                 }
-            } catch (IOException e) {
+            } catch (Exception e) {
                 logger.error("Failed to batch update final metadata", e);
-            } finally {
-                pendingMetadata.clear();
             }
 
             indexService.clearCache();
@@ -235,6 +247,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
             throw e;
         }
     }
+
 
     public void setIndexService(IndexService indexService) {
         this.indexService = indexService;

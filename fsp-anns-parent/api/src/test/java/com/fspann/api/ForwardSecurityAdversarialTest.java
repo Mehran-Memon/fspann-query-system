@@ -37,25 +37,29 @@ public class ForwardSecurityAdversarialTest {
             metadataManager.close();
         }
         for (int i = 0; i < 3; i++) {
-            try (Stream<Path> files = Files.walk(tempDir)) {
-                files.sorted(Comparator.reverseOrder())
-                        .forEach(path -> {
-                            try {
-                                Files.deleteIfExists(path);
-                            } catch (IOException e) {
-                                System.err.println("Failed to delete " + path);
-                            }
-                        });
-                return;
-            } catch (IOException e) {
-                if (i == 2) throw e;
-                try {
-                    Thread.sleep(100); // Wait before retry
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
+            try {
+                if (metadataManager != null) {
+                    metadataManager.close(); // Ensure RocksDB is closed before deletion
                 }
-            }
+                System.gc(); // Force finalizers
+                Thread.sleep(200); // Let file locks clear
+
+                try (Stream<Path> files = Files.walk(tempDir)) {
+                    files.sorted(Comparator.reverseOrder())
+                            .forEach(path -> {
+                                try {
+                                    Files.deleteIfExists(path);
+                                } catch (IOException e) {
+                                    System.err.println("Failed to delete " + path);
+                                }
+                            });
+                }
+                break;
+            } catch (IOException e) {
+                if (i == 2) throw new IOException("Failed to delete temp directory after retries", e);
+            } catch (InterruptedException ignored) {}
         }
+
     }
 
     @BeforeEach

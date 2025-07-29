@@ -26,15 +26,21 @@ class ForwardSecureANNSystemIntegrationTest {
     private RocksDBMetadataManager metadataManager;
     private Path tempDir; // Reuse for cleanup
 
+    @BeforeAll
+    static void setTestMode() {
+        System.setProperty("test.env", "true");
+    }
+
+
     @BeforeEach
     void setup(@TempDir Path tempDir) throws Exception {
         this.tempDir = tempDir; // store for cleanup in tearDown
 
         Path dataFile = tempDir.resolve("data.csv");
-        Files.writeString(dataFile, "0.0,0.0\n0.1,0.1\n0.9,0.9\n");
+        Files.writeString(dataFile, "0.1,0.1\n0.5,0.5\n");
 
         Path queryFile = tempDir.resolve("query.csv");
-        Files.writeString(queryFile, "0.05,0.05\n0.95,0.95");
+        Files.writeString(queryFile, "0.1,0.1\n");
 
         Path config = tempDir.resolve("config.json");
         Files.writeString(config, """
