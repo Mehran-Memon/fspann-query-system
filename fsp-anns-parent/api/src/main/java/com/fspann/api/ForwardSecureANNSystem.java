@@ -97,6 +97,7 @@ public class ForwardSecureANNSystem {
         Files.createDirectories(pointsPath);
         Files.createDirectories(metaDBPath);
 
+
         this.cryptoService = Objects.requireNonNull(cryptoService, "CryptoService cannot be null");
         this.metadataManager = Objects.requireNonNull(metadataManager, "MetadataManager cannot be null");
         KeyLifeCycleService injected = cryptoService.getKeyService();

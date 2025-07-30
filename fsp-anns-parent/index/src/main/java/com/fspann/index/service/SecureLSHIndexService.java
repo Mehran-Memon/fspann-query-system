@@ -6,16 +6,12 @@ import com.fspann.crypto.CryptoService;
 import com.fspann.index.core.DimensionContext;
 import com.fspann.index.core.SecureLSHIndex;
 import com.fspann.index.core.EvenLSH;
-import com.fspann.common.RocksDBMetadataManager;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import javax.crypto.SecretKey;
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
 
 public class SecureLSHIndexService implements IndexService {
     private static final Logger logger = LoggerFactory.getLogger(SecureLSHIndexService.class);
@@ -28,7 +24,6 @@ public class SecureLSHIndexService implements IndexService {
     private final Map<Integer, DimensionContext> dimensionContexts = new ConcurrentHashMap<>();
     private final Map<String, EncryptedPoint> indexedPoints = new ConcurrentHashMap<>();
     private final EncryptedPointBuffer buffer;
-    private final Map<String, Map<String, String>> pendingMetadata = new ConcurrentHashMap<>();
     private static final int DEFAULT_NUM_SHARDS = 32;
 
     public SecureLSHIndexService(CryptoService crypto,
@@ -69,89 +64,19 @@ public class SecureLSHIndexService implements IndexService {
         });
     }
 
-
+    /**
+     * Batch inserts a list of raw vectors with corresponding IDs.
+     */
     public void batchInsert(List<String> ids, List<double[]> vectors) {
-        if (ids.size() != vectors.size()) {
-            throw new IllegalArgumentException("IDs and vectors must be the same size.");
+        if (ids == null || vectors == null || ids.size() != vectors.size()) {
+            throw new IllegalArgumentException("IDs and vectors must be non-null and of equal size");
         }
 
-        Map<Integer, List<EncryptedPoint>> byDim = new HashMap<>();
-
-        for (int i = 0; i < vectors.size(); i++) {
-            String id = ids.get(i);
-            double[] vector = vectors.get(i);
-            try {
-                int dimension = vector.length;
-                DimensionContext ctx = getOrCreateContext(dimension);
-                KeyVersion version = keyService.getCurrentVersion();
-                SecretKey key = version.getKey();
-
-                int shardId = ctx.getLsh().getBucketId(vector);
-                EncryptedPoint encryptedPoint = crypto.encryptToPoint(id, vector, key);
-                EncryptedPoint withShard = new EncryptedPoint(
-                        encryptedPoint.getId(),
-                        shardId,
-                        encryptedPoint.getIv(),
-                        encryptedPoint.getCiphertext(),
-                        version.getVersion(),
-                        dimension,
-                        Collections.singletonList(shardId)
-                );
-
-                byDim.computeIfAbsent(dimension, k -> new ArrayList<>()).add(withShard);
-            } catch (Exception e) {
-                logger.error("Failed to encrypt vector id={} during batchInsert", id, e);
-            }
+        for (int i = 0; i < ids.size(); i++) {
+            insert(ids.get(i), vectors.get(i));
         }
-
-        for (Map.Entry<Integer, List<EncryptedPoint>> entry : byDim.entrySet()) {
-            DimensionContext ctx = getOrCreateContext(entry.getKey());
-            SecureLSHIndex idx = ctx.getIndex();
-
-            long t1 = System.nanoTime();
-
-            for (EncryptedPoint pt : entry.getValue()) {
-                indexedPoints.put(pt.getId(), pt);
-                idx.addPoint(pt);
-                idx.markShardDirty(pt.getShardId());
-                pendingMetadata.put(pt.getId(), Map.of(
-                        "shardId", String.valueOf(pt.getShardId()),
-                        "version", String.valueOf(pt.getVersion())
-                ));
-            }
-            long t2 = System.nanoTime();
-
-            try {
-                metadataManager.batchUpdateVectorMetadata(pendingMetadata);
-                pendingMetadata.clear();
-            } catch (IOException e) {
-                logger.error("Failed to batch update metadata", e);
-            }
-
-            long t3 = System.nanoTime();
-
-            for (EncryptedPoint pt : entry.getValue()) {
-                buffer.add(pt);
-                try {
-                    metadataManager.saveEncryptedPoint(pt);
-                } catch (IOException e) {
-                    logger.error("Failed to persist encrypted point {}", pt.getId(), e);
-                }
-            }
-
-            long t4 = System.nanoTime();
-
-            logger.info("{} points in {} ms (index: {} ms, metaMap: {} ms, save: {} ms)",
-                    entry.getValue().size(),
-                    TimeUnit.NANOSECONDS.toMillis(t4 - t1),
-                    TimeUnit.NANOSECONDS.toMillis(t2 - t1),
-                    TimeUnit.NANOSECONDS.toMillis(t3 - t2),
-                    TimeUnit.NANOSECONDS.toMillis(t4 - t3)
-            );
-        }
-
-        buffer.flushAll();
     }
+
 
     @Override
     public void insert(EncryptedPoint pt) {
@@ -162,22 +87,6 @@ public class SecureLSHIndexService implements IndexService {
         SecureLSHIndex idx = ctx.getIndex();
         idx.addPoint(pt);
         idx.markShardDirty(pt.getShardId());
-
-        pendingMetadata.put(pt.getId(), Map.of(
-                "shardId", String.valueOf(pt.getShardId()),
-                "version", String.valueOf(pt.getVersion())
-        ));
-        Map<String, Map<String, String>> metadataCopy = new HashMap<>(pendingMetadata);
-        logger.info("Before batchUpdateVectorMetadata: pendingMetadata={}", pendingMetadata);
-        try {
-            metadataManager.batchUpdateVectorMetadata(metadataCopy);
-            logger.info("After batchUpdateVectorMetadata: pendingMetadata={}", pendingMetadata);
-            pendingMetadata.clear();
-            logger.info("After clear: pendingMetadata={}", pendingMetadata);
-        } catch (IOException e) {
-            logger.error("Failed to batch update metadata for point {}", pt.getId(), e);
-        }
-
         buffer.add(pt);
         try {
             metadataManager.saveEncryptedPoint(pt);

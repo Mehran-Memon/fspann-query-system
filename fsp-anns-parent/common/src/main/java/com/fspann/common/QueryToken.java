@@ -3,9 +3,11 @@ package com.fspann.common;
 import java.util.Collections;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.Objects;
 
 /**
  * Data Transfer Object representing an encrypted ANN query.
+ * Immutable once constructed.
  */
 public class QueryToken {
     private final List<Integer> candidateBuckets;
@@ -25,27 +27,38 @@ public class QueryToken {
                       double[] plaintextQuery,
                       int topK,
                       int numTables,
-                      String encryptionContext,  int dimension, int shardId, int version) {
-        if (candidateBuckets == null || candidateBuckets.isEmpty()) {
-            throw new IllegalArgumentException("candidateBuckets cannot be null or empty");
+                      String encryptionContext,
+                      int dimension,
+                      int shardId,
+                      int version) {
+
+        Objects.requireNonNull(candidateBuckets, "candidateBuckets cannot be null");
+        Objects.requireNonNull(encryptedQuery, "encryptedQuery cannot be null");
+        Objects.requireNonNull(plaintextQuery, "plaintextQuery cannot be null");
+        Objects.requireNonNull(iv, "IV cannot be null");
+
+        if (candidateBuckets.isEmpty()) {
+            throw new IllegalArgumentException("candidateBuckets cannot be empty");
         }
-        if (encryptedQuery == null) throw new NullPointerException("encryptedQuery");
-        if (plaintextQuery == null)
-            throw new IllegalArgumentException("plaintextQuery cannot be null");
-        if (topK < 0) {
-            throw new IllegalArgumentException("topK cannot be negative: " + topK);
+        if (topK <= 0) {
+            throw new IllegalArgumentException("topK must be positive: " + topK);
         }
         if (numTables <= 0) {
             throw new IllegalArgumentException("numTables must be positive: " + numTables);
         }
+        if (dimension <= 0) {
+            throw new IllegalArgumentException("dimension must be positive: " + dimension);
+        }
+
         this.candidateBuckets = Collections.unmodifiableList(new ArrayList<>(candidateBuckets));
-        this.encryptedQuery = encryptedQuery != null ? encryptedQuery.clone() : null;
-        this.plaintextQuery = plaintextQuery.clone(); // store a copy
-        this.topK = topK;
         this.iv = iv.clone();
+        this.encryptedQuery = encryptedQuery.clone();
+        this.plaintextQuery = plaintextQuery.clone();
+        this.topK = topK;
         this.numTables = numTables;
         this.encryptionContext = (encryptionContext != null && !encryptionContext.isEmpty())
-                ? encryptionContext : "epoch_0";
+                ? encryptionContext
+                : "epoch_0_dim_" + dimension;
         this.dimension = dimension;
         this.shardId = shardId;
         this.version = version;
@@ -56,7 +69,7 @@ public class QueryToken {
     }
 
     public List<Integer> getCandidateBuckets() {
-        return new ArrayList<>(candidateBuckets); // Return copy
+        return new ArrayList<>(candidateBuckets);
     }
 
     public byte[] getIv() {
@@ -76,7 +89,7 @@ public class QueryToken {
     }
 
     public int getQueryVectorLength() {
-        return plaintextQuery != null ? plaintextQuery.length : 0;
+        return plaintextQuery.length;
     }
 
     public int getTopK() {
@@ -106,10 +119,13 @@ public class QueryToken {
     @Override
     public String toString() {
         return "QueryToken{" +
-                "candidateBuckets=" + candidateBuckets +
-                ", topK=" + topK +
+                "topK=" + topK +
                 ", numTables=" + numTables +
+                ", buckets=" + candidateBuckets +
                 ", encryptionContext='" + encryptionContext + '\'' +
+                ", version=" + version +
+                ", dim=" + dimension +
+                ", shardId=" + shardId +
                 '}';
     }
 }

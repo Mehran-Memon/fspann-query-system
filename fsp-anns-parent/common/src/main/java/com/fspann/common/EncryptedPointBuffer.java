@@ -1,6 +1,3 @@
-// Unified configuration path and version folder logic
-// All files now share one base path for keys, metadata, and encrypted points
-
 package com.fspann.common;
 
 import org.slf4j.Logger;
@@ -41,9 +38,10 @@ public class EncryptedPointBuffer {
 
         long maxMemory = Runtime.getRuntime().maxMemory();
         long usedMemory = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
+        double usageRatio = (double) usedMemory / maxMemory;
 
-        if ((double) usedMemory / maxMemory > MEMORY_THRESHOLD_RATIO) {
-            logger.warn("Memory usage exceeded 80% ({} MB used of {} MB). Flushing buffers.",
+        if (usageRatio > MEMORY_THRESHOLD_RATIO) {
+            logger.warn("Memory usage exceeded 80% ({} MB used of {} MB). Flushing all buffers.",
                     usedMemory / (1024 * 1024), maxMemory / (1024 * 1024));
             flushAll();
         }
@@ -54,20 +52,22 @@ public class EncryptedPointBuffer {
     }
 
     public synchronized void flushAll() {
+        logger.info("Flushing all version buffers ({} total points)", globalBufferCount);
         for (Integer version : new ArrayList<>(versionBuffer.keySet())) {
             flush(version);
         }
     }
 
     public synchronized void flush(int version) {
-        List<EncryptedPoint> points = versionBuffer.getOrDefault(version, Collections.emptyList());
-        if (points.isEmpty()) return;
+        List<EncryptedPoint> points = versionBuffer.get(version);
+        if (points == null || points.isEmpty()) return;
 
         int flushedSize = points.size();
-        String batchFileName = String.format("v%d_batch_%03d.points", version, batchCounters.getOrDefault(version, 0));
+        int batchIndex = batchCounters.getOrDefault(version, 0);
+        String batchFileName = String.format("v%d_batch_%03d.points", version, batchIndex);
         Path versionDir = pointsDir.resolve("v" + version);
-        Path batchFile = versionDir.resolve(batchFileName);
 
+        // Step 1: Prepare metadata
         Map<String, Map<String, String>> allMeta = new HashMap<>();
         for (EncryptedPoint pt : points) {
             allMeta.put(pt.getId(), Map.of(
@@ -76,33 +76,35 @@ public class EncryptedPointBuffer {
             ));
         }
 
+        // Step 2: Try batch metadata update first
         try {
             metadataManager.batchPutMetadata(allMeta);
         } catch (RuntimeException e) {
-            logger.error("Failed to batch put metadata for version {}, retrying individually", version, e);
+            logger.error("Batch metadata update failed for v{}, falling back to individual updates", version, e);
             for (EncryptedPoint pt : points) {
                 try {
                     metadataManager.updateVectorMetadata(pt.getId(), allMeta.get(pt.getId()));
                 } catch (RuntimeException ex) {
-                    logger.error("Failed to put metadata for point {}", pt.getId(), ex);
+                    logger.error("Failed to update metadata for point {}", pt.getId(), ex);
                 }
             }
         }
 
+        // Step 3: Save each point to disk
         try {
             Files.createDirectories(versionDir);
             for (EncryptedPoint pt : points) {
                 Path pointFile = versionDir.resolve(pt.getId() + ".point");
                 PersistenceUtils.saveObject(pt, pointFile.toString(), pointsDir.toString());
             }
-            logger.debug("Flushed {} points for v{} to {}", flushedSize, version, batchFileName);
+            logger.info("Flushed {} points to disk (v{} - {})", flushedSize, version, batchFileName);
         } catch (IOException e) {
             logger.error("Failed to flush EncryptedPoints for version {} to {}: {}", version, batchFileName, e.getMessage());
         }
 
         globalBufferCount -= flushedSize;
         totalFlushedPoints += flushedSize;
-        batchCounters.put(version, batchCounters.getOrDefault(version, 0) + 1);
+        batchCounters.put(version, batchIndex + 1);
         versionBuffer.remove(version);
     }
 
@@ -120,6 +122,6 @@ public class EncryptedPointBuffer {
 
     public void shutdown() {
         flushAll();
-        logger.debug("EncryptedPointBuffer shutdown, flushed {} points", totalFlushedPoints);
+        logger.info("EncryptedPointBuffer shutdown complete, total flushed: {}", totalFlushedPoints);
     }
 }

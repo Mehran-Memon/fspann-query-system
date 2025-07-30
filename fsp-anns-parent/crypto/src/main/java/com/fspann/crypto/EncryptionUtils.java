@@ -44,10 +44,17 @@ public final class EncryptionUtils {
      */
     public static byte[] encryptVector(double[] vector, byte[] iv, SecretKey key) throws GeneralSecurityException {
         validateParams(vector, iv, key);
+        if (vector.length == 0) throw new IllegalArgumentException("Vector cannot be empty");
+        for (double v : vector) {
+            if (Double.isNaN(v) || Double.isInfinite(v)) {
+                throw new IllegalArgumentException("Vector contains invalid values (NaN or Infinite)");
+            }
+        }
         byte[] plaintext = doubleArrayToBytes(vector);
         Cipher cipher = Cipher.getInstance(TRANSFORMATION);
         cipher.init(Cipher.ENCRYPT_MODE, key, new GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv));
         try {
+            logger.debug("Encrypting vector of size {} with IV: {}", vector.length, Base64.getEncoder().encodeToString(iv));
             return cipher.doFinal(plaintext);
         } finally {
             Arrays.fill(plaintext, (byte) 0); // Clear sensitive data
@@ -70,13 +77,16 @@ public final class EncryptionUtils {
         GCMParameterSpec spec = new GCMParameterSpec(128, iv);
         cipher.init(Cipher.DECRYPT_MODE, key, spec);
         byte[] decrypted = cipher.doFinal(ciphertext);
-        // Convert byte[] to double[]
-        ByteBuffer buffer = ByteBuffer.wrap(decrypted);
-        double[] result = new double[decrypted.length / 8];
-        for (int i = 0; i < result.length; i++) {
-            result[i] = buffer.getDouble();
+        try {
+            ByteBuffer buffer = ByteBuffer.wrap(decrypted);
+            double[] result = new double[decrypted.length / 8];
+            for (int i = 0; i < result.length; i++) {
+                result[i] = buffer.getDouble();
+            }
+            return result;
+        } finally {
+            Arrays.fill(decrypted, (byte) 0); // Clear sensitive decrypted data
         }
-        return result;
     }
 
     private static byte[] doubleArrayToBytes(double[] vector) {
@@ -107,4 +117,5 @@ public final class EncryptionUtils {
         if (input instanceof byte[] && ((byte[]) input).length < GCM_TAG_LENGTH_BITS / 8) {
             throw new IllegalArgumentException("Ciphertext too short");
         }
-    }}
+    }
+}

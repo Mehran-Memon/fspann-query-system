@@ -66,7 +66,6 @@ public class AesGcmCryptoService implements CryptoService {
     public EncryptedPoint encrypt(String id, double[] vector) {
         return encryptTimer.record(() -> {
             try {
-                // Validate inputs
                 Objects.requireNonNull(id, "Point ID cannot be null");
                 if (!id.matches("[a-zA-Z0-9_-]+")) {
                     throw new IllegalArgumentException("Invalid ID format: only alphanumeric, underscore, and hyphen allowed");
@@ -81,27 +80,19 @@ public class AesGcmCryptoService implements CryptoService {
                     }
                 }
 
-                // Check key version without triggering rotation
                 KeyVersion current = keyService.getCurrentVersion();
                 if (cachedVersion == null || cachedVersion.getVersion() != current.getVersion()) {
                     synchronized (this) {
                         if (cachedVersion == null || cachedVersion.getVersion() != current.getVersion()) {
-                            cachedVersion = current; // Update cache without rotation
+                            cachedVersion = current;
                         }
                     }
                 }
                 SecretKey key = cachedVersion.getKey();
-
-                // Encrypt vector
                 byte[] iv = EncryptionUtils.generateIV();
                 byte[] ciphertext = EncryptionUtils.encryptVector(vector, iv, key);
-
-                // Create EncryptedPoint with current version
                 EncryptedPoint point = new EncryptedPoint(id, 0, iv, ciphertext, cachedVersion.getVersion(), vector.length, null);
-
-                // Update metadata (defer to batch if possible)
                 metadataManager.updateVectorMetadata(id, Map.of("version", String.valueOf(cachedVersion.getVersion())));
-
                 logger.debug("Encrypted point {} with version {}", id, cachedVersion.getVersion());
                 return point;
             } catch (GeneralSecurityException e) {
@@ -115,13 +106,12 @@ public class AesGcmCryptoService implements CryptoService {
     public double[] decryptFromPoint(EncryptedPoint pt, SecretKey key) {
         logger.info("Decrypting point: id={}, version={}, IV={}", pt.getId(), pt.getVersion(), Base64.getEncoder().encodeToString(pt.getIv()));
         return decryptTimer.record(() -> {
-            logger.debug("Attempting decryption for point {} with key version {}", pt.getId(), pt.getVersion());
             try {
                 logger.debug("Decrypting point {} with key version {}", pt.getId(), pt.getVersion());
                 return EncryptionUtils.decryptVector(pt.getCiphertext(), pt.getIv(), key);
             } catch (GeneralSecurityException e) {
-                logger.error("Decryption failed for point {}", pt.getId(), e);
-                throw new CryptoException("Decryption failed for point: " + pt.getId(), e);
+                logger.error("Decryption failed (possibly due to stale key) for point {}: {}", pt.getId(), e.getMessage());
+                throw new CryptoException("Forward security breach: invalid decryption key", e);
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
@@ -178,14 +168,19 @@ public class AesGcmCryptoService implements CryptoService {
             try {
                 double[] plaintext = EncryptionUtils.decryptVector(pt.getCiphertext(), pt.getIv(), oldKey);
                 byte[] ciphertext = EncryptionUtils.encryptVector(plaintext, newIv, newKey);
-
                 int newVersion = keyService.getCurrentVersion().getVersion();
+
+                if (newVersion == pt.getVersion()) {
+                    logger.debug("Skipping re-encryption for point {}: already at latest version v{}", pt.getId(), newVersion);
+                    return pt;
+                }
+
                 EncryptedPoint reEncrypted = new EncryptedPoint(
                         pt.getId(), pt.getShardId(), newIv, ciphertext, newVersion, pt.getVectorLength(), null
                 );
 
                 metadataManager.updateVectorMetadata(pt.getId(), Map.of("version", String.valueOf(newVersion)));
-                logger.debug("Re-encrypted (custom IV) point {} from v{} to v{}", pt.getId(), oldVersion, newVersion);
+                logger.debug("Re-encrypted point {} from v{} to v{}", pt.getId(), oldVersion, newVersion);
                 return reEncrypted;
             } catch (GeneralSecurityException e) {
                 logger.error("Re-encryption failed for point {}", pt.getId(), e);

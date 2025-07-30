@@ -28,7 +28,8 @@ public class SecureLSHIndex {
     public SecureLSHIndex(int numHashTables, int numShards, EvenLSH lsh) {
         this.numHashTables = numHashTables;
         this.numShards = numShards;
-        this.lsh = lsh;
+        this.lsh = Objects.requireNonNull(lsh, "LSH function cannot be null");
+
         for (int i = 0; i < numHashTables; i++) {
             tables.add(new ConcurrentHashMap<>());
         }
@@ -38,10 +39,17 @@ public class SecureLSHIndex {
         Objects.requireNonNull(pt, "EncryptedPoint cannot be null");
         lock.writeLock().lock();
         try {
+            if (points.containsKey(pt.getId())) {
+                logger.debug("Point {} already exists, replacing...", pt.getId());
+                removePoint(pt.getId());  // ensure clean overwrite
+            }
             points.put(pt.getId(), pt);
             for (Map<Integer, CopyOnWriteArrayList<EncryptedPoint>> table : tables) {
                 table.computeIfAbsent(pt.getShardId(), k -> new CopyOnWriteArrayList<>()).add(pt);
             }
+            logger.debug("Inserted EncryptedPoint id={} into shard {}", pt.getId(), pt.getShardId());
+        } catch (Exception e) {
+            logger.error("Failed to add point {}", pt.getId(), e);
         } finally {
             lock.writeLock().unlock();
         }
@@ -55,8 +63,14 @@ public class SecureLSHIndex {
             if (pt != null) {
                 int shard = pt.getShardId();
                 for (Map<Integer, CopyOnWriteArrayList<EncryptedPoint>> table : tables) {
-                    table.getOrDefault(shard, new CopyOnWriteArrayList<>()).remove(pt);
+                    CopyOnWriteArrayList<EncryptedPoint> bucket = table.get(shard);
+                    if (bucket != null) {
+                        bucket.remove(pt);
+                        logger.debug("Removed point {} from shard {}", id, shard);
+                    }
                 }
+            } else {
+                logger.debug("Attempted to remove nonexistent point {}", id);
             }
         } finally {
             lock.writeLock().unlock();
@@ -70,14 +84,19 @@ public class SecureLSHIndex {
             Set<EncryptedPoint> result = new LinkedHashSet<>();
             List<Integer> buckets = token.getBuckets();
             int tablesToUse = Math.min(token.getNumTables(), numHashTables);
+
             for (int t = 0; t < tablesToUse; t++) {
-                for (Integer b : buckets) {
-                    CopyOnWriteArrayList<EncryptedPoint> bucket = tables.get(t).get(b);
+                for (Integer bucketId : buckets) {
+                    CopyOnWriteArrayList<EncryptedPoint> bucket = tables.get(t).get(bucketId);
                     if (bucket != null) {
                         result.addAll(bucket);
+                    } else {
+                        logger.trace("Empty bucket {} in table {}", bucketId, t);
                     }
                 }
             }
+
+            logger.debug("Query returned {} candidates for dim={} tokenBuckets={}", result.size(), token.getQueryVector().length, buckets);
             return new ArrayList<>(result);
         } finally {
             lock.readLock().unlock();
@@ -86,6 +105,7 @@ public class SecureLSHIndex {
 
     public void markShardDirty(int shardId) {
         dirtyShards.add(shardId);
+        logger.debug("Marked shard {} as dirty", shardId);
     }
 
     public Set<Integer> getDirtyShards() {
@@ -94,6 +114,7 @@ public class SecureLSHIndex {
 
     public void clearDirtyShard(int shardId) {
         dirtyShards.remove(shardId);
+        logger.debug("Cleared dirty shard {}", shardId);
     }
 
     public int getNumHashTables() {
@@ -106,5 +127,13 @@ public class SecureLSHIndex {
 
     public int getPointCount() {
         return points.size();
+    }
+
+    public boolean hasPoint(String id) {
+        return points.containsKey(id);
+    }
+
+    public EncryptedPoint getPoint(String id) {
+        return points.get(id);
     }
 }

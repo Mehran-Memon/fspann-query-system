@@ -4,6 +4,8 @@ import java.io.Serializable;
 import java.util.*;
 
 public class EncryptedPoint implements Serializable {
+    private static final long serialVersionUID = 1L;
+
     private final String id;
     private final int shardId;
     private final byte[] iv;
@@ -21,7 +23,7 @@ public class EncryptedPoint implements Serializable {
         if (vectorLength <= 0) throw new IllegalArgumentException("Vector length must be positive");
         this.version = version;
         this.vectorLength = vectorLength;
-        this.buckets = buckets != null ? Collections.unmodifiableList(new ArrayList<>(buckets)) : null;
+        this.buckets = buckets != null ? Collections.unmodifiableList(new ArrayList<>(buckets)) : Collections.emptyList();
     }
 
     public String getId() { return id; }
@@ -30,7 +32,7 @@ public class EncryptedPoint implements Serializable {
     public byte[] getCiphertext() { return ciphertext.clone(); }
     public int getVersion() { return version; }
     public int getVectorLength() { return vectorLength; }
-    public List<Integer> getBuckets() { return buckets != null ? new ArrayList<>(buckets) : null; }
+    public List<Integer> getBuckets() { return new ArrayList<>(buckets); }
 
     @Override
     public boolean equals(Object o) {
@@ -49,5 +51,10 @@ public class EncryptedPoint implements Serializable {
     @Override
     public int hashCode() {
         return Objects.hash(id, shardId, Arrays.hashCode(iv), Arrays.hashCode(ciphertext), version, vectorLength, buckets);
+    }
+
+    @Override
+    public String toString() {
+        return String.format("EncryptedPoint[id=%s, shard=%d, version=%d, dim=%d]", id, shardId, version, vectorLength);
     }
 }
