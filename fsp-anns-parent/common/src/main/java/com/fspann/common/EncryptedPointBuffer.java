@@ -1,3 +1,6 @@
+// Unified configuration path and version folder logic
+// All files now share one base path for keys, metadata, and encrypted points
+
 package com.fspann.common;
 
 import org.slf4j.Logger;
@@ -13,22 +16,22 @@ public class EncryptedPointBuffer {
     private static final Logger logger = LoggerFactory.getLogger(EncryptedPointBuffer.class);
     private final Map<Integer, List<EncryptedPoint>> versionBuffer = new HashMap<>();
     private final Map<Integer, Integer> batchCounters = new HashMap<>();
-    private final Path baseDir;
+    private final Path pointsDir;
     private final RocksDBMetadataManager metadataManager;
     private static final double MEMORY_THRESHOLD_RATIO = 0.80;
     private final int flushThreshold;
     private int globalBufferCount = 0;
     private int totalFlushedPoints = 0;
 
-    public EncryptedPointBuffer(String baseDirPath, RocksDBMetadataManager metadataManager) throws IOException {
-        this(baseDirPath, metadataManager, 1000);
+    public EncryptedPointBuffer(String pointsPath, RocksDBMetadataManager metadataManager) throws IOException {
+        this(pointsPath, metadataManager, 1000);
     }
 
-    public EncryptedPointBuffer(String baseDirPath, RocksDBMetadataManager metadataManager, int flushThreshold) throws IOException {
-        this.baseDir = Paths.get(baseDirPath);
+    public EncryptedPointBuffer(String pointsPath, RocksDBMetadataManager metadataManager, int flushThreshold) throws IOException {
+        this.pointsDir = Paths.get(pointsPath);
         this.metadataManager = Objects.requireNonNull(metadataManager, "MetadataManager cannot be null");
         this.flushThreshold = flushThreshold;
-        Files.createDirectories(baseDir);
+        Files.createDirectories(pointsDir);
     }
 
     public synchronized void add(EncryptedPoint pt) {
@@ -62,7 +65,7 @@ public class EncryptedPointBuffer {
 
         int flushedSize = points.size();
         String batchFileName = String.format("v%d_batch_%03d.points", version, batchCounters.getOrDefault(version, 0));
-        Path versionDir = baseDir.resolve("v" + version);
+        Path versionDir = pointsDir.resolve("v" + version);
         Path batchFile = versionDir.resolve(batchFileName);
 
         Map<String, Map<String, String>> allMeta = new HashMap<>();
@@ -79,7 +82,7 @@ public class EncryptedPointBuffer {
             logger.error("Failed to batch put metadata for version {}, retrying individually", version, e);
             for (EncryptedPoint pt : points) {
                 try {
-                    metadataManager.putVectorMetadata(pt.getId(), allMeta.get(pt.getId()));
+                    metadataManager.updateVectorMetadata(pt.getId(), allMeta.get(pt.getId()));
                 } catch (RuntimeException ex) {
                     logger.error("Failed to put metadata for point {}", pt.getId(), ex);
                 }
@@ -90,7 +93,7 @@ public class EncryptedPointBuffer {
             Files.createDirectories(versionDir);
             for (EncryptedPoint pt : points) {
                 Path pointFile = versionDir.resolve(pt.getId() + ".point");
-                PersistenceUtils.saveObject(pt, pointFile.toString(), baseDir.toString());
+                PersistenceUtils.saveObject(pt, pointFile.toString(), pointsDir.toString());
             }
             logger.debug("Flushed {} points for v{} to {}", flushedSize, version, batchFileName);
         } catch (IOException e) {

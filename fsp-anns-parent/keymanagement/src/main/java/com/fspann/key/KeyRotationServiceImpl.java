@@ -1,12 +1,7 @@
 package com.fspann.key;
 
-import com.fspann.common.EncryptedPoint;
-import com.fspann.common.KeyLifeCycleService;
-import com.fspann.common.KeyVersion;
-import com.fspann.common.PersistenceUtils;
+import com.fspann.common.*;
 import com.fspann.crypto.CryptoService;
-import com.fspann.common.RocksDBMetadataManager;
-import com.fspann.common.IndexService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -137,14 +132,13 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
         int totalReEncrypted = 0;
         Set<String> seen = new HashSet<>();
         Path baseDir = Paths.get(metadataManager.getPointsBaseDir());
+        Map<String, Map<String, String>> pendingMetadata = new HashMap<>();
 
         try (Stream<Path> stream = Files.walk(baseDir)) {
             List<Path> pointFiles = stream
                     .filter(Files::isRegularFile)
                     .filter(p -> p.toString().endsWith(".point"))
                     .toList();
-
-            Map<String, Map<String, String>> pendingMetadata = new HashMap<>();
 
             for (Path file : pointFiles) {
                 try {
@@ -162,7 +156,8 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
                             updated.getCiphertext(),
                             updated.getIv(),
                             newShard,
-                            updated.getVersion(), null
+                            getCurrentVersion().getVersion(),  // ✅ Correct version assignment,
+                            null
                     );
 
                     pendingMetadata.put(reindexed.getId(), Map.of(
@@ -170,17 +165,19 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
                             "shardId", String.valueOf(reindexed.getShardId())
                     ));
 
-                    Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
-                    PersistenceUtils.saveObject(reindexed, tmp.toString(), baseDir.toString());
-                    Files.move(tmp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-                    if (!Files.exists(file)) {
-                        logger.error("Failed to confirm overwrite: {}", file);
-                        throw new IOException("Failed to overwrite .point file: " + file);
+                    // ✅ Insert into buffer instead of direct save
+                    EncryptedPointBuffer buffer = indexService.getPointBuffer();
+                    if (buffer != null) {
+                        buffer.add(reindexed);
+                    } else {
+                        // Fallback to direct persist
+                        Path versionDir = baseDir.resolve("v" + reindexed.getVersion());
+                        Files.createDirectories(versionDir);
+                        Path updatedFile = versionDir.resolve(reindexed.getId() + ".point");
+                        PersistenceUtils.saveObject(reindexed, updatedFile.toString(), baseDir.toString());
                     }
 
-                    logger.debug("Re-encrypted point {}: v{}→v{}, shard {}→{}", reindexed.getId(), original.getVersion(), reindexed.getVersion(), original.getShardId(), reindexed.getShardId());
-
-                    indexService.insert(reindexed);
+                    indexService.insert(reindexed);  // Re-insert into index
                     totalReEncrypted++;
 
                     if (totalReEncrypted % 10000 == 0) {
@@ -188,18 +185,23 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
                         pendingMetadata.clear();
                         logger.info("Re-encrypted {} points so far", totalReEncrypted);
                     }
+
                 } catch (IOException | ClassNotFoundException e) {
                     logger.warn("Failed to re-encrypt {}: {}", file, e.getMessage());
                 }
             }
 
-            try {
-                if (!pendingMetadata.isEmpty()) {
-                    metadataManager.batchUpdateVectorMetadata(pendingMetadata);
-                    logger.debug("Final batch update for {} metadata entries", pendingMetadata.size());
-                }
-            } catch (Exception e) {
-                logger.error("Failed to batch update final metadata", e);
+            // 🔁 Final metadata update
+            if (!pendingMetadata.isEmpty()) {
+                metadataManager.batchUpdateVectorMetadata(pendingMetadata);
+                logger.debug("Final batch update for {} metadata entries", pendingMetadata.size());
+            }
+
+            // ✅ Flush buffer to ensure .point files are persisted
+            EncryptedPointBuffer buffer = indexService.getPointBuffer();
+            if (buffer != null) {
+                buffer.flushAll();
+                logger.debug("Flushed point buffer after re-encryption");
             }
 
             indexService.clearCache();

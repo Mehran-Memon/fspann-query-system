@@ -1,3 +1,6 @@
+// Unified configuration path and version folder logic
+// All files now share one base path for keys, metadata, and encrypted points
+
 package com.fspann.common;
 
 import org.rocksdb.*;
@@ -55,7 +58,6 @@ public class RocksDBMetadataManager implements AutoCloseable {
             logger.error("Failed to initialize RocksDB at {}", dbPath, e);
             throw new IOException("RocksDB initialization failed", e);
         }
-        // Intentionally DO NOT close 'options' here immediately; defer until shutdown:
         Runtime.getRuntime().addShutdownHook(new Thread(options::close));
     }
 
@@ -88,15 +90,6 @@ public class RocksDBMetadataManager implements AutoCloseable {
         } catch (RocksDBException e) {
             logger.error("Batch metadata update failed", e);
             throw new IOException("Batch metadata update failed", e);
-        }
-    }
-
-    public void putVectorMetadata(String vectorId, Map<String, String> metadata) {
-        try {
-            db.put(vectorId.getBytes(StandardCharsets.UTF_8), serializeMetadata(metadata));
-        } catch (RocksDBException e) {
-            logger.error("Failed to put metadata for vectorId={}", vectorId, e);
-            throw new RuntimeException("Failed to put metadata", e);
         }
     }
 
@@ -159,7 +152,7 @@ public class RocksDBMetadataManager implements AutoCloseable {
         Map<String, String> meta = new HashMap<>();
         meta.put("version", String.valueOf(pt.getVersion()));
         meta.put("shardId", String.valueOf(pt.getShardId()));
-        putVectorMetadata(pt.getId(), meta);
+        updateVectorMetadata(pt.getId(), meta);
     }
 
     public List<EncryptedPoint> getAllEncryptedPoints() {

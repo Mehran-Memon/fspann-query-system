@@ -42,8 +42,9 @@ public class KeyManager {
         if (storagePath == null) {
             throw new IllegalArgumentException("Key path must not be null");
         }
-        this.storagePath = storagePath;
-        Path p = Paths.get(storagePath);
+        this.storagePath = Paths.get(storagePath).toAbsolutePath().normalize().toString();
+        Path p = Paths.get(this.storagePath);
+
         if (Files.exists(p)) {
             loadKeys(p);
         } else {

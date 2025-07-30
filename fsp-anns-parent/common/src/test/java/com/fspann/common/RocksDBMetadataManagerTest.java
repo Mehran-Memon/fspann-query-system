@@ -98,7 +98,7 @@ public class RocksDBMetadataManagerTest {
     public void testPutAndGetVectorMetadata() throws Exception {
         String vectorId = "vec123";
         Map<String, String> metadata = Map.of("shardId", "1", "version", "v1");
-        metadataManager.putVectorMetadata(vectorId, metadata);
+        metadataManager.updateVectorMetadata(vectorId, metadata);
         Map<String, String> retrievedMetadata = metadataManager.getVectorMetadata(vectorId);
         assertEquals("1", retrievedMetadata.get("shardId"));
         assertEquals("v1", retrievedMetadata.get("version"));
@@ -107,7 +107,7 @@ public class RocksDBMetadataManagerTest {
     @Test
     public void testUpdateVectorMetadata() throws Exception {
         String vectorId = "vec123";
-        metadataManager.putVectorMetadata(vectorId, Map.of("shardId", "1", "version", "v1"));
+        metadataManager.updateVectorMetadata(vectorId, Map.of("shardId", "1", "version", "v1"));
         metadataManager.updateVectorMetadata(vectorId, Map.of("version", "v2"));
         Map<String, String> updatedMetadata = metadataManager.getVectorMetadata(vectorId);
         assertEquals("v2", updatedMetadata.get("version"));
@@ -120,7 +120,7 @@ public class RocksDBMetadataManagerTest {
         String vectorId = "vec123";
         List<Integer> buckets = Arrays.asList(1, 2, 3);
         EncryptedPoint point = new EncryptedPoint(vectorId, 1, new byte[]{0, 1, 2}, new byte[]{3, 4, 5}, 1, 128, buckets);
-        metadataManager.putVectorMetadata(vectorId, Map.of("version", "v1", "shardId", "1"));
+        metadataManager.updateVectorMetadata(vectorId, Map.of("version", "v1", "shardId", "1"));
         metadataManager.saveEncryptedPoint(point);
 
         List<EncryptedPoint> points = metadataManager.getAllEncryptedPoints();
@@ -143,7 +143,7 @@ public class RocksDBMetadataManagerTest {
         Files.createDirectories(pointsPath);
 
         try (RocksDBMetadataManager manager = new RocksDBMetadataManager(dbPath.toString(), pointsPath.toString())) {
-            manager.putVectorMetadata("vec1", Map.of("shardId", "1", "version", "v1"));
+            manager.updateVectorMetadata("vec1", Map.of("shardId", "1", "version", "v1"));
             Map<String, String> metadata = manager.getVectorMetadata("vec1");
             assertEquals("1", metadata.get("shardId"));
             assertEquals("v1", metadata.get("version"));
@@ -151,9 +151,9 @@ public class RocksDBMetadataManagerTest {
     }
 
     @Test
-    public void testShutdown() {
+    public void testShutdown() throws IOException {
         String vectorId = "vec123";
-        metadataManager.putVectorMetadata(vectorId, Map.of("shardId", "1", "version", "v1"));
+        metadataManager.updateVectorMetadata(vectorId, Map.of("shardId", "1", "version", "v1"));
         metadataManager.close();
         assertDoesNotThrow(() -> metadataManager.close());
     }
@@ -161,7 +161,7 @@ public class RocksDBMetadataManagerTest {
     @Test
     public void testRemoveVectorMetadata() throws Exception {
         String vectorId = "vec123";
-        metadataManager.putVectorMetadata(vectorId, Map.of("shardId", "1", "version", "v1"));
+        metadataManager.updateVectorMetadata(vectorId, Map.of("shardId", "1", "version", "v1"));
         metadataManager.removeVectorMetadata(vectorId);
         assertTrue(metadataManager.getVectorMetadata(vectorId).isEmpty());
     }
@@ -169,7 +169,7 @@ public class RocksDBMetadataManagerTest {
     @Test
     public void testMergeVectorMetadata() throws Exception {
         String vectorId = "vec999";
-        metadataManager.putVectorMetadata(vectorId, Map.of("version", "v1", "shardId", "2"));
+        metadataManager.updateVectorMetadata(vectorId, Map.of("version", "v1", "shardId", "2"));
         metadataManager.mergeVectorMetadata(vectorId, Map.of("version", "v2", "label", "secure"));
 
         Map<String, String> merged = metadataManager.getVectorMetadata(vectorId);

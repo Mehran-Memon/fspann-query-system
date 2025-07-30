@@ -294,6 +294,11 @@ public class SecureLSHIndexService implements IndexService {
         buffer.flushAll();
     }
 
+    @Override
+    public EncryptedPointBuffer getPointBuffer() {
+        return buffer;
+    }
+
     public void clearCache() {
         int size = indexedPoints.size();
         indexedPoints.clear();

@@ -89,7 +89,13 @@ public class ForwardSecureANNSystem {
         }
         this.config = tempConfig;
 
-        Files.createDirectories(metadataPath);
+        Path keysPath = metadataPath.resolve("keys");
+        Path pointsPath = metadataPath.resolve("points");
+        Path metaDBPath = metadataPath.resolve("metadata");
+
+        Files.createDirectories(keysPath);
+        Files.createDirectories(pointsPath);
+        Files.createDirectories(metaDBPath);
 
         this.cryptoService = Objects.requireNonNull(cryptoService, "CryptoService cannot be null");
         this.metadataManager = Objects.requireNonNull(metadataManager, "MetadataManager cannot be null");
@@ -97,12 +103,12 @@ public class ForwardSecureANNSystem {
         if (injected != null) {
             this.keyService = injected;
         } else {
-            KeyManager keyManager = new KeyManager(sanitizePath(keysFilePath));
+            KeyManager keyManager = new KeyManager(keysPath.toString());
             KeyRotationPolicy policy = new KeyRotationPolicy((int) config.getOpsThreshold(), config.getAgeThresholdMs());
-            this.keyService = new KeyRotationServiceImpl(keyManager, policy, metadataPath.toString(), metadataManager, cryptoService);
+            this.keyService = new KeyRotationServiceImpl(keyManager, policy, metaDBPath.toString(), metadataManager, cryptoService);
         }
 
-        this.pointBuffer = new EncryptedPointBuffer(metadataPath.toString(), metadataManager, 500);
+        this.pointBuffer = new EncryptedPointBuffer(pointsPath.toString(), metadataManager, 500);
         this.indexService = new SecureLSHIndexService(cryptoService, keyService, metadataManager);
         if (keyService instanceof KeyRotationServiceImpl) {
             ((KeyRotationServiceImpl) keyService).setIndexService(indexService);
@@ -116,6 +122,7 @@ public class ForwardSecureANNSystem {
         this.queryService = new QueryServiceImpl(indexService, cryptoService, keyService);
         this.topKProfiler = new TopKProfiler(metadataPath.toString());
 
+        // Loading data...
         DefaultDataLoader loader = new DefaultDataLoader();
         Path dataFile = Paths.get(sanitizePath(dataPath));
         for (int dim : dimensions) {
@@ -585,11 +592,19 @@ public class ForwardSecureANNSystem {
 
         Files.createDirectories(metadataPath);
 
-        RocksDBMetadataManager metadataManager = new RocksDBMetadataManager(metadataPath.toString());
+        Path keysPath = metadataPath.resolve("keys");
+        Path pointsPath = metadataPath.resolve("points");
+        Path metaDBPath = metadataPath.resolve("metadata");
 
-        KeyManager keyManager = new KeyManager(keysFile);
+        Files.createDirectories(keysPath);
+        Files.createDirectories(pointsPath);
+        Files.createDirectories(metaDBPath);
+
+        RocksDBMetadataManager metadataManager = new RocksDBMetadataManager(metaDBPath.toString(), pointsPath.toString());
+
+        KeyManager keyManager = new KeyManager(keysPath.toString());
         KeyRotationPolicy policy = new KeyRotationPolicy(100000, 999_999);
-        KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(keyManager, policy, metadataPath.toString(), metadataManager, null);
+        KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(keyManager, policy, metaDBPath.toString(), metadataManager, null);
 
         CryptoService cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
         keyService.setCryptoService(cryptoService);
