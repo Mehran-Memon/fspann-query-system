@@ -210,9 +210,9 @@ public class ForwardSecureANNSystem {
         }
 
         List<List<double[]>> partitions = partitionList(vectors, BATCH_SIZE);
-        List<String> allIds = Collections.synchronizedList(new ArrayList<>());
+        List<String> allIds = new ArrayList<>();
 
-        partitions.parallelStream().forEach(batch -> {
+        for (List<double[]> batch : partitions) {
             List<String> ids = new ArrayList<>(BATCH_SIZE);
             List<double[]> validBatch = new ArrayList<>(BATCH_SIZE);
             for (double[] vec : batch) {
@@ -227,18 +227,17 @@ public class ForwardSecureANNSystem {
                 ids.add(UUID.randomUUID().toString());
                 validBatch.add(vec);
             }
+
             if (!ids.isEmpty()) {
                 long batchStart = System.nanoTime();
                 indexService.batchInsert(ids, validBatch);
-                synchronized (this) {
-                    totalInserted += ids.size();
-                    batchDurations.add(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - batchStart));
-                }
+                totalInserted += ids.size();
+                batchDurations.add(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - batchStart));
                 allIds.addAll(ids);
                 logger.debug("Batch[{}]: {} pts - {} ms", (totalInserted / BATCH_SIZE), ids.size(),
                         (System.nanoTime() - batchStart) / 1_000_000);
             }
-        });
+        }
 
         if (allIds.isEmpty()) {
             logger.warn("batchInsert completed but no valid vectors were inserted for dim={}", dim);
@@ -256,7 +255,7 @@ public class ForwardSecureANNSystem {
             } else {
                 long duration = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
                 logger.warn("No timings recorded for batchInsert (likely empty or all invalid data). Using fallback duration: {} ms", duration);
-                totalIndexingTime += duration; // Fallback to manual timing
+                totalIndexingTime += duration;
                 indexingCount += vectors.size();
             }
         }

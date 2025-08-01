@@ -1,1 +1,6 @@
-{"numShards":2,"profilerEnabled":true,"opsThreshold":2147483647,"ageThresholdMs":9223372036854775807}
+{
+  "numShards": 2,
+  "profilerEnabled": true,
+  "opsThreshold": 2147483647,
+  "ageThresholdMs": 9223372036854775807
+}

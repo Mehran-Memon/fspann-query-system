@@ -85,8 +85,12 @@ class ForwardSecureANNSystemIntegrationTest {
         if (metadataManager != null) {
             metadataManager.close();
             metadataManager = null;
+
+            try (var options = new org.rocksdb.Options().setCreateIfMissing(true)) {
+                org.rocksdb.RocksDB.destroyDB(tempDir.toString(), options);
+            }
         }
-        // Attempt cleanup a few times in case of Windows file locks
+
         IOException last = null;
         for (int i = 0; i < 3; i++) {
             try (Stream<Path> files = Files.walk(tempDir)) {
@@ -95,7 +99,6 @@ class ForwardSecureANNSystemIntegrationTest {
                             try {
                                 Files.deleteIfExists(path);
                             } catch (IOException e) {
-                                // Just print for diagnostics
                                 System.err.println("Failed to delete " + path);
                             }
                         });
