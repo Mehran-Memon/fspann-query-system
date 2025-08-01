@@ -9,12 +9,14 @@ import java.nio.ByteOrder;
 import java.util.*;
 
 /**
- * Loads .ivecs groundtruth file where each line contains k integer indices (nearest neighbor IDs).
+ * Loads .ivecs groundtruth file where each line contains k integer indices (nearest neighbor IDs),
+ * and allows lookup of groundtruth vectors by ID for ratio calculation.
  */
 public class GroundtruthManager {
     private static final Logger logger = LoggerFactory.getLogger(GroundtruthManager.class);
     private final List<int[]> groundtruthList = new ArrayList<>();
     private final Map<Integer, int[]> indexToGroundtruth = new HashMap<>();
+    private final Map<String, double[]> idToVector = new HashMap<>();
 
     /**
      * Load all groundtruth entries from .ivecs file into memory.
@@ -66,5 +68,22 @@ public class GroundtruthManager {
 
     public int totalQueries() {
         return groundtruthList.size();
+    }
+
+    // New: store actual groundtruth vectors by ID
+    public void putVector(String id, double[] vector) {
+        idToVector.put(id, vector);
+    }
+
+    public double[] getVectorById(String id) {
+        double[] vec = idToVector.get(id);
+        if (vec == null) {
+            throw new IllegalArgumentException("No groundtruth vector found for ID: " + id);
+        }
+        return vec;
+    }
+
+    public boolean hasVector(String id) {
+        return idToVector.containsKey(id);
     }
 }

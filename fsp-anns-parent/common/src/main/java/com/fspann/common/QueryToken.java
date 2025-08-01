@@ -32,13 +32,17 @@ public class QueryToken {
                       int shardId,
                       int version) {
 
-        Objects.requireNonNull(candidateBuckets, "candidateBuckets cannot be null");
-        Objects.requireNonNull(encryptedQuery, "encryptedQuery cannot be null");
-        Objects.requireNonNull(plaintextQuery, "plaintextQuery cannot be null");
-        Objects.requireNonNull(iv, "IV cannot be null");
-
-        if (candidateBuckets.isEmpty()) {
-            throw new IllegalArgumentException("candidateBuckets cannot be empty");
+        if (candidateBuckets == null || candidateBuckets.isEmpty()) {
+            throw new IllegalArgumentException("candidateBuckets cannot be null or empty");
+        }
+        if (encryptedQuery == null) {
+            throw new IllegalArgumentException("encryptedQuery cannot be null");
+        }
+        if (plaintextQuery == null) {
+            throw new IllegalArgumentException("plaintextQuery cannot be null");
+        }
+        if (iv == null) {
+            throw new IllegalArgumentException("IV cannot be null");
         }
         if (topK <= 0) {
             throw new IllegalArgumentException("topK must be positive: " + topK);

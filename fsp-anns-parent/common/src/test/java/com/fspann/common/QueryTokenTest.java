@@ -54,7 +54,7 @@ class QueryTokenTest {
     }
 
     @Test
-    void constructorRejectsNullOrEmpty() {
+    void constructorRejectsInvalidInputs() {
         byte[] iv            = new byte[] { 0x00 };
         byte[] encryptedQry  = new byte[] { 0x01 };
         double[] plainQry    = new double[] { 0.1 };
@@ -72,6 +72,7 @@ class QueryTokenTest {
                 new QueryToken(List.of(1), iv, encryptedQry, plainQry, 1, 0, "ctx", 128, 0, 1)
         );
     }
+
 
     @Test
     void gettersReturnClonesAndValues() {

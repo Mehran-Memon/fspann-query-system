@@ -175,8 +175,21 @@ public class QueryServiceImpl implements QueryService {
                     .filter(truthSet::contains)
                     .count();
 
-            double ratio = (double) retrieved.size() / k;
             double recall = (double) matchCount / k;
+
+            double ratio = 1.0;
+            if (!retrieved.isEmpty() && truth.length > 0) {
+                try {
+                    double distSysTop1 = retrieved.get(0).getDistance();
+                    double[] gtVec = groundtruthManager.getVectorById(String.valueOf(truth[0]));
+                    double distGroundtruth = computeDistance(baseToken.getPlaintextQuery(), gtVec);
+                    if (distGroundtruth > 0) {
+                        ratio = distSysTop1 / distGroundtruth;
+                    }
+                } catch (Exception e) {
+                    logger.warn("Failed to compute true ratio, using fallback.", e);
+                }
+            }
 
             results.add(new QueryEvaluationResult(k, retrieved.size(), ratio, recall, durationNs / 1_000_000));
         }

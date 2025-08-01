@@ -88,12 +88,19 @@ public class SecureLSHIndexService implements IndexService {
         idx.addPoint(pt);
         idx.markShardDirty(pt.getShardId());
         buffer.add(pt);
+
         try {
+            Map<String, String> metadata = new HashMap<>();
+            metadata.put("shardId", String.valueOf(pt.getShardId()));
+            metadata.put("version", String.valueOf(pt.getVersion()));
+            metadata.put("dim", String.valueOf(pt.getVectorLength()));
+            metadataManager.batchUpdateVectorMetadata(Collections.singletonMap(pt.getId(), metadata));
             metadataManager.saveEncryptedPoint(pt);
         } catch (IOException e) {
             logger.error("Failed to persist encrypted point {}", pt.getId(), e);
         }
     }
+
 
     @Override
     public void insert(String id, double[] vector) {
