@@ -124,6 +124,7 @@ public class ForwardSecurityAdversarialTest {
                 ids.add(id);
                 points.add(point);
             }
+
             long insertStart = System.nanoTime();
             for (int i = 0; i < NUM_POINTS; i++) {
                 system.insert(ids.get(i), points.get(i), dim);
@@ -135,8 +136,7 @@ public class ForwardSecurityAdversarialTest {
             SecretKey compromisedKey = KeyUtils.fromBytes(keyService.getCurrentVersion().getKey().getEncoded());
             int preRotationVersion = keyService.getCurrentVersion().getVersion();
 
-            keyService.rotateKey();
-            keyService.reEncryptAll();
+            keyService.rotateKey(); // Already re-encrypts internally
             ((SecureLSHIndexService) system.getIndexService()).clearCache();
 
             String afterId = UUID.randomUUID().toString();
@@ -171,8 +171,7 @@ public class ForwardSecurityAdversarialTest {
             assertTrue(queryDuration < 500, "Query time should be under 500ms for dim=" + dim);
             PerformanceVisualizer.visualizeQueryResults(results);
 
-            keyService.rotateKey();
-            keyService.reEncryptAll();
+            keyService.rotateKey(); // Second rotation with internal re-encryption
             ((SecureLSHIndexService) system.getIndexService()).clearCache();
 
             for (String id : ids) {

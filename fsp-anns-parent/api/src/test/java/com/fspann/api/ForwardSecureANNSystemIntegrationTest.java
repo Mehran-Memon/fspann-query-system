@@ -11,6 +11,8 @@ import com.fspann.query.core.QueryEvaluationResult;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
+import org.rocksdb.Options;
+import org.rocksdb.RocksDB;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -82,12 +84,11 @@ class ForwardSecureANNSystemIntegrationTest {
             system.shutdown();
             system = null;
         }
+
         if (metadataManager != null) {
             metadataManager.close();
-            metadataManager = null;
-
-            try (var options = new org.rocksdb.Options().setCreateIfMissing(true)) {
-                org.rocksdb.RocksDB.destroyDB(tempDir.toString(), options);
+            try (Options opt = new Options().setCreateIfMissing(true)) {
+                RocksDB.destroyDB(tempDir.toString(), opt);
             }
         }
 
@@ -110,7 +111,10 @@ class ForwardSecureANNSystemIntegrationTest {
             }
         }
         if (last != null) throw new IOException("Failed to delete temp directory after retries", last);
+
+        // ✅ Help finalize RocksDB native resources and file handles
         System.gc();
+        Thread.sleep(200);
     }
 
     @Test

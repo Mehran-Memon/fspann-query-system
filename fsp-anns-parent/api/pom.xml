@@ -133,14 +133,19 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
-                <version>3.2.5</version>
+                <version>3.0.0-M9</version>
                 <configuration>
-                    <argLine>-Drocksdb.stats=true -Dtest.env=true
-                        -Djdk.net.URLClassPath.disableClassPathURLCheck=true -Xmx8g -Xss4m -XX:+CrashOnOutOfMemoryError</argLine>
-                    <forkCount>1</forkCount>
                     <reuseForks>false</reuseForks>
+                    <forkCount>1</forkCount>
+                    <runOrder>alphabetical</runOrder>
+                    <argLine>-Xmx8g -Xss4m -XX:+CrashOnOutOfMemoryError</argLine>
+                    <systemPropertyVariables>
+                        <rocksdb.stats>true</rocksdb.stats>
+                        <test.env>true</test.env>
+                    </systemPropertyVariables>
                 </configuration>
             </plugin>
+
         </plugins>
     </build>
 </project>

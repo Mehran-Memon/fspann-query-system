@@ -11,6 +11,9 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 import com.fspann.common.RocksDBMetadataManager;
+import org.rocksdb.Options;
+import org.rocksdb.RocksDB;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -23,16 +26,21 @@ class QueryEvaluationTest {
 
     private ForwardSecureANNSystem system;
     private RocksDBMetadataManager metadataManager;
+    private Path tempDir;
 
     @AfterEach
-    void tearDown(@TempDir Path tempDir) throws Exception {
+    void tearDown() throws Exception {
         if (system != null) {
             system.shutdown();
             system = null;
         }
         if (metadataManager != null) {
             metadataManager.close();
+            try (Options opt = new Options().setCreateIfMissing(true)) {
+                RocksDB.destroyDB(tempDir.toString(), opt);
+            }
         }
+        IOException last = null;
         for (int i = 0; i < 3; i++) {
             try (Stream<Path> files = Files.walk(tempDir)) {
                 files.sorted(Comparator.reverseOrder())
@@ -43,21 +51,23 @@ class QueryEvaluationTest {
                                 System.err.println("Failed to delete " + path);
                             }
                         });
-                return;
+                last = null;
+                break;
             } catch (IOException e) {
-                if (i == 2) throw e;
+                last = e;
                 try {
                     Thread.sleep(100);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                }
+                } catch (InterruptedException ignored) {}
             }
         }
+        if (last != null) throw new IOException("Failed to delete temp directory after retries", last);
         System.gc();
+        Thread.sleep(200);
     }
 
     @Test
     void queryLatencyShouldBeBelow1s(@TempDir Path tempDir) throws Exception {
+        this.tempDir = tempDir;
         system = setupSmallSystem(tempDir);
         List<QueryResult> results = system.query(new double[]{0.05, 0.05}, 1, 2);
         assertNotNull(results);
@@ -69,6 +79,7 @@ class QueryEvaluationTest {
 
     @Test
     void cloakedQueryShouldReturnResults(@TempDir Path tempDir) throws Exception {
+        this.tempDir = tempDir;
         system = setupSmallSystem(tempDir);
         List<QueryResult> results = system.queryWithCloak(new double[]{0.05, 0.05}, 1, 2);
         assertNotNull(results);
@@ -77,6 +88,7 @@ class QueryEvaluationTest {
 
     @Test
     void profilerCsvShouldContainExpectedHeaders(@TempDir Path tempDir) throws Exception {
+        this.tempDir = tempDir;
         system = setupSmallSystem(tempDir);
         Profiler profiler = system.getProfiler();
 
