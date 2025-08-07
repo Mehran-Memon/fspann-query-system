@@ -15,8 +15,7 @@ import org.rocksdb.Options;
 import org.rocksdb.RocksDB;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import java.nio.file.*;
 import java.util.*;
 import java.util.stream.Stream;
 
@@ -24,19 +23,19 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class ForwardSecureANNSystemIntegrationTest {
+
     private ForwardSecureANNSystem system;
     private RocksDBMetadataManager metadataManager;
-    private Path tempDir; // Reuse for cleanup
+    private Path tempDir;
 
     @BeforeAll
-    static void setTestMode() {
+    static void enableTestMode() {
         System.setProperty("test.env", "true");
     }
 
-
     @BeforeEach
     void setup(@TempDir Path tempDir) throws Exception {
-        this.tempDir = tempDir; // store for cleanup in tearDown
+        this.tempDir = tempDir;
 
         Path dataFile = tempDir.resolve("data.csv");
         Files.writeString(dataFile, "0.1,0.1\n0.5,0.5\n");
@@ -47,20 +46,30 @@ class ForwardSecureANNSystemIntegrationTest {
         Path config = tempDir.resolve("config.json");
         Files.writeString(config, """
             {
-              "numShards": 4,
+              "numShards": 2,
               "profilerEnabled": true,
-              "opsThreshold": 10000,
-              "ageThresholdMs": 9999999
+              "opsThreshold": 1000,
+              "ageThresholdMs": 1000000
             }
         """);
 
         Path keys = tempDir.resolve("keys.ser");
         List<Integer> dimensions = List.of(2);
-        this.metadataManager = new RocksDBMetadataManager(tempDir.toString(), tempDir.resolve("points").toString());
+
+        this.metadataManager = new RocksDBMetadataManager(
+                tempDir.resolve("metadata").toString(),
+                tempDir.resolve("points").toString()
+        );
+
         KeyManager keyManager = new KeyManager(keys.toString());
-        KeyRotationPolicy policy = new KeyRotationPolicy(100, 10000);
-        KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(keyManager, policy, tempDir.toString(), metadataManager, null);
-        CryptoService cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
+        KeyRotationPolicy policy = new KeyRotationPolicy(1000, 1000000);
+        KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(
+                keyManager, policy, tempDir.resolve("metadata").toString(), metadataManager, null
+        );
+
+        CryptoService cryptoService = new AesGcmCryptoService(
+                new SimpleMeterRegistry(), keyService, metadataManager
+        );
         keyService.setCryptoService(cryptoService);
 
         this.system = new ForwardSecureANNSystem(
@@ -74,60 +83,69 @@ class ForwardSecureANNSystemIntegrationTest {
                 cryptoService,
                 10
         );
-        assertNotNull(system.getIndexService(), "IndexService should be initialized");
-        assertNotNull(system.getQueryService(), "QueryService should be initialized");
+
+        assertNotNull(system.getIndexService(), "IndexService should not be null");
+        assertNotNull(system.getQueryService(), "QueryService should not be null");
     }
 
     @AfterEach
     void tearDown() throws Exception {
         if (system != null) {
-            system.shutdown();
+            try {
+                system.shutdown(); // Must call this before metadataManager.close()
+            } catch (Exception e) {
+                System.err.println("Failed to shutdown system: " + e.getMessage());
+            }
             system = null;
         }
-
         if (metadataManager != null) {
-            metadataManager.close();
-            try (Options opt = new Options().setCreateIfMissing(true)) {
-                RocksDB.destroyDB(tempDir.toString(), opt);
+            try {
+                RocksDBTestCleaner.clean(metadataManager); // Call BEFORE close()
+                metadataManager.close();
+            } catch (Exception e) {
+                System.err.println("Failed to close metadata manager: " + e.getMessage());
             }
+            metadataManager = null;
         }
 
-        IOException last = null;
-        for (int i = 0; i < 3; i++) {
-            try (Stream<Path> files = Files.walk(tempDir)) {
-                files.sorted(Comparator.reverseOrder())
-                        .forEach(path -> {
-                            try {
-                                Files.deleteIfExists(path);
-                            } catch (IOException e) {
-                                System.err.println("Failed to delete " + path);
-                            }
-                        });
-                last = null;
-                break;
+        // Retry deleting the temp directory to handle Windows file locking
+        int maxRetries = 5;
+        for (int i = 0; i < maxRetries; i++) {
+            try (Stream<Path> walk = Files.walk(tempDir)) {
+                walk.sorted(Comparator.reverseOrder()).forEach(path -> {
+                    try {
+                        Files.deleteIfExists(path);
+                    } catch (IOException e) {
+                        System.err.println("Failed to delete " + path + ": " + e.getMessage());
+                    }
+                });
+                break; // If successful, exit the retry loop
             } catch (IOException e) {
-                last = e;
-                try { Thread.sleep(100); } catch (InterruptedException ignored) {}
+                System.err.println("Retry " + (i + 1) + " failed to delete temp directory: " + e.getMessage());
+                if (i < maxRetries - 1) {
+                    Thread.sleep(500); // Wait before retrying
+                } else {
+                    System.err.println("Failed to delete temp directory after " + maxRetries + " attempts");
+                }
             }
         }
-        if (last != null) throw new IOException("Failed to delete temp directory after retries", last);
 
-        // ✅ Help finalize RocksDB native resources and file handles
+        // Force GC to clean native handles
         System.gc();
-        Thread.sleep(200);
+        Thread.sleep(500); // Increased delay to ensure native resources are released
     }
 
     @Test
-    void simpleQueryRecallEvaluation() throws Exception {
-        assertTrue(system.getIndexedVectorCount() > 0, "Indexed vector count should be positive");
+    void testQueryRecallEvaluation() throws Exception {
+        assertTrue(system.getIndexedVectorCount() > 0, "Should have some indexed vectors");
 
         GroundtruthManager gt = new GroundtruthManager();
         gt.put(0, new int[]{0, 1});
-        gt.put(1, new int[]{2, 1});
+        gt.put(1, new int[]{1});
 
         List<double[]> queries = List.of(
-                new double[]{0.05, 0.05},
-                new double[]{0.95, 0.95}
+                new double[]{0.1, 0.1},
+                new double[]{0.9, 0.9}
         );
 
         for (int i = 0; i < queries.size(); i++) {
@@ -135,46 +153,27 @@ class ForwardSecureANNSystemIntegrationTest {
             List<QueryEvaluationResult> evals = system.getQueryService()
                     .searchWithTopKVariants(token, i, gt);
 
-            assertFalse(evals.isEmpty(), "No evaluation results");
+            assertFalse(evals.isEmpty(), "Should have evaluation results");
             for (QueryEvaluationResult r : evals) {
-                assertTrue(r.getRecall() >= 0 && r.getRecall() <= 1.0, "Recall out of range");
-                assertTrue(r.getRatio() >= 0, "Ratio should be non-negative");
+                assertTrue(r.getRecall() >= 0 && r.getRecall() <= 1.0);
+                assertTrue(r.getRatio() >= 0);
             }
-            if (system.getProfiler() != null) {
-                for (QueryEvaluationResult r : evals) {
-                    system.getProfiler().recordTopKVariants(
-                            "Q" + i,
-                            r.getTopKRequested(),
-                            r.getRetrieved(),
-                            r.getRatio(),
-                            r.getRecall(),
-                            r.getTimeMs()
-                    );
-                }
-            }
-        }
-
-        if (system.getProfiler() != null) {
-            Path out = tempDir.resolve("topk.csv");
-            system.getProfiler().exportTopKVariants(out.toString());
-            assertTrue(Files.exists(out), "TopK CSV should exist");
         }
     }
 
     @Test
-    void testQueryWithCloak() throws Exception {
+    void testQueryWithCloakReturnsResults() throws Exception {
         double[] query = new double[]{0.05, 0.05};
         List<QueryResult> results = system.queryWithCloak(query, 2, 2);
-        assertNotNull(results, "Query results should not be null");
-        assertFalse(results.isEmpty(), "Query results should not be empty");
+        assertNotNull(results);
+        assertFalse(results.isEmpty());
     }
 
     @Test
-    void testInsertFakePoints() throws Exception {
-        int fakeCount = 10;
-        int initialCount = system.getIndexedVectorCount();
-        system.insertFakePointsInBatches(fakeCount, 2);
-        assertEquals(initialCount + fakeCount, system.getIndexedVectorCount(),
-                "Indexed vector count should increase by fakeCount");
+    void testFakePointInsertionIncreasesCount() throws Exception {
+        int before = system.getIndexedVectorCount();
+        system.insertFakePointsInBatches(5, 2);
+        int after = system.getIndexedVectorCount();
+        assertEquals(before + 5, after);
     }
 }

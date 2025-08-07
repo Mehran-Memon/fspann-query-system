@@ -47,9 +47,10 @@ public class RocksDBMetadataManager implements AutoCloseable {
 
         this.options = new Options()
                 .setCreateIfMissing(true)
-                .setWriteBufferSize(64 * 1024 * 1024)
+                .setWriteBufferSize(16 * 1024 * 1024)
                 .setMaxWriteBufferNumber(2)
-                .setTargetFileSizeBase(64 * 1024 * 1024);
+                .setTargetFileSizeBase(16 * 1024 * 1024)
+                .setMaxBackgroundJobs(2);
 
         try {
             this.db = RocksDB.open(options, dbPath);
@@ -58,7 +59,6 @@ public class RocksDBMetadataManager implements AutoCloseable {
             logger.error("Failed to initialize RocksDB at {}", dbPath, e);
             throw new IOException("RocksDB initialization failed", e);
         }
-        Runtime.getRuntime().addShutdownHook(new Thread(options::close));
     }
 
     public void batchPutMetadata(Map<String, Map<String, String>> allMetadata) {

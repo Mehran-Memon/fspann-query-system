@@ -549,7 +549,9 @@ public class ForwardSecureANNSystem {
                 metadataManager.printSummary();
                 logger.info("Logging metadata stats...");
                 metadataManager.logStats();
-//                metadataManager.close();
+                System.out.println("🔻 Closing metadataManager...");
+                metadataManager.close();
+                System.out.println("✅ metadataManager closed successfully.");
             }
 
             logger.info("Performing final flushAll()");
