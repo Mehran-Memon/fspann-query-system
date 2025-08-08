@@ -2,7 +2,6 @@ package com.fspann.index.core;
 
 import com.fspann.common.EncryptedPoint;
 import com.fspann.common.QueryToken;
-import com.fspann.common.QueryTokenV2;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -93,18 +92,26 @@ public class SecureLSHIndex {
         }
     }
 
-
-    /** Query with per-table bucket expansions from the token. Deduplicates across tables. */
+    /**
+     * Query with per-table bucket expansions from the token (or legacy replicated buckets).
+     * Deduplicates candidates across tables.
+     */
     public List<EncryptedPoint> queryEncrypted(QueryToken token) {
         Objects.requireNonNull(token, "QueryToken cannot be null");
         lock.readLock().lock();
         try {
             Set<EncryptedPoint> result = new LinkedHashSet<>();
-            List<List<Integer>> tableBuckets = token.getTableBuckets();
+            List<List<Integer>> tableBuckets = token.hasPerTable()
+                    ? token.getTableBuckets()
+                    : token.getTableBucketsOrLegacy(numHashTables);
+
             int tablesToUse = Math.min(token.getNumTables(), numHashTables);
 
             if (tableBuckets.size() != tablesToUse) {
-                throw new IllegalArgumentException("tableBuckets size must equal numTables in token");
+                // tolerate larger by clipping; smaller is a caller bug
+                if (tableBuckets.size() < tablesToUse) {
+                    throw new IllegalArgumentException("tableBuckets size must equal numTables in token");
+                }
             }
 
             for (int t = 0; t < tablesToUse; t++) {

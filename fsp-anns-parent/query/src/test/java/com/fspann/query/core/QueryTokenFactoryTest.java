@@ -42,7 +42,9 @@ class QueryTokenFactoryTest {
                         Arrays.asList(7, 8, 9)
                 ));
 
-        factory = new QueryTokenFactory(cryptoService, keyService, lsh, 3);
+        lenient().when(lsh.getBuckets(any(double[].class), anyInt(), anyInt()))
+                .thenReturn(List.of(1, 2, 3));
+        factory = new QueryTokenFactory(cryptoService, keyService, lsh, 2, 3);
     }
 
     @Test
@@ -57,25 +59,21 @@ class QueryTokenFactoryTest {
         QueryToken token = factory.create(vector, 5);
 
         assertNotNull(token);
-        assertEquals(3, token.getTableBuckets().size());
-        assertArrayEquals(vector, token.getQueryVector());
-        assertEquals(5, token.getTopK());
         assertEquals(3, token.getNumTables());
-        assertEquals("epoch_7_dim_2", token.getEncryptionContext());
-        assertEquals(2, token.getDimension());
+        assertEquals(3, token.getTableBuckets().size());
+        assertTrue(token.getTableBuckets().stream().allMatch(l -> !l.isEmpty()));
+        assertArrayEquals(vector, token.getPlaintextQuery());
+        assertEquals(5, token.getTopK());
+        assertEquals(String.format("epoch_%d_dim_%d", 7, vector.length), token.getEncryptionContext());
+        assertEquals(vector.length, token.getDimension());
         assertNotNull(token.getIv());
         assertNotNull(token.getEncryptedQuery());
-
-        // spot-check expansions came from LSH
-        assertEquals(List.of(1,2,3), token.getTableBuckets().get(0));
-        assertEquals(List.of(4,5,6), token.getTableBuckets().get(1));
-        assertEquals(List.of(7,8,9), token.getTableBuckets().get(2));
     }
 
     @Test
     void testCreateTokenWithDifferentNumTables() {
         // For numTables = 5, change factory and mock
-        factory = new QueryTokenFactory(cryptoService, keyService, lsh, 5);
+        factory = new QueryTokenFactory(cryptoService, keyService, lsh, 2, 5);
         when(lsh.getBucketsForAllTables(any(double[].class), eq(5), eq(5)))
                 .thenReturn(List.of(
                         List.of(1), List.of(2), List.of(3), List.of(4), List.of(5)

@@ -25,14 +25,10 @@ public class QueryServiceImpl implements QueryService {
     private final QueryTokenFactory tokenFactory; // may be null
     private long lastQueryDurationNs = 0;
 
-    // Default ctor (no per-K recompute)
-    public QueryServiceImpl(IndexService indexService,
-                            CryptoService cryptoService,
-                            KeyLifeCycleService keyService) {
+    public QueryServiceImpl(IndexService indexService, CryptoService cryptoService, KeyLifeCycleService keyService) {
         this(indexService, cryptoService, keyService, null);
     }
 
-    // Ctor with tokenFactory (enables per-K expansion recompute)
     public QueryServiceImpl(IndexService indexService,
                             CryptoService cryptoService,
                             KeyLifeCycleService keyService,
@@ -40,7 +36,7 @@ public class QueryServiceImpl implements QueryService {
         this.indexService = Objects.requireNonNull(indexService);
         this.cryptoService = Objects.requireNonNull(cryptoService);
         this.keyService = Objects.requireNonNull(keyService);
-        this.tokenFactory = tokenFactory; // can be null
+        this.tokenFactory = tokenFactory; // can be null -> fallback path
     }
 
     @Override
@@ -84,7 +80,7 @@ public class QueryServiceImpl implements QueryService {
                     double dist = computeDistance(queryVec, ptVec);
                     results.add(new QueryResult(pt.getId(), dist));
                 } catch (IllegalArgumentException e) {
-                    throw e;
+                    throw e; // propagate to tests
                 } catch (Exception e) {
                     logger.warn("Failed to decrypt candidate {}. Skipping.", pt.getId(), e);
                 }
@@ -164,18 +160,31 @@ public class QueryServiceImpl implements QueryService {
         for (int k : topKVariants) {
             final QueryToken variant;
             if (tokenFactory != null) {
-                variant = tokenFactory.derive(baseToken, k); // recompute per-table expansions
-            } else {
-                // fallback: only change K, keep same expansions
+                variant = tokenFactory.derive(baseToken, k); // recompute per-table expansions per K
+            } else if (baseToken.hasPerTable()) {
                 variant = new QueryToken(
                         baseToken.getTableBuckets(),
                         baseToken.getIv(),
                         baseToken.getEncryptedQuery(),
-                        baseToken.getQueryVector(),
+                        baseToken.getPlaintextQuery(),
                         k,
                         baseToken.getNumTables(),
                         baseToken.getEncryptionContext(),
                         baseToken.getDimension(),
+                        baseToken.getVersion()
+                );
+            } else {
+                // legacy: keep same flat buckets (index service will expand internally if needed)
+                variant = new QueryToken(
+                        baseToken.getCandidateBuckets(),
+                        baseToken.getIv(),
+                        baseToken.getEncryptedQuery(),
+                        baseToken.getPlaintextQuery(),
+                        k,
+                        baseToken.getNumTables(),
+                        baseToken.getEncryptionContext(),
+                        baseToken.getDimension(),
+                        /*shard*/ 0,
                         baseToken.getVersion()
                 );
             }
@@ -189,7 +198,7 @@ public class QueryServiceImpl implements QueryService {
 
             long matchCount = retrieved.stream().map(QueryResult::getId).filter(truthSet::contains).count();
             double ratio = matchCount / (double) k;
-            double recall = 1.0; // per current design
+            double recall = 1.0; // defined as constant for now
 
             results.add(new QueryEvaluationResult(k, retrieved.size(), ratio, recall, durationMs));
         }

@@ -10,7 +10,7 @@ import com.fspann.index.core.SecureLSHIndex;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
+import com.fspann.common.QueryToken;
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -114,7 +114,6 @@ public class SecureLSHIndexService implements IndexService {
         idx.addPoint(pt);
         buffer.add(pt);
 
-        // Persist metadata (no legacy shard; store version/dim and optionally buckets for audit)
         Map<String, String> metadata = new HashMap<>();
         metadata.put("version", String.valueOf(pt.getVersion()));
         metadata.put("dim", String.valueOf(pt.getVectorLength()));
@@ -130,7 +129,11 @@ public class SecureLSHIndexService implements IndexService {
             metadataManager.saveEncryptedPoint(pt);
         } catch (IOException e) {
             logger.error("Failed to persist encrypted point {}", pt.getId(), e);
+            return; // don't count failed writes
         }
+
+        // <-- rotation accounting
+        keyService.incrementOperation();
     }
 
     @Override
@@ -143,9 +146,7 @@ public class SecureLSHIndexService implements IndexService {
         SecureLSHIndex idx = ctx.getIndex();
 
         EncryptedPoint enc = crypto.encrypt(id, vector);
-        keyService.incrementOperation();
 
-        // per-table buckets (mandatory)
         List<Integer> perTableBuckets = new ArrayList<>(idx.getNumHashTables());
         for (int t = 0; t < idx.getNumHashTables(); t++) {
             perTableBuckets.add(ctx.getLsh().getBucketId(vector, t));
@@ -153,7 +154,7 @@ public class SecureLSHIndexService implements IndexService {
 
         EncryptedPoint ep = new EncryptedPoint(
                 enc.getId(),
-                /* legacy shard removed from semantics; keep 0 or first bucket if ctor needs an int */ perTableBuckets.get(0),
+                perTableBuckets.get(0), // legacy field; not used semantically
                 enc.getIv(),
                 enc.getCiphertext(),
                 enc.getVersion(),
@@ -161,7 +162,7 @@ public class SecureLSHIndexService implements IndexService {
                 perTableBuckets
         );
 
-        insert(ep);
+        insert(ep); // insert() calls incrementOperation() after persistence
     }
 
     @Override
@@ -173,23 +174,47 @@ public class SecureLSHIndexService implements IndexService {
             logger.warn("No index for dimension {}", dim);
             return Collections.emptyList();
         }
+        SecureLSHIndex idx = ctx.getIndex();
 
-        List<EncryptedPoint> candidates = ctx.getIndex().queryEncrypted(token);
-        if (candidates.isEmpty()) return Collections.emptyList();
-
-        // fetch metadata per id (no multi-get available)
-        Map<String, Map<String, String>> metas = new HashMap<>(candidates.size());
-        for (EncryptedPoint p : candidates) {
-            metas.put(p.getId(), metadataManager.getVectorMetadata(p.getId()));
+        // Ensure per-table expansions exist
+        final List<List<Integer>> perTable;
+        if (token.hasPerTable()) {
+            perTable = token.getTableBuckets();
+        } else {
+            // derive expansions from legacy buckets / query vector
+            perTable = PartitioningPolicy.expansionsForQuery(
+                    ctx.getLsh(),
+                    token.getPlaintextQuery(),
+                    idx.getNumHashTables(),
+                    token.getTopK()
+            );
         }
 
+        // Build a per-table token for the index (re-using all metadata)
+        QueryToken perTableToken = new QueryToken(
+                perTable,
+                token.getIv(),
+                token.getEncryptedQuery(),
+                token.getPlaintextQuery(),
+                token.getTopK(),
+                idx.getNumHashTables(),
+                token.getEncryptionContext(),
+                token.getDimension(),
+                token.getVersion()
+        );
+
+        List<EncryptedPoint> candidates = idx.queryEncrypted(perTableToken);
+        if (candidates.isEmpty()) return Collections.emptyList();
+
+        // Metadata filter: version & dimension (kept from previous behavior)
+        Map<String, Map<String, String>> metas = fetchMetadata(candidates);
         List<EncryptedPoint> filtered = new ArrayList<>(candidates.size());
-        for (EncryptedPoint p : candidates) {
-            Map<String, String> m = metas.get(p.getId());
+        for (EncryptedPoint pt : candidates) {
+            Map<String, String> m = metas.get(pt.getId());
             if (m != null
-                    && Integer.toString(p.getVersion()).equals(m.get("version"))
-                    && Integer.toString(p.getVectorLength()).equals(m.get("dim"))) {
-                filtered.add(p);
+                    && Integer.toString(pt.getVersion()).equals(m.get("version"))
+                    && Integer.toString(pt.getVectorLength()).equals(m.get("dim"))) {
+                filtered.add(pt);
             }
         }
         return filtered;

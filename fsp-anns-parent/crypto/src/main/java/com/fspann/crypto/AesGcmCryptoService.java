@@ -43,6 +43,7 @@ public class AesGcmCryptoService implements CryptoService {
                 .register(this.registry);
     }
 
+    // encryptToPoint: stop writing metadata, keep version stamp, warn if non-current key used
     @Override
     public EncryptedPoint encryptToPoint(String id, double[] vector, SecretKey key) {
         if (!id.matches("[a-zA-Z0-9_-]+")) {
@@ -50,12 +51,22 @@ public class AesGcmCryptoService implements CryptoService {
         }
         return encryptTimer.record(() -> {
             try {
+                KeyVersion cur = keyService.getCurrentVersion();
+                // best-effort: log if caller didn't pass the current key (providers may not expose getEncoded)
+                try {
+                    byte[] curBytes = cur.getKey().getEncoded();
+                    byte[] argBytes = key.getEncoded();
+                    if (curBytes != null && argBytes != null && !java.util.Arrays.equals(curBytes, argBytes)) {
+                        logger.warn("encryptToPoint called with a non-current key; stamping current version v{}", cur.getVersion());
+                    }
+                } catch (Throwable ignore) {}
+
                 byte[] iv = EncryptionUtils.generateIV();
                 byte[] ciphertext = EncryptionUtils.encryptVector(vector, iv, key);
-                int version = keyService.getCurrentVersion().getVersion();
-                EncryptedPoint point = new EncryptedPoint(id, 0, iv, ciphertext, version, vector.length, null);
-                metadataManager.updateVectorMetadata(id, Map.of("version", String.valueOf(version)));
-                logger.debug("Encrypted point {} with key version {}", id, version);
+
+                // IMPORTANT: do NOT write metadata here (query tokens are ephemeral)
+                EncryptedPoint point = new EncryptedPoint(id, 0, iv, ciphertext, cur.getVersion(), vector.length, null);
+                logger.debug("Encrypted query point {} with key version {}", id, cur.getVersion());
                 return point;
             } catch (GeneralSecurityException e) {
                 logger.error("Encryption failed for point {}", id, e);
@@ -104,13 +115,12 @@ public class AesGcmCryptoService implements CryptoService {
         });
     }
 
+    // decryptFromPoint: lower to DEBUG to avoid noisy/sensitive INFO logs
     @Override
     public double[] decryptFromPoint(EncryptedPoint pt, SecretKey key) {
-        logger.info("Decrypting point: id={}, version={}, IV={}",
-                pt.getId(), pt.getVersion(), Base64.getEncoder().encodeToString(pt.getIv()));
+        logger.debug("Decrypting point: id={}, version={}", pt.getId(), pt.getVersion());
         return decryptTimer.record(() -> {
             try {
-                logger.debug("Decrypting point {} with key version {}", pt.getId(), pt.getVersion());
                 return EncryptionUtils.decryptVector(pt.getCiphertext(), pt.getIv(), key);
             } catch (GeneralSecurityException e) {
                 logger.error("Decryption failed (possibly due to stale key) for point {}: {}", pt.getId(), e.getMessage());

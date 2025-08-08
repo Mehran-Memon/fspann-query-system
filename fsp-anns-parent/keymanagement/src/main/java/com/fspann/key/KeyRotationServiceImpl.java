@@ -72,43 +72,36 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
 
         int total = 0;
         Set<String> seen = new HashSet<>();
-        Path baseDir = Paths.get(metadataManager.getPointsBaseDir());
-
-        try (Stream<Path> stream = Files.walk(baseDir)) {
-            List<Path> pointFiles = stream
-                    .filter(Files::isRegularFile)
-                    .filter(p -> p.toString().endsWith(".point"))
-                    .toList();
-
-            for (Path file : pointFiles) {
-                try {
-                    EncryptedPoint original = PersistenceUtils.loadObject(
-                            file.toString(), baseDir.toString(), EncryptedPoint.class);
-                    if (original == null || !seen.add(original.getId())) continue;
-
-                    // Already current? skip.
-                    if (original.getVersion() == getCurrentVersion().getVersion()) continue;
-
-                    // Decrypt with the original version’s key, then re-insert via the service.
-                    KeyVersion ov = getVersion(original.getVersion());
-                    double[] raw = cryptoService.decryptFromPoint(original, ov.getKey());
-                    indexService.insert(original.getId(), raw);
-                    total++;
-                } catch (Exception e) {
-                    logger.warn("Failed to re-encrypt {}: {}", file, e.getMessage());
-                }
-            }
-        } catch (IOException e) {
-            logger.error("Failed walking encrypted-points dir", e);
-        }
 
         try {
+            // Let the metadata manager enumerate all stored points (ids only)
+            // If you don't have such a method, you can keep the Files.walk() variant you had.
+            List<EncryptedPoint> all = metadataManager.getAllEncryptedPoints();
+            for (EncryptedPoint original : all) {
+                if (original == null || !seen.add(original.getId())) continue;
+
+                // Decrypt with the key that matches the point's version
+                KeyVersion pointVer = getVersion(original.getVersion());
+                double[] raw = cryptoService.decryptFromPoint(original, pointVer.getKey());
+
+                // Re-insert with same id; service will encrypt w/ CURRENT key + recompute buckets
+                indexService.insert(original.getId(), raw);
+
+                total++;
+            }
+
+            // If your service buffers writes, flush now
             EncryptedPointBuffer buf = indexService.getPointBuffer();
             if (buf != null) buf.flushAll();
-            indexService.clearCache();
-        } catch (Exception ignore) { /* non-fatal */ }
 
-        logger.info("Re-encryption completed for {} vectors", total);
+            // Optional: drop any stale metadata no longer in the active set
+            metadataManager.cleanupStaleMetadata(seen);
+
+            logger.info("Re-encryption completed for {} vectors", total);
+        } catch (Exception e) {
+            logger.error("Re-encryption pipeline failed", e);
+            // Intentionally do not throw; partial progress is acceptable, and next pass will pick up leftovers.
+        }
     }
 
     public synchronized List<EncryptedPoint> rotateIfNeededAndReturnUpdated() {
