@@ -18,7 +18,7 @@ class BucketConstructorTest {
                 new byte[32],
                 1,
                 128,
-                null
+                null // not indexing these; just padding test
         );
 
         List<List<EncryptedPoint>> buckets = new ArrayList<>();

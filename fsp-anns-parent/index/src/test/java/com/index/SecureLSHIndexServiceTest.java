@@ -1,6 +1,9 @@
 package com.index;
 
-import com.fspann.common.*;
+import com.fspann.common.EncryptedPoint;
+import com.fspann.common.EncryptedPointBuffer;
+import com.fspann.common.KeyLifeCycleService;
+import com.fspann.common.RocksDBMetadataManager;
 import com.fspann.crypto.CryptoService;
 import com.fspann.index.core.EvenLSH;
 import com.fspann.index.core.SecureLSHIndex;
@@ -8,10 +11,10 @@ import com.fspann.index.service.SecureLSHIndexService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.util.Collections;
-import java.util.Map;
+import java.util.*;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class SecureLSHIndexServiceTest {
@@ -19,91 +22,78 @@ class SecureLSHIndexServiceTest {
     private CryptoService crypto;
     private KeyLifeCycleService keyService;
     private RocksDBMetadataManager metadataManager;
-    private SecureLSHIndexService indexService;
 
     @BeforeEach
     void setup() {
         crypto = mock(CryptoService.class);
         keyService = mock(KeyLifeCycleService.class);
         metadataManager = mock(RocksDBMetadataManager.class);
-
-        when(metadataManager.getPointsBaseDir())
-                .thenReturn(System.getProperty("java.io.tmpdir") + "/points");
-
-        indexService = new SecureLSHIndexService(crypto, keyService, metadataManager);
+        when(metadataManager.getPointsBaseDir()).thenReturn(System.getProperty("java.io.tmpdir") + "/points");
     }
 
-
     @Test
-    void testInsert_VectorEncryptedCorrectly() throws Exception {
-        String id = "test";
-        double[] vector = {1.0, 2.0};
-        int dimension = vector.length;
+    void testInsert_PersistsBucketsInMetadata() throws Exception {
+        String id = "test-1";
+        double[] vector = {1.0, 2.0, 3.0, 4.0};
+        int dim = vector.length;
 
-        // Inject consistent EvenLSH and Index for controlled shardId
-        EvenLSH testLsh = new EvenLSH(dimension, 32, 1); // Only 1 projection to keep it deterministic
-        int shardId = testLsh.getBucketId(vector);
-        SecureLSHIndex dummyIndex = new SecureLSHIndex(1, 32, testLsh);
+        // Deterministic LSH + index with known numTables
+        int numBuckets = 32;
+        int numTables = 3;
+        EvenLSH testLsh = new EvenLSH(dim, numBuckets, 16, 777L);
+        SecureLSHIndex testIndex = new SecureLSHIndex(numTables, numBuckets, testLsh);
+        EncryptedPointBuffer buffer = mock(EncryptedPointBuffer.class);
 
-        EncryptedPoint encrypted = new EncryptedPoint(id, shardId, new byte[]{1}, new byte[]{2}, 1, dimension, Collections.singletonList(shardId));
-        when(crypto.encrypt(eq(id), eq(vector))).thenReturn(encrypted);
+        // crypto.encrypt returns the raw encrypted blob; service will wrap it with per-table buckets
+        EncryptedPoint enc = new EncryptedPoint(id, 0, new byte[]{1}, new byte[]{2}, 7, dim, Collections.emptyList());
+        when(crypto.encrypt(eq(id), eq(vector))).thenReturn(enc);
 
-        // Inject LSH and Index into the service
-        indexService = new SecureLSHIndexService(crypto, keyService, metadataManager, dummyIndex, testLsh, new EncryptedPointBuffer("metadata/points", metadataManager));
+        SecureLSHIndexService svc = new SecureLSHIndexService(crypto, keyService, metadataManager, testIndex, testLsh, buffer);
 
-        indexService.insert(id, vector);
+        svc.insert(id, vector);
 
-        // Verify metadata matches injected shardId
+        // compute expected per-table buckets
+        List<Integer> expectedBuckets = new ArrayList<>();
+        for (int t = 0; t < numTables; t++) expectedBuckets.add(testLsh.getBucketId(vector, t));
+
         verify(metadataManager).batchUpdateVectorMetadata(argThat(map -> {
             Map<String, String> meta = map.get(id);
-            return meta != null &&
-                    meta.get("shardId").equals(String.valueOf(shardId)) &&
-                    meta.get("dim").equals(String.valueOf(dimension)) &&
-                    meta.get("version").equals("1");
+            if (meta == null) return false;
+            if (!String.valueOf(dim).equals(meta.get("dim"))) return false;
+            if (!"7".equals(meta.get("version"))) return false;
+            for (int t = 0; t < numTables; t++) {
+                String key = "b" + t;
+                if (!meta.containsKey(key)) return false;
+                if (!String.valueOf(expectedBuckets.get(t)).equals(meta.get(key))) return false;
+            }
+            return true;
         }));
 
         verify(metadataManager).saveEncryptedPoint(any(EncryptedPoint.class));
+        verify(buffer).add(any(EncryptedPoint.class));
     }
 
     @Test
-    void testInsertHandlesDifferentDimensions() throws Exception {
-        String id = "335ce2df-1702-45fe-9823-ba9d697f612d";
-        double[] vector = new double[128];
-        int dimension = 128;
+    void testInsert_MinimalMetadataPresence() throws Exception {
+        // Use default service path (creates its own ctx)
+        SecureLSHIndexService svc = new SecureLSHIndexService(crypto, keyService, metadataManager);
 
-        EvenLSH lsh = new EvenLSH(dimension, 32);
-        int shardId = lsh.getBucketId(vector);
+        String id = "vec-128";
+        double[] vec = new double[128];
+        EncryptedPoint enc = new EncryptedPoint(id, 0, new byte[12], new byte[16], 3, 128, Collections.emptyList());
+        when(crypto.encrypt(eq(id), eq(vec))).thenReturn(enc);
 
-        EncryptedPoint encrypted = new EncryptedPoint(id, shardId, new byte[12], new byte[16], 7, dimension, Collections.singletonList(shardId));
-        when(crypto.encrypt(eq(id), eq(vector))).thenReturn(encrypted);
-
-        indexService.insert(id, vector);
+        svc.insert(id, vec);
 
         verify(metadataManager).batchUpdateVectorMetadata(argThat(map -> {
             Map<String, String> meta = map.get(id);
-            return meta != null &&
-                    meta.get("shardId").equals(String.valueOf(shardId)) &&
-                    meta.get("dim").equals(String.valueOf(dimension)) &&
-                    meta.get("version").equals("7");
+            if (meta == null) return false;
+            // must at least contain dim, version, and at least one b*
+            if (!"128".equals(meta.get("dim"))) return false;
+            if (!"3".equals(meta.get("version"))) return false;
+            return meta.keySet().stream().anyMatch(k -> k.startsWith("b"));
         }));
 
-        verify(metadataManager).saveEncryptedPoint(encrypted);
-    }
-
-    @Test
-    void testInsert_UpdatesMetadataAndMarksShardDirty() throws Exception {
-        EncryptedPoint pt = new EncryptedPoint("vec123", 4, new byte[]{0}, new byte[]{1}, 99, 2, Collections.singletonList(4));
-
-        indexService.insert(pt);
-
-        verify(metadataManager).batchUpdateVectorMetadata(argThat(map -> {
-            Map<String, String> meta = map.get("vec123");
-            return meta != null &&
-                    meta.get("shardId").equals("4") &&
-                    meta.get("dim").equals("2") &&
-                    meta.get("version").equals("99");
-        }));
-
-        verify(metadataManager).saveEncryptedPoint(pt);
+        verify(metadataManager).saveEncryptedPoint(any(EncryptedPoint.class));
     }
 }

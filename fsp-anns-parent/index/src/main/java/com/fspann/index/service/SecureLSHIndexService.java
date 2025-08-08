@@ -4,12 +4,13 @@ import com.fspann.common.EncryptedPoint;
 import com.fspann.common.EncryptedPointBuffer;
 import com.fspann.common.IndexService;
 import com.fspann.common.KeyLifeCycleService;
-import com.fspann.common.QueryToken;
+import com.fspann.common.QueryTokenV2;
 import com.fspann.common.RocksDBMetadataManager;
 import com.fspann.crypto.AesGcmCryptoService;
 import com.fspann.crypto.CryptoService;
 import com.fspann.index.core.DimensionContext;
 import com.fspann.index.core.EvenLSH;
+import com.fspann.index.core.PartitioningPolicy;
 import com.fspann.index.core.SecureLSHIndex;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.slf4j.Logger;
@@ -22,33 +23,25 @@ import java.util.concurrent.ConcurrentHashMap;
 public class SecureLSHIndexService implements IndexService {
     private static final Logger logger = LoggerFactory.getLogger(SecureLSHIndexService.class);
 
-    private static final int DEFAULT_NUM_SHARDS = 32;
+    private static final int DEFAULT_NUM_BUCKETS = 32;
 
     private final CryptoService crypto;
     private final KeyLifeCycleService keyService;
     private final RocksDBMetadataManager metadataManager;
-    private final SecureLSHIndex index;   // optional injected single-index (used by tests)
-    private final EvenLSH lsh;            // optional injected LSH (used by tests)
+    private final SecureLSHIndex index;   // optional injected single-index (tests)
+    private final EvenLSH lsh;            // optional injected LSH (tests)
     private final EncryptedPointBuffer buffer;
+    private static final int DEFAULT_NUM_TABLES = 4; // or 8; tune later
 
     private final Map<Integer, DimensionContext> dimensionContexts = new ConcurrentHashMap<>();
     private final Map<String, EncryptedPoint> indexedPoints = new ConcurrentHashMap<>();
 
-    /**
-     * Default ctor: builds a buffer using the metadata manager's base dir (no hard-coded paths).
-     * In production, prefer creating the buffer in the API layer and injecting via the 6-arg ctor,
-     * so this module does not create any directories on its own.
-     */
     public SecureLSHIndexService(CryptoService crypto,
                                  KeyLifeCycleService keyService,
                                  RocksDBMetadataManager metadataManager) {
         this(crypto, keyService, metadataManager, null, null, createBufferFromManager(metadataManager));
     }
 
-    /**
-     * Fully-injected ctor. If you want the index module to avoid creating directories,
-     * pass a prebuilt buffer from the API layer here.
-     */
     public SecureLSHIndexService(CryptoService crypto,
                                  KeyLifeCycleService keyService,
                                  RocksDBMetadataManager metadataManager,
@@ -68,8 +61,6 @@ public class SecureLSHIndexService implements IndexService {
                 "metadataManager.getPointsBaseDir() returned null. " +
                         "In tests, stub this or inject a buffer explicitly.");
         try {
-            // Use the manager's base dir. If you want zero directory creation in this module,
-            // inject the buffer via the 6-arg constructor instead.
             return new EncryptedPointBuffer(pointsBase, manager);
         } catch (IOException e) {
             throw new RuntimeException("Failed to initialize EncryptedPointBuffer", e);
@@ -78,15 +69,36 @@ public class SecureLSHIndexService implements IndexService {
 
     private DimensionContext getOrCreateContext(int dimension) {
         return dimensionContexts.computeIfAbsent(dimension, dim -> {
-            int buckets = Math.max(1, DEFAULT_NUM_SHARDS);
-            int projections = Math.max(1, (int) Math.ceil(buckets * Math.log(Math.max(dim, 1) / 16.0) / Math.log(2)));
-            EvenLSH lshInstance = (this.lsh != null) ? this.lsh : new EvenLSH(dim, buckets, projections);
-            SecureLSHIndex idx = (this.index != null) ? this.index : new SecureLSHIndex(1, buckets, lshInstance);
+            int buckets = Math.max(1, DEFAULT_NUM_BUCKETS);
+            int projections = Math.max(1,
+                    (int) Math.ceil(buckets * Math.log(Math.max(dim, 1) / 16.0) / Math.log(2)));
+
+            long seed = seedFor(dim, buckets, projections); // <--- deterministic
+            EvenLSH lshInstance = (this.lsh != null)
+                    ? this.lsh
+                    : new EvenLSH(dim, buckets, projections, seed);
+
+            SecureLSHIndex idx = (this.index != null)
+                    ? this.index
+                    : new SecureLSHIndex(DEFAULT_NUM_TABLES, buckets, lshInstance);
+
             return new DimensionContext(idx, crypto, keyService, lshInstance);
         });
     }
 
-    /** Batch inserts a list of raw vectors with corresponding IDs. */
+
+    private static long seedFor(int dim, int buckets, int projections) {
+        long x = 0x9E3779B97F4A7C15L;
+        x ^= (long) dim * 0xBF58476D1CE4E5B9L;
+        x ^= (long) buckets * 0x94D049BB133111EBL;
+        x ^= (long) projections + 0x2545F4914F6CDD1DL;
+        x ^= (x >>> 33); x *= 0xff51afd7ed558ccdl;
+        x ^= (x >>> 33); x *= 0xc4ceb9fe1a85ec53l;
+        x ^= (x >>> 33);
+        return x;
+    }
+
+    /** Batch inserts raw vectors with IDs. */
     public void batchInsert(List<String> ids, List<double[]> vectors) {
         if (ids == null || vectors == null || ids.size() != vectors.size()) {
             throw new IllegalArgumentException("IDs and vectors must be non-null and of equal size");
@@ -105,14 +117,18 @@ public class SecureLSHIndexService implements IndexService {
         indexedPoints.put(pt.getId(), pt);
         SecureLSHIndex idx = ctx.getIndex();
         idx.addPoint(pt);
-        idx.markShardDirty(pt.getShardId());
         buffer.add(pt);
 
-        // persist metadata & point (batch for metadata to match tests)
+        // Persist metadata (no legacy shard; store version/dim and optionally buckets for audit)
         Map<String, String> metadata = new HashMap<>();
-        metadata.put("shardId", String.valueOf(pt.getShardId()));
         metadata.put("version", String.valueOf(pt.getVersion()));
         metadata.put("dim", String.valueOf(pt.getVectorLength()));
+        List<Integer> buckets = pt.getBuckets();
+        if (buckets != null) {
+            for (int t = 0; t < buckets.size(); t++) {
+                metadata.put("b" + t, String.valueOf(buckets.get(t)));
+            }
+        }
 
         try {
             metadataManager.batchUpdateVectorMetadata(Collections.singletonMap(pt.getId(), metadata));
@@ -126,23 +142,30 @@ public class SecureLSHIndexService implements IndexService {
     public void insert(String id, double[] vector) {
         Objects.requireNonNull(id, "Point ID cannot be null");
         Objects.requireNonNull(vector, "Vector cannot be null");
+
         int dimension = vector.length;
         DimensionContext ctx = getOrCreateContext(dimension);
+        SecureLSHIndex idx = ctx.getIndex();
 
-        EncryptedPoint encryptedPoint = crypto.encrypt(id, vector);
-        int shardId = ctx.getLsh().getBucketId(vector);
+        EncryptedPoint enc = crypto.encrypt(id, vector);
 
-        EncryptedPoint withShard = new EncryptedPoint(
-                encryptedPoint.getId(),
-                shardId,
-                encryptedPoint.getIv(),
-                encryptedPoint.getCiphertext(),
-                encryptedPoint.getVersion(),
+        // per-table buckets (mandatory)
+        List<Integer> perTableBuckets = new ArrayList<>(idx.getNumHashTables());
+        for (int t = 0; t < idx.getNumHashTables(); t++) {
+            perTableBuckets.add(ctx.getLsh().getBucketId(vector, t));
+        }
+
+        EncryptedPoint ep = new EncryptedPoint(
+                enc.getId(),
+                /* legacy shard removed from semantics; keep 0 or first bucket if ctor needs an int */ perTableBuckets.get(0),
+                enc.getIv(),
+                enc.getCiphertext(),
+                enc.getVersion(),
                 vector.length,
-                Collections.singletonList(shardId)
+                perTableBuckets
         );
 
-        insert(withShard);
+        insert(ep);
     }
 
     @Override
@@ -159,35 +182,6 @@ public class SecureLSHIndexService implements IndexService {
         }
     }
 
-    @Override
-    public List<EncryptedPoint> lookup(QueryToken token) {
-        Objects.requireNonNull(token, "QueryToken cannot be null");
-        int dim = token.getQueryVector().length;
-        DimensionContext ctx = dimensionContexts.get(dim);
-        if (ctx == null) {
-            logger.warn("No index for dimension {}", dim);
-            return Collections.emptyList();
-        }
-
-        List<EncryptedPoint> candidates = ctx.getIndex().queryEncrypted(token);
-        if (candidates.isEmpty()) return Collections.emptyList();
-
-        // fetch metadata per id (since multiGet isn't available on your manager)
-        Map<String, Map<String, String>> metas = fetchMetadata(candidates);
-
-        List<EncryptedPoint> filtered = new ArrayList<>(candidates.size());
-        for (EncryptedPoint pt : candidates) {
-            Map<String, String> m = metas.get(pt.getId());
-            if (m != null
-                    && Integer.toString(pt.getVersion()).equals(m.get("version"))
-                    && Integer.toString(pt.getShardId()).equals(m.get("shardId"))
-                    && Integer.toString(pt.getVectorLength()).equals(m.get("dim"))) {
-                filtered.add(pt);
-            }
-        }
-        return filtered;
-    }
-
     private Map<String, Map<String, String>> fetchMetadata(List<EncryptedPoint> points) {
         Map<String, Map<String, String>> out = new HashMap<>(points.size());
         for (EncryptedPoint p : points) {
@@ -196,22 +190,15 @@ public class SecureLSHIndexService implements IndexService {
         return out;
     }
 
+    // Legacy no-op (kept to satisfy IndexService, but no shard semantics now)
     @Override
-    public void markDirty(int shardId) {
-        for (DimensionContext ctx : dimensionContexts.values()) {
-            ctx.getIndex().markShardDirty(shardId);
-        }
-    }
+    public void markDirty(int shardId) { /* no-op in proposal-aligned design */ }
 
     @Override
-    public int getIndexedVectorCount() {
-        return indexedPoints.size();
-    }
+    public int getIndexedVectorCount() { return indexedPoints.size(); }
 
     @Override
-    public Set<Integer> getRegisteredDimensions() {
-        return dimensionContexts.keySet();
-    }
+    public Set<Integer> getRegisteredDimensions() { return dimensionContexts.keySet(); }
 
     @Override
     public int getVectorCountForDimension(int dimension) {
@@ -231,24 +218,18 @@ public class SecureLSHIndexService implements IndexService {
         }
     }
 
-    public void updateCachedPoint(EncryptedPoint pt) {
-        indexedPoints.put(pt.getId(), pt);
-    }
+    public void updateCachedPoint(EncryptedPoint pt) { indexedPoints.put(pt.getId(), pt); }
 
-    public void flushBuffers() {
-        buffer.flushAll();
-    }
+    public void flushBuffers() { buffer.flushAll(); }
 
     @Override
-    public EncryptedPointBuffer getPointBuffer() {
-        return buffer;
-    }
+    public EncryptedPointBuffer getPointBuffer() { return buffer; }
 
     @Override
     public int getShardIdForVector(double[] vector) {
         int dim = Objects.requireNonNull(vector, "vector").length;
         DimensionContext ctx = getOrCreateContext(dim);
-        return ctx.getLsh().getBucketId(vector);
+        return ctx.getLsh().getBucketId(vector, 0); // legacy diagnostic only
     }
 
     public void clearCache() {
@@ -257,7 +238,26 @@ public class SecureLSHIndexService implements IndexService {
         logger.info("Cleared {} cached points", size);
     }
 
-    public void shutdown() {
-        buffer.shutdown();
+    public Map<Integer, Double> evaluateFanoutRatio(double[] query) {
+        return evaluateFanoutRatio(query, new int[]{1, 20, 40, 60, 80, 100});
     }
+
+    public Map<Integer, Double> evaluateFanoutRatio(double[] query, int[] topKs) {
+        Objects.requireNonNull(query, "query");
+        DimensionContext ctx = getOrCreateContext(query.length);
+        SecureLSHIndex idx = ctx.getIndex();
+        Map<Integer, Double> out = new LinkedHashMap<>();
+        int N = Math.max(1, idx.getPointCount()); // avoid div-by-zero
+
+        for (int k : topKs) {
+            List<List<Integer>> perTable = PartitioningPolicy
+                    .expansionsForQuery(ctx.getLsh(), query, idx.getNumHashTables(), k);
+            int cand = idx.candidateCount(perTable);
+            double ratio = cand / (double) N;
+            out.put(k, ratio); // <--- populate
+        }
+        return out;
+    }
+
+    public void shutdown() { buffer.shutdown(); }
 }

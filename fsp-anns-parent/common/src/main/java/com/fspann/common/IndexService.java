@@ -24,10 +24,10 @@ public interface IndexService {
      */
     void delete(String id);
 
-    /**
-     * Lookup using a query token (dimension inferred from token).
-     */
-    List<EncryptedPoint> lookup(QueryToken token);
+    @Deprecated
+    default List<EncryptedPoint> lookup(QueryToken token) {
+        throw new UnsupportedOperationException("Deprecated: use QueryTokenV2");
+    }
 
     /**
      * Mark a specific shard as dirty for key rotation within its dimension.

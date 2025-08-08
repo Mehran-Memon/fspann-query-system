@@ -3,217 +3,194 @@ package com.fspann.index.core;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.SplittableRandom;
 
 /**
- * EvenLSH projects vectors using random Gaussian vectors for bucketization.
- * Optimized for arbitrary-dimensional data with efficient dot product and adaptive projection vectors.
+ * EvenLSH: random Gaussian projections -> stable per-table bucketization.
+ * - Per-table APIs only (no legacy single-table shortcuts).
+ * - Contiguous neighbor expansion around main bucket for fanout (used by top-K probing).
+ * - Projection vectors are L2-normalized; loop-unrolled dot products for speed.
+ * - DETERMINISTIC: projections seeded so bucketization is stable across restarts.
  */
-public class EvenLSH {
+public final class EvenLSH {
     private static final Logger logger = LoggerFactory.getLogger(EvenLSH.class);
-    private final ConcurrentMap<String, CacheEntry> cachedProjections = new ConcurrentHashMap<>();
+
     private final int dimensions;
     private final int numBuckets;
-    private final int numProjections;
+    private final int numProjections;        // upper-bounded to 8*numBuckets
     private final double[][] projectionVectors;
-    private static final long CACHE_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
-    private static final int UNROLL_THRESHOLD = 256; // Threshold for loop unrolling
-    private static final int MAX_CACHE_SIZE = 20000; // Cache size for large datasets
+    private final long seed;
 
-    private static class CacheEntry {
-        final double projection;
-        final long timestamp;
-
-        CacheEntry(double projection) {
-            this.projection = projection;
-            this.timestamp = System.currentTimeMillis();
-        }
-    }
+    private static final int UNROLL_THRESHOLD = 256; // Loop unrolling threshold
 
     public EvenLSH(int dimensions, int numBuckets) {
         this(dimensions, numBuckets, calculateNumProjections(dimensions, numBuckets));
     }
 
     public EvenLSH(int dimensions, int numBuckets, int numProjections) {
+        this(dimensions, numBuckets, numProjections,
+                defaultSeed(dimensions, numBuckets, numProjections));
+    }
+
+    public EvenLSH(int dimensions, int numBuckets, int numProjections, long seed) {
         if (dimensions <= 0 || numBuckets <= 0 || numProjections <= 0) {
-            throw new IllegalArgumentException("Dimensions, bucket count, and projection count must be positive");
+            throw new IllegalArgumentException("dimensions, numBuckets, numProjections must be > 0");
         }
         this.dimensions = dimensions;
         this.numBuckets = numBuckets;
         this.numProjections = Math.max(numBuckets, Math.min(numProjections, numBuckets * 8));
+        this.seed = seed;
         this.projectionVectors = new double[this.numProjections][dimensions];
 
-        Random rand = new Random();
+        // Build normalized random projections (deterministic via seed)
+        SplittableRandom rnd = new SplittableRandom(seed);
         for (int i = 0; i < this.numProjections; i++) {
             double norm = 0.0;
             for (int j = 0; j < dimensions; j++) {
-                projectionVectors[i][j] = rand.nextGaussian();
-                norm += projectionVectors[i][j] * projectionVectors[i][j];
+                double v = nextGaussian(rnd);
+                projectionVectors[i][j] = v;
+                norm += v * v;
             }
             norm = Math.sqrt(norm);
+            if (norm == 0.0) norm = 1.0;
             for (int j = 0; j < dimensions; j++) {
                 projectionVectors[i][j] /= norm;
             }
         }
-        logger.info("Initialized EvenLSH with {} dimensions, {} buckets, {} projections", dimensions, numBuckets, numProjections);
+        logger.info("Initialized EvenLSH dims={}, buckets={}, projections={}, seed={}",
+                dimensions, numBuckets, this.numProjections, seed);
     }
 
-    /**
-     * Calculates adaptive number of projections based on dimensions and buckets.
-     */
+    /** Adaptive projection count ~ buckets * log(dim/16). */
     private static int calculateNumProjections(int dimensions, int numBuckets) {
-        // Scale projections with log(dimensions) for arbitrary dimensions
-        int projections = (int) Math.ceil(numBuckets * Math.log(Math.max(dimensions, 1) / 16.0) / Math.log(2));
-        return Math.max(numBuckets, Math.min(projections, numBuckets * 8));
+        int proj = (int) Math.ceil(numBuckets * Math.log(Math.max(dimensions, 1) / 16.0) / Math.log(2));
+        return Math.max(numBuckets, Math.min(proj, numBuckets * 8));
     }
 
-    /**
-     * Projects a vector using the specified projection vector.
-     */
-    public double project(double[] vector, int tableIndex, String id) {
+    /** Default seed that stays stable across restarts for same (dims, buckets, projections). */
+    private static long defaultSeed(int dims, int buckets, int projs) {
+        long x = 0x9E3779B97F4A7C15L;
+        x ^= (long) dims * 0xBF58476D1CE4E5B9L;
+        x ^= (long) buckets * 0x94D049BB133111EBL;
+        x ^= (long) projs + 0x2545F4914F6CDD1DL;
+        x ^= (x >>> 33); x *= 0xff51afd7ed558ccdl;
+        x ^= (x >>> 33); x *= 0xc4ceb9fe1a85ec53l;
+        x ^= (x >>> 33);
+        return x;
+    }
+
+    /** Box–Muller from uniform SplittableRandom (deterministic). */
+    private static double nextGaussian(SplittableRandom r) {
+        double u1 = Math.max(Double.MIN_VALUE, r.nextDouble());
+        double u2 = r.nextDouble();
+        double mag = Math.sqrt(-2.0 * Math.log(u1));
+        return mag * Math.cos(2.0 * Math.PI * u2);
+    }
+
+    /** Projection using tableIndex-th projection (wrapped by numProjections). */
+    public double project(double[] vector, int tableIndex) {
         validateVector(vector);
-        Objects.requireNonNull(id, "ID cannot be null");
+        int idx = Math.floorMod(tableIndex, numProjections);
+        return dot(vector, projectionVectors[idx]);
+    }
 
-        cleanExpiredCache();
-        return cachedProjections.computeIfAbsent(id, k -> {
-            long start = System.nanoTime();
-            double projection = computeDotProduct(vector, projectionVectors[tableIndex % numProjections]);
-            long duration = System.nanoTime() - start;
-            logger.debug("Computed projection for id={}, dim={}, duration={} ns", id, dimensions, duration);
-            return new CacheEntry(projection);
-        }).projection;
+    /** Main bucket for a table (stable; not salted by epoch). */
+    public int getBucketId(double[] vector, int tableIndex) {
+        double p = project(vector, tableIndex);
+        long bits = Double.doubleToLongBits(p);
+        // light avalanche; independent per table
+        bits ^= (bits << 21);
+        bits ^= (bits >>> 35);
+        bits ^= (bits << 4);
+        long mix = 0x9E3779B97F4A7C15L * (tableIndex + 1L);
+        int hashed = (int) ((bits ^ mix) & 0x7FFFFFFF);
+        return hashed % numBuckets;
     }
 
     /**
-     * Default projection for backward compatibility.
+     * Contiguous neighbor expansion for probing.
+     * Example: range=2 -> [b-2, b-1, b, b+1, b+2] modulo numBuckets.
      */
-    public double project(double[] vector) {
-        return project(vector, 0, UUID.randomUUID().toString());
-    }
-
-    /**
-     * Returns the main bucket for a given vector.
-     */
-    public int getBucketId(double[] vector) {
+    public List<Integer> getBuckets(double[] vector, int topK, int tableIndex) {
         validateVector(vector);
-        long start = System.nanoTime();
-        double projection = project(vector);
-        int bucketId = Math.floorMod((int) (projection * numBuckets), numBuckets);
-        long duration = System.nanoTime() - start;
-        logger.debug("Computed bucketId={} for dim={}, duration={} ns", bucketId, dimensions, duration);
-        return bucketId;
+        int main = getBucketId(vector, tableIndex);
+        int range = calculateRange(topK);
+        return expandContiguous(main, range);
     }
 
-    /**
-     * Expands the main bucket into a range of nearby buckets based on top-K.
-     */
-    public List<Integer> getBuckets(double[] point, int topK) {
-        int range = calculateBucketRange(topK);
-        int mainBucket = getBucketId(point);
-        return expandBuckets(mainBucket, range);
+    /** Main buckets for all tables [0..numTables-1]. */
+    public int[] getBucketIdsForAllTables(double[] vector, int numTables) {
+        validateVector(vector);
+        if (numTables <= 0) throw new IllegalArgumentException("numTables must be > 0");
+        int[] out = new int[numTables];
+        for (int t = 0; t < numTables; t++) out[t] = getBucketId(vector, t);
+        return out;
     }
 
-    /**
-     * Default range for backward compatibility.
-     */
-    public List<Integer> getBuckets(double[] point) {
-        return getBuckets(point, DEFAULT_TOP_K);
-    }
-
-    public int getDimensions() {
-        return dimensions;
-    }
-
-    public int getNumBuckets() {
-        return numBuckets;
-    }
-
-    /**
-     * Clears the projection cache, e.g., during key rotation.
-     */
-    public void clearCache() {
-        cachedProjections.clear();
-        logger.info("Cleared projection cache for dim={}", dimensions);
-    }
-
-    private List<Integer> expandBuckets(int mainBucket, int range) {
-        List<Integer> buckets = new ArrayList<>();
-        for (int i = -range; i <= range; i++) {
-            int bucket = (mainBucket + i + numBuckets) % numBuckets;
-            if (!buckets.contains(bucket)) {
-                buckets.add(bucket);
-            }
+    /** Per-table contiguous expansions for all tables. */
+    public List<List<Integer>> getBucketsForAllTables(double[] vector, int topK, int numTables) {
+        validateVector(vector);
+        if (numTables <= 0) throw new IllegalArgumentException("numTables must be > 0");
+        int range = calculateRange(topK);
+        List<List<Integer>> all = new ArrayList<>(numTables);
+        for (int t = 0; t < numTables; t++) {
+            int main = getBucketId(vector, t);
+            all.add(expandContiguous(main, range));
         }
-        logger.debug("Expanded buckets for mainBucket={}, range={}, dim={}, result={}", mainBucket, range, dimensions, buckets);
-        return buckets;
+        return all;
     }
 
-    private int calculateBucketRange(int topK) {
-        int range = Math.max(1, (int) Math.ceil(Math.log(topK + 1) / Math.log(2)));
-        range = Math.min(range, numBuckets / 4); // Cap range to avoid excessive buckets
-        logger.debug("Calculated bucket range={} for topK={}, dim={}", range, topK, dimensions);
-        return range;
+    public int getDimensions() { return dimensions; }
+    public int getNumBuckets() { return numBuckets; }
+    public long getSeed() { return seed; }
+
+    // ---- internal helpers ----
+
+    private int calculateRange(int topK) {
+        // log-based growth; cap at 25% of buckets to keep fanout bounded
+        int r = Math.max(1, (int) Math.ceil(Math.log(topK + 1) / Math.log(2)));
+        return Math.min(r, Math.max(1, numBuckets / 4));
     }
 
-    private double computeDotProduct(double[] vector, double[] projection) {
-        if (dimensions <= UNROLL_THRESHOLD) {
-            // Unrolled loop for smaller dimensions
-            double sum = 0.0;
+    private List<Integer> expandContiguous(int main, int range) {
+        List<Integer> out = new ArrayList<>(range * 2 + 1);
+        for (int d = -range; d <= range; d++) {
+            out.add(Math.floorMod(main + d, numBuckets));
+        }
+        return out;
+    }
+
+    private double dot(double[] a, double[] b) {
+        int n = dimensions;
+        if (n <= UNROLL_THRESHOLD) {
+            double s = 0.0;
             int i = 0;
-            for (; i <= dimensions - 4; i += 4) {
-                sum += vector[i] * projection[i] +
-                        vector[i + 1] * projection[i + 1] +
-                        vector[i + 2] * projection[i + 2] +
-                        vector[i + 3] * projection[i + 3];
+            for (; i <= n - 4; i += 4) {
+                s += a[i] * b[i]
+                        + a[i + 1] * b[i + 1]
+                        + a[i + 2] * b[i + 2]
+                        + a[i + 3] * b[i + 3];
             }
-            for (; i < dimensions; i++) {
-                sum += vector[i] * projection[i];
-            }
-            return sum;
+            for (; i < n; i++) s += a[i] * b[i];
+            return s;
         } else {
-            // Block-based computation for large dimensions
-            double sum = 0.0;
-            int blockSize = 8;
+            double s = 0.0;
+            final int blk = 8;
             int i = 0;
-            for (; i <= dimensions - blockSize; i += blockSize) {
-                for (int j = 0; j < blockSize; j++) {
-                    sum += vector[i + j] * projection[i + j];
-                }
+            for (; i <= n - blk; i += blk) {
+                for (int j = 0; j < blk; j++) s += a[i + j] * b[i + j];
             }
-            for (; i < dimensions; i++) {
-                sum += vector[i] * projection[i];
-            }
-            return sum;
+            for (; i < n; i++) s += a[i] * b[i];
+            return s;
         }
     }
 
-    private void cleanExpiredCache() {
-        long now = System.currentTimeMillis();
-        int initialSize = cachedProjections.size();
-        if (initialSize > MAX_CACHE_SIZE) {
-            cachedProjections.entrySet().stream()
-                    .sorted(Map.Entry.comparingByValue((e1, e2) -> Long.compare(e1.timestamp, e2.timestamp)))
-                    .limit(initialSize - MAX_CACHE_SIZE / 2)
-                    .forEach(entry -> cachedProjections.remove(entry.getKey()));
-        }
-        cachedProjections.entrySet().removeIf(entry -> now - entry.getValue().timestamp > CACHE_EXPIRY_MS);
-        if (initialSize != cachedProjections.size()) {
-            logger.debug("Cleaned cache for dim={}, size reduced from {} to {}", dimensions, initialSize, cachedProjections.size());
-        }
+    private void validateVector(double[] v) {
+        if (v == null || v.length != dimensions)
+            throw new IllegalArgumentException("Vector dims mismatch: expected=" + dimensions + " got=" + (v == null ? 0 : v.length));
+        for (double x : v) if (Double.isNaN(x) || Double.isInfinite(x))
+            throw new IllegalArgumentException("Vector has NaN/Inf");
     }
-
-    private void validateVector(double[] vector) {
-        if (vector == null || vector.length != dimensions) {
-            throw new IllegalArgumentException("Vector dimensions mismatch: expected=" + dimensions + ", got=" + (vector == null ? 0 : vector.length));
-        }
-        for (double v : vector) {
-            if (Double.isNaN(v) || Double.isInfinite(v)) {
-                throw new IllegalArgumentException("Vector contains invalid values (NaN or Infinite)");
-            }
-        }
-    }
-
-    private static final int DEFAULT_TOP_K = 5;
 }
