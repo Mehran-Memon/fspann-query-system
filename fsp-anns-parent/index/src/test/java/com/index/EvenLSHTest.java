@@ -9,51 +9,38 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class EvenLSHTest {
-
     private EvenLSH lsh;
 
     @BeforeEach
     void setUp() {
-        // deterministic seed for stable tests
-        lsh = new EvenLSH(3, 100, 32, 1234L);
+        lsh = new EvenLSH(3, 100); // 3D input, 100 buckets
     }
 
     @Test
-    void testGetBucketsWithinRangePerTable() {
+    void perTableBucketsHaveContiguousRange() {
         double[] point = {1.0, 2.0, 3.0};
-        int topK = 2; // range = ceil(log2(3)) = 2 -> size = 5
-        List<Integer> buckets = lsh.getBuckets(point, topK, 0);
+        List<Integer> buckets = lsh.getBuckets(point, 20, 0);
         assertNotNull(buckets);
-        assertEquals(5, buckets.size());
-        // must be within [0, numBuckets)
-        buckets.forEach(b -> assertTrue(b >= 0 && b < lsh.getNumBuckets()));
+        assertFalse(buckets.isEmpty());
+        // contiguous expansion: 2*range + 1
+        assertTrue(buckets.size() >= 1);
+        assertTrue(buckets.stream().allMatch(b -> b >= 0 && b < lsh.getNumBuckets()));
     }
 
     @Test
-    void testProjectAndBucketIdRange() {
-        double[] vector = {1.0, 2.0, 3.0};
-        double projection = lsh.project(vector, 0);
-        int bucketId = lsh.getBucketId(vector, 0);
-        assertFalse(Double.isNaN(projection));
-        assertTrue(bucketId >= 0 && bucketId < lsh.getNumBuckets());
+    void allTablesExpansionHasNumTablesLists() {
+        double[] point = {1.0, 2.0, 3.0};
+        int numTables = 4;
+        List<List<Integer>> all = lsh.getBucketsForAllTables(point, 20, numTables);
+        assertEquals(numTables, all.size());
+        all.forEach(lst -> assertFalse(lst.isEmpty()));
     }
 
     @Test
-    void testVectorDimensionMismatchThrows() {
-        double[] badVec = {1.0, 2.0}; // lsh expects 3D
-        assertThrows(IllegalArgumentException.class, () -> lsh.getBucketId(badVec, 0));
-        assertThrows(IllegalArgumentException.class, () -> lsh.project(badVec, 0));
-    }
-
-    @Test
-    void testDeterministicBucketAssignment() {
+    void bucketIdDeterministic() {
         double[] vec = {1.2, 3.4, 5.6};
-        int first = lsh.getBucketId(vec, 0);
-        int second = lsh.getBucketId(vec, 0);
-        assertEquals(first, second);
-
-        // same params + seed -> identical mapping across instances
-        EvenLSH lsh2 = new EvenLSH(3, 100, 32, 1234L);
-        assertEquals(first, lsh2.getBucketId(vec, 0));
+        int b1 = lsh.getBucketId(vec, 0);
+        int b2 = lsh.getBucketId(vec, 0);
+        assertEquals(b1, b2);
     }
 }

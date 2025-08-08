@@ -1,11 +1,6 @@
 package com.fspann.index.service;
 
-import com.fspann.common.EncryptedPoint;
-import com.fspann.common.EncryptedPointBuffer;
-import com.fspann.common.IndexService;
-import com.fspann.common.KeyLifeCycleService;
-import com.fspann.common.QueryTokenV2;
-import com.fspann.common.RocksDBMetadataManager;
+import com.fspann.common.*;
 import com.fspann.crypto.AesGcmCryptoService;
 import com.fspann.crypto.CryptoService;
 import com.fspann.index.core.DimensionContext;
@@ -166,6 +161,37 @@ public class SecureLSHIndexService implements IndexService {
         );
 
         insert(ep);
+    }
+
+    @Override
+    public List<EncryptedPoint> lookup(QueryToken token) {
+        Objects.requireNonNull(token, "QueryToken cannot be null");
+        int dim = token.getDimension();
+        DimensionContext ctx = dimensionContexts.get(dim);
+        if (ctx == null) {
+            logger.warn("No index for dimension {}", dim);
+            return Collections.emptyList();
+        }
+
+        List<EncryptedPoint> candidates = ctx.getIndex().queryEncrypted(token);
+        if (candidates.isEmpty()) return Collections.emptyList();
+
+        // fetch metadata per id (no multi-get available)
+        Map<String, Map<String, String>> metas = new HashMap<>(candidates.size());
+        for (EncryptedPoint p : candidates) {
+            metas.put(p.getId(), metadataManager.getVectorMetadata(p.getId()));
+        }
+
+        List<EncryptedPoint> filtered = new ArrayList<>(candidates.size());
+        for (EncryptedPoint p : candidates) {
+            Map<String, String> m = metas.get(p.getId());
+            if (m != null
+                    && Integer.toString(p.getVersion()).equals(m.get("version"))
+                    && Integer.toString(p.getVectorLength()).equals(m.get("dim"))) {
+                filtered.add(p);
+            }
+        }
+        return filtered;
     }
 
     @Override

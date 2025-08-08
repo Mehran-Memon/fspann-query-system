@@ -35,18 +35,21 @@ class QueryServiceImplTest {
         clearInvocations(indexService, cryptoService, keyService, groundtruthManager);
     }
 
-    @Test
-    void testTokenWithEmptyContextDefaults() {
-        QueryToken token = new QueryToken(
-                List.of(1),
+    private QueryToken tokenWithPerTable(int dim, int topK, int numTables, String ctx, int version) {
+        // trivial single-bucket expansion per table for tests
+        List<List<Integer>> tableBuckets = new ArrayList<>(numTables);
+        for (int t = 0; t < numTables; t++) tableBuckets.add(List.of(1));
+        return new QueryToken(
+                tableBuckets,
                 new byte[12],
                 new byte[32],
-                new double[]{1.0, 2.0},
-                1, 1,
-                "", // empty context should default
-                2, 0, 0
+                new double[]{1.0, 2.0}, // dim must match caller
+                topK,
+                numTables,
+                ctx,
+                dim,
+                version
         );
-        assertTrue(token.getEncryptionContext().startsWith("epoch_0_dim_"));
     }
 
     @Test
@@ -56,9 +59,12 @@ class QueryServiceImplTest {
         double[] query = new double[]{1.0, 2.0};
         SecretKey key = new SecretKeySpec(new byte[32], "AES");
         KeyVersion version = new KeyVersion(7, key);
-        String ctx = String.format("epoch_%d_dim_%d", 7, query.length);
+        String ctx = "epoch_7_dim_2";
 
-        QueryToken token = new QueryToken(List.of(1), iv, encQuery, query, 2, 1, ctx, 2, 0, 7);
+        QueryToken token = new QueryToken(
+                List.of(List.of(1)), iv, encQuery, query,
+                2, 1, ctx, 2, 7
+        );
 
         when(keyService.getVersion(7)).thenReturn(version);
         when(keyService.getCurrentVersion()).thenReturn(version);
@@ -80,7 +86,14 @@ class QueryServiceImplTest {
         byte[] iv = new byte[12];
         byte[] encQuery = new byte[32];
         double[] query = new double[]{1.0, 2.0};
-        QueryToken token = new QueryToken(List.of(1), iv, encQuery, query, 1, 1, "epoch_999_dim_2", 2, 0, 999);
+        QueryToken token = new QueryToken(
+                List.of(List.of(1)),
+                iv, encQuery, query,
+                1, 1,
+                "epoch_999_dim_2",
+                2,
+                999
+        );
 
         SecretKey fallbackKey = new SecretKeySpec(new byte[32], "AES");
         when(keyService.getCurrentVersion()).thenReturn(new KeyVersion(1, fallbackKey));
@@ -91,46 +104,48 @@ class QueryServiceImplTest {
 
     @Test
     void testRatioAndRecallWhenGroundtruthEmpty() throws Exception {
-        // ratio = matchCount/k, GT empty -> matchCount = 0 => ratio = 0.0
-        // current impl sets recall = 1.0
-        byte[] iv = new byte[12];
-        byte[] encQuery = new byte[32];
+        // ratio = 0.0 when GT empty, recall stays 1.0 (by design)
         double[] query = new double[]{0.5, 0.6};
-        String encryptionContext = String.format("epoch_%d_dim_%d", 1, query.length);
-        QueryToken token = new QueryToken(List.of(5), iv, encQuery, query, 10, 1, encryptionContext, 2, 0, 1);
+        String ctx = "epoch_1_dim_2";
+        QueryToken token = new QueryToken(
+                List.of(List.of(5)), new byte[12], new byte[32], query,
+                10, 1, ctx, 2, 1
+        );
 
         SecretKey key = new SecretKeySpec(new byte[32], "AES");
         KeyVersion version = new KeyVersion(1, key);
 
         when(keyService.getVersion(1)).thenReturn(version);
         when(keyService.getCurrentVersion()).thenReturn(version);
-        when(cryptoService.decryptQuery(eq(encQuery), eq(iv), eq(key))).thenReturn(query);
+        when(cryptoService.decryptQuery(any(), any(), eq(key))).thenReturn(query);
 
         when(indexService.lookup(any(QueryToken.class))).thenReturn(Arrays.asList(
-                new EncryptedPoint("id1", 0, iv, encQuery, 1, 2, Collections.singletonList(5)),
-                new EncryptedPoint("id2", 0, iv, encQuery, 1, 2, Collections.singletonList(5))
+                new EncryptedPoint("id1", 0, new byte[12], new byte[32], 1, 2, List.of(5)),
+                new EncryptedPoint("id2", 0, new byte[12], new byte[32], 1, 2, List.of(5))
         ));
         when(cryptoService.decryptFromPoint(any(), eq(key))).thenReturn(new double[]{0.5, 0.6});
 
-        // Empty groundtruth
-        when(groundtruthManager.getGroundtruth(eq(1), anyInt())).thenReturn(new int[]{});
+        when(groundtruthManager.getGroundtruth(eq(1), anyInt())).thenReturn(new int[]{}); // empty GT
 
         List<QueryEvaluationResult> results = service.searchWithTopKVariants(token, 1, groundtruthManager);
-        QueryEvaluationResult r = results.get(0); // for k = 1 in the list [1,20,40,60,80,100]
+        QueryEvaluationResult r = results.get(0); // k=1
 
-        assertEquals(0.0, r.getRatio(), 1e-9, "With empty groundtruth, matchCount/k must be 0.0");
-        assertEquals(1.0, r.getRecall(), 1e-9, "Recall is defined as 1.0 by the current implementation");
+        assertEquals(0.0, r.getRatio(), 1e-9);
+        assertEquals(1.0, r.getRecall(), 1e-9);
     }
 
     @Test
     void testRatioCalculationWithGroundtruth_MatchAtTop1() throws Exception {
-        // For k=1, if retrieved id equals GT id => ratio = 1/1 = 1.0
         byte[] iv = new byte[12];
         byte[] encQuery = new byte[32];
         double[] queryVec = new double[]{1.0, 1.0};
         String ctx = "epoch_1_dim_2";
 
-        QueryToken token = new QueryToken(List.of(5), iv, encQuery, queryVec, 1, 1, ctx, 2, 0, 1);
+        QueryToken token = new QueryToken(
+                List.of(List.of(5)),
+                iv, encQuery, queryVec,
+                1, 1, ctx, 2, 1
+        );
 
         SecretKey key = new SecretKeySpec(new byte[32], "AES");
         KeyVersion version = new KeyVersion(1, key);
@@ -139,7 +154,7 @@ class QueryServiceImplTest {
         when(keyService.getCurrentVersion()).thenReturn(version);
         when(cryptoService.decryptQuery(eq(encQuery), eq(iv), eq(key))).thenReturn(queryVec);
 
-        EncryptedPoint top1 = new EncryptedPoint("42", 0, iv, encQuery, 1, 2, Collections.singletonList(5));
+        EncryptedPoint top1 = new EncryptedPoint("42", 0, iv, encQuery, 1, 2, List.of(5));
         when(indexService.lookup(any())).thenReturn(List.of(top1));
         when(cryptoService.decryptFromPoint(eq(top1), eq(key))).thenReturn(new double[]{0.0, 0.0});
 
@@ -150,7 +165,7 @@ class QueryServiceImplTest {
                 .filter(r -> r.getTopKRequested() == 1)
                 .findFirst().orElseThrow();
 
-        assertEquals(1.0, top1Result.getRatio(), 1e-6, "One correct match out of 1 => ratio=1.0");
-        assertEquals(1.0, top1Result.getRecall(), 1e-6, "Recall remains 1.0 per current implementation");
+        assertEquals(1.0, top1Result.getRatio(), 1e-6);
+        assertEquals(1.0, top1Result.getRecall(), 1e-6);
     }
 }

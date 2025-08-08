@@ -4,6 +4,7 @@ import com.fspann.common.*;
 import com.fspann.crypto.CryptoService;
 import com.fspann.loader.GroundtruthManager;
 import com.fspann.query.core.QueryEvaluationResult;
+import com.fspann.query.core.QueryTokenFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -21,12 +22,25 @@ public class QueryServiceImpl implements QueryService {
     private final IndexService indexService;
     private final CryptoService cryptoService;
     private final KeyLifeCycleService keyService;
+    private final QueryTokenFactory tokenFactory; // may be null
     private long lastQueryDurationNs = 0;
 
-    public QueryServiceImpl(IndexService indexService, CryptoService cryptoService, KeyLifeCycleService keyService) {
+    // Default ctor (no per-K recompute)
+    public QueryServiceImpl(IndexService indexService,
+                            CryptoService cryptoService,
+                            KeyLifeCycleService keyService) {
+        this(indexService, cryptoService, keyService, null);
+    }
+
+    // Ctor with tokenFactory (enables per-K expansion recompute)
+    public QueryServiceImpl(IndexService indexService,
+                            CryptoService cryptoService,
+                            KeyLifeCycleService keyService,
+                            QueryTokenFactory tokenFactory) {
         this.indexService = Objects.requireNonNull(indexService);
         this.cryptoService = Objects.requireNonNull(cryptoService);
         this.keyService = Objects.requireNonNull(keyService);
+        this.tokenFactory = tokenFactory; // can be null
     }
 
     @Override
@@ -70,7 +84,7 @@ public class QueryServiceImpl implements QueryService {
                     double dist = computeDistance(queryVec, ptVec);
                     results.add(new QueryResult(pt.getId(), dist));
                 } catch (IllegalArgumentException e) {
-                    throw e; // rethrow so tests catch it
+                    throw e;
                 } catch (Exception e) {
                     logger.warn("Failed to decrypt candidate {}. Skipping.", pt.getId(), e);
                 }
@@ -148,48 +162,36 @@ public class QueryServiceImpl implements QueryService {
         List<QueryEvaluationResult> results = new ArrayList<>();
 
         for (int k : topKVariants) {
-            QueryToken variant = new QueryToken(
-                    baseToken.getCandidateBuckets(),
-                    baseToken.getIv(),
-                    baseToken.getEncryptedQuery(),
-                    baseToken.getPlaintextQuery(),
-                    k,
-                    baseToken.getNumTables(),
-                    baseToken.getEncryptionContext(),
-                    baseToken.getDimension(),
-                    baseToken.getShardId(),
-                    baseToken.getVersion()
-            );
+            final QueryToken variant;
+            if (tokenFactory != null) {
+                variant = tokenFactory.derive(baseToken, k); // recompute per-table expansions
+            } else {
+                // fallback: only change K, keep same expansions
+                variant = new QueryToken(
+                        baseToken.getTableBuckets(),
+                        baseToken.getIv(),
+                        baseToken.getEncryptedQuery(),
+                        baseToken.getQueryVector(),
+                        k,
+                        baseToken.getNumTables(),
+                        baseToken.getEncryptionContext(),
+                        baseToken.getDimension(),
+                        baseToken.getVersion()
+                );
+            }
 
             long start = System.nanoTime();
             List<QueryResult> retrieved = search(variant);
             long durationMs = (System.nanoTime() - start) / 1_000_000;
 
-            // ground-truth IDs for this k
             int[] truth = groundtruthManager.getGroundtruth(queryIndex, k);
-            Set<String> truthSet = Arrays.stream(truth)
-                    .mapToObj(String::valueOf)
-                    .collect(Collectors.toSet());
+            Set<String> truthSet = Arrays.stream(truth).mapToObj(String::valueOf).collect(Collectors.toSet());
 
-            // count how many of the top-k we retrieved
-            long matchCount = retrieved.stream()
-                    .map(QueryResult::getId)
-                    .filter(truthSet::contains)
-                    .count();
-
-            // NEW: ratio = fraction of matches
+            long matchCount = retrieved.stream().map(QueryResult::getId).filter(truthSet::contains).count();
             double ratio = matchCount / (double) k;
+            double recall = 1.0; // per current design
 
-            // keep "recall" as your other metric (e.g. distance-ratio or always =1.0)
-            double recall = 1.0;
-
-            results.add(new QueryEvaluationResult(
-                    k,
-                    retrieved.size(),
-                    ratio,
-                    recall,
-                    durationMs
-            ));
+            results.add(new QueryEvaluationResult(k, retrieved.size(), ratio, recall, durationMs));
         }
 
         return results;

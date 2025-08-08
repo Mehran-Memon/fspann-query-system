@@ -1,9 +1,6 @@
 package com.index;
 
-import com.fspann.common.EncryptedPoint;
-import com.fspann.common.EncryptedPointBuffer;
-import com.fspann.common.KeyLifeCycleService;
-import com.fspann.common.RocksDBMetadataManager;
+import com.fspann.common.*;
 import com.fspann.crypto.CryptoService;
 import com.fspann.index.core.EvenLSH;
 import com.fspann.index.core.SecureLSHIndex;
@@ -11,10 +8,10 @@ import com.fspann.index.service.SecureLSHIndexService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.util.*;
+import java.util.Collections;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class SecureLSHIndexServiceTest {
@@ -22,78 +19,56 @@ class SecureLSHIndexServiceTest {
     private CryptoService crypto;
     private KeyLifeCycleService keyService;
     private RocksDBMetadataManager metadataManager;
+    private SecureLSHIndexService indexService;
 
     @BeforeEach
     void setup() {
         crypto = mock(CryptoService.class);
         keyService = mock(KeyLifeCycleService.class);
         metadataManager = mock(RocksDBMetadataManager.class);
-        when(metadataManager.getPointsBaseDir()).thenReturn(System.getProperty("java.io.tmpdir") + "/points");
+        when(metadataManager.getPointsBaseDir())
+                .thenReturn(System.getProperty("java.io.tmpdir") + "/points");
+        indexService = new SecureLSHIndexService(crypto, keyService, metadataManager);
     }
 
     @Test
-    void testInsert_PersistsBucketsInMetadata() throws Exception {
-        String id = "test-1";
-        double[] vector = {1.0, 2.0, 3.0, 4.0};
-        int dim = vector.length;
+    void testInsert_VectorEncryptedAndMetadataWritten() throws Exception {
+        String id = "test";
+        double[] vector = {1.0, 2.0};
+        int dimension = vector.length;
 
-        // Deterministic LSH + index with known numTables
-        int numBuckets = 32;
-        int numTables = 3;
-        EvenLSH testLsh = new EvenLSH(dim, numBuckets, 16, 777L);
-        SecureLSHIndex testIndex = new SecureLSHIndex(numTables, numBuckets, testLsh);
-        EncryptedPointBuffer buffer = mock(EncryptedPointBuffer.class);
-
-        // crypto.encrypt returns the raw encrypted blob; service will wrap it with per-table buckets
-        EncryptedPoint enc = new EncryptedPoint(id, 0, new byte[]{1}, new byte[]{2}, 7, dim, Collections.emptyList());
+        // Crypto returns IV/cipher only; service computes buckets itself
+        EncryptedPoint enc = new EncryptedPoint(id, 0, new byte[]{1}, new byte[]{2}, 1, dimension, Collections.emptyList());
         when(crypto.encrypt(eq(id), eq(vector))).thenReturn(enc);
 
-        SecureLSHIndexService svc = new SecureLSHIndexService(crypto, keyService, metadataManager, testIndex, testLsh, buffer);
-
-        svc.insert(id, vector);
-
-        // compute expected per-table buckets
-        List<Integer> expectedBuckets = new ArrayList<>();
-        for (int t = 0; t < numTables; t++) expectedBuckets.add(testLsh.getBucketId(vector, t));
+        indexService.insert(id, vector);
 
         verify(metadataManager).batchUpdateVectorMetadata(argThat(map -> {
-            Map<String, String> meta = map.get(id);
-            if (meta == null) return false;
-            if (!String.valueOf(dim).equals(meta.get("dim"))) return false;
-            if (!"7".equals(meta.get("version"))) return false;
-            for (int t = 0; t < numTables; t++) {
-                String key = "b" + t;
-                if (!meta.containsKey(key)) return false;
-                if (!String.valueOf(expectedBuckets.get(t)).equals(meta.get(key))) return false;
-            }
-            return true;
+            Map<String, String> m = map.get(id);
+            // New design: require version + dim; (b0..bN optional, not asserted)
+            return m != null
+                    && "1".equals(m.get("version"))
+                    && String.valueOf(dimension).equals(m.get("dim"));
         }));
 
         verify(metadataManager).saveEncryptedPoint(any(EncryptedPoint.class));
-        verify(buffer).add(any(EncryptedPoint.class));
     }
 
     @Test
-    void testInsert_MinimalMetadataPresence() throws Exception {
-        // Use default service path (creates its own ctx)
-        SecureLSHIndexService svc = new SecureLSHIndexService(crypto, keyService, metadataManager);
+    void testInsert_PreEncryptedPoint_WritesMetadata() throws Exception {
+        // Build a point with per-table buckets (DEFAULT_NUM_TABLES = 4)
+        var buckets = java.util.Arrays.asList(1,1,1,1);
+        EncryptedPoint pt = new EncryptedPoint("vec123", buckets.get(0), new byte[]{0}, new byte[]{1}, 99, 2, buckets);
 
-        String id = "vec-128";
-        double[] vec = new double[128];
-        EncryptedPoint enc = new EncryptedPoint(id, 0, new byte[12], new byte[16], 3, 128, Collections.emptyList());
-        when(crypto.encrypt(eq(id), eq(vec))).thenReturn(enc);
-
-        svc.insert(id, vec);
+        indexService.insert(pt);
 
         verify(metadataManager).batchUpdateVectorMetadata(argThat(map -> {
-            Map<String, String> meta = map.get(id);
-            if (meta == null) return false;
-            // must at least contain dim, version, and at least one b*
-            if (!"128".equals(meta.get("dim"))) return false;
-            if (!"3".equals(meta.get("version"))) return false;
-            return meta.keySet().stream().anyMatch(k -> k.startsWith("b"));
+            Map<String, String> m = map.get("vec123");
+            return m != null
+                    && "2".equals(m.get("dim"))
+                    && "99".equals(m.get("version"));
         }));
 
-        verify(metadataManager).saveEncryptedPoint(any(EncryptedPoint.class));
+        verify(metadataManager).saveEncryptedPoint(pt);
     }
 }

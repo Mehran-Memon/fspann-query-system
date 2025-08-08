@@ -1,9 +1,9 @@
 package com.fspann.index.core;
 
-import com.fspann.crypto.CryptoService;
 import com.fspann.common.KeyLifeCycleService;
+import com.fspann.crypto.CryptoService;
 
-public final class DimensionContext {
+public class DimensionContext {
     private final EvenLSH lsh;
     private final SecureLSHIndex index;
     private final CryptoService crypto;
@@ -21,9 +21,10 @@ public final class DimensionContext {
         this.dimension = lsh.getDimensions();
     }
 
+    /** No-op in proposal-aligned design (epoch handled at query time). */
+    public void reEncryptAll() { /* intentionally empty */ }
+
     public SecureLSHIndex getIndex() { return index; }
     public EvenLSH getLsh() { return lsh; }
     public int getDimension() { return dimension; }
-
-    // No re-encrypt here; forward-secure cloaking/epochs live in query layer.
 }

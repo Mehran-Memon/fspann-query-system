@@ -1,6 +1,7 @@
 package com.fspann.index.core;
 
 import com.fspann.common.EncryptedPoint;
+import com.fspann.common.QueryToken;
 import com.fspann.common.QueryTokenV2;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -92,12 +93,10 @@ public class SecureLSHIndex {
         }
     }
 
-    /**
-     * Query with per-table bucket expansions from the token.
-     * Deduplicates candidates across tables.
-     */
-    public List<EncryptedPoint> queryEncrypted(QueryTokenV2 token) {
-        Objects.requireNonNull(token, "QueryTokenV2 cannot be null");
+
+    /** Query with per-table bucket expansions from the token. Deduplicates across tables. */
+    public List<EncryptedPoint> queryEncrypted(QueryToken token) {
+        Objects.requireNonNull(token, "QueryToken cannot be null");
         lock.readLock().lock();
         try {
             Set<EncryptedPoint> result = new LinkedHashSet<>();
@@ -116,7 +115,7 @@ public class SecureLSHIndex {
                 }
             }
             logger.debug("Query returned {} candidates for dim={} perTableExpansions={}",
-                    result.size(), token.getQueryVector().length, tableBuckets);
+                    result.size(), token.getDimension(), tableBuckets);
             return new ArrayList<>(result);
         } finally {
             lock.readLock().unlock();

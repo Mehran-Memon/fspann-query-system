@@ -3,50 +3,24 @@ package com.fspann.common;
 import java.util.List;
 import java.util.Set;
 
-/**
- * Abstraction for index operations: insert, delete, lookup, and dirty marking.
- * Extended for dimension-aware indexing.
- */
 public interface IndexService {
 
-    /**
-     * Inserts a fully encrypted point into the appropriate index (based on its dimension).
-     */
     void insert(EncryptedPoint point);
 
-    /**
-     * Inserts a raw vector and determines its dimension automatically.
-     */
     void insert(String id, double[] vector);
 
-    /**
-     * Deletes a point by its ID (across all dimensions).
-     */
     void delete(String id);
 
-    @Deprecated
-    default List<EncryptedPoint> lookup(QueryToken token) {
-        throw new UnsupportedOperationException("Deprecated: use QueryTokenV2");
-    }
+    /** REQUIRED: per-table bucket lookup */
+    List<EncryptedPoint> lookup(QueryToken token);
 
-    /**
-     * Mark a specific shard as dirty for key rotation within its dimension.
-     */
+    /** Legacy no-op in new design; left for API compatibility */
     void markDirty(int shardId);
 
-    /**
-     * Total number of indexed points (across all dimensions).
-     */
     int getIndexedVectorCount();
 
-    /**
-     * List all registered dimensions being tracked.
-     */
     Set<Integer> getRegisteredDimensions();
 
-    /**
-     * Get the number of indexed vectors for a specific dimension.
-     */
     int getVectorCountForDimension(int dimension);
 
     EncryptedPoint getEncryptedPoint(String id);

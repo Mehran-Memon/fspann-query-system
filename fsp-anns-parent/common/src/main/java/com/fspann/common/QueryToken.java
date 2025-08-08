@@ -1,135 +1,50 @@
 package com.fspann.common;
 
-import java.util.Collections;
 import java.util.List;
-import java.util.ArrayList;
 import java.util.Objects;
 
-/**
- * Data Transfer Object representing an encrypted ANN query.
- * Immutable once constructed.
- */
-public class QueryToken {
-    private final List<Integer> candidateBuckets;
-    private final byte[] encryptedQuery;
-    private final double[] plaintextQuery;
+public final class QueryToken {
+    private final List<List<Integer>> tableBuckets; // per-table contiguous expansions
     private final byte[] iv;
+    private final byte[] encryptedQuery;
+    private final double[] queryVector; // plaintext copy for eval
     private final int topK;
     private final int numTables;
-    private final String encryptionContext;
+    private final String encryptionContext; // "epoch_<v>_dim_<d>"
     private final int dimension;
-    private final int shardId;
     private final int version;
 
-    public QueryToken(List<Integer> candidateBuckets,
+    public QueryToken(List<List<Integer>> tableBuckets,
                       byte[] iv,
                       byte[] encryptedQuery,
-                      double[] plaintextQuery,
+                      double[] queryVector,
                       int topK,
                       int numTables,
                       String encryptionContext,
                       int dimension,
-                      int shardId,
                       int version) {
-
-        if (candidateBuckets == null || candidateBuckets.isEmpty()) {
-            throw new IllegalArgumentException("candidateBuckets cannot be null or empty");
-        }
-        if (encryptedQuery == null) {
-            throw new IllegalArgumentException("encryptedQuery cannot be null");
-        }
-        if (plaintextQuery == null) {
-            throw new IllegalArgumentException("plaintextQuery cannot be null");
-        }
-        if (iv == null) {
-            throw new IllegalArgumentException("IV cannot be null");
-        }
-        if (topK <= 0) {
-            throw new IllegalArgumentException("topK must be positive: " + topK);
-        }
-        if (numTables <= 0) {
-            throw new IllegalArgumentException("numTables must be positive: " + numTables);
-        }
-        if (dimension <= 0) {
-            throw new IllegalArgumentException("dimension must be positive: " + dimension);
-        }
-
-        this.candidateBuckets = Collections.unmodifiableList(new ArrayList<>(candidateBuckets));
-        this.iv = iv.clone();
-        this.encryptedQuery = encryptedQuery.clone();
-        this.plaintextQuery = plaintextQuery.clone();
+        this.tableBuckets      = Objects.requireNonNull(tableBuckets, "tableBuckets");
+        this.iv                = Objects.requireNonNull(iv, "iv");
+        this.encryptedQuery    = Objects.requireNonNull(encryptedQuery, "encryptedQuery");
+        this.queryVector       = Objects.requireNonNull(queryVector, "queryVector");
+        this.encryptionContext = Objects.requireNonNull(encryptionContext, "encryptionContext");
+        if (topK <= 0) throw new IllegalArgumentException("topK must be > 0");
+        if (numTables <= 0) throw new IllegalArgumentException("numTables must be > 0");
+        if (tableBuckets.size() != numTables)
+            throw new IllegalArgumentException("tableBuckets size must equal numTables");
         this.topK = topK;
         this.numTables = numTables;
-        this.encryptionContext = (encryptionContext != null && !encryptionContext.isEmpty())
-                ? encryptionContext
-                : "epoch_0_dim_" + dimension;
         this.dimension = dimension;
-        this.shardId = shardId;
         this.version = version;
     }
 
-    public List<Integer> getBuckets() {
-        return candidateBuckets;
-    }
-
-    public List<Integer> getCandidateBuckets() {
-        return new ArrayList<>(candidateBuckets);
-    }
-
-    public byte[] getIv() {
-        return iv.clone();
-    }
-
-    public byte[] getEncryptedQuery() {
-        return encryptedQuery.clone();
-    }
-
-    public double[] getPlaintextQuery() {
-        return plaintextQuery.clone();
-    }
-
-    public double[] getQueryVector() {
-        return getPlaintextQuery();
-    }
-
-    public int getQueryVectorLength() {
-        return plaintextQuery.length;
-    }
-
-    public int getTopK() {
-        return topK;
-    }
-
-    public int getNumTables() {
-        return numTables;
-    }
-
-    public String getEncryptionContext() {
-        return encryptionContext;
-    }
-
-    public int getDimension() {
-        return dimension;
-    }
-
-    public int getShardId() {
-        return shardId;
-    }
-
-    public int getVersion() {
-        return version;
-    }
-
-    @Override
-    public String toString() {
-        return "QueryToken{" +
-                "topK=" + topK +
-                ", numTables=" + numTables +
-                ", buckets=" + candidateBuckets +
-                ", encryptionContext='" + encryptionContext + '\'' +
-                ", version=" + version +
-                ", dim=" + dimension +
-                ", shardId=" + shardId +
-                '}';
-    }
+    public List<List<Integer>> getTableBuckets() { return tableBuckets; }
+    public byte[] getIv() { return iv; }
+    public byte[] getEncryptedQuery() { return encryptedQuery; }
+    public double[] getQueryVector() { return queryVector; }
+    public int getTopK() { return topK; }
+    public int getNumTables() { return numTables; }
+    public String getEncryptionContext() { return encryptionContext; }
+    public int getDimension() { return dimension; }
+    public int getVersion() { return version; }
 }
