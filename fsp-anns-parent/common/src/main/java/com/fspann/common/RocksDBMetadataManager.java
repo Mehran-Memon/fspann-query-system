@@ -35,6 +35,17 @@ public class RocksDBMetadataManager implements AutoCloseable {
         }
     }
 
+    private static RocksDBMetadataManager createDefaultMetadataManager() {
+        try {
+            return RocksDBMetadataManager.create(
+                    FsPaths.metadataDb().toString(),
+                    FsPaths.pointsDir().toString()
+            );
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to initialize RocksDBMetadataManager", e);
+        }
+    }
+
     /**
      * Singleton factory. Returns an open instance for the given paths.
      * Call close() between tests to allow different paths in the same JVM.

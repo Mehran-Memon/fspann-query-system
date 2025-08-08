@@ -4,6 +4,7 @@ import com.fspann.common.KeyVersion;
 import com.fspann.common.PersistenceUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import com.fspann.common.FsPaths;
 
 import javax.crypto.KeyGenerator;
 import javax.crypto.Mac;
@@ -36,9 +37,17 @@ public class KeyManager {
     private final ConcurrentMap<Integer, SecretKey> derivedKeys = new ConcurrentHashMap<>();
 
     public KeyManager(String keyStorePath) throws IOException {
-        if (keyStorePath == null) throw new IllegalArgumentException("keyStorePath must not be null");
+        // if null/blank, use default from FsPaths
+        Path p;
+        if (keyStorePath == null || keyStorePath.isBlank()) {
+            p = FsPaths.keyStoreFile();
+        } else {
+            Path candidate = Paths.get(keyStorePath);
+            p = candidate.isAbsolute()
+                    ? candidate.toAbsolutePath().normalize()
+                    : FsPaths.baseDir().resolve(candidate).toAbsolutePath().normalize();
+        }
 
-        Path p = Paths.get(keyStorePath).toAbsolutePath().normalize();
         if (Files.exists(p) && Files.isDirectory(p)) {
             this.storeFile = p.resolve("keystore.blob");
         } else {

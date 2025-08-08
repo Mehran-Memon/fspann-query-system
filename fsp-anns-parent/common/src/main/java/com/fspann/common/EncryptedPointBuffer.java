@@ -25,7 +25,8 @@ public class EncryptedPointBuffer {
     }
 
     public EncryptedPointBuffer(String pointsPath, RocksDBMetadataManager metadataManager, int flushThreshold) throws IOException {
-        this.pointsDir = Paths.get(pointsPath);
+        Path p = Paths.get(pointsPath);
+        this.pointsDir = p.isAbsolute() ? p.normalize() : FsPaths.baseDir().resolve(p).normalize();
         this.metadataManager = Objects.requireNonNull(metadataManager, "MetadataManager cannot be null");
         this.flushThreshold = flushThreshold;
         Files.createDirectories(pointsDir);
