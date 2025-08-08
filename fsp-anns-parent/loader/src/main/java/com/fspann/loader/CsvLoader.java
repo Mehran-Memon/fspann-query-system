@@ -1,35 +1,61 @@
 package com.fspann.loader;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Iterator;
+import java.util.NoSuchElementException;
 import java.util.Objects;
-import java.util.logging.Logger;
-import java.util.stream.Stream;
 
 /**
  * CSV format loader: each line is comma-separated doubles.
- * Now maintains offset per path to support batch streaming.
+ * Streaming iterator that closes its reader on EOF.
  */
 public class CsvLoader implements FormatLoader {
-    private static final Logger logger = Logger.getLogger(CsvLoader.class.getName());
+    private static final Logger logger = LoggerFactory.getLogger(CsvLoader.class);
 
     @Override
     public Iterator<double[]> openVectorIterator(Path file) throws IOException {
-        BufferedReader reader = Files.newBufferedReader(file);
-        return reader.lines()
-                .map(this::parseLine)
-                .filter(Objects::nonNull)
-                .iterator();
+        final BufferedReader reader = Files.newBufferedReader(file);
+        return new Iterator<>() {
+            String nextLine = advance();
+
+            private String advance() {
+                try {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        line = line.trim();
+                        if (!line.isEmpty()) return line;
+                    }
+                    close();
+                    return null;
+                } catch (IOException e) {
+                    close();
+                    throw new RuntimeException("Failed reading CSV: " + file, e);
+                }
+            }
+
+            private void close() {
+                try { reader.close(); } catch (IOException ignored) {}
+            }
+
+            @Override public boolean hasNext() { return nextLine != null; }
+
+            @Override
+            public double[] next() {
+                if (nextLine == null) throw new NoSuchElementException();
+                double[] vec = parseLine(nextLine);
+                nextLine = advance();
+                return vec;
+            }
+        };
     }
 
-    private double[] parseLine(String raw) {
-        String line = raw.trim();
-        if (line.isEmpty()) {
-            return null;
-        }
+    private double[] parseLine(String line) {
         String[] tokens = line.split(",");
         double[] vector = new double[tokens.length];
         for (int i = 0; i < tokens.length; i++) {
@@ -37,13 +63,14 @@ public class CsvLoader implements FormatLoader {
             try {
                 double val = Double.parseDouble(tok);
                 if (Double.isNaN(val) || Double.isInfinite(val)) {
-                    logger.warning(() -> "Invalid numeric value '" + tok + "' in CSV line: " + line);
-                    return null;
+                    logger.warn("Invalid numeric value '{}' in CSV line: {}", tok, line);
+                    throw new NumberFormatException("NaN/Inf");
                 }
                 vector[i] = val;
             } catch (NumberFormatException nfe) {
-                logger.warning(() -> "Skipping malformed CSV line: " + line);
-                return null;
+                logger.warn("Skipping malformed CSV line: {}", line);
+                // If you'd rather drop bad lines silently, return null and filter; here we fail-fast
+                throw nfe;
             }
         }
         return vector;

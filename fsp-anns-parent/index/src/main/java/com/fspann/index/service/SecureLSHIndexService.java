@@ -19,6 +19,7 @@ public class SecureLSHIndexService implements IndexService {
     private static final Logger logger = LoggerFactory.getLogger(SecureLSHIndexService.class);
 
     private static final int DEFAULT_NUM_BUCKETS = 32;
+    private static final int DEFAULT_NUM_TABLES  = 4;
 
     private final CryptoService crypto;
     private final KeyLifeCycleService keyService;
@@ -26,7 +27,10 @@ public class SecureLSHIndexService implements IndexService {
     private final SecureLSHIndex index;   // optional injected single-index (tests)
     private final EvenLSH lsh;            // optional injected LSH (tests)
     private final EncryptedPointBuffer buffer;
-    private static final int DEFAULT_NUM_TABLES = 4; // or 8; tune later
+
+    // Configurable defaults for new dimension contexts
+    private final int defaultNumBuckets;
+    private final int defaultNumTables;
 
     private final Map<Integer, DimensionContext> dimensionContexts = new ConcurrentHashMap<>();
     private final Map<String, EncryptedPoint> indexedPoints = new ConcurrentHashMap<>();
@@ -34,7 +38,9 @@ public class SecureLSHIndexService implements IndexService {
     public SecureLSHIndexService(CryptoService crypto,
                                  KeyLifeCycleService keyService,
                                  RocksDBMetadataManager metadataManager) {
-        this(crypto, keyService, metadataManager, null, null, createBufferFromManager(metadataManager));
+        this(crypto, keyService, metadataManager,
+                null, null, createBufferFromManager(metadataManager),
+                DEFAULT_NUM_BUCKETS, DEFAULT_NUM_TABLES);
     }
 
     public SecureLSHIndexService(CryptoService crypto,
@@ -43,18 +49,33 @@ public class SecureLSHIndexService implements IndexService {
                                  SecureLSHIndex index,
                                  EvenLSH lsh,
                                  EncryptedPointBuffer buffer) {
+        this(crypto, keyService, metadataManager,
+                index, lsh, buffer,
+                DEFAULT_NUM_BUCKETS, DEFAULT_NUM_TABLES);
+    }
+
+    /** Fully-configurable constructor (used by API/bootstrap). */
+    public SecureLSHIndexService(CryptoService crypto,
+                                 KeyLifeCycleService keyService,
+                                 RocksDBMetadataManager metadataManager,
+                                 SecureLSHIndex index,
+                                 EvenLSH lsh,
+                                 EncryptedPointBuffer buffer,
+                                 int defaultNumBuckets,
+                                 int defaultNumTables) {
         this.crypto = (crypto != null) ? crypto : new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
         this.keyService = Objects.requireNonNull(keyService, "keyService");
         this.metadataManager = Objects.requireNonNull(metadataManager, "metadataManager");
         this.index = index;
         this.lsh = lsh;
         this.buffer = Objects.requireNonNull(buffer, "buffer");
+        this.defaultNumBuckets = Math.max(1, defaultNumBuckets);
+        this.defaultNumTables  = Math.max(1, defaultNumTables);
     }
 
     private static EncryptedPointBuffer createBufferFromManager(RocksDBMetadataManager manager) {
         String pointsBase = Objects.requireNonNull(manager.getPointsBaseDir(),
-                "metadataManager.getPointsBaseDir() returned null. " +
-                        "In tests, stub this or inject a buffer explicitly.");
+                "metadataManager.getPointsBaseDir() returned null. In tests, stub this or inject a buffer explicitly.");
         try {
             return new EncryptedPointBuffer(pointsBase, manager);
         } catch (IOException e) {
@@ -64,23 +85,22 @@ public class SecureLSHIndexService implements IndexService {
 
     private DimensionContext getOrCreateContext(int dimension) {
         return dimensionContexts.computeIfAbsent(dimension, dim -> {
-            int buckets = Math.max(1, DEFAULT_NUM_BUCKETS);
+            int buckets = Math.max(1, defaultNumBuckets);
             int projections = Math.max(1,
                     (int) Math.ceil(buckets * Math.log(Math.max(dim, 1) / 16.0) / Math.log(2)));
 
-            long seed = seedFor(dim, buckets, projections); // <--- deterministic
+            long seed = seedFor(dim, buckets, projections); // deterministic
             EvenLSH lshInstance = (this.lsh != null)
                     ? this.lsh
                     : new EvenLSH(dim, buckets, projections, seed);
 
             SecureLSHIndex idx = (this.index != null)
                     ? this.index
-                    : new SecureLSHIndex(DEFAULT_NUM_TABLES, buckets, lshInstance);
+                    : new SecureLSHIndex(defaultNumTables, buckets, lshInstance);
 
             return new DimensionContext(idx, crypto, keyService, lshInstance);
         });
     }
-
 
     private static long seedFor(int dim, int buckets, int projections) {
         long x = 0x9E3779B97F4A7C15L;

@@ -7,8 +7,10 @@ import java.util.Iterator;
 import java.util.List;
 
 /**
- * Unified interface for file‐format streaming.
- * We provide default batch methods on top of the two iterators.
+ * Unified interface for file-format streaming.
+ * Implementations should close underlying streams when exhausted.
+ * Default batch methods are thin wrappers; callers like DefaultDataLoader
+ * should reuse iterators to achieve true streaming across calls.
  */
 public interface FormatLoader {
     /** Stream all vectors one at a time. */
