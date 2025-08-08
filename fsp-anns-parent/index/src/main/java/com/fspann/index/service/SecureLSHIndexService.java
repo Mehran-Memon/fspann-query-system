@@ -143,6 +143,7 @@ public class SecureLSHIndexService implements IndexService {
         SecureLSHIndex idx = ctx.getIndex();
 
         EncryptedPoint enc = crypto.encrypt(id, vector);
+        keyService.incrementOperation();
 
         // per-table buckets (mandatory)
         List<Integer> perTableBuckets = new ArrayList<>(idx.getNumHashTables());

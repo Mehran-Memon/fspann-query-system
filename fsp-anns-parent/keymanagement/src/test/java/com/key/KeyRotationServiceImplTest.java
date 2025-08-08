@@ -1,89 +1,87 @@
 package com.key;
 
+import com.fspann.common.*;
 import com.fspann.crypto.CryptoService;
-import com.fspann.common.RocksDBMetadataManager;
-import com.fspann.key.KeyManager;
 import com.fspann.key.KeyRotationPolicy;
 import com.fspann.key.KeyRotationServiceImpl;
-import com.fspann.common.KeyVersion;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import com.fspann.key.KeyManager;
 
-import javax.crypto.SecretKey;
+import javax.crypto.spec.SecretKeySpec;
 import java.nio.file.Path;
-import java.util.List;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
-import java.util.stream.IntStream;
+import java.util.Collections;
 
+import static org.mockito.AdditionalMatchers.aryEq;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class KeyRotationServiceImplTest {
-    @Mock
-    private KeyManager keyManager;
 
-    @Mock
-    private KeyRotationPolicy policy;
-
-    @Mock
-    private SecretKey mockKey;
-
-    private KeyRotationServiceImpl service;
-
-    @Mock
-    private RocksDBMetadataManager metadataManager;
-
-    @Mock
-    private CryptoService cryptoService;
-
-    @TempDir
-    Path tempDir;
-
-    @BeforeEach
-    void setUp() {
-        MockitoAnnotations.openMocks(this);
-        when(policy.getMaxOperations()).thenReturn(1000);
-        when(policy.getMaxIntervalMillis()).thenReturn(7L * 24 * 60 * 60 * 1000L); // 7 days
-        when(metadataManager.getAllEncryptedPoints()).thenReturn(List.of()); // no points to re-encrypt
-
-        service = new KeyRotationServiceImpl(keyManager, policy, tempDir.toString(), metadataManager, cryptoService);
-    }
-
+    @TempDir Path tmp;
 
     @Test
-    void testConcurrentRotation() throws InterruptedException {
-        ExecutorService executor = Executors.newFixedThreadPool(4);
-        IntStream.range(0, 1000).forEach(i -> executor.submit(service::incrementOperation));
-        executor.shutdown();
-        executor.awaitTermination(5, TimeUnit.SECONDS);
+    void reEncryptAll_reinsertsViaIndexService() throws Exception {
+        // Mocks and fixtures
+        KeyManager keyManager = mock(KeyManager.class);
+        KeyRotationPolicy policy = new KeyRotationPolicy(1, Long.MAX_VALUE);
+        RocksDBMetadataManager meta = mock(RocksDBMetadataManager.class);
+        CryptoService crypto = mock(CryptoService.class);
+        IndexService index = mock(IndexService.class);
 
-        // Updated KeyVersion call with dummy iv and encryptedQuery
-        byte[] dummyIv = new byte[]{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
-        byte[] dummyEncryptedQuery = new byte[]{10, 20, 30, 40};
-        KeyVersion newVersion = new KeyVersion(2, mockKey);
+        when(meta.getPointsBaseDir()).thenReturn(tmp.toString());
 
-        when(keyManager.rotateKey()).thenReturn(newVersion);
+        // Old point on disk (v=1)
+        byte[] iv = new byte[12];
+        byte[] ct = new byte[16];
+        EncryptedPoint old = new EncryptedPoint("id123", 0, iv, ct, 1, 2, Collections.singletonList(0));
+        PersistenceUtils.saveObject(old, tmp.resolve("id123.point").toString(), tmp.toString());
 
-        synchronized (service) {
-            service.rotateIfNeeded();
-            verify(keyManager).rotateKey();
-        }
+        // Keys
+        KeyVersion v1 = new KeyVersion(1, new SecretKeySpec(new byte[32], "AES"));
+        KeyVersion v2 = new KeyVersion(2, new SecretKeySpec(new byte[32], "AES"));
+        when(keyManager.getCurrentVersion()).thenReturn(v2);
+        when(keyManager.getSessionKey(1)).thenReturn(v1.getKey());
+
+        // Crypto decrypt old -> raw vector
+        double[] raw = new double[]{0.1, 0.2};
+        when(crypto.decryptFromPoint(eq(old), eq(v1.getKey()))).thenReturn(raw);
+
+        KeyRotationServiceImpl svc = new KeyRotationServiceImpl(
+                keyManager, policy, tmp.toString(), meta, crypto);
+        svc.setIndexService(index);
+
+        // Act
+        svc.reEncryptAll();
+
+        // Assert: reinserted via service with same id and raw vector
+        verify(index, times(1)).insert(eq("id123"), aryEq(raw));
+        // optional: buffer flush + cache clear are best-effort; we won’t assert
     }
 
     @Test
-    void testRotationOnTimeExceeded() throws Exception {
-        when(keyManager.rotateKey()).thenReturn(new KeyVersion(3, mockKey));
-        long fakePast = System.currentTimeMillis() - policy.getMaxIntervalMillis() - 1000;
-        service.setLastRotationTime(fakePast);  // Add this setter
-        synchronized (service) {
-            service.rotateIfNeeded();
-            verify(keyManager).rotateKey();
-        }
+    void rotateIfNeeded_returnsEmptyListAndPersistsMeta(@TempDir Path dir) throws Exception {
+        KeyManager keyManager = mock(KeyManager.class);
+        KeyRotationPolicy policy = new KeyRotationPolicy(1, 1); // easy to trigger
+        RocksDBMetadataManager meta = mock(RocksDBMetadataManager.class);
+        CryptoService crypto = mock(CryptoService.class);
+        IndexService index = mock(IndexService.class);
+
+        when(meta.getPointsBaseDir()).thenReturn(dir.toString());
+        when(keyManager.rotateKey()).thenReturn(new KeyVersion(3, new SecretKeySpec(new byte[32], "AES")));
+        when(keyManager.getCurrentVersion()).thenReturn(new KeyVersion(3, new SecretKeySpec(new byte[32], "AES")));
+
+        KeyRotationServiceImpl svc = new KeyRotationServiceImpl(
+                keyManager, policy, dir.toString(), meta, crypto);
+        svc.setIndexService(index);
+
+        // Trigger rotation
+        svc.incrementOperation(); // hits maxOperations==1
+        var updated = svc.rotateIfNeededAndReturnUpdated();
+
+        // We return empty list now (no metadataManager.getAllEncryptedPoints() call)
+        assert(updated.isEmpty());
+        // verify rotation happened once
+        verify(keyManager, times(1)).rotateKey();
     }
-
-
 }

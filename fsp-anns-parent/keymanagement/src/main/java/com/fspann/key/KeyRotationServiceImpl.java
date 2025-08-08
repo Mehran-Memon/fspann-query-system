@@ -70,10 +70,9 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
             return;
         }
 
-        int totalReEncrypted = 0;
+        int total = 0;
         Set<String> seen = new HashSet<>();
         Path baseDir = Paths.get(metadataManager.getPointsBaseDir());
-        Map<String, Map<String, String>> pendingMetadata = new HashMap<>();
 
         try (Stream<Path> stream = Files.walk(baseDir)) {
             List<Path> pointFiles = stream
@@ -83,78 +82,40 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
 
             for (Path file : pointFiles) {
                 try {
-                    EncryptedPoint original = PersistenceUtils.loadObject(file.toString(), baseDir.toString(), EncryptedPoint.class);
+                    EncryptedPoint original = PersistenceUtils.loadObject(
+                            file.toString(), baseDir.toString(), EncryptedPoint.class);
                     if (original == null || !seen.add(original.getId())) continue;
 
-                    byte[] newIv = cryptoService.generateIV();
-                    EncryptedPoint updated = cryptoService.reEncrypt(original, getCurrentVersion().getKey(), newIv);
-                    double[] rawVec = cryptoService.decryptFromPoint(updated, getCurrentVersion().getKey());
-                    int newShard = indexService.getShardIdForVector(rawVec);
+                    // Already current? skip.
+                    if (original.getVersion() == getCurrentVersion().getVersion()) continue;
 
-                    EncryptedPoint reindexed = new EncryptedPoint(
-                            updated.getId(), updated.getVectorLength(),
-                            updated.getCiphertext(), updated.getIv(),
-                            newShard, getCurrentVersion().getVersion(), null
-                    );
-
-                    Map<String, String> meta = Map.of(
-                            "version", String.valueOf(reindexed.getVersion()),
-                            "shardId", String.valueOf(reindexed.getShardId())
-                    );
-                    metadataManager.updateVectorMetadata(reindexed.getId(), meta);
-                    pendingMetadata.put(reindexed.getId(), meta);
-
-                    EncryptedPointBuffer buffer = indexService.getPointBuffer();
-                    if (buffer != null) {
-                        buffer.add(reindexed);
-                    } else {
-                        Path versionDir = baseDir.resolve("v" + reindexed.getVersion());
-                        Files.createDirectories(versionDir);
-                        Path updatedFile = versionDir.resolve(reindexed.getId() + ".point");
-                        PersistenceUtils.saveObject(reindexed, updatedFile.toString(), baseDir.toString());
-                    }
-
-                    indexService.insert(reindexed);
-                    totalReEncrypted++;
-
-                    if (totalReEncrypted % 10000 == 0) {
-                        metadataManager.batchUpdateVectorMetadata(pendingMetadata);
-                        pendingMetadata.clear();
-                        logger.info("Re-encrypted {} points so far", totalReEncrypted);
-                    }
+                    // Decrypt with the original version’s key, then re-insert via the service.
+                    KeyVersion ov = getVersion(original.getVersion());
+                    double[] raw = cryptoService.decryptFromPoint(original, ov.getKey());
+                    indexService.insert(original.getId(), raw);
+                    total++;
                 } catch (Exception e) {
                     logger.warn("Failed to re-encrypt {}: {}", file, e.getMessage());
                 }
             }
-
-            if (!pendingMetadata.isEmpty()) {
-                metadataManager.batchUpdateVectorMetadata(pendingMetadata);
-                logger.debug("Final batch update for {} metadata entries", pendingMetadata.size());
-            }
-
-            EncryptedPointBuffer buffer = indexService.getPointBuffer();
-            if (buffer != null) {
-                buffer.flushAll();
-                logger.debug("Flushed point buffer after re-encryption");
-            }
-
-            indexService.clearCache();
-            metadataManager.cleanupStaleMetadata(seen);
-
         } catch (IOException e) {
             logger.error("Failed walking encrypted-points dir", e);
         }
 
-        logger.info("Re-encryption completed for {} vectors", totalReEncrypted);
+        try {
+            EncryptedPointBuffer buf = indexService.getPointBuffer();
+            if (buf != null) buf.flushAll();
+            indexService.clearCache();
+        } catch (Exception ignore) { /* non-fatal */ }
+
+        logger.info("Re-encryption completed for {} vectors", total);
     }
 
     public synchronized List<EncryptedPoint> rotateIfNeededAndReturnUpdated() {
-        boolean opsExceeded = operationCount.get() >= policy.getMaxOperations();
+        boolean opsExceeded  = operationCount.get() >= policy.getMaxOperations();
         boolean timeExceeded = Duration.between(lastRotation, Instant.now()).toMillis() >= policy.getMaxIntervalMillis();
 
-        if (!(opsExceeded || timeExceeded)) {
-            return Collections.emptyList();
-        }
+        if (!(opsExceeded || timeExceeded)) return Collections.emptyList();
 
         logger.info("Initiating key rotation...");
         KeyVersion newVer = keyManager.rotateKey();
@@ -170,7 +131,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
         }
 
         reEncryptAll();
-        return metadataManager.getAllEncryptedPoints();
+        return Collections.emptyList();
     }
 
     public synchronized KeyVersion rotateKey() {

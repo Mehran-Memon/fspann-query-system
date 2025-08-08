@@ -153,7 +153,9 @@ public class KeyManager {
     private SecretKey generateMasterKey() throws NoSuchAlgorithmException {
         KeyGenerator kg = KeyGenerator.getInstance(KEY_ALGO);
         kg.init(KEY_BITS, SecureRandom.getInstanceStrong());
-        return kg.generateKey();
+        SecretKey k = kg.generateKey();
+        // Ensure the stored key is serializable across providers
+        return new javax.crypto.spec.SecretKeySpec(k.getEncoded(), KEY_ALGO);
     }
 
     /** Simple serializable blob for disk. */
