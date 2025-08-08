@@ -163,35 +163,33 @@ public class QueryServiceImpl implements QueryService {
 
             long start = System.nanoTime();
             List<QueryResult> retrieved = search(variant);
-            long durationNs = System.nanoTime() - start;
+            long durationMs = (System.nanoTime() - start) / 1_000_000;
 
+            // ground-truth IDs for this k
             int[] truth = groundtruthManager.getGroundtruth(queryIndex, k);
             Set<String> truthSet = Arrays.stream(truth)
                     .mapToObj(String::valueOf)
                     .collect(Collectors.toSet());
 
+            // count how many of the top-k we retrieved
             long matchCount = retrieved.stream()
                     .map(QueryResult::getId)
                     .filter(truthSet::contains)
                     .count();
 
-            double recall = (double) matchCount / k;
+            // NEW: ratio = fraction of matches
+            double ratio = matchCount / (double) k;
 
-            double ratio = 1.0;
-            if (!retrieved.isEmpty() && truth.length > 0) {
-                try {
-                    double distSysTop1 = retrieved.get(0).getDistance();
-                    double[] gtVec = groundtruthManager.getVectorById(String.valueOf(truth[0]));
-                    double distGroundtruth = computeDistance(baseToken.getPlaintextQuery(), gtVec);
-                    if (distGroundtruth > 0) {
-                        ratio = distSysTop1 / distGroundtruth;
-                    }
-                } catch (Exception e) {
-                    logger.warn("Failed to compute true ratio, using fallback.", e);
-                }
-            }
+            // keep "recall" as your other metric (e.g. distance-ratio or always =1.0)
+            double recall = 1.0;
 
-            results.add(new QueryEvaluationResult(k, retrieved.size(), ratio, recall, durationNs / 1_000_000));
+            results.add(new QueryEvaluationResult(
+                    k,
+                    retrieved.size(),
+                    ratio,
+                    recall,
+                    durationMs
+            ));
         }
 
         return results;

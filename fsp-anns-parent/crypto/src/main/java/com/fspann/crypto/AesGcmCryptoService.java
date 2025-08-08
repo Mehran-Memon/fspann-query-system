@@ -27,10 +27,12 @@ public class AesGcmCryptoService implements CryptoService {
     private final RocksDBMetadataManager metadataManager;
     private volatile KeyVersion cachedVersion;
 
-    public AesGcmCryptoService(MeterRegistry registry, KeyLifeCycleService keyService, RocksDBMetadataManager metadataManager) {
-        this.registry = registry != null ? registry : new SimpleMeterRegistry();
+    public AesGcmCryptoService(MeterRegistry registry,
+                               KeyLifeCycleService keyService,
+                               RocksDBMetadataManager metadataManager) {
+        this.registry = (registry != null) ? registry : new SimpleMeterRegistry();
         this.keyService = Objects.requireNonNull(keyService, "KeyLifeCycleService must not be null");
-        this.metadataManager = metadataManager != null ? metadataManager : createDefaultMetadataManager();
+        this.metadataManager = (metadataManager != null) ? metadataManager : createDefaultMetadataManager();
 
         this.encryptTimer = Timer.builder("fspann.crypto.encrypt.time")
                 .description("AES-GCM encryption latency")
@@ -104,7 +106,8 @@ public class AesGcmCryptoService implements CryptoService {
 
     @Override
     public double[] decryptFromPoint(EncryptedPoint pt, SecretKey key) {
-        logger.info("Decrypting point: id={}, version={}, IV={}", pt.getId(), pt.getVersion(), Base64.getEncoder().encodeToString(pt.getIv()));
+        logger.info("Decrypting point: id={}, version={}, IV={}",
+                pt.getId(), pt.getVersion(), Base64.getEncoder().encodeToString(pt.getIv()));
         return decryptTimer.record(() -> {
             try {
                 logger.debug("Decrypting point {} with key version {}", pt.getId(), pt.getVersion());
@@ -122,12 +125,9 @@ public class AesGcmCryptoService implements CryptoService {
     public byte[] encrypt(double[] vector, SecretKey key, byte[] iv) {
         return encryptTimer.record(() -> {
             try {
-                logger.debug("Encrypting vector with IV: {}, key: {}",
-                        Base64.getEncoder().encodeToString(iv),
-                        Base64.getEncoder().encodeToString(key.getEncoded()));
-                byte[] ciphertext = EncryptionUtils.encryptVector(vector, iv, key);
-                logger.debug("Encrypted ciphertext: {}", Base64.getEncoder().encodeToString(ciphertext));
-                return ciphertext;
+                // Avoid logging raw key bytes
+                logger.debug("Encrypting vector with IV: {}", Base64.getEncoder().encodeToString(iv));
+                return EncryptionUtils.encryptVector(vector, iv, key);
             } catch (GeneralSecurityException e) {
                 logger.error("Encryption failed for vector", e);
                 throw new CryptoException("Encryption failed", e);
@@ -139,10 +139,7 @@ public class AesGcmCryptoService implements CryptoService {
     public double[] decryptQuery(byte[] ciphertext, byte[] iv, SecretKey key) {
         return decryptTimer.record(() -> {
             try {
-                logger.debug("Decrypting query with IV: {}, key: {}, ciphertext: {}",
-                        Base64.getEncoder().encodeToString(iv),
-                        Base64.getEncoder().encodeToString(key.getEncoded()),
-                        Base64.getEncoder().encodeToString(ciphertext));
+                logger.debug("Decrypting query with IV: {}", Base64.getEncoder().encodeToString(iv));
                 return EncryptionUtils.decryptVector(ciphertext, iv, key);
             } catch (GeneralSecurityException e) {
                 logger.error("Query decryption failed", e);
@@ -213,7 +210,8 @@ public class AesGcmCryptoService implements CryptoService {
 
     private static RocksDBMetadataManager createDefaultMetadataManager() {
         try {
-            return new RocksDBMetadataManager("metadata/rocksdb", "metadata/points");
+            // Use the factory since the constructor is private
+            return RocksDBMetadataManager.create("metadata/rocksdb", "metadata/points");
         } catch (IOException e) {
             throw new RuntimeException("Failed to initialize RocksDBMetadataManager", e);
         }

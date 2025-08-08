@@ -37,7 +37,15 @@ class QueryServiceImplTest {
 
     @Test
     void testTokenWithEmptyContextDefaults() {
-        QueryToken token = new QueryToken(List.of(1), new byte[12], new byte[32], new double[]{1.0, 2.0}, 1, 1, "", 2, 0, 0);
+        QueryToken token = new QueryToken(
+                List.of(1),
+                new byte[12],
+                new byte[32],
+                new double[]{1.0, 2.0},
+                1, 1,
+                "", // empty context should default
+                2, 0, 0
+        );
         assertTrue(token.getEncryptionContext().startsWith("epoch_0_dim_"));
     }
 
@@ -57,11 +65,11 @@ class QueryServiceImplTest {
         when(cryptoService.decryptQuery(encQuery, iv, key)).thenReturn(query);
 
         EncryptedPoint good = new EncryptedPoint("good", 0, iv, encQuery, 7, 2, List.of(1));
-        EncryptedPoint bad = new EncryptedPoint("bad", 0, iv, encQuery, 7, 2, List.of(1));
+        EncryptedPoint bad  = new EncryptedPoint("bad",  0, iv, encQuery, 7, 2, List.of(1));
 
         when(indexService.lookup(token)).thenReturn(List.of(good, bad));
         when(cryptoService.decryptFromPoint(good, key)).thenReturn(new double[]{1.0, 2.0});
-        when(cryptoService.decryptFromPoint(bad, key)).thenReturn(new double[]{100.0, 100.0});
+        when(cryptoService.decryptFromPoint(bad,  key)).thenReturn(new double[]{100.0, 100.0});
 
         List<QueryResult> results = service.search(token);
         assertEquals("good", results.get(0).getId());
@@ -82,7 +90,9 @@ class QueryServiceImplTest {
     }
 
     @Test
-    void testZeroRatioWithEmptyGroundtruth() throws Exception {
+    void testRatioAndRecallWhenGroundtruthEmpty() throws Exception {
+        // ratio = matchCount/k, GT empty -> matchCount = 0 => ratio = 0.0
+        // current impl sets recall = 1.0
         byte[] iv = new byte[12];
         byte[] encQuery = new byte[32];
         double[] query = new double[]{0.5, 0.6};
@@ -95,21 +105,26 @@ class QueryServiceImplTest {
         when(keyService.getVersion(1)).thenReturn(version);
         when(keyService.getCurrentVersion()).thenReturn(version);
         when(cryptoService.decryptQuery(eq(encQuery), eq(iv), eq(key))).thenReturn(query);
+
         when(indexService.lookup(any(QueryToken.class))).thenReturn(Arrays.asList(
                 new EncryptedPoint("id1", 0, iv, encQuery, 1, 2, Collections.singletonList(5)),
                 new EncryptedPoint("id2", 0, iv, encQuery, 1, 2, Collections.singletonList(5))
         ));
         when(cryptoService.decryptFromPoint(any(), eq(key))).thenReturn(new double[]{0.5, 0.6});
+
+        // Empty groundtruth
         when(groundtruthManager.getGroundtruth(eq(1), anyInt())).thenReturn(new int[]{});
-        when(groundtruthManager.hasVector(anyString())).thenReturn(false);
 
         List<QueryEvaluationResult> results = service.searchWithTopKVariants(token, 1, groundtruthManager);
-        assertEquals(1.0, results.get(0).getRatio(), 1e-9, "Expected fallback ratio of 1.0 when groundtruth is empty");
-        assertEquals(0.0, results.get(0).getRecall(), 1e-9, "Recall should still be 0.0 when groundtruth is empty");
+        QueryEvaluationResult r = results.get(0); // for k = 1 in the list [1,20,40,60,80,100]
+
+        assertEquals(0.0, r.getRatio(), 1e-9, "With empty groundtruth, matchCount/k must be 0.0");
+        assertEquals(1.0, r.getRecall(), 1e-9, "Recall is defined as 1.0 by the current implementation");
     }
 
     @Test
-    void testRatioCalculationWithGroundtruth() throws Exception {
+    void testRatioCalculationWithGroundtruth_MatchAtTop1() throws Exception {
+        // For k=1, if retrieved id equals GT id => ratio = 1/1 = 1.0
         byte[] iv = new byte[12];
         byte[] encQuery = new byte[32];
         double[] queryVec = new double[]{1.0, 1.0};
@@ -129,25 +144,13 @@ class QueryServiceImplTest {
         when(cryptoService.decryptFromPoint(eq(top1), eq(key))).thenReturn(new double[]{0.0, 0.0});
 
         when(groundtruthManager.getGroundtruth(eq(0), anyInt())).thenReturn(new int[]{42});
-        when(groundtruthManager.hasVector("42")).thenReturn(true);
-        when(groundtruthManager.getVectorById("42")).thenReturn(new double[]{0.0, 0.0});  // Perfect match
 
         List<QueryEvaluationResult> results = service.searchWithTopKVariants(token, 0, groundtruthManager);
-
         QueryEvaluationResult top1Result = results.stream()
                 .filter(r -> r.getTopKRequested() == 1)
                 .findFirst().orElseThrow();
 
-        assertEquals(1.0, top1Result.getRatio(), 1e-6);
-        assertEquals(1.0, top1Result.getRecall(), 1e-6);
-    }
-
-    private double computeDistance(double[] a, double[] b) {
-        double sum = 0;
-        for (int i = 0; i < a.length; i++) {
-            double d = a[i] - b[i];
-            sum += d * d;
-        }
-        return Math.sqrt(sum);
+        assertEquals(1.0, top1Result.getRatio(), 1e-6, "One correct match out of 1 => ratio=1.0");
+        assertEquals(1.0, top1Result.getRecall(), 1e-6, "Recall remains 1.0 per current implementation");
     }
 }

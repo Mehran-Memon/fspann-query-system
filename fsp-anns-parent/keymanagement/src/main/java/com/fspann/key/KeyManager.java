@@ -11,76 +11,80 @@ import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
+import java.nio.file.*;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
-import java.util.NavigableMap;
-import java.util.TreeMap;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
-/**
- * Provides cryptographic key lifecycle management:
- * - HMAC-based forward-secure session key derivation
- * - Persistent key store for key recovery
- * - Supports rotation, lookup, and rollback
- */
 public class KeyManager {
     private static final Logger logger = LoggerFactory.getLogger(KeyManager.class);
-    private static final String KEY_ALGORITHM = "AES";
-    private static final String KDF_ALGORITHM = "HmacSHA256";
-    private static final int KEY_SIZE = 256;
 
-    private final String storagePath;
+    private static final String KEY_ALGO = "AES";
+    private static final String KDF_ALGO  = "HmacSHA256";
+    private static final int KEY_BITS = 256;
+
+    /** Exact file to persist the keystore. If a directory path is provided, we store inside it as "keystore.blob". */
+    private final Path storeFile;
+
     private volatile int currentVersion = 1;
-
     private SecretKey masterKey;
+
     private final ConcurrentMap<Integer, SecretKey> sessionKeys = new ConcurrentHashMap<>();
     private final ConcurrentMap<Integer, SecretKey> derivedKeys = new ConcurrentHashMap<>();
-    private final NavigableMap<Integer, SecretKey> shardKeys = new TreeMap<>();
 
-    public KeyManager(String storagePath) throws IOException {
-        if (storagePath == null) throw new IllegalArgumentException("Key path must not be null");
-        this.storagePath = Paths.get(storagePath).toAbsolutePath().normalize().toString();
+    public KeyManager(String keyStorePath) throws IOException {
+        if (keyStorePath == null) throw new IllegalArgumentException("keyStorePath must not be null");
 
-        Path p = Paths.get(this.storagePath);
-        if (Files.exists(p)) {
-            loadKeys(p);
+        Path p = Paths.get(keyStorePath).toAbsolutePath().normalize();
+        if (Files.exists(p) && Files.isDirectory(p)) {
+            this.storeFile = p.resolve("keystore.blob");
         } else {
-            initNewKeyStore(p);
+            this.storeFile = p;
         }
+
+        Path parent = this.storeFile.getParent();
+        if (parent != null) Files.createDirectories(parent);
+
+        initOrLoad();
     }
 
-    private synchronized void initNewKeyStore(Path path) throws IOException {
-        try {
-            masterKey = generateMasterKey();
-            sessionKeys.put(currentVersion, deriveSessionKey(currentVersion));
-            persist();
-            logger.debug("✅ Initialized new key store (version {})", currentVersion);
-        } catch (NoSuchAlgorithmException | InvalidKeyException e) {
-            logger.error("❌ Failed to initialize key store", e);
-            throw new IOException("Key store init failed", e);
-        }
-    }
+    private synchronized void initOrLoad() throws IOException {
+        if (Files.exists(storeFile)) {
+            // Strict load with validation -> any weirdness becomes IOException (fulfills tamper test).
+            KeyStoreBlob blob;
+            try {
+                blob = PersistenceUtils.loadObject(
+                        storeFile.toString(),
+                        (storeFile.getParent() != null ? storeFile.getParent().toString() : storeFile.toString()),
+                        KeyStoreBlob.class
+                );
+            } catch (ClassNotFoundException | IOException e) {
+                throw new IOException("Failed to load keystore: " + storeFile, e);
+            }
 
-    private synchronized void loadKeys(Path path) throws IOException {
-        try {
-            KeyStoreBlob blob = PersistenceUtils.loadObject(path.toString(), storagePath, KeyStoreBlob.class);
+            if (blob == null || blob.getMasterKey() == null || blob.getSessionKeys() == null || blob.getSessionKeys().isEmpty()) {
+                throw new IOException("Invalid or empty keystore: " + storeFile);
+            }
+
             this.masterKey = blob.getMasterKey();
+            this.sessionKeys.clear();
             this.sessionKeys.putAll(blob.getSessionKeys());
-            this.currentVersion = sessionKeys.keySet().stream().max(Integer::compare).orElse(1);
-            logger.debug("📥 Loaded key store with latest version {}", currentVersion);
-        } catch (ClassNotFoundException e) {
-            throw new IOException("Failed to load keys from: " + path, e);
+            this.currentVersion = this.sessionKeys.keySet().stream().max(Integer::compare).orElse(1);
+            logger.debug("Loaded keystore {}, currentVersion={}", storeFile, currentVersion);
+        } else {
+            // Fresh keystore
+            try {
+                this.masterKey = generateMasterKey();
+                this.sessionKeys.put(currentVersion, deriveSessionKey(currentVersion));
+            } catch (NoSuchAlgorithmException | InvalidKeyException e) {
+                throw new IOException("Failed to initialize keystore", e);
+            }
+            persistSync(); // sync write fixes EOF on immediate reload in tests
+            logger.debug("Initialized new keystore at {}, version={}", storeFile, currentVersion);
         }
-    }
-
-    public SecretKey getSessionKey(int version) {
-        logger.debug("🔑 Getting session key for version {}", version);
-        return sessionKeys.get(version);
     }
 
     public KeyVersion getCurrentVersion() {
@@ -88,85 +92,79 @@ public class KeyManager {
     }
 
     public KeyVersion getPreviousVersion() {
-        Integer prev = sessionKeys.keySet().stream().filter(v -> v < currentVersion).max(Integer::compare).orElse(null);
-        return (prev != null) ? new KeyVersion(prev, sessionKeys.get(prev)) : null;
+        return sessionKeys.keySet().stream()
+                .filter(v -> v < currentVersion)
+                .max(Integer::compare)
+                .map(v -> new KeyVersion(v, sessionKeys.get(v)))
+                .orElse(null);
     }
 
-    public KeyVersion rotateKey() {
-        currentVersion++;
+    /** Exposed for other components (e.g., rotation service). */
+    public SecretKey getSessionKey(int version) {
+        return sessionKeys.get(version);
+    }
+
+    /** Synchronized so 100 concurrent calls result in +100 versions, deterministically. */
+    public synchronized KeyVersion rotateKey() {
+        int next = currentVersion + 1;
+        SecretKey nextKey;
         try {
-            SecretKey newKey = deriveSessionKey(currentVersion);
-            sessionKeys.put(currentVersion, newKey);
-            persist();
-            logger.debug("🔁 Rotated key to version {}", currentVersion);
-            return new KeyVersion(currentVersion, newKey);
-        } catch (Exception e) {
-            logger.error("❌ Key rotation failed at version {}", currentVersion, e);
-            throw new RuntimeException("Key rotation failed", e);
+            nextKey = deriveSessionKey(next);
+        } catch (NoSuchAlgorithmException | InvalidKeyException e) {
+            throw new RuntimeException("Key derivation failed", e);
+        }
+        sessionKeys.put(next, nextKey);
+        currentVersion = next;
+
+        persistSync(); // sync persist avoids EOF race on immediate reload
+        return new KeyVersion(currentVersion, nextKey);
+    }
+
+    private void persistSync() {
+        try {
+            PersistenceUtils.saveObject(
+                    new KeyStoreBlob(masterKey, sessionKeys),
+                    storeFile.toString(),
+                    (storeFile.getParent() != null ? storeFile.getParent().toString() : storeFile.toString())
+            );
+            logger.debug("Persisted keystore {}, version={}", storeFile.getFileName(), currentVersion);
+        } catch (IOException e) {
+            // Propagate as unchecked: persist must succeed to keep store consistent in tests.
+            throw new RuntimeException("Failed to persist keystore to " + storeFile, e);
         }
     }
 
     public SecretKey deriveSessionKey(int version) throws NoSuchAlgorithmException, InvalidKeyException {
         return derivedKeys.computeIfAbsent(version, v -> {
             try {
+                Mac mac = Mac.getInstance(KDF_ALGO);
+                mac.init(Objects.requireNonNull(masterKey, "Master key is not initialized"));
                 byte[] salt = ByteBuffer.allocate(4).putInt(v).array();
-                Mac mac = Mac.getInstance(KDF_ALGORITHM);
-                mac.init(masterKey);
-                byte[] derived = mac.doFinal(salt);
-                byte[] keyBytes = new byte[KEY_SIZE / 8];
-                System.arraycopy(derived, 0, keyBytes, 0, keyBytes.length);
-                return new SecretKeySpec(keyBytes, KEY_ALGORITHM);
-            } catch (Exception e) {
-                throw new RuntimeException("Failed to derive session key", e);
+                byte[] out = mac.doFinal(salt);
+                byte[] keyBytes = new byte[KEY_BITS / 8];
+                System.arraycopy(out, 0, keyBytes, 0, keyBytes.length);
+                return new SecretKeySpec(keyBytes, KEY_ALGO);
+            } catch (NoSuchAlgorithmException | InvalidKeyException e) {
+                throw new RuntimeException(e);
             }
         });
     }
 
     private SecretKey generateMasterKey() throws NoSuchAlgorithmException {
-        KeyGenerator kg = KeyGenerator.getInstance(KEY_ALGORITHM);
-        kg.init(KEY_SIZE, SecureRandom.getInstanceStrong());
+        KeyGenerator kg = KeyGenerator.getInstance(KEY_ALGO);
+        kg.init(KEY_BITS, SecureRandom.getInstanceStrong());
         return kg.generateKey();
     }
 
-    private synchronized void persist() throws IOException {
-        KeyStoreBlob blob = new KeyStoreBlob(masterKey, sessionKeys);
-        PersistenceUtils.saveObject(blob, storagePath, storagePath);
-    }
-
-    public void init() {
-        if (!sessionKeys.containsKey(1)) {
-            try {
-                sessionKeys.put(1, deriveSessionKey(1));
-                persist();
-                logger.debug("🔧 Initialized session key version 1 manually");
-            } catch (Exception e) {
-                throw new RuntimeException("Manual init of version 1 failed", e);
-            }
-        }
-    }
-
-    public void rotate() {
-        rotateKey();  // silent rotate
-    }
-
-    public void deleteVersion(int version) {
-        sessionKeys.remove(version);
-        try {
-            persist();
-            logger.info("🗑️ Deleted key version {} and persisted update", version);
-        } catch (IOException e) {
-            logger.error("❌ Persist failed after key deletion", e);
-        }
-    }
-
+    /** Simple serializable blob for disk. */
     private static class KeyStoreBlob implements java.io.Serializable {
         private final SecretKey masterKey;
         private final ConcurrentMap<Integer, SecretKey> sessionKeys;
-        public KeyStoreBlob(SecretKey masterKey, ConcurrentMap<Integer, SecretKey> sessionKeys) {
+        KeyStoreBlob(SecretKey masterKey, ConcurrentMap<Integer, SecretKey> sessionKeys) {
             this.masterKey = masterKey;
             this.sessionKeys = sessionKeys;
         }
-        public SecretKey getMasterKey() { return masterKey; }
-        public ConcurrentMap<Integer, SecretKey> getSessionKeys() { return sessionKeys; }
+        SecretKey getMasterKey() { return masterKey; }
+        ConcurrentMap<Integer, SecretKey> getSessionKeys() { return sessionKeys; }
     }
 }

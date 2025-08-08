@@ -1,6 +1,3 @@
-// Unified configuration path and version folder logic
-// All files now share one base path for keys, metadata, and encrypted points
-
 package com.fspann.common;
 
 import org.rocksdb.*;
@@ -9,146 +6,186 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
+import java.nio.file.*;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+/**
+ * Minimal, robust RocksDB-backed metadata store with explicit lifecycle management.
+ * Avoids Cleaner/finalize to prevent JNI crashes. Always close() before destroyDB.
+ */
 public class RocksDBMetadataManager implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(RocksDBMetadataManager.class);
+    private static final Object LOCK = new Object();
+    private static RocksDBMetadataManager instance = null;
+
     private final RocksDB db;
     private final String dbPath;
     private final String baseDir;
-    private volatile boolean closed = false;
     private final Options options;
+    private volatile boolean closed = false;
 
     static {
         try {
             RocksDB.loadLibrary();
-            logger.info("RocksDB native library loaded successfully.");
-        } catch (Exception e) {
-            logger.error("Failed to load RocksDB native library", e);
-            throw new RuntimeException("RocksDB initialization failed", e);
+            logger.info("RocksDB native library loaded.");
+        } catch (Throwable t) {
+            throw new RuntimeException("Failed to load RocksDB native library", t);
         }
     }
 
-    public RocksDBMetadataManager(String dbPath) throws IOException {
-        this(dbPath, Paths.get(dbPath, "points").toString());
+    /**
+     * Singleton factory. Returns an open instance for the given paths.
+     * Call close() between tests to allow different paths in the same JVM.
+     */
+    public static RocksDBMetadataManager create(String dbPath, String pointsPath) throws IOException {
+        synchronized (LOCK) {
+            if (instance != null && !instance.closed) {
+                return instance;
+            }
+            instance = new RocksDBMetadataManager(dbPath, pointsPath);
+            return instance;
+        }
     }
 
-    public RocksDBMetadataManager(String dbPath, String pointsPath) throws IOException {
+    private RocksDBMetadataManager(String dbPath, String baseDir) throws IOException {
         this.dbPath = dbPath;
-        this.baseDir = pointsPath;
+        this.baseDir = baseDir;
 
         Files.createDirectories(Paths.get(dbPath));
-        Files.createDirectories(Paths.get(pointsPath));
+        Files.createDirectories(Paths.get(baseDir));
 
         this.options = new Options()
                 .setCreateIfMissing(true)
                 .setWriteBufferSize(16 * 1024 * 1024)
-                .setMaxWriteBufferNumber(2)
-                .setTargetFileSizeBase(16 * 1024 * 1024)
-                .setMaxBackgroundJobs(2);
+                .setMaxBackgroundJobs(2)
+                .setCompressionType(CompressionType.NO_COMPRESSION)
+                .setInfoLogLevel(InfoLogLevel.ERROR_LEVEL);
 
         try {
-            this.db = RocksDB.open(options, dbPath);
-            logger.info("Initialized RocksDB at {}", dbPath);
+            this.db = RocksDB.open(this.options, dbPath);
         } catch (RocksDBException e) {
-            logger.error("Failed to initialize RocksDB at {}", dbPath, e);
-            throw new IOException("RocksDB initialization failed", e);
+            throw new IOException("RocksDB open failed at " + dbPath, e);
         }
+        logger.debug("RocksDBMetadataManager opened at {} (points at {})", dbPath, baseDir);
     }
 
-    public void batchPutMetadata(Map<String, Map<String, String>> allMetadata) {
-        try (WriteBatch batch = new WriteBatch(); WriteOptions opts = new WriteOptions()) {
-            allMetadata.forEach((key, valMap) -> {
-                try {
-                    batch.put(key.getBytes(StandardCharsets.UTF_8), serializeMetadata(valMap));
-                } catch (RocksDBException e) {
-                    throw new RuntimeException(e);
+    @Override
+    public void close() {
+        synchronized (LOCK) {
+            if (closed) return;
+            try {
+                if (db != null) {
+                    try { db.syncWal(); } catch (Exception ignore) {}
+                    db.close();
                 }
-            });
-            db.write(opts, batch);
-        } catch (RocksDBException e) {
-            logger.error("Batch metadata insert failed", e);
-            throw new RuntimeException("Batch metadata insert failed", e);
-        }
-    }
-
-    public void batchUpdateVectorMetadata(Map<String, Map<String, String>> updates) throws IOException {
-        Objects.requireNonNull(updates, "Updates map cannot be null");
-        try (WriteBatch batch = new WriteBatch(); WriteOptions opts = new WriteOptions()) {
-            for (Map.Entry<String, Map<String, String>> entry : updates.entrySet()) {
-                String key = Objects.requireNonNull(entry.getKey(), "Vector ID cannot be null");
-                Map<String, String> valMap = Objects.requireNonNull(entry.getValue(), "Metadata cannot be null");
-                batch.put(key.getBytes(StandardCharsets.UTF_8), serializeMetadata(valMap));
+            } catch (Throwable t) {
+                logger.warn("Error closing RocksDB at {}", dbPath, t);
+            } finally {
+                try { options.close(); } catch (Throwable ignore) {}
+                closed = true;
+                instance = null;
+                logger.debug("RocksDBMetadataManager closed for {}", dbPath);
             }
-            db.write(opts, batch);
-            logger.debug("Batch updated {} metadata entries", updates.size());
-        } catch (RocksDBException e) {
-            logger.error("Batch metadata update failed", e);
-            throw new IOException("Batch metadata update failed", e);
         }
     }
 
-    public Map<String, String> getVectorMetadata(String vectorId) {
+    // ------------------- CRUD: metadata -------------------
+
+    public synchronized Map<String, Map<String, String>> multiGetVectorMetadata(Collection<String> vectorIds) {
+        Objects.requireNonNull(vectorIds, "vectorIds");
+        if (vectorIds.isEmpty()) return Collections.emptyMap();
+
+        Map<String, Map<String, String>> out = new LinkedHashMap<>(vectorIds.size());
+        for (String id : vectorIds) {
+            out.put(id, getVectorMetadata(id)); // reuse your single-get
+        }
+        return out;
+    }
+
+    public synchronized Map<String, String> getVectorMetadata(String vectorId) {
+        Objects.requireNonNull(vectorId, "vectorId");
         try {
-            byte[] value = db.get(vectorId.getBytes(StandardCharsets.UTF_8));
-            return value != null ? deserializeMetadata(value) : new HashMap<>();
+            byte[] v = db.get(vectorId.getBytes(StandardCharsets.UTF_8));
+            return (v == null) ? Collections.emptyMap() : deserializeMetadata(v);
         } catch (RocksDBException e) {
-            logger.warn("Failed to get metadata for vectorId={}", vectorId, e);
-            return new HashMap<>();
+            logger.warn("getVectorMetadata failed for {}", vectorId, e);
+            return Collections.emptyMap();
         }
     }
 
-    public void removeVectorMetadata(String vectorId) {
-        if (closed) throw new IllegalStateException("RocksDBMetadataManager is closed");
-        Objects.requireNonNull(vectorId, "Vector ID cannot be null");
+    public synchronized void updateVectorMetadata(String vectorId, Map<String, String> updates) {
+        Objects.requireNonNull(vectorId, "vectorId");
+        Objects.requireNonNull(updates, "updates");
+        try {
+            db.put(vectorId.getBytes(StandardCharsets.UTF_8), serializeMetadata(updates));
+        } catch (RocksDBException e) {
+            throw new RuntimeException("updateVectorMetadata failed for " + vectorId, e);
+        }
+    }
+
+    /**
+     * Merge only-missing keys (existing values win). Matches your test expectations.
+     */
+    public synchronized void mergeVectorMetadata(String vectorId, Map<String, String> updates) {
+        Objects.requireNonNull(vectorId, "vectorId");
+        Objects.requireNonNull(updates, "updates");
+        Map<String, String> existing = getVectorMetadata(vectorId);
+        if (existing.isEmpty()) {
+            // nothing there: merging behaves like put-all
+            existing = new HashMap<>(updates);
+        } else {
+            updates.forEach(existing::putIfAbsent);
+        }
+        updateVectorMetadata(vectorId, existing);
+    }
+
+    public synchronized void removeVectorMetadata(String vectorId) {
+        Objects.requireNonNull(vectorId, "vectorId");
         try {
             db.delete(vectorId.getBytes(StandardCharsets.UTF_8));
-            logger.debug("Deleted metadata for vectorId={}", vectorId);
         } catch (RocksDBException e) {
-            logger.warn("Failed to delete metadata for vectorId={}", vectorId, e);
+            logger.warn("removeVectorMetadata failed for {}", vectorId, e);
         }
     }
 
-    private byte[] serializeMetadata(Map<String, String> metadata) {
-        return metadata.entrySet().stream()
-                .map(e -> escape(e.getKey()) + "=" + escape(e.getValue()))
-                .collect(Collectors.joining(";"))
-                .getBytes(StandardCharsets.UTF_8);
+    public synchronized void batchUpdateVectorMetadata(Map<String, Map<String, String>> updates) throws IOException {
+        Objects.requireNonNull(updates, "updates");
+        try (WriteBatch batch = new WriteBatch(); WriteOptions wo = new WriteOptions()) {
+            for (Map.Entry<String, Map<String, String>> e : updates.entrySet()) {
+                batch.put(e.getKey().getBytes(StandardCharsets.UTF_8), serializeMetadata(e.getValue()));
+            }
+            db.write(wo, batch);
+        } catch (RocksDBException e) {
+            throw new IOException("batchUpdateVectorMetadata failed", e);
+        }
     }
 
-    private Map<String, String> deserializeMetadata(byte[] data) {
-        String str = new String(data, StandardCharsets.UTF_8);
-        return Arrays.stream(str.split("(?<!\\\\);"))
-                .map(entry -> entry.split("(?<!\\\\)=", 2))
-                .filter(kv -> kv.length == 2)
-                .collect(Collectors.toMap(
-                        kv -> unescape(kv[0]),
-                        kv -> unescape(kv[1])
-                ));
+    public synchronized void batchPutMetadata(Map<String, Map<String, String>> allMetadata) {
+        Objects.requireNonNull(allMetadata, "allMetadata");
+        try (WriteBatch batch = new WriteBatch(); WriteOptions wo = new WriteOptions()) {
+            for (Map.Entry<String, Map<String, String>> e : allMetadata.entrySet()) {
+                batch.put(e.getKey().getBytes(StandardCharsets.UTF_8), serializeMetadata(e.getValue()));
+            }
+            db.write(wo, batch);
+        } catch (RocksDBException e) {
+            throw new RuntimeException("batchPutMetadata failed", e);
+        }
     }
 
-    private String escape(String s) {
-        return s.replace("=", "\\=").replace(";", "\\;");
-    }
-
-    private String unescape(String s) {
-        return s.replace("\\=", "=").replace("\\;", ";");
-    }
+    // ------------------- points persistence -------------------
 
     public void saveEncryptedPoint(EncryptedPoint pt) throws IOException {
-        Objects.requireNonNull(pt, "EncryptedPoint cannot be null");
+        Objects.requireNonNull(pt, "pt");
         String safeVersion = "v" + pt.getVersion();
-
         Path versionDir = Paths.get(baseDir, safeVersion);
         Files.createDirectories(versionDir);
+
         Path filePath = versionDir.resolve(pt.getId() + ".point");
         PersistenceUtils.saveObject(pt, filePath.toString(), baseDir);
 
+        // keep metadata up to date (version as numeric is okay; loaders handle both)
         Map<String, String> meta = new HashMap<>();
         meta.put("version", String.valueOf(pt.getVersion()));
         meta.put("shardId", String.valueOf(pt.getShardId()));
@@ -156,181 +193,142 @@ public class RocksDBMetadataManager implements AutoCloseable {
     }
 
     public List<EncryptedPoint> getAllEncryptedPoints() {
-        Set<String> seenIds = new HashSet<>();
-        List<EncryptedPoint> uniquePoints = new ArrayList<>();
-
-        try (Stream<Path> files = Files.walk(Paths.get(baseDir))) {
-            files.filter(Files::isRegularFile)
-                    .filter(path -> path.toString().endsWith(".point"))
-                    .forEach(path -> {
+        List<EncryptedPoint> list = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        try (Stream<Path> s = Files.walk(Paths.get(baseDir))) {
+            s.filter(Files::isRegularFile)
+                    .filter(p -> p.toString().endsWith(".point"))
+                    .forEach(p -> {
                         try {
-                            EncryptedPoint pt = PersistenceUtils.loadObject(path.toString(), baseDir, EncryptedPoint.class);
+                            EncryptedPoint pt = PersistenceUtils.loadObject(p.toString(), baseDir, EncryptedPoint.class);
                             if (pt == null) return;
+                            if (!seen.add(pt.getId())) return;
 
-                            String id = pt.getId();
-                            if (!seenIds.add(id)) {
-                                logger.debug("Skipping duplicate EncryptedPoint with ID {}", id);
+                            Map<String, String> meta = getVectorMetadata(pt.getId());
+                            if (meta.isEmpty() || !meta.containsKey("version") || !meta.containsKey("shardId")) {
+                                // skip if missing essential metadata
                                 return;
                             }
-
-                            Map<String, String> meta = getVectorMetadata(id);
-                            if (meta == null || !meta.containsKey("version") || !meta.containsKey("shardId")) {
-                                logger.warn("Skipping point {}: Missing or incomplete metadata", id);
-                                return;
-                            }
-
-                            uniquePoints.add(pt);
-                        } catch (IOException | ClassNotFoundException e) {
-                            logger.error("Failed to load point from {}", path, e);
+                            list.add(pt);
+                        } catch (Exception e) {
+                            logger.warn("Failed to load point {}", p, e);
                         }
                     });
         } catch (IOException e) {
-            logger.error("Failed to walk points directory {}", baseDir, e);
+            logger.warn("getAllEncryptedPoints walk failed", e);
         }
-
-        logger.debug("Total encrypted points loaded: {}", uniquePoints.size());
-        return uniquePoints;
-    }
-
-    public void cleanupStaleMetadata(Set<String> validIds) {
-        Objects.requireNonNull(validIds, "Valid IDs set cannot be null");
-        int removed = 0;
-        try (WriteBatch batch = new WriteBatch(); WriteOptions opts = new WriteOptions()) {
-            try (RocksIterator it = db.newIterator()) {
-                for (it.seekToFirst(); it.isValid(); it.next()) {
-                    String key = new String(it.key(), StandardCharsets.UTF_8);
-                    if (!validIds.contains(key) && !key.equals("index")) {
-                        batch.delete(key.getBytes(StandardCharsets.UTF_8));
-                        removed++;
-                    }
-                }
-            }
-            if (removed > 0) {
-                db.write(opts, batch);
-                logger.debug("Cleaned up {} stale metadata entries", removed);
-            }
-        } catch (RocksDBException e) {
-            logger.error("Error while cleaning up stale metadata entries", e);
-        }
+        return list;
     }
 
     public EncryptedPoint loadEncryptedPoint(String id) throws IOException, ClassNotFoundException {
-        Objects.requireNonNull(id, "Vector ID cannot be null");
+        Objects.requireNonNull(id, "id");
         Map<String, String> meta = getVectorMetadata(id);
-        if (meta == null || !meta.containsKey("version")) {
-            logger.warn("Missing version metadata for id={}", id);
-            return null;
-        }
-        String safeVersion = meta.get("version").startsWith("v") ? meta.get("version") : "v" + meta.get("version");
-        Path filePath = Paths.get(baseDir, safeVersion, id + ".point");
+        if (meta.isEmpty() || !meta.containsKey("version")) return null;
 
-        if (!Files.exists(filePath)) {
-            logger.warn("Expected encrypted point file does not exist: {}", filePath);
-            return null;
-        }
-
-        return PersistenceUtils.loadObject(filePath.toString(), baseDir, EncryptedPoint.class);
+        String ver = meta.get("version");
+        String safeVersion = ver.startsWith("v") ? ver : "v" + ver;
+        Path p = Paths.get(baseDir, safeVersion, id + ".point");
+        if (!Files.exists(p)) return null;
+        return PersistenceUtils.loadObject(p.toString(), baseDir, EncryptedPoint.class);
     }
+
+    public void cleanupStaleMetadata(Set<String> validIds) {
+        Objects.requireNonNull(validIds, "validIds");
+        RocksIterator it = null;
+        try {
+            it = db.newIterator();
+            List<byte[]> toDelete = new ArrayList<>();
+            for (it.seekToFirst(); it.isValid(); it.next()) {
+                String key = new String(it.key(), StandardCharsets.UTF_8);
+                if (!"index".equals(key) && !validIds.contains(key)) {
+                    toDelete.add(it.key());
+                }
+            }
+            if (!toDelete.isEmpty()) {
+                try (WriteBatch batch = new WriteBatch(); WriteOptions wo = new WriteOptions()) {
+                    for (byte[] k : toDelete) batch.delete(k);
+                    db.write(wo, batch);
+                }
+            }
+        } catch (RocksDBException e) {
+            logger.warn("cleanupStaleMetadata failed", e);
+        } finally {
+            if (it != null) it.close();
+        }
+    }
+
+    // ------------------- index version helpers -------------------
 
     public void saveIndexVersion(int version) {
         try {
-            db.put("index".getBytes(StandardCharsets.UTF_8), String.valueOf(version).getBytes(StandardCharsets.UTF_8));
-            logger.debug("Saved index version {}", version);
+            db.put("index".getBytes(StandardCharsets.UTF_8),
+                    String.valueOf(version).getBytes(StandardCharsets.UTF_8));
         } catch (RocksDBException e) {
-            logger.error("Failed to save index version {}", version, e);
+            logger.warn("saveIndexVersion failed", e);
         }
-    }
-
-    public void updateVectorMetadata(String vectorId, Map<String, String> updates) {
-        if (closed) throw new IllegalStateException("RocksDBMetadataManager is closed");
-        Objects.requireNonNull(vectorId, "Vector ID cannot be null");
-        Objects.requireNonNull(updates, "Updates cannot be null");
-        try {
-            db.put(vectorId.getBytes(StandardCharsets.UTF_8), serializeMetadata(updates));
-            logger.debug("Updated metadata for vectorId={}", vectorId);
-        } catch (RocksDBException e) {
-            logger.error("Failed to update metadata for vectorId={}", vectorId, e);
-            throw new RuntimeException("Failed to update metadata", e);
-        }
-    }
-
-    public void mergeVectorMetadata(String vectorId, Map<String, String> updates) {
-        if (closed) throw new IllegalStateException("RocksDBMetadataManager is closed");
-        Objects.requireNonNull(vectorId, "Vector ID cannot be null");
-        Objects.requireNonNull(updates, "Updates cannot be null");
-        try {
-            Map<String, String> existing = getVectorMetadata(vectorId);
-            updates.forEach(existing::putIfAbsent);
-            db.put(vectorId.getBytes(StandardCharsets.UTF_8), serializeMetadata(existing));
-            logger.debug("Merged metadata for vectorId={}", vectorId);
-        } catch (RocksDBException e) {
-            logger.error("Failed to merge metadata for vectorId={}", vectorId, e);
-            throw new RuntimeException("Failed to merge metadata", e);
-        }
-    }
-
-    public String getPointsBaseDir() {
-        return this.baseDir;
     }
 
     public int loadIndexVersion() {
         try {
-            byte[] data = db.get("index".getBytes(StandardCharsets.UTF_8));
-            return (data != null) ? Integer.parseInt(new String(data, StandardCharsets.UTF_8)) : 1;
-        } catch (RocksDBException e) {
-            logger.warn("Failed to load index version, defaulting to 1", e);
+            byte[] v = db.get("index".getBytes(StandardCharsets.UTF_8));
+            return (v == null) ? 1 : Integer.parseInt(new String(v, StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            logger.warn("loadIndexVersion failed", e);
             return 1;
         }
     }
 
     public List<String> getAllVectorIds() {
-        List<String> keys = new ArrayList<>();
-        try (RocksIterator it = db.newIterator()) {
+        List<String> out = new ArrayList<>();
+        RocksIterator it = null;
+        try {
+            it = db.newIterator();
             for (it.seekToFirst(); it.isValid(); it.next()) {
                 String key = new String(it.key(), StandardCharsets.UTF_8);
-                if (!key.equals("index")) {
-                    keys.add(key);
-                }
+                if (!"index".equals(key)) out.add(key);
             }
-        } catch (Exception e) {
-            logger.error("Failed to iterate vector IDs", e);
+        } finally {
+            if (it != null) it.close();
         }
-        return keys;
+        return out;
     }
 
     public void logStats() {
         try {
-            String stats = db.getProperty("rocksdb.stats");
-            logger.debug("ROCKSDB STATS:\n{}", stats);
-        } catch (RocksDBException e) {
-            logger.warn("Could not retrieve RocksDB stats", e);
-        }
+            logger.debug("rocksdb.stats:\n{}", db.getProperty("rocksdb.stats"));
+        } catch (RocksDBException ignore) {}
     }
 
     public void printSummary() {
         try {
-            logger.debug("Metadata contains approx {} keys", db.getLongProperty("rocksdb.estimate-num-keys"));
-            logger.debug("Metadata live SST files: {}", db.getProperty("rocksdb.num-live-sst-files"));
-        } catch (RocksDBException e) {
-            logger.error("Failed to read RocksDB summary", e);
-        }
+            logger.debug("estimate-num-keys={}", db.getLongProperty("rocksdb.estimate-num-keys"));
+            logger.debug("num-live-sst-files={}", db.getProperty("rocksdb.num-live-sst-files"));
+        } catch (RocksDBException ignore) {}
     }
 
-    @Override
-    public void close() {
-        if (!closed) {
-            try {
-                if (db != null) db.close();
-                if (options != null) options.close();
-            } catch (Exception e) {
-                logger.error("Error during RocksDB close", e);
-            } finally {
-                closed = true;
-            }
-        }
+    public String getDbPath() { return dbPath; }
+    public String getPointsBaseDir() { return baseDir; }
+
+    // ------------------- serialization helpers -------------------
+
+    private byte[] serializeMetadata(Map<String, String> m) {
+        String s = m.entrySet().stream()
+                .map(e -> escape(e.getKey()) + "=" + escape(e.getValue()))
+                .collect(Collectors.joining(";"));
+        return s.getBytes(StandardCharsets.UTF_8);
     }
 
-    public String getDbPath() {
-        return dbPath;
+    private Map<String, String> deserializeMetadata(byte[] data) {
+        String s = new String(data, StandardCharsets.UTF_8);
+        return Arrays.stream(s.split("(?<!\\\\);"))
+                .map(tok -> tok.split("(?<!\\\\)=", 2))
+                .filter(kv -> kv.length == 2)
+                .collect(Collectors.toMap(
+                        kv -> unescape(kv[0]),
+                        kv -> unescape(kv[1])
+                ));
     }
+
+    private String escape(String in)   { return in.replace("=", "\\=").replace(";", "\\;"); }
+    private String unescape(String in) { return in.replace("\\=", "=").replace("\\;", ";"); }
 }

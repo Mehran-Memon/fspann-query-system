@@ -5,8 +5,6 @@ import com.fspann.config.SystemConfig;
 import com.fspann.crypto.AesGcmCryptoService;
 import com.fspann.crypto.CryptoService;
 import com.fspann.index.core.EvenLSH;
-import com.fspann.common.IndexService;
-import com.fspann.common.EncryptedPointBuffer;
 import com.fspann.index.service.SecureLSHIndexService;
 import com.fspann.key.KeyManager;
 import com.fspann.key.KeyRotationPolicy;
@@ -25,16 +23,15 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.util.concurrent.*;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
+import java.nio.file.*;
 import java.util.*;
+import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
 public class ForwardSecureANNSystem {
     private static final Logger logger = LoggerFactory.getLogger(ForwardSecureANNSystem.class);
     private static final double DEFAULT_NOISE_SCALE = 0.01;
+
     private final SecureLSHIndexService indexService;
     private final QueryTokenFactory tokenFactory;
     private final QueryService queryService;
@@ -45,16 +42,17 @@ public class ForwardSecureANNSystem {
     private final Profiler profiler;
     private final boolean verbose;
     private final List<Long> batchDurations = Collections.synchronizedList(new ArrayList<>());
-    private final EncryptedPointBuffer pointBuffer;
     private final RocksDBMetadataManager metadataManager;
     private final TopKProfiler topKProfiler;
-    private int currentVersion;
-    private int totalInserted = 0;
+
     private final int BATCH_SIZE;
     private long totalIndexingTime = 0;
     private long totalQueryTime = 0;
     private int indexingCount = 0;
+    private int totalInserted = 0;
+
     private final ExecutorService executor;
+    private boolean exitOnShutdown = false;
 
     public ForwardSecureANNSystem(
             String configPath,
@@ -79,51 +77,80 @@ public class ForwardSecureANNSystem {
         this.BATCH_SIZE = batchSize;
         this.executor = Executors.newFixedThreadPool(Math.max(1, Runtime.getRuntime().availableProcessors() / 2));
 
-        SystemConfig tempConfig;
+        // Load config early
+        SystemConfig cfg;
         try {
-            ApiSystemConfig apiConfig = new ApiSystemConfig(sanitizePath(configPath));
-            tempConfig = apiConfig.getConfig();
+            ApiSystemConfig apiCfg = new ApiSystemConfig(sanitizePath(configPath));
+            cfg = apiCfg.getConfig();
         } catch (IOException e) {
             logger.error("Failed to initialize configuration: {}", configPath, e);
             throw e;
         }
-        this.config = tempConfig;
+        this.config = cfg;
 
-        Path keysPath = metadataPath.resolve("keys");
+        // Layout: API owns the directories
+        Path keysPath   = metadataPath.resolve("keys");
         Path pointsPath = metadataPath.resolve("points");
         Path metaDBPath = metadataPath.resolve("metadata");
-
         Files.createDirectories(keysPath);
         Files.createDirectories(pointsPath);
         Files.createDirectories(metaDBPath);
 
-
-        this.cryptoService = Objects.requireNonNull(cryptoService, "CryptoService cannot be null");
+        // Core services (injected)
         this.metadataManager = Objects.requireNonNull(metadataManager, "MetadataManager cannot be null");
-        KeyLifeCycleService injected = cryptoService.getKeyService();
-        if (injected != null) {
-            this.keyService = injected;
-        } else {
+        this.cryptoService   = Objects.requireNonNull(cryptoService, "CryptoService cannot be null");
+
+        // Key service: use the one carried by CryptoService if present, otherwise create our own
+        KeyLifeCycleService ks = cryptoService.getKeyService();
+        if (ks == null) {
             KeyManager keyManager = new KeyManager(keysPath.toString());
             KeyRotationPolicy policy = new KeyRotationPolicy((int) config.getOpsThreshold(), config.getAgeThresholdMs());
-            this.keyService = new KeyRotationServiceImpl(keyManager, policy, metaDBPath.toString(), metadataManager, cryptoService);
+            ks = new KeyRotationServiceImpl(keyManager, policy, metaDBPath.toString(), metadataManager, cryptoService);
+            // if CryptoService supports it, wire back
+            try {
+                // AesGcmCryptoService has setKeyService; if not present, this is a no-op via reflection
+                cryptoService.getClass().getMethod("setKeyService", KeyLifeCycleService.class).invoke(cryptoService, ks);
+            } catch (Exception ignore) { /* best-effort */ }
         }
+        this.keyService = ks;
 
-        this.pointBuffer = new EncryptedPointBuffer(pointsPath.toString(), metadataManager, 500);
-        this.indexService = new SecureLSHIndexService(cryptoService, keyService, metadataManager);
-        if (keyService instanceof KeyRotationServiceImpl) {
-            ((KeyRotationServiceImpl) keyService).setIndexService(indexService);
+        // One shared buffer owned by API, injected into index
+        EncryptedPointBuffer sharedBuffer = new EncryptedPointBuffer(pointsPath.toString(), metadataManager, 500);
+
+        // One shared LSH instance used by BOTH index & token factory (this fixes bucket mismatches)
+        int maxDim = Collections.max(dimensions);
+        EvenLSH sharedLsh = new EvenLSH(maxDim, config.getNumShards());
+
+        // Build index service with DI; pass shared LSH and shared buffer
+        this.indexService = new SecureLSHIndexService(
+                cryptoService,
+                keyService,
+                metadataManager,
+                /* index */ null,
+                /* lsh   */ sharedLsh,
+                /* buffer*/ sharedBuffer
+        );
+
+        if (keyService instanceof KeyRotationServiceImpl kr) {
+            kr.setIndexService(indexService);
         }
 
         this.cache = new ConcurrentMapCache(config.getNumShards() * 1000);
         this.profiler = config.isProfilerEnabled() ? new MicrometerProfiler(new SimpleMeterRegistry()) : null;
-        this.tokenFactory = new QueryTokenFactory(cryptoService, keyService,
-                new EvenLSH(Collections.max(dimensions), config.getNumShards()),
-                Math.max(1, config.getNumShards() / 4), 1);
+
+        // Token factory uses the SAME LSH
+        this.tokenFactory = new QueryTokenFactory(
+                cryptoService,
+                keyService,
+                sharedLsh,
+                Math.max(1, config.getNumShards() / 4),
+                /* numTables */ 1
+        );
+
         this.queryService = new QueryServiceImpl(indexService, cryptoService, keyService);
         this.topKProfiler = new TopKProfiler(metadataPath.toString());
 
-        // Loading data...
+        // Eager-load data
         DefaultDataLoader loader = new DefaultDataLoader();
         Path dataFile = Paths.get(sanitizePath(dataPath));
         for (int dim : dimensions) {
@@ -147,7 +174,6 @@ public class ForwardSecureANNSystem {
     }
 
     private String sanitizePath(String path) {
-        // Allow all paths in test mode (e.g., set by JUnit or Maven)
         if ("true".equals(System.getProperty("test.env"))) {
             return Paths.get(path).normalize().toString();
         }
@@ -165,9 +191,7 @@ public class ForwardSecureANNSystem {
         private final ConcurrentMap<QueryToken, Long> timestamps = new ConcurrentHashMap<>();
         private static final long CACHE_EXPIRY_MS = 10 * 60 * 1000;
 
-        ConcurrentMapCache(int maxSize) {
-            this.maxSize = maxSize;
-        }
+        ConcurrentMapCache(int maxSize) { this.maxSize = maxSize; }
 
         @Override
         public List<QueryResult> put(QueryToken key, List<QueryResult> value) {
@@ -181,15 +205,15 @@ public class ForwardSecureANNSystem {
 
         private void cleanExpiredEntries() {
             long now = System.currentTimeMillis();
-            timestamps.entrySet().removeIf(entry -> now - entry.getValue() > CACHE_EXPIRY_MS);
+            timestamps.entrySet().removeIf(e -> now - e.getValue() > CACHE_EXPIRY_MS);
         }
 
         private void removeOldestEntry() {
             timestamps.entrySet().stream()
                     .min(Map.Entry.comparingByValue())
-                    .ifPresent(entry -> {
-                        remove(entry.getKey());
-                        timestamps.remove(entry.getKey());
+                    .ifPresent(e -> {
+                        remove(e.getKey());
+                        timestamps.remove(e.getKey());
                     });
         }
     }
@@ -197,17 +221,13 @@ public class ForwardSecureANNSystem {
     public void batchInsert(List<double[]> vectors, int dim) {
         Objects.requireNonNull(vectors, "Vectors cannot be null");
         if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
-
         if (vectors.isEmpty()) {
             logger.warn("batchInsert called with empty vector list for dim={}", dim);
             return;
         }
 
         long start = System.nanoTime();
-        if (profiler != null) {
-            logger.debug("Starting profiler for batchInsert");
-            profiler.start("batchInsert");
-        }
+        if (profiler != null) profiler.start("batchInsert");
 
         List<List<double[]>> partitions = partitionList(vectors, BATCH_SIZE);
         List<String> allIds = new ArrayList<>();
@@ -216,10 +236,7 @@ public class ForwardSecureANNSystem {
             List<String> ids = new ArrayList<>(BATCH_SIZE);
             List<double[]> validBatch = new ArrayList<>(BATCH_SIZE);
             for (double[] vec : batch) {
-                if (vec == null) {
-                    logger.warn("Skipping null vector!");
-                    continue;
-                }
+                if (vec == null) continue;
                 if (vec.length != dim) {
                     logger.warn("Skipping vector with dim {} (expected {}) - vector: {}", vec.length, dim, Arrays.toString(vec));
                     continue;
@@ -234,7 +251,8 @@ public class ForwardSecureANNSystem {
                 totalInserted += ids.size();
                 batchDurations.add(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - batchStart));
                 allIds.addAll(ids);
-                logger.debug("Batch[{}]: {} pts - {} ms", (totalInserted / BATCH_SIZE), ids.size(),
+                logger.debug("Batch[{}]: {} pts - {} ms",
+                        (totalInserted / BATCH_SIZE), ids.size(),
                         (System.nanoTime() - batchStart) / 1_000_000);
             }
         }
@@ -245,19 +263,10 @@ public class ForwardSecureANNSystem {
 
         if (profiler != null) {
             profiler.stop("batchInsert");
-            logger.debug("Stopped profiler for batchInsert");
             List<Long> timings = profiler.getTimings("batchInsert");
-            if (!timings.isEmpty()) {
-                long duration = timings.getLast();
-                totalIndexingTime += duration;
-                indexingCount += vectors.size();
-                logger.debug("batchInsert timing recorded: {} ms", duration / 1_000_000.0);
-            } else {
-                long duration = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
-                logger.warn("No timings recorded for batchInsert (likely empty or all invalid data). Using fallback duration: {} ms", duration);
-                totalIndexingTime += duration;
-                indexingCount += vectors.size();
-            }
+            long durationMs = !timings.isEmpty() ? timings.getLast() : TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+            totalIndexingTime += TimeUnit.MILLISECONDS.toNanos(durationMs);
+            indexingCount += vectors.size();
         }
     }
 
@@ -270,7 +279,8 @@ public class ForwardSecureANNSystem {
     }
 
     public int getIndexedVectorCount() {
-        return totalInserted + pointBuffer.getTotalFlushedPoints();
+        EncryptedPointBuffer buf = indexService.getPointBuffer();
+        return totalInserted + (buf != null ? buf.getTotalFlushedPoints() : 0);
     }
 
     public void insert(String id, double[] vector, int dim) {
@@ -283,10 +293,17 @@ public class ForwardSecureANNSystem {
 
         try {
             keyService.incrementOperation();
-            List<EncryptedPoint> updatedPoints = ((KeyRotationServiceImpl) keyService).rotateIfNeededAndReturnUpdated();
-            for (EncryptedPoint pt : updatedPoints) {
-                indexService.updateCachedPoint(pt);
+
+            // If we have the rotating service, get possibly updated points back to the index
+            if (keyService instanceof KeyRotationServiceImpl) {
+                List<EncryptedPoint> updatedPoints = ((KeyRotationServiceImpl) keyService).rotateIfNeededAndReturnUpdated();
+                for (EncryptedPoint pt : updatedPoints) {
+                    indexService.updateCachedPoint(pt);
+                }
+            } else {
+                keyService.rotateIfNeeded();
             }
+
             indexService.insert(id, vector);
         } catch (Exception e) {
             logger.error("Insert failed for id={}", id, e);
@@ -295,11 +312,9 @@ public class ForwardSecureANNSystem {
             if (profiler != null) {
                 profiler.stop("insert");
                 List<Long> timings = profiler.getTimings("insert");
-                if (timings.isEmpty()) {
-                    logger.warn("No timings recorded for insert of id={}", id);
-                } else {
+                if (!timings.isEmpty()) {
                     long duration = timings.getLast();
-                    totalIndexingTime += duration;
+                    totalIndexingTime += TimeUnit.MILLISECONDS.toNanos(duration);
                     indexingCount++;
                     if (verbose) logger.debug("Insert complete for id={} in {} ms", id, duration / 1_000_000.0);
                 }
@@ -312,20 +327,18 @@ public class ForwardSecureANNSystem {
         if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
 
         int remaining = total;
-        List<String> ids = new ArrayList<>(BATCH_SIZE);
-        List<double[]> batch = new ArrayList<>(BATCH_SIZE);
-        Random random = new Random();
+        Random rnd = new Random();
         int batchCount = 0;
 
         while (remaining > 0) {
-            ids.clear();
-            batch.clear();
             int size = Math.min(BATCH_SIZE, remaining);
+            List<String> ids = new ArrayList<>(size);
+            List<double[]> batch = new ArrayList<>(size);
 
             for (int i = 0; i < size; i++) {
-                double[] fakeVec = new double[dim];
-                for (int j = 0; j < dim; j++) fakeVec[j] = random.nextDouble();
-                batch.add(fakeVec);
+                double[] v = new double[dim];
+                for (int j = 0; j < dim; j++) v[j] = rnd.nextDouble();
+                batch.add(v);
                 ids.add(UUID.randomUUID().toString());
             }
 
@@ -346,12 +359,12 @@ public class ForwardSecureANNSystem {
         if (topK <= 0) throw new IllegalArgumentException("TopK must be positive");
 
         double noiseScale = topK <= 20 ? DEFAULT_NOISE_SCALE / 2 : DEFAULT_NOISE_SCALE;
-        double[] cloakedQuery = new double[queryVector.length];
-        Random random = new Random();
+        double[] cloaked = new double[queryVector.length];
+        Random r = new Random();
         for (int i = 0; i < queryVector.length; i++) {
-            cloakedQuery[i] = queryVector[i] + (random.nextGaussian() * noiseScale);
+            cloaked[i] = queryVector[i] + (r.nextGaussian() * noiseScale);
         }
-        return tokenFactory.create(cloakedQuery, topK);
+        return tokenFactory.create(cloaked, topK);
     }
 
     public List<QueryResult> query(double[] queryVector, int topK, int dim) {
@@ -362,21 +375,25 @@ public class ForwardSecureANNSystem {
 
         long start = System.nanoTime();
         QueryToken token = tokenFactory.create(queryVector, topK);
+
         List<QueryResult> cached = cache.get(token);
         if (cached != null) {
-            logger.debug("Cache hit for query token, topK={}", topK);
             if (profiler != null) {
                 profiler.recordQueryMetric("Q_cache_" + topK, 0, (System.nanoTime() - start) / 1_000_000.0, 0);
             }
             return cached;
         }
+
         List<QueryResult> results = queryService.search(token);
         cache.put(token, results);
+
         long elapsed = System.nanoTime() - start;
         totalQueryTime += elapsed;
         if (profiler != null) {
-            profiler.recordQueryMetric("Q_" + topK, ((QueryServiceImpl) queryService).getLastQueryDurationNs() / 1_000_000.0,
-                    elapsed / 1_000_000.0, 0);
+            profiler.recordQueryMetric("Q_" + topK,
+                    ((QueryServiceImpl) queryService).getLastQueryDurationNs() / 1_000_000.0,
+                    elapsed / 1_000_000.0,
+                    0);
         }
         return results;
     }
@@ -389,21 +406,25 @@ public class ForwardSecureANNSystem {
 
         long start = System.nanoTime();
         QueryToken token = cloakQuery(queryVector, dim, topK);
+
         List<QueryResult> cached = cache.get(token);
         if (cached != null) {
-            logger.debug("Cache hit for cloaked query token, topK={}", topK);
             if (profiler != null) {
                 profiler.recordQueryMetric("Q_cloak_cache_" + topK, 0, (System.nanoTime() - start) / 1_000_000.0, 0);
             }
             return cached;
         }
+
         List<QueryResult> results = queryService.search(token);
         cache.put(token, results);
+
         long elapsed = System.nanoTime() - start;
         totalQueryTime += elapsed;
         if (profiler != null) {
-            profiler.recordQueryMetric("Q_cloak_" + topK, ((QueryServiceImpl) queryService).getLastQueryDurationNs() / 1_000_000.0,
-                    elapsed / 1_000_000.0, 0);
+            profiler.recordQueryMetric("Q_cloak_" + topK,
+                    ((QueryServiceImpl) queryService).getLastQueryDurationNs() / 1_000_000.0,
+                    elapsed / 1_000_000.0,
+                    0);
         }
         if (verbose) logger.debug("Cloaked query returned {} results for topK={}", results.size(), topK);
         return results;
@@ -437,20 +458,14 @@ public class ForwardSecureANNSystem {
 
                 double clientMs = (clientEnd - clientStart) / 1_000_000.0;
                 double serverMs = ((QueryServiceImpl) queryService).getLastQueryDurationNs() / 1_000_000.0;
-                double avgRatio = evals.stream().mapToDouble(QueryEvaluationResult::getRatio).average().orElse(0.0);
+                double avgRatio  = evals.stream().mapToDouble(QueryEvaluationResult::getRatio).average().orElse(0.0);
                 double avgRecall = evals.stream().mapToDouble(QueryEvaluationResult::getRecall).average().orElse(0.0);
 
                 if (profiler != null) {
                     profiler.recordQueryMetric("Q" + q + "_topK" + topK, serverMs, clientMs, avgRatio);
                     for (QueryEvaluationResult r : evals) {
-                        profiler.recordTopKVariants(
-                                "Q" + q + "_topK" + topK,
-                                r.getTopKRequested(),
-                                r.getRetrieved(),
-                                r.getRatio(),
-                                r.getRecall(),
-                                r.getTimeMs()
-                        );
+                        profiler.recordTopKVariants("Q" + q + "_topK" + topK,
+                                r.getTopKRequested(), r.getRetrieved(), r.getRatio(), r.getRecall(), r.getTimeMs());
                     }
                 }
 
@@ -475,31 +490,6 @@ public class ForwardSecureANNSystem {
         return this.indexService;
     }
 
-    private double computeRatio(double[] query, List<QueryResult> predicted, List<double[]> vectors, int[] gtIndices) {
-        if (predicted.isEmpty() || gtIndices.length == 0) return Double.MAX_VALUE;
-
-        double ratioSum = 0.0;
-        int count = Math.min(predicted.size(), gtIndices.length);
-
-        for (int i = 0; i < count; i++) {
-            double predDist = predicted.get(i).getDistance();
-            double trueDist = computeDistance(query, vectors.get(gtIndices[i]));
-            ratioSum += predDist / trueDist;
-        }
-
-        return ratioSum / count;
-    }
-
-    private double computeDistance(double[] a, double[] b) {
-        if (a.length != b.length) throw new IllegalArgumentException("Vector dimension mismatch");
-        double sum = 0.0;
-        for (int i = 0; i < a.length; i++) {
-            double diff = a[i] - b[i];
-            sum += diff * diff;
-        }
-        return Math.sqrt(sum);
-    }
-
     public QueryService getQueryService() {
         return this.queryService;
     }
@@ -508,24 +498,31 @@ public class ForwardSecureANNSystem {
         return this.profiler;
     }
 
+    /** Disable System.exit on shutdown (for tests). */
+    public void setExitOnShutdown(boolean exitOnShutdown) {
+        this.exitOnShutdown = exitOnShutdown;
+    }
+
     public void flushAll() throws IOException {
         logger.info("ForwardSecureANNSystem flushAll started");
-        pointBuffer.flushAll();
-        indexService.flushBuffers();
-        metadataManager.saveIndexVersion(currentVersion);
+        EncryptedPointBuffer buf = indexService.getPointBuffer();
+        if (buf != null) buf.flushAll();
+        metadataManager.saveIndexVersion(keyService.getCurrentVersion().getVersion());
         logger.info("ForwardSecureANNSystem flushAll completed");
     }
 
     public void shutdown() {
         System.out.printf(
-                "\n=== System Shutdown ===%n" +
-                        "Total indexing time: %d ms%n" +
-                        "Total query time: %d ms%n%n",
+                "%n=== System Shutdown ===%nTotal indexing time: %d ms%nTotal query time: %d ms%n%n",
                 TimeUnit.NANOSECONDS.toMillis(totalIndexingTime),
                 TimeUnit.NANOSECONDS.toMillis(totalQueryTime)
         );
         try {
             logger.info("Shutdown sequence started");
+
+            // Flush BEFORE closing any stores
+            logger.info("Performing final flushAll()");
+            flushAll();
 
             if (indexService != null) {
                 logger.info("Flushing indexService buffers...");
@@ -542,20 +539,15 @@ public class ForwardSecureANNSystem {
                 logger.info("Profiler CSVs exported");
             }
 
-            // ... Other shutdown steps ...
-
             if (metadataManager != null) {
                 logger.info("Printing metadata summary...");
                 metadataManager.printSummary();
                 logger.info("Logging metadata stats...");
                 metadataManager.logStats();
-                System.out.println("🔻 Closing metadataManager...");
+                logger.info("Closing metadataManager...");
                 metadataManager.close();
-                System.out.println("✅ metadataManager closed successfully.");
+                logger.info("metadataManager closed successfully.");
             }
-
-            logger.info("Performing final flushAll()");
-            flushAll();
 
         } catch (Exception e) {
             logger.error("Unexpected error during shutdown", e);
@@ -574,6 +566,9 @@ public class ForwardSecureANNSystem {
             logger.info("Requesting GC cleanup...");
             System.gc();
             logger.info("Shutdown complete");
+            if (exitOnShutdown && !"true".equals(System.getProperty("test.env"))) {
+                System.exit(0);
+            }
         }
     }
 
@@ -583,30 +578,31 @@ public class ForwardSecureANNSystem {
             System.exit(1);
         }
 
-        String configFile = args[0];
-        String dataPath = args[1];
-        String queryPath = args[2];
-        String keysFile = args[3];
+        String configFile  = args[0];
+        String dataPath    = args[1];
+        String queryPath   = args[2];
+        String keysFile    = args[3];
         List<Integer> dimensions = Arrays.stream(args[4].split(",")).map(Integer::parseInt).collect(Collectors.toList());
-        Path metadataPath = Paths.get(args[5]);
+        Path metadataPath  = Paths.get(args[5]);
         String groundtruthPath = args[6];
         int batchSize = args.length >= 8 ? Integer.parseInt(args[7]) : 10000;
 
         Files.createDirectories(metadataPath);
-
-        Path keysPath = metadataPath.resolve("keys");
+        Path keysPath   = metadataPath.resolve("keys");
         Path pointsPath = metadataPath.resolve("points");
         Path metaDBPath = metadataPath.resolve("metadata");
-
         Files.createDirectories(keysPath);
         Files.createDirectories(pointsPath);
         Files.createDirectories(metaDBPath);
 
-        RocksDBMetadataManager metadataManager = new RocksDBMetadataManager(metaDBPath.toString(), pointsPath.toString());
+        // Use factory to avoid ctor access shenanigans
+        RocksDBMetadataManager metadataManager =
+                RocksDBMetadataManager.create(metaDBPath.toString(), pointsPath.toString());
 
         KeyManager keyManager = new KeyManager(keysPath.toString());
         KeyRotationPolicy policy = new KeyRotationPolicy(100000, 999_999);
-        KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(keyManager, policy, metaDBPath.toString(), metadataManager, null);
+        KeyRotationServiceImpl keyService =
+                new KeyRotationServiceImpl(keyManager, policy, metaDBPath.toString(), metadataManager, null);
 
         CryptoService cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
         keyService.setCryptoService(cryptoService);
@@ -615,6 +611,10 @@ public class ForwardSecureANNSystem {
                 configFile, dataPath, keysFile, dimensions, metadataPath, false,
                 metadataManager, cryptoService, batchSize
         );
+
+        if ("true".equals(System.getProperty("disable.exit"))) {
+            sys.setExitOnShutdown(false);
+        }
 
         int dim = dimensions.get(0);
         sys.runEndToEnd(dataPath, queryPath, dim, groundtruthPath);

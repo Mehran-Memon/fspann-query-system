@@ -10,13 +10,10 @@ import com.fspann.query.service.QueryServiceImpl;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
-import org.rocksdb.Options;
-import org.rocksdb.RocksDB;
 
-import java.io.IOException;
-import java.nio.file.*;
-import java.util.*;
-import java.util.stream.Stream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -33,50 +30,13 @@ class QueryEvaluationTest {
     }
 
     @AfterEach
-    void tearDown() throws Exception {
+    void tearDown() {
         if (system != null) {
-            try {
-                system.shutdown(); // Must call this before metadataManager.close()
-            } catch (Exception e) {
-                System.err.println("Failed to shutdown system: " + e.getMessage());
-            }
+            system.shutdown();
             system = null;
         }
-        if (metadataManager != null) {
-            try {
-                RocksDBTestCleaner.clean(metadataManager); // Call BEFORE close()
-                metadataManager.close();
-            } catch (Exception e) {
-                System.err.println("Failed to close metadata manager: " + e.getMessage());
-            }
-            metadataManager = null;
-        }
-
-        // Retry deleting the temp directory to handle Windows file locking
-        int maxRetries = 5;
-        for (int i = 0; i < maxRetries; i++) {
-            try (Stream<Path> walk = Files.walk(tempDir)) {
-                walk.sorted(Comparator.reverseOrder()).forEach(path -> {
-                    try {
-                        Files.deleteIfExists(path);
-                    } catch (IOException e) {
-                        System.err.println("Failed to delete " + path + ": " + e.getMessage());
-                    }
-                });
-                break; // If successful, exit the retry loop
-            } catch (IOException e) {
-                System.err.println("Retry " + (i + 1) + " failed to delete temp directory: " + e.getMessage());
-                if (i < maxRetries - 1) {
-                    Thread.sleep(500); // Wait before retrying
-                } else {
-                    System.err.println("Failed to delete temp directory after " + maxRetries + " attempts");
-                }
-            }
-        }
-
-        // Force GC to clean native handles
-        System.gc();
-        Thread.sleep(500); // Increased delay to ensure native resources are released
+        metadataManager = null; // closed by system
+        // Let @TempDir clean up automatically.
     }
 
     @Test
@@ -132,32 +92,35 @@ class QueryEvaluationTest {
             }
         """);
 
-        Path keys = tempDir.resolve("keys.ser");
-        List<Integer> dimensions = List.of(2);
-
+        // keys & metadata dirs
+        Path keysDir = tempDir.resolve("keys");
+        Files.createDirectories(keysDir);
         Path metadataDir = tempDir.resolve("metadata");
         Path pointsDir = tempDir.resolve("points");
         Files.createDirectories(metadataDir);
         Files.createDirectories(pointsDir);
 
-        metadataManager = new RocksDBMetadataManager(metadataDir.toString(), pointsDir.toString());
+        metadataManager = RocksDBMetadataManager.create(metadataDir.toString(), pointsDir.toString());
 
-        KeyManager keyManager = new KeyManager(keys.toString());
+        KeyManager keyManager = new KeyManager(keysDir.toString());
         KeyRotationPolicy policy = new KeyRotationPolicy(2, 1000);
-        KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(keyManager, policy, metadataDir.toString(), metadataManager, null);
+        KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(
+                keyManager, policy, metadataDir.toString(), metadataManager, null);
         CryptoService cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
         keyService.setCryptoService(cryptoService);
 
-        return new ForwardSecureANNSystem(
+        ForwardSecureANNSystem s = new ForwardSecureANNSystem(
                 configFile.toString(),
                 dataFile.toString(),
-                keys.toString(),
-                dimensions,
+                keysDir.toString(),
+                List.of(2),
                 tempDir,
                 true,
                 metadataManager,
                 cryptoService,
                 1000
         );
+        s.setExitOnShutdown(false);
+        return s;
     }
 }

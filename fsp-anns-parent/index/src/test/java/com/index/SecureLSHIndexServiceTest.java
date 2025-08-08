@@ -26,8 +26,13 @@ class SecureLSHIndexServiceTest {
         crypto = mock(CryptoService.class);
         keyService = mock(KeyLifeCycleService.class);
         metadataManager = mock(RocksDBMetadataManager.class);
+
+        when(metadataManager.getPointsBaseDir())
+                .thenReturn(System.getProperty("java.io.tmpdir") + "/points");
+
         indexService = new SecureLSHIndexService(crypto, keyService, metadataManager);
     }
+
 
     @Test
     void testInsert_VectorEncryptedCorrectly() throws Exception {

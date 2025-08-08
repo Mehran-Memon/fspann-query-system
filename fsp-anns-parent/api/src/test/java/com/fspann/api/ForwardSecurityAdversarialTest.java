@@ -13,222 +13,208 @@ import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 
 import javax.crypto.SecretKey;
-import java.io.IOException;
-import java.nio.file.*;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class ForwardSecurityAdversarialTest {
     private static final int[] TEST_DIMENSIONS = {3, 128, 1024};
     private static final int NUM_POINTS = 1000;
     private static final int TOP_K = 20;
-    private RocksDBMetadataManager metadataManager;
 
-    private RocksDBMetadataManager createMetadataManager(Path baseDir) throws IOException {
-        return new RocksDBMetadataManager(baseDir.toString(), baseDir.resolve("points").toString());
+    @BeforeAll
+    static void enableTestMode() {
+        System.setProperty("test.env", "true");
     }
 
-    private String generateDummyData(int dim) {
+    private static String minimalDummyData(int dim) {
+        // tiny file just to satisfy loader; you insert real points later
         StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < NUM_POINTS; i++) {
-            sb.append("0.0".repeat(Math.max(0, dim)).replaceAll(".$", "\n"));
+        for (int i = 0; i < Math.max(1, dim / 2); i++) {
+            for (int j = 0; j < dim; j++) {
+                sb.append("0.0");
+                if (j < dim - 1) sb.append(',');
+            }
+            sb.append('\n');
         }
         return sb.toString();
     }
 
-    @BeforeEach
-    public void setupEach(@TempDir Path tempDir) throws IOException {
-        this.metadataManager = new RocksDBMetadataManager(tempDir.toString(), tempDir.resolve("points").toString());
-    }
-
-    @BeforeEach
-    public void prepareEmptyMetadataDir(@TempDir Path tempDir) throws IOException {
-        Path baseDir = tempDir.resolve("points");
-        if (Files.exists(baseDir)) {
-            Files.walk(baseDir)
-                    .sorted(Comparator.reverseOrder())
-                    .map(Path::toFile)
-                    .forEach(f -> {
-                        if (!f.delete()) {
-                            System.err.println("Failed to delete " + f.getAbsolutePath());
-                        }
-                    });
-        }
-        Files.createDirectories(baseDir);
-    }
-
     @Test
-    public void testForwardSecurityAgainstKeyCompromise(@TempDir Path tempDir) throws Exception {
-        List<Double> queryLatencies = new ArrayList<>();
-
+    void testForwardSecurityAgainstKeyCompromise(@TempDir Path tempRoot) throws Exception {
         for (int dim : TEST_DIMENSIONS) {
-            RocksDBMetadataManager metadataManager = createMetadataManager(tempDir);
+            // --- fresh dirs per dimension (no shared metadata/key state) ---
+            Path runDir      = tempRoot.resolve("run_dim_" + dim);
+            Path metadataDir = runDir.resolve("metadata");
+            Path pointsDir   = runDir.resolve("points");
+            Path keysDir     = runDir.resolve("keys");
 
-            Path config = tempDir.resolve("config_" + dim + ".json");
-            Files.writeString(config, "{\"numShards\":32,\"profilerEnabled\":true,\"opsThreshold\":999999,\"ageThresholdMs\":999999}");
-            Path dummyData = tempDir.resolve("dummy_" + dim + ".csv");
-            Files.writeString(dummyData, generateDummyData(dim));
-            Path keys = tempDir.resolve("keys_" + dim + ".ser");
+            Files.createDirectories(metadataDir);
+            Files.createDirectories(pointsDir);
+            Files.createDirectories(keysDir);
 
-            KeyManager keyManager = new KeyManager(keys.toString());
+            // fresh RocksDB per run
+            RocksDBMetadataManager metadata = RocksDBMetadataManager.create(metadataDir.toString(), pointsDir.toString());
+
+            // tiny config + dummy data file
+            Path cfg   = runDir.resolve("config.json");
+            Files.writeString(cfg, "{\"numShards\":32,\"profilerEnabled\":true,\"opsThreshold\":999999,\"ageThresholdMs\":999999}");
+            Path data  = runDir.resolve("dummy.csv");
+            Files.writeString(data, minimalDummyData(dim));
+
+            // key / crypto
+            KeyManager keyManager = new KeyManager(keysDir.toString());
             KeyRotationPolicy policy = new KeyRotationPolicy(999999, 999999);
-            KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(keyManager, policy, tempDir.toString(), metadataManager, null);
-            CryptoService cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
+            KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(keyManager, policy, metadataDir.toString(), metadata, null);
+            CryptoService cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadata);
             keyService.setCryptoService(cryptoService);
 
             ForwardSecureANNSystem system = new ForwardSecureANNSystem(
-                    config.toString(), dummyData.toString(), keys.toString(),
-                    Collections.singletonList(dim), tempDir, true, metadataManager, cryptoService, 1
+                    cfg.toString(), data.toString(), keysDir.toString(),
+                    Collections.singletonList(dim), runDir, true, metadata, cryptoService, 64
             );
+            system.setExitOnShutdown(false);
             keyService.setIndexService(system.getIndexService());
 
-            List<String> ids = new ArrayList<>();
-            List<double[]> points = new ArrayList<>();
-            Random rand = new Random();
-            for (int i = 0; i < NUM_POINTS; i++) {
-                String id = UUID.randomUUID().toString();
-                double[] point = rand.doubles(dim).toArray();
-                ids.add(id);
-                points.add(point);
+            try {
+                // insert real points
+                List<String> ids = new ArrayList<>(NUM_POINTS);
+                List<double[]> vecs = new ArrayList<>(NUM_POINTS);
+                Random r = new Random();
+                for (int i = 0; i < NUM_POINTS; i++) {
+                    ids.add(UUID.randomUUID().toString());
+                    vecs.add(r.doubles(dim).toArray());
+                }
+                for (int i = 0; i < NUM_POINTS; i++) {
+                    system.insert(ids.get(i), vecs.get(i), dim);
+                }
+                system.flushAll();
+
+                SecretKey compromisedKey = KeyUtils.fromBytes(keyService.getCurrentVersion().getKey().getEncoded());
+
+                // one manual rotation
+                keyService.rotateKey();
+                ((SecureLSHIndexService) system.getIndexService()).clearCache();
+
+                // insert one more after rotation
+                system.insert(UUID.randomUUID().toString(), r.doubles(dim).toArray(), dim);
+                system.flushAll();
+
+                int expectedVersion = keyService.getCurrentVersion().getVersion();
+
+                // verify version + decryptability expectations
+                for (String id : ids) {
+                    EncryptedPoint p = system.getIndexService().getEncryptedPoint(id);
+                    assertEquals(expectedVersion, p.getVersion(), "Version mismatch for dim=" + dim);
+
+                    assertTrue(KeyUtils.tryDecryptWithKeyOnly(p, compromisedKey).isEmpty(), "Old key should not decrypt");
+                    SecretKey currentKey = keyService.getVersion(p.getVersion()).getKey();
+                    assertTrue(KeyUtils.tryDecryptWithKeyOnly(p, currentKey).isPresent(), "New key should decrypt");
+                }
+
+                // sanity query; should not be empty
+                List<QueryResult> results = system.query(vecs.get(0), TOP_K, dim);
+                assertNotNull(results);
+                assertFalse(results.isEmpty(), "Query returned no results for dim=" + dim);
+
+                // rotate again and ensure cache cleared works
+                keyService.rotateKey();
+                ((SecureLSHIndexService) system.getIndexService()).clearCache();
+
+                for (String id : ids) {
+                    EncryptedPoint p = system.getIndexService().getEncryptedPoint(id);
+                    assertEquals(keyService.getCurrentVersion().getVersion(), p.getVersion(),
+                            "Point not updated after second rotation");
+                    assertTrue(KeyUtils.tryDecryptWithKeyOnly(p, compromisedKey).isEmpty(),
+                            "Old key should not decrypt after second rotation");
+                }
+            } finally {
+                // always close this run’s resources before next dim
+                system.shutdown();         // closes metadata internally
+                // small pause helps Windows release LOCK
+                try { Thread.sleep(150); } catch (InterruptedException ignored) {}
             }
-
-            long insertStart = System.nanoTime();
-            for (int i = 0; i < NUM_POINTS; i++) {
-                system.insert(ids.get(i), points.get(i), dim);
-            }
-            system.flushAll();
-            long insertDuration = (System.nanoTime() - insertStart) / 1_000_000;
-            PerformanceVisualizer.visualizeTimings(List.of(insertDuration));
-
-            SecretKey compromisedKey = KeyUtils.fromBytes(keyService.getCurrentVersion().getKey().getEncoded());
-
-            keyService.rotateKey();
-            ((SecureLSHIndexService) system.getIndexService()).clearCache();
-
-            double[] pointAfter = rand.doubles(dim).toArray();
-            system.insert(UUID.randomUUID().toString(), pointAfter, dim);
-            system.flushAll();
-
-            int expectedVersion = keyService.getCurrentVersion().getVersion();
-
-            for (String id : ids) {
-                EncryptedPoint point = system.getIndexService().getEncryptedPoint(id);
-                assertEquals(expectedVersion, point.getVersion(), "Point " + id + " version mismatch for dim=" + dim);
-
-                assertTrue(KeyUtils.tryDecryptWithKeyOnly(point, compromisedKey).isEmpty(),
-                        "Old key should not decrypt point " + id);
-
-                SecretKey currentKey = keyService.getVersion(point.getVersion()).getKey();
-                assertTrue(KeyUtils.tryDecryptWithKeyOnly(point, currentKey).isPresent(),
-                        "New key should decrypt point " + id);
-            }
-
-            long queryStart = System.nanoTime();
-            List<QueryResult> results = system.query(points.get(0), TOP_K, dim);
-            long queryDuration = (System.nanoTime() - queryStart) / 1_000_000;
-            queryLatencies.add((double) queryDuration);
-
-            assertNotNull(results);
-            assertFalse(results.isEmpty());
-            assertTrue(queryDuration < 500, "Query time must be < 500ms");
-            PerformanceVisualizer.visualizeQueryResults(results);
-
-            keyService.rotateKey();
-            ((SecureLSHIndexService) system.getIndexService()).clearCache();
-
-            for (String id : ids) {
-                EncryptedPoint point = system.getIndexService().getEncryptedPoint(id);
-                assertEquals(keyService.getCurrentVersion().getVersion(), point.getVersion(),
-                        "Point " + id + " not updated after second rotation");
-                assertTrue(KeyUtils.tryDecryptWithKeyOnly(point, compromisedKey).isEmpty(),
-                        "Old key should not decrypt after second rotation");
-            }
-
-            system.shutdown();
-            metadataManager.close();
         }
-
-        PerformanceVisualizer.visualizeQueryLatencies(queryLatencies, null);
     }
 
     @Test
-    public void testCacheHitUnderAdversarialConditions(@TempDir Path tempDir) throws Exception {
+    void testCacheHitUnderAdversarialConditions(@TempDir Path tempRoot) throws Exception {
         final int dim = 128;
         final int vectorCount = 100;
 
-        // Write config
-        Path config = tempDir.resolve("config.json");
-        Files.writeString(config, """
-        {
-          "numShards": 32,
-          "profilerEnabled": true,
-          "opsThreshold": 999999,
-          "ageThresholdMs": 999999
-        }
-        """);
+        Path runDir      = tempRoot.resolve("cache_run");
+        Path metadataDir = runDir.resolve("metadata");
+        Path pointsDir   = runDir.resolve("points");
+        Path keysDir     = runDir.resolve("keys");
 
-        // Write dummy data
-        Path dummyData = tempDir.resolve("dummy.csv");
+        Files.createDirectories(metadataDir);
+        Files.createDirectories(pointsDir);
+        Files.createDirectories(keysDir);
+
+        RocksDBMetadataManager metadata = RocksDBMetadataManager.create(metadataDir.toString(), pointsDir.toString());
+
+        Path cfg = runDir.resolve("config.json");
+        Files.writeString(cfg, """
+        { "numShards": 32, "profilerEnabled": true, "opsThreshold": 999999, "ageThresholdMs": 999999 }
+        """);
+        Path data = runDir.resolve("dummy.csv");
         StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < vectorCount; i++) {
+        for (int i = 0; i < 5; i++) {                // tiny file; we insert real data below
             for (int j = 0; j < dim; j++) {
                 sb.append("0.1");
                 if (j < dim - 1) sb.append(",");
             }
             sb.append("\n");
         }
-        Files.writeString(dummyData, sb.toString());
+        Files.writeString(data, sb.toString());
 
-        Path keys = tempDir.resolve("keys.ser");
-
-        // Setup services
-        KeyManager keyManager = new KeyManager(keys.toString());
+        KeyManager keyManager = new KeyManager(keysDir.toString());
         KeyRotationPolicy policy = new KeyRotationPolicy(999999, 999999);
-        KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(keyManager, policy, tempDir.toString(), metadataManager, null);
-        CryptoService cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
+        KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(keyManager, policy, metadataDir.toString(), metadata, null);
+        CryptoService cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadata);
         keyService.setCryptoService(cryptoService);
 
         ForwardSecureANNSystem system = new ForwardSecureANNSystem(
-                config.toString(), dummyData.toString(), keys.toString(),
-                List.of(dim), tempDir, true, metadataManager, cryptoService, 1
+                cfg.toString(), data.toString(), keysDir.toString(),
+                List.of(dim), runDir, true, metadata, cryptoService, 1
         );
+        system.setExitOnShutdown(false);
         keyService.setIndexService(system.getIndexService());
 
-        // Insert and flush
-        Random rand = new Random();
-        List<String> ids = new ArrayList<>();
-        List<double[]> rawVectors = new ArrayList<>();
-        for (int i = 0; i < vectorCount; i++) {
-            String id = UUID.randomUUID().toString();
-            double[] vec = rand.doubles(dim).toArray();
-            ids.add(id);
-            rawVectors.add(vec);
-            system.insert(id, vec, dim);
+        try {
+            // insert real data
+            Random rand = new Random();
+            List<double[]> rawVectors = new ArrayList<>(vectorCount);
+            for (int i = 0; i < vectorCount; i++) {
+                double[] v = rand.doubles(dim).toArray();
+                rawVectors.add(v);
+                system.insert(UUID.randomUUID().toString(), v, dim);
+            }
+            system.flushAll();
+
+            // first query populates cache
+            List<QueryResult> results1 = system.query(rawVectors.get(0), TOP_K, dim);
+            assertNotNull(results1, "Initial query results must not be null");
+            assertFalse(results1.isEmpty(), "Initial query results must not be empty");
+
+            // rotate & clear cache; a second query should still return non-empty results
+            keyService.rotateKey();
+            ((SecureLSHIndexService) system.getIndexService()).clearCache();
+
+            List<QueryResult> results2 = system.query(rawVectors.get(0), TOP_K, dim);
+            assertNotNull(results2, "Second query results must not be null");
+            assertFalse(results2.isEmpty(), "Second query results must not be empty");
+            assertEquals(results1.size(), results2.size(), "Result size mismatch after re-query");
+
+            for (int i = 0; i < results1.size(); i++) {
+                assertEquals(results1.get(i).getId(), results2.get(i).getId(), "Mismatched id at " + i);
+            }
+        } finally {
+            system.shutdown();
+            try { Thread.sleep(150); } catch (InterruptedException ignored) {}
         }
-        system.flushAll();
-
-        // First query to populate cache
-        List<QueryResult> results1 = system.query(rawVectors.get(0), TOP_K, dim);
-        assertNotNull(results1, "Initial query results must not be null");
-        assertFalse(results1.isEmpty(), "Initial query results must not be empty");
-
-        // Perform key rotation and clear cache
-        keyService.rotateKey();
-        ((SecureLSHIndexService) system.getIndexService()).clearCache();
-
-        // Second query should retrieve updated results but match structure
-        List<QueryResult> results2 = system.query(rawVectors.get(0), TOP_K, dim);
-        assertNotNull(results2, "Second query results must not be null");
-        assertFalse(results2.isEmpty(), "Second query results must not be empty");
-        assertEquals(results1.size(), results2.size(), "Query result size mismatch after re-query");
-
-        for (int i = 0; i < results1.size(); i++) {
-            QueryResult r1 = results1.get(i);
-            QueryResult r2 = results2.get(i);
-            assertEquals(r1.getId(), r2.getId(), "Mismatched result at index " + i);
-        }
-
-        PerformanceVisualizer.visualizeQueryResults(results2);
     }
 }

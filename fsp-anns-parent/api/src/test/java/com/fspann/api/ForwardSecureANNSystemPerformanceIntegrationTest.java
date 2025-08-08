@@ -12,27 +12,30 @@ import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
-import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class ForwardSecureANNSystemPerformanceIntegrationTest {
     private static final Logger logger = LoggerFactory.getLogger(ForwardSecureANNSystemPerformanceIntegrationTest.class);
-    private static ForwardSecureANNSystem sys;
-    private static List<double[]> dataset;
+
+    private ForwardSecureANNSystem sys;
+    private List<double[]> dataset;
     private static final int DIMS = 10;
     private static final int VECTOR_COUNT = 1000;
     private static final double MAX_INSERT_MS = 1000.0;
     private static final double MAX_QUERY_MS = 500.0;
-    private static RocksDBMetadataManager metadataManager;
+
+    private RocksDBMetadataManager metadataManager;
+    private Path baseDir;
 
     @BeforeAll
-    public static void setup(@TempDir Path tempDir) throws Exception {
-        Path configPath = tempDir.resolve("config.json");
+    public void setup(@TempDir Path tempDir) throws Exception {
+        this.baseDir = tempDir;
+        Path configPath = baseDir.resolve("config.json");
         Files.writeString(configPath, "{\"numShards\":4, \"profilerEnabled\":true, \"opsThreshold\":2, \"ageThresholdMs\":1000}");
         logger.debug("Created config: {}", configPath);
 
@@ -49,64 +52,48 @@ public class ForwardSecureANNSystemPerformanceIntegrationTest {
             dataset.add(vec);
         }
 
-        Path dataPath = tempDir.resolve("synthetic_gaussian_128d_storage.csv");
+        Path dataPath = baseDir.resolve("synthetic_gaussian_10d.csv");
         Files.writeString(dataPath, sb.toString());
         logger.debug("Generated data file: {} with {} vectors", dataPath, dataset.size());
 
-        Path keysPath = tempDir.resolve("keys.ser");
-        metadataManager = new RocksDBMetadataManager(tempDir.toString(), tempDir.resolve("points").toString());
+        Path metadataDir = baseDir.resolve("metadata");
+        Path pointsDir = baseDir.resolve("points");
+        Files.createDirectories(metadataDir);
+        Files.createDirectories(pointsDir);
+        metadataManager = RocksDBMetadataManager.create(metadataDir.toString(), pointsDir.toString());
 
-        KeyManager keyManager = new KeyManager(keysPath.toString());
+        Path keysDir = baseDir.resolve("keys");
+        Files.createDirectories(keysDir);
+
+        KeyManager keyManager = new KeyManager(keysDir.toString());
         KeyRotationPolicy policy = new KeyRotationPolicy(100, Long.MAX_VALUE);
-        KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(keyManager, policy, tempDir.toString(), metadataManager, null);
+        KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(keyManager, policy, metadataDir.toString(), metadataManager, null);
         CryptoService cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
         keyService.setCryptoService(cryptoService);
 
         sys = new ForwardSecureANNSystem(
                 configPath.toString(),
                 dataPath.toString(),
-                keysPath.toString(),
+                keysDir.toString(),
                 List.of(DIMS),
-                tempDir,
+                baseDir,
                 false,
                 metadataManager,
                 cryptoService,
                 100
         );
-
+        sys.setExitOnShutdown(false);
         logger.info("🚀 System initialized successfully");
     }
 
     @AfterAll
-    public static void tearDown(@TempDir Path tempDir) throws IOException {
+    public void tearDown() {
         if (sys != null) {
             sys.shutdown();
             sys = null;
         }
-        if (metadataManager != null) {
-            metadataManager.close();
-        }
-        for (int i = 0; i < 3; i++) {
-            try (Stream<Path> files = Files.walk(tempDir)) {
-                files.sorted(Comparator.reverseOrder())
-                        .forEach(path -> {
-                            try {
-                                Files.deleteIfExists(path);
-                            } catch (IOException e) {
-                                System.err.println("Failed to delete " + path);
-                            }
-                        });
-                return;
-            } catch (IOException e) {
-                if (i == 2) throw new IOException("Failed to delete temp directory after retries", e);
-                try {
-                    Thread.sleep(100); // Wait before retry
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                }
-            }
-        }
-        System.gc();
+        metadataManager = null; // closed by system.shutdown()
+        // Let @TempDir clean up.
     }
 
     @Test
@@ -149,10 +136,10 @@ public class ForwardSecureANNSystemPerformanceIntegrationTest {
     }
 
     @Test
-    public void testKeyRotationPerformance() throws Exception {
+    public void testKeyRotationPerformance() {
         int initialCount = sys.getIndexedVectorCount();
-        sys.insert("test-id", new double[DIMS], DIMS); // Trigger rotation
-        sys.insert("test-id2", new double[DIMS], DIMS); // Trigger rotation
+        sys.insert("test-id", new double[DIMS], DIMS); // Trigger rotation counts
+        sys.insert("test-id2", new double[DIMS], DIMS); // Trigger rotation counts
         int finalCount = sys.getIndexedVectorCount();
         assertEquals(initialCount + 2, finalCount, "Indexed count should increase by 2");
     }
