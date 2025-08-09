@@ -1,88 +1,67 @@
+// loader/src/main/java/com/fspann/loader/DefaultDataLoader.java
 package com.fspann.loader;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 
-public class DefaultDataLoader implements DataLoader {
-    private final Map<String, FormatLoader> registry = new ConcurrentHashMap<>();
-
-    // NEW: persistent iterators so batches stream across calls
-    private final Map<Path, Iterator<double[]>> vectorIterators = new ConcurrentHashMap<>();
-    private final Map<Path, Iterator<int[]>>    indexIterators  = new ConcurrentHashMap<>();
-
-    public DefaultDataLoader() {
-        registry.put("CSV",   new CsvLoader());
-        registry.put("FVECS", new FvecsLoader());
-        registry.put("IVECS", new IvecsLoader());
-    }
+/**
+ * DefaultDataLoader: maps common ANN benchmark formats to loaders.
+ * - Vectors: .csv, .fvecs (optionally .bvecs if you add BvecsLoader)
+ * - Groundtruth indices: .csv, .ivecs
+ *
+ * NOTE: For big datasets (e.g., SIFT1M/1B), prefer StreamingBatchLoader over loadData().
+ */
+public class DefaultDataLoader {
 
     public FormatLoader lookup(Path file) {
-        String name = file.getFileName().toString();
-        int dot = name.lastIndexOf('.');
-        String ext = (dot >= 0 ? name.substring(dot + 1) : "").toUpperCase(Locale.ROOT);
-        FormatLoader f = registry.get(ext);
-        if (f == null) throw new IllegalArgumentException("No loader for extension: " + ext);
-        return f;
+        String name = file.getFileName().toString().toLowerCase(Locale.ROOT);
+        if (name.endsWith(".csv"))   return new CsvLoader();
+        if (name.endsWith(".fvecs")) return new FvecsLoader();
+        if (name.endsWith(".ivecs")) return new IvecsLoader();
+        // If you add a BvecsLoader:
+        // if (name.endsWith(".bvecs")) return new BvecsLoader();
+        throw new IllegalArgumentException("Unsupported vector/index format: " + name);
     }
 
-    @Override
-    public List<double[]> loadData(String path, int expectedDim, int batchSize) throws IOException {
-        Path file = Paths.get(path).toAbsolutePath().normalize();
+    /** Eager load whole file of vectors (.csv or .fvecs). Use StreamingBatchLoader for huge corpora. */
+    public List<double[]> loadData(String path, int dim) throws IOException {
+        Path p = Path.of(path);
+        String name = p.getFileName().toString().toLowerCase(Locale.ROOT);
 
-        Iterator<double[]> it = vectorIterators.computeIfAbsent(file, f -> {
-            try { return lookup(f).openVectorIterator(f); }
-            catch (IOException e) { throw new UncheckedIOException(e); }
-        });
-
-        List<double[]> batch = new ArrayList<>(Math.max(1, batchSize));
-        while (it.hasNext() && batch.size() < batchSize) {
-            batch.add(it.next());
+        // Guard against passing .ivecs (indices) into the vector path by mistake.
+        if (name.endsWith(".ivecs")) {
+            throw new IllegalArgumentException("loadData() expects vectors (.csv/.fvecs), but got an .ivecs index file: " + name);
         }
-        // Iterator exhausted? remove to allow fresh stream on next call.
-        if (batch.isEmpty()) vectorIterators.remove(file);
 
-        if (expectedDim > 0) {
-            for (double[] v : batch) {
-                if (v.length != expectedDim) {
-                    throw new IllegalArgumentException(
-                            "Vector dimension mismatch: expected " + expectedDim + ", got " + v.length
-                    );
-                }
-            }
+        // (Optional) allow .bvecs if you implement BvecsLoader
+        if (!(name.endsWith(".csv") || name.endsWith(".fvecs") /*|| name.endsWith(".bvecs")*/)) {
+            throw new IllegalArgumentException("Unsupported vector format for loadData(): " + name);
         }
-        return batch;
-    }
 
-    @Override
-    public List<double[]> loadData(String path, int batchSize) throws IOException {
-        return loadData(path, 0, batchSize);
-    }
-
-    @Override
-    public List<int[]> loadGroundTruth(String path, int batchSize) throws IOException {
-        Path file = Paths.get(path).toAbsolutePath().normalize();
-
-        Iterator<int[]> it = indexIterators.computeIfAbsent(file, f -> {
-            try { return lookup(f).openIndexIterator(f); }
-            catch (IOException e) { throw new UncheckedIOException(e); }
-        });
-
-        List<int[]> batch = new ArrayList<>(Math.max(1, batchSize));
-        while (it.hasNext() && batch.size() < batchSize) {
-            batch.add(it.next());
+        FormatLoader fl = lookup(p);
+        List<double[]> out = new ArrayList<>();
+        for (Iterator<double[]> it = fl.openVectorIterator(p); it.hasNext(); ) {
+            double[] v = it.next();
+            if (v.length == dim) out.add(v); // keep only exact-dim rows
         }
-        if (batch.isEmpty()) indexIterators.remove(file);
-        return batch;
+        return out;
     }
 
-    /** Optional helper to restart streaming from the beginning for a file. */
-    public void reset(String path) {
-        Path file = Paths.get(path).toAbsolutePath().normalize();
-        vectorIterators.remove(file);
-        indexIterators.remove(file);
+    /** Eager load groundtruth indices (.csv or .ivecs). */
+    public List<int[]> loadGroundtruth(String path) throws IOException {
+        Path p = Path.of(path);
+        String name = p.getFileName().toString().toLowerCase(Locale.ROOT);
+
+        if (!(name.endsWith(".csv") || name.endsWith(".ivecs"))) {
+            throw new IllegalArgumentException("Unsupported groundtruth format (expected .csv or .ivecs): " + name);
+        }
+
+        FormatLoader fl = lookup(p);
+        List<int[]> out = new ArrayList<>();
+        for (Iterator<int[]> it = fl.openIndexIterator(p); it.hasNext(); ) {
+            out.add(it.next());
+        }
+        return out;
     }
 }

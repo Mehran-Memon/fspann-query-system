@@ -114,8 +114,7 @@ public class AesGcmCryptoService implements CryptoService {
 
                 // Persist minimal metadata (version/dim) for filtering and rotation sanity
                 metadataManager.updateVectorMetadata(id, Map.of(
-                        "version", String.valueOf(cachedVersion.getVersion()),
-                        "dim", String.valueOf(vector.length)
+                        "version", String.valueOf(cachedVersion.getVersion())
                 ));
                 logger.debug("Encrypted point {} with version {}", id, cachedVersion.getVersion());
                 return point;
@@ -211,8 +210,7 @@ public class AesGcmCryptoService implements CryptoService {
                 );
 
                 metadataManager.updateVectorMetadata(pt.getId(), Map.of(
-                        "version", String.valueOf(newVersion),
-                        "dim", String.valueOf(pt.getVectorLength())
+                        "version", String.valueOf(newVersion)
                 ));
                 logger.debug("Re-encrypted point {} from v{} to v{}", pt.getId(), oldVersion, newVersion);
                 return reEncrypted;

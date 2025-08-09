@@ -209,6 +209,7 @@ public class ForwardSecureANNSystem {
         if (profiler != null) profiler.start("batchInsert");
 
         for (int i = 0; i < vectors.size(); i += BATCH_SIZE) {
+            keyService.rotateIfNeeded();
             List<double[]> slice = vectors.subList(i, Math.min(i + BATCH_SIZE, vectors.size()));
             List<String> ids = new ArrayList<>(slice.size());
             List<double[]> valid = new ArrayList<>(slice.size());
@@ -248,7 +249,7 @@ public class ForwardSecureANNSystem {
 
         if (profiler != null) profiler.start("insert");
         try {
-            keyService.incrementOperation();
+            // REMOVE this line: keyService.incrementOperation();
 
             if (keyService instanceof KeyRotationServiceImpl) {
                 List<EncryptedPoint> updated = ((KeyRotationServiceImpl) keyService).rotateIfNeededAndReturnUpdated();
@@ -257,7 +258,7 @@ public class ForwardSecureANNSystem {
                 keyService.rotateIfNeeded();
             }
 
-            indexService.insert(id, vector);
+            indexService.insert(id, vector); // index layer will increment ops
             indexedCount.incrementAndGet();
         } finally {
             if (profiler != null) {
@@ -309,7 +310,7 @@ public class ForwardSecureANNSystem {
         QueryToken token = factoryForDim(dim).create(queryVector, topK);
 
         // record plaintext query (for artifact export) — safe for tests/local runs
-        recentQueries.add(queryVector.clone());
+        recordRecent(queryVector);
 
         List<QueryResult> cached = cache.get(token);
         if (cached != null) {
@@ -343,7 +344,7 @@ public class ForwardSecureANNSystem {
         QueryToken token = cloakQuery(queryVector, dim, topK);
 
         // record pre-cloak version; you could also store the cloaked vector if you prefer
-        recentQueries.add(queryVector.clone());
+        recordRecent(queryVector);
 
         List<QueryResult> cached = cache.get(token);
         if (cached != null) {
@@ -495,6 +496,14 @@ public class ForwardSecureANNSystem {
         }
     }
 
+    private void recordRecent(double[] v) {
+        double[] copy = v.clone();
+        synchronized (recentQueries) {
+            if (recentQueries.size() >= 1000) recentQueries.remove(0);
+            recentQueries.add(copy);
+        }
+    }
+
     /** Dump profiler CSVs, query list, and copies of keys/metadata/points to outDir. */
     public void exportArtifacts(Path outDir) throws IOException {
         Files.createDirectories(outDir);
@@ -543,6 +552,7 @@ public class ForwardSecureANNSystem {
     private void tryCopyPath(Path src, Path dst) {
         try {
             if (src == null || !Files.exists(src)) return;
+
             if (Files.isDirectory(src)) {
                 Files.walk(src).forEach(sp -> {
                     try {
@@ -552,8 +562,13 @@ public class ForwardSecureANNSystem {
                     } catch (IOException e) { logger.warn("Copy failed for {}", sp, e); }
                 });
             } else {
-                Files.createDirectories(dst.getParent());
-                Files.copy(src, dst, StandardCopyOption.REPLACE_EXISTING);
+                // src is a single file: copy into dst directory
+                Path dstDir = dst;
+                if (!Files.exists(dstDir) || !Files.isDirectory(dstDir)) {
+                    Files.createDirectories(dstDir);
+                }
+                Path target = dstDir.resolve(src.getFileName());
+                Files.copy(src, target, StandardCopyOption.REPLACE_EXISTING);
             }
         } catch (Exception e) {
             logger.warn("Failed copying {} → {}", src, dst, e);
@@ -592,13 +607,6 @@ public class ForwardSecureANNSystem {
                 logger.info("Shutting down indexService...");
                 indexService.shutdown();
                 logger.info("IndexService shutdown complete");
-            }
-
-            if (profiler != null) {
-                logger.info("Exporting profiler data...");
-                profiler.exportToCSV("profiler_metrics.csv");
-                topKProfiler.export("topk_evaluation.csv");
-                logger.info("Profiler CSVs exported");
             }
 
             if (metadataManager != null) {
@@ -647,7 +655,7 @@ public class ForwardSecureANNSystem {
         List<Integer> dimensions = Arrays.stream(args[4].split(",")).map(Integer::parseInt).collect(Collectors.toList());
         Path metadataPath  = Paths.get(args[5]);
         String groundtruthPath = args[6];
-        int batchSize = args.length >= 8 ? Integer.parseInt(args[7]) : 10_000;
+        int batchSize = args.length >= 8 ? Integer.parseInt(args[7]) : 100_000;
 
         Files.createDirectories(metadataPath);
         Path pointsPath = metadataPath.resolve("points");

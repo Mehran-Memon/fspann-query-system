@@ -30,7 +30,13 @@ public class SecureLSHIndexService implements IndexService {
     private final int defaultNumTables;
 
     private final Map<Integer, DimensionContext> dimensionContexts = new ConcurrentHashMap<>();
-    private final Map<String, EncryptedPoint> indexedPoints = new ConcurrentHashMap<>();
+    private final Map<String, EncryptedPoint> indexedPoints =
+            Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, true) {
+                private static final int MAX = 200_000; // tune for your box
+                @Override protected boolean removeEldestEntry(Map.Entry<String,EncryptedPoint> e) {
+                    return size() > MAX;
+                }
+            });
 
     public SecureLSHIndexService(CryptoService crypto,
                                  KeyLifeCycleService keyService,
