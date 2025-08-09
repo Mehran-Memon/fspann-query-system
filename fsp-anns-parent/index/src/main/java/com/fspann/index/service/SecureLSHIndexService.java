@@ -11,16 +11,13 @@ import com.fspann.index.core.SecureLSHIndex;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import com.fspann.common.QueryToken;
+
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class SecureLSHIndexService implements IndexService {
     private static final Logger logger = LoggerFactory.getLogger(SecureLSHIndexService.class);
-
-    private static final int DEFAULT_NUM_BUCKETS = 32;
-    private static final int DEFAULT_NUM_TABLES  = 4;
 
     private final CryptoService crypto;
     private final KeyLifeCycleService keyService;
@@ -29,7 +26,6 @@ public class SecureLSHIndexService implements IndexService {
     private final EvenLSH lsh;            // optional injected LSH (tests)
     private final EncryptedPointBuffer buffer;
 
-    // Configurable defaults for new dimension contexts
     private final int defaultNumBuckets;
     private final int defaultNumTables;
 
@@ -41,11 +37,9 @@ public class SecureLSHIndexService implements IndexService {
                                  RocksDBMetadataManager metadataManager) {
         this(crypto, keyService, metadataManager,
                 null, null, createBufferFromManager(metadataManager),
-                /*defaultNumBuckets*/ 32,
-                /*defaultNumTables*/  4);
+                32, 4);
     }
 
-    // NEW: ctor with defaults
     public SecureLSHIndexService(CryptoService crypto,
                                  KeyLifeCycleService keyService,
                                  RocksDBMetadataManager metadataManager,
@@ -83,12 +77,8 @@ public class SecureLSHIndexService implements IndexService {
         });
     }
 
-    // NEW: let API/token factory fetch the exact LSH for a dimension
-    public EvenLSH getLshForDimension(int dimension) {
-        return getOrCreateContext(dimension).getLsh();
-    }
+    public EvenLSH getLshForDimension(int dimension) { return getOrCreateContext(dimension).getLsh(); }
 
-    // (optional) convenience factory used by your AppBootstrap earlier
     public static SecureLSHIndexService fromConfig(CryptoService crypto,
                                                    KeyLifeCycleService keyService,
                                                    RocksDBMetadataManager metadata,
@@ -120,7 +110,10 @@ public class SecureLSHIndexService implements IndexService {
         return x;
     }
 
-    /** Batch inserts raw vectors with IDs. */
+    // ---------------------------------------------------------------------
+    // IndexService API
+    // ---------------------------------------------------------------------
+
     public void batchInsert(List<String> ids, List<double[]> vectors) {
         if (ids == null || vectors == null || ids.size() != vectors.size()) {
             throw new IllegalArgumentException("IDs and vectors must be non-null and of equal size");
@@ -159,7 +152,7 @@ public class SecureLSHIndexService implements IndexService {
             return; // don't count failed writes
         }
 
-        // <-- rotation accounting
+        // rotation accounting (kept for compatibility)
         keyService.incrementOperation();
     }
 
@@ -181,7 +174,7 @@ public class SecureLSHIndexService implements IndexService {
 
         EncryptedPoint ep = new EncryptedPoint(
                 enc.getId(),
-                perTableBuckets.get(0), // legacy field; not used semantically
+                perTableBuckets.get(0), // legacy field
                 enc.getIv(),
                 enc.getCiphertext(),
                 enc.getVersion(),
@@ -189,7 +182,7 @@ public class SecureLSHIndexService implements IndexService {
                 perTableBuckets
         );
 
-        insert(ep); // insert() calls incrementOperation() after persistence
+        insert(ep);
     }
 
     @Override
@@ -203,21 +196,15 @@ public class SecureLSHIndexService implements IndexService {
         }
         SecureLSHIndex idx = ctx.getIndex();
 
-        // Ensure per-table expansions exist
         final List<List<Integer>> perTable;
         if (token.hasPerTable()) {
             perTable = token.getTableBuckets();
         } else {
-            // derive expansions from legacy buckets / query vector
             perTable = PartitioningPolicy.expansionsForQuery(
-                    ctx.getLsh(),
-                    token.getPlaintextQuery(),
-                    idx.getNumHashTables(),
-                    token.getTopK()
+                    ctx.getLsh(), token.getPlaintextQuery(), idx.getNumHashTables(), token.getTopK()
             );
         }
 
-        // Build a per-table token for the index (re-using all metadata)
         QueryToken perTableToken = new QueryToken(
                 perTable,
                 token.getIv(),
@@ -233,7 +220,6 @@ public class SecureLSHIndexService implements IndexService {
         List<EncryptedPoint> candidates = idx.queryEncrypted(perTableToken);
         if (candidates.isEmpty()) return Collections.emptyList();
 
-        // Metadata filter: version & dimension (kept from previous behavior)
         Map<String, Map<String, String>> metas = fetchMetadata(candidates);
         List<EncryptedPoint> filtered = new ArrayList<>(candidates.size());
         for (EncryptedPoint pt : candidates) {
@@ -247,17 +233,13 @@ public class SecureLSHIndexService implements IndexService {
         return filtered;
     }
 
-    @Override
-    public void delete(String id) {
+    @Override public void delete(String id) {
         Objects.requireNonNull(id, "Point ID cannot be null");
         EncryptedPoint pt = indexedPoints.remove(id);
         if (pt != null) {
             DimensionContext ctx = dimensionContexts.get(pt.getVectorLength());
-            if (ctx != null) {
-                ctx.getIndex().removePoint(id);
-            } else {
-                logger.warn("No context found for dimension {} during delete", pt.getVectorLength());
-            }
+            if (ctx != null) ctx.getIndex().removePoint(id);
+            else logger.warn("No context found for dimension {} during delete", pt.getVectorLength());
         }
     }
 
@@ -269,15 +251,9 @@ public class SecureLSHIndexService implements IndexService {
         return out;
     }
 
-    // Legacy no-op (kept to satisfy IndexService, but no shard semantics now)
-    @Override
-    public void markDirty(int shardId) { /* no-op in proposal-aligned design */ }
-
-    @Override
-    public int getIndexedVectorCount() { return indexedPoints.size(); }
-
-    @Override
-    public Set<Integer> getRegisteredDimensions() { return dimensionContexts.keySet(); }
+    @Override public void markDirty(int shardId) { /* no-op */ }
+    @Override public int getIndexedVectorCount() { return indexedPoints.size(); }
+    @Override public Set<Integer> getRegisteredDimensions() { return dimensionContexts.keySet(); }
 
     @Override
     public int getVectorCountForDimension(int dimension) {
@@ -301,8 +277,7 @@ public class SecureLSHIndexService implements IndexService {
 
     public void flushBuffers() { buffer.flushAll(); }
 
-    @Override
-    public EncryptedPointBuffer getPointBuffer() { return buffer; }
+    @Override public EncryptedPointBuffer getPointBuffer() { return buffer; }
 
     @Override
     public int getShardIdForVector(double[] vector) {
@@ -326,14 +301,14 @@ public class SecureLSHIndexService implements IndexService {
         DimensionContext ctx = getOrCreateContext(query.length);
         SecureLSHIndex idx = ctx.getIndex();
         Map<Integer, Double> out = new LinkedHashMap<>();
-        int N = Math.max(1, idx.getPointCount()); // avoid div-by-zero
+        int N = Math.max(1, idx.getPointCount());
 
         for (int k : topKs) {
             List<List<Integer>> perTable = PartitioningPolicy
                     .expansionsForQuery(ctx.getLsh(), query, idx.getNumHashTables(), k);
             int cand = idx.candidateCount(perTable);
             double ratio = cand / (double) N;
-            out.put(k, ratio); // <--- populate
+            out.put(k, ratio);
         }
         return out;
     }

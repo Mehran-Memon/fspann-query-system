@@ -50,6 +50,13 @@ public class ForwardSecureANNSystem {
     private int totalInserted = 0;
     private final int tokenNumTables;
 
+    // artifact/export helpers (now aligned with FsPaths)
+    private final Path metaDBPath;
+    private final Path pointsPath;
+    private final Path keyStorePath;
+    private final java.util.List<double[]> recentQueries =
+            java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+
     private final ExecutorService executor;
     private boolean exitOnShutdown = false;
 
@@ -75,7 +82,7 @@ public class ForwardSecureANNSystem {
         this.BATCH_SIZE = batchSize;
         this.executor = Executors.newFixedThreadPool(Math.max(1, Runtime.getRuntime().availableProcessors() / 2));
 
-        // Load config (via API wrapper which caches)
+        // Load config
         SystemConfig cfg;
         try {
             ApiSystemConfig apiCfg = new ApiSystemConfig(normalizePath(configPath));
@@ -86,10 +93,15 @@ public class ForwardSecureANNSystem {
         }
         this.config = cfg;
 
-        // Layout owned by API
-        Files.createDirectories(metadataPath);
-        Path pointsPath = metadataPath.resolve("points");
-        Path metaDBPath = metadataPath.resolve("metadata");
+        // ---- Centralize paths via FsPaths, but keep test-time @TempDir compatibility ----
+        // Ensure FsPaths resolves to the provided metadataPath (temp dir in tests).
+        System.setProperty(FsPaths.BASE_DIR_PROP, metadataPath.toString());
+        System.setProperty(FsPaths.METADB_PROP, metadataPath.resolve("metadata").toString());
+        System.setProperty(FsPaths.POINTS_PROP, metadataPath.resolve("points").toString());
+
+        // Resolve and persist fields
+        this.pointsPath = FsPaths.pointsDir();
+        this.metaDBPath = FsPaths.metadataDb();
         Files.createDirectories(pointsPath);
         Files.createDirectories(metaDBPath);
 
@@ -97,29 +109,44 @@ public class ForwardSecureANNSystem {
         this.metadataManager = Objects.requireNonNull(metadataManager, "MetadataManager cannot be null");
         this.cryptoService   = Objects.requireNonNull(cryptoService, "CryptoService cannot be null");
 
-        // Key service (prefer the one behind CryptoService, else create one using keysFilePath resolved under metadataPath)
+        // Key service (also align FsPaths KEYSTORE_PROP)
+        Path derivedKeyRoot = resolveKeyStorePath(keysFilePath, metadataPath);
+        System.setProperty(FsPaths.KEYSTORE_PROP, derivedKeyRoot.toString());
         KeyLifeCycleService ks = cryptoService.getKeyService();
         if (ks == null) {
-            Path keyStore = resolveKeyStorePath(keysFilePath, metadataPath);
-            Files.createDirectories(keyStore.getParent());
-            KeyManager keyManager = new KeyManager(keyStore.toString());
-            // cap opsThreshold to int for policy constructor
+            Files.createDirectories(derivedKeyRoot.getParent());
+            KeyManager keyManager = new KeyManager(derivedKeyRoot.toString());
             int opsCap = (int) Math.min(Integer.MAX_VALUE, config.getOpsThreshold());
             KeyRotationPolicy policy = new KeyRotationPolicy(opsCap, config.getAgeThresholdMs());
             ks = new KeyRotationServiceImpl(keyManager, policy, metaDBPath.toString(), metadataManager, cryptoService);
-            // If crypto supports it (AesGcmCryptoService does), wire back
             try {
                 cryptoService.getClass().getMethod("setKeyService", KeyLifeCycleService.class).invoke(cryptoService, ks);
             } catch (Exception ignore) { /* no-op */ }
         }
         this.keyService = ks;
 
-        // Build index service from config (it will own its buffer per your index module)
+        // Capture actual keystore path for export
+        Path ksp = derivedKeyRoot;
+        try {
+            if (keyService instanceof KeyRotationServiceImpl kr) {
+                try {
+                    var m = kr.getClass().getMethod("getKeyManager");
+                    Object km = m.invoke(kr);
+                    var mp = km.getClass().getMethod("getStorePath");
+                    String p = (String) mp.invoke(km);
+                    if (p != null && !p.isBlank()) ksp = Paths.get(p);
+                } catch (Throwable ignore) { /* fallback remains derivedKeyRoot */ }
+            }
+        } catch (Throwable ignore) {}
+        this.keyStorePath = ksp;
+
+        // Build index service
         this.indexService = SecureLSHIndexService.fromConfig(cryptoService, keyService, metadataManager, config);
-        // try to read from the index service if it exposes it; otherwise default to 4
+
+        // per-token tables (fallback to 4 if index doesn't expose it)
         int tmpTables = 4;
         try {
-            // If your index service has a getter, use it:
+            // If indexService exposes number of tables, assign here.
             // tmpTables = indexService.getNumTables();
         } catch (Throwable ignore) {}
         this.tokenNumTables = tmpTables;
@@ -131,7 +158,7 @@ public class ForwardSecureANNSystem {
         this.cache = new ConcurrentMapCache(config.getNumShards() * 1000);
         this.profiler = config.isProfilerEnabled() ? new MicrometerProfiler(new SimpleMeterRegistry()) : null;
 
-        // One token-factory per dimension with THE index’s LSH for that dimension
+        // Token factories by dimension
         for (int dim : dimensions) {
             EvenLSH lshForDim = indexService.getLshForDimension(dim);
             tokenFactories.put(dim, new QueryTokenFactory(
@@ -141,14 +168,12 @@ public class ForwardSecureANNSystem {
             ));
         }
 
-
         this.queryService = new QueryServiceImpl(indexService, cryptoService, keyService);
         this.topKProfiler = new TopKProfiler(metadataPath.toString());
     }
 
-    /* ---------------------- Indexing API ---------------------- */
+        /* ---------------------- Indexing API ---------------------- */
 
-    /** Stream and index vectors for a specific dimension from a file. */
     public void indexStream(String dataPath, int dim) throws IOException {
         Objects.requireNonNull(dataPath, "Data path cannot be null");
         if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
@@ -163,7 +188,6 @@ public class ForwardSecureANNSystem {
 
         while (!(batch = batchLoader.nextBatch()).isEmpty()) {
             logger.debug("Loaded batch {} for dim={} with {} vectors", ++batchCount, dim, batch.size());
-            // basic filter-and-insert (dimension check)
             batchInsert(batch, dim);
         }
 
@@ -172,7 +196,6 @@ public class ForwardSecureANNSystem {
         }
     }
 
-    /** Convenience to index for multiple dimensions from the same file. */
     public void indexAllDimensions(String dataPath, List<Integer> dimensions) throws IOException {
         for (int dim : dimensions) indexStream(dataPath, dim);
     }
@@ -185,7 +208,6 @@ public class ForwardSecureANNSystem {
         long startNs = System.nanoTime();
         if (profiler != null) profiler.start("batchInsert");
 
-        // partition to internal batches (BATCH_SIZE already handled by Stream loader, but safe)
         for (int i = 0; i < vectors.size(); i += BATCH_SIZE) {
             List<double[]> slice = vectors.subList(i, Math.min(i + BATCH_SIZE, vectors.size()));
             List<String> ids = new ArrayList<>(slice.size());
@@ -208,7 +230,7 @@ public class ForwardSecureANNSystem {
 
         if (profiler != null) {
             profiler.stop("batchInsert");
-            List<Long> timings = profiler.getTimings("batchInsert"); // ns if MicrometerProfiler calls super.*
+            List<Long> timings = profiler.getTimings("batchInsert");
             long durationNs = !timings.isEmpty() ? timings.getLast() : (System.nanoTime() - startNs);
             totalIndexingTime += durationNs;
         }
@@ -257,7 +279,7 @@ public class ForwardSecureANNSystem {
             EvenLSH lsh = indexService.getLshForDimension(d);
             return new QueryTokenFactory(cryptoService, keyService, lsh,
                     Math.max(1, config.getNumShards() / 4),
-                    tokenNumTables   // <— was 1
+                    tokenNumTables
             );
         });
     }
@@ -285,6 +307,9 @@ public class ForwardSecureANNSystem {
 
         long start = System.nanoTime();
         QueryToken token = factoryForDim(dim).create(queryVector, topK);
+
+        // record plaintext query (for artifact export) — safe for tests/local runs
+        recentQueries.add(queryVector.clone());
 
         List<QueryResult> cached = cache.get(token);
         if (cached != null) {
@@ -316,6 +341,9 @@ public class ForwardSecureANNSystem {
 
         long start = System.nanoTime();
         QueryToken token = cloakQuery(queryVector, dim, topK);
+
+        // record pre-cloak version; you could also store the cloaked vector if you prefer
+        recentQueries.add(queryVector.clone());
 
         List<QueryResult> cached = cache.get(token);
         if (cached != null) {
@@ -356,7 +384,7 @@ public class ForwardSecureANNSystem {
         GroundtruthManager groundtruth = new GroundtruthManager();
         groundtruth.load(normalizePath(groundtruthPath));
 
-        ResultWriter rw = new ResultWriter(Paths.get("results_table.txt"));
+        ResultWriter rw = new ResultWriter(Paths.get("results", "results_table.txt"));
         int[] topKValues = {1, 20, 40, 60, 80, 100};
 
         for (int q = 0; q < queries.size(); q++) {
@@ -421,11 +449,10 @@ public class ForwardSecureANNSystem {
             }
 
             indexService.batchInsert(ids, batch);
-            indexedCount.addAndGet(size);  // keep the single source of truth
+            indexedCount.addAndGet(size);
             remaining -= size;
         }
     }
-
 
     private static Path resolveKeyStorePath(String keysFilePath, Path metadataBase) {
         Path p = Paths.get(keysFilePath);
@@ -465,6 +492,71 @@ public class ForwardSecureANNSystem {
                         remove(e.getKey());
                         timestamps.remove(e.getKey());
                     });
+        }
+    }
+
+    /** Dump profiler CSVs, query list, and copies of keys/metadata/points to outDir. */
+    public void exportArtifacts(Path outDir) throws IOException {
+        Files.createDirectories(outDir);
+
+        // 1) timers and query rows
+        if (profiler != null) {
+            profiler.exportToCSV(outDir.resolve("profiler_metrics.csv").toString());
+            if (profiler instanceof MicrometerProfiler mp) {
+                mp.exportQueryMetricsCSV(outDir.resolve("query_metrics.csv").toString());
+            }
+            if (profiler instanceof MicrometerProfiler mp) {
+                mp.exportMetersCSV(outDir.resolve("micrometer_meters.csv").toString());
+            }
+            var client = profiler.getAllClientQueryTimes();
+            var ratio  = profiler.getAllQueryRatios();
+            double art = client.stream().mapToDouble(Double::doubleValue).average().orElse(0);
+            double avgRatio = ratio.stream().mapToDouble(Double::doubleValue).average().orElse(0);
+            Files.writeString(outDir.resolve("metrics_summary.txt"),
+                    String.format("ART(ms)=%.3f%nAvgRatio=%.6f%n", art, avgRatio));
+        }
+
+        // 2) Top-K evaluation (if used)
+        try { topKProfiler.export(outDir.resolve("topk_evaluation.csv").toString()); }
+        catch (Exception ignore) { /* ok if not used */ }
+
+        // 3) dump recent queries
+        if (!recentQueries.isEmpty()) {
+            var p = outDir.resolve("queries.csv");
+            try (var w = Files.newBufferedWriter(p)) {
+                for (double[] q : recentQueries) {
+                    for (int i = 0; i < q.length; i++) {
+                        if (i > 0) w.write(",");
+                        w.write(Double.toString(q[i]));
+                    }
+                    w.write("\n");
+                }
+            }
+        }
+
+        // 4) Copy keystore + metadata directories
+        tryCopyPath(keyStorePath, outDir.resolve("keys"));
+        tryCopyPath(pointsPath, outDir.resolve("points"));
+        tryCopyPath(metaDBPath, outDir.resolve("metadata"));
+    }
+
+    private void tryCopyPath(Path src, Path dst) {
+        try {
+            if (src == null || !Files.exists(src)) return;
+            if (Files.isDirectory(src)) {
+                Files.walk(src).forEach(sp -> {
+                    try {
+                        Path rp = dst.resolve(src.relativize(sp).toString());
+                        if (Files.isDirectory(sp)) Files.createDirectories(rp);
+                        else { Files.createDirectories(rp.getParent()); Files.copy(sp, rp, StandardCopyOption.REPLACE_EXISTING); }
+                    } catch (IOException e) { logger.warn("Copy failed for {}", sp, e); }
+                });
+            } else {
+                Files.createDirectories(dst.getParent());
+                Files.copy(src, dst, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } catch (Exception e) {
+            logger.warn("Failed copying {} → {}", src, dst, e);
         }
     }
 
@@ -588,6 +680,8 @@ public class ForwardSecureANNSystem {
 
         int dim = dimensions.get(0);
         sys.runEndToEnd(dataPath, queryPath, dim, groundtruthPath);
+
+        sys.exportArtifacts(Paths.get("results"));
 
         if (sys.getProfiler() != null) {
             System.out.print("\n==== QUERY PERFORMANCE METRICS ====\n");

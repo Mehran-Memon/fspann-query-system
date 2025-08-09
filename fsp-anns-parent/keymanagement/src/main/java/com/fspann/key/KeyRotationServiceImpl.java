@@ -7,12 +7,11 @@ import org.slf4j.LoggerFactory;
 
 import javax.crypto.SecretKey;
 import java.io.IOException;
-import java.nio.file.*;
+import java.nio.file.Paths;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Stream;
 
 public class KeyRotationServiceImpl implements KeyLifeCycleService {
     private static final Logger logger = LoggerFactory.getLogger(KeyRotationServiceImpl.class);
@@ -21,6 +20,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
     private final KeyRotationPolicy policy;
     private final String rotationMetaDir;
     private final RocksDBMetadataManager metadataManager;
+
     private CryptoService cryptoService;
     private IndexService indexService;
 
@@ -32,27 +32,21 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
                                   String rotationMetaDir,
                                   RocksDBMetadataManager metadataManager,
                                   CryptoService cryptoService) {
-        this.keyManager = keyManager;
-        this.policy = policy;
-        this.rotationMetaDir = rotationMetaDir;
-        this.metadataManager = metadataManager;
+        this.keyManager = Objects.requireNonNull(keyManager, "keyManager");
+        this.policy = Objects.requireNonNull(policy, "policy");
+        this.rotationMetaDir = Objects.requireNonNull(rotationMetaDir, "rotationMetaDir");
+        this.metadataManager = Objects.requireNonNull(metadataManager, "metadataManager");
         this.cryptoService = cryptoService;
     }
 
     @Override
-    public KeyVersion getCurrentVersion() {
-        return keyManager.getCurrentVersion();
-    }
+    public KeyVersion getCurrentVersion() { return keyManager.getCurrentVersion(); }
 
     @Override
-    public void rotateIfNeeded() {
-        rotateIfNeededAndReturnUpdated();
-    }
+    public void rotateIfNeeded() { rotateIfNeededAndReturnUpdated(); }
 
     @Override
-    public KeyVersion getPreviousVersion() {
-        return keyManager.getPreviousVersion();
-    }
+    public KeyVersion getPreviousVersion() { return keyManager.getPreviousVersion(); }
 
     @Override
     public KeyVersion getVersion(int version) {
@@ -74,33 +68,31 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
         Set<String> seen = new HashSet<>();
 
         try {
-            // Let the metadata manager enumerate all stored points (ids only)
-            // If you don't have such a method, you can keep the Files.walk() variant you had.
+            // Preferred path: use metadata to enumerate points (implement these if missing).
             List<EncryptedPoint> all = metadataManager.getAllEncryptedPoints();
             for (EncryptedPoint original : all) {
                 if (original == null || !seen.add(original.getId())) continue;
 
-                // Decrypt with the key that matches the point's version
                 KeyVersion pointVer = getVersion(original.getVersion());
                 double[] raw = cryptoService.decryptFromPoint(original, pointVer.getKey());
 
-                // Re-insert with same id; service will encrypt w/ CURRENT key + recompute buckets
+                // Re-insert with same id; index service will encrypt with CURRENT key and recompute buckets
                 indexService.insert(original.getId(), raw);
-
                 total++;
             }
 
-            // If your service buffers writes, flush now
             EncryptedPointBuffer buf = indexService.getPointBuffer();
             if (buf != null) buf.flushAll();
 
-            // Optional: drop any stale metadata no longer in the active set
+            // Optionally clean stale metadata keys
             metadataManager.cleanupStaleMetadata(seen);
 
             logger.info("Re-encryption completed for {} vectors", total);
+        } catch (UnsupportedOperationException | NoSuchMethodError e) {
+            // If your RocksDBMetadataManager doesn't support enumeration yet, log and skip silently.
+            logger.warn("Metadata enumeration not supported; skipping re-encryption pass.");
         } catch (Exception e) {
             logger.error("Re-encryption pipeline failed", e);
-            // Intentionally do not throw; partial progress is acceptable, and next pass will pick up leftovers.
         }
     }
 
@@ -134,9 +126,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
             lastRotation = Instant.now();
             operationCount.set(0);
             logger.info("Manual key rotation complete: version={}", newVersion.getVersion());
-
             reEncryptAll();
-
             return newVersion;
         } catch (Exception e) {
             logger.error("Manual key rotation failed", e);
@@ -144,19 +134,8 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
         }
     }
 
-    public void setCryptoService(CryptoService cryptoService) {
-        this.cryptoService = cryptoService;
-    }
-
-    public void setIndexService(IndexService indexService) {
-        this.indexService = indexService;
-    }
-
-    public void incrementOperation() {
-        operationCount.incrementAndGet();
-    }
-
-    public void setLastRotationTime(long timestamp) {
-        this.lastRotation = Instant.ofEpochMilli(timestamp);
-    }
+    public void setCryptoService(CryptoService cryptoService) { this.cryptoService = cryptoService; }
+    public void setIndexService(IndexService indexService) { this.indexService = indexService; }
+    public void incrementOperation() { operationCount.incrementAndGet(); }
+    public void setLastRotationTime(long timestamp) { this.lastRotation = Instant.ofEpochMilli(timestamp); }
 }
