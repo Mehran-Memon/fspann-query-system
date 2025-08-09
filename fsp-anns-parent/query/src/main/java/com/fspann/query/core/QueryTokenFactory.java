@@ -49,12 +49,21 @@ public class QueryTokenFactory {
         }
         if (topK <= 0) throw new IllegalArgumentException("topK must be greater than zero");
 
+        // NEW: dimension validation against LSH
+        int lshDim = lsh.getDimensions();
+        if (lshDim > 0 && lshDim != vector.length) {
+            throw new IllegalArgumentException(
+                    "Vector dimension mismatch: expected " + lshDim + " but got " + vector.length);
+        }
+
         KeyVersion currentVersion = keyService.getCurrentVersion();
         SecretKey key = currentVersion.getKey();
         int version = currentVersion.getVersion();
 
         String encryptionContext = String.format("epoch_%d_dim_%d", version, vector.length);
-        EncryptedPoint encrypted = cryptoService.encryptToPoint("index", vector, key);
+
+        // FIX: use "query" to match tests
+        EncryptedPoint encrypted = cryptoService.encryptToPoint("query", vector, key);
 
         List<List<Integer>> perTable = new ArrayList<>(numTables);
         for (int t = 0; t < numTables; t++) {
@@ -81,8 +90,18 @@ public class QueryTokenFactory {
         if (newTopK <= 0) throw new IllegalArgumentException("newTopK must be > 0");
 
         double[] q = base.getPlaintextQuery();
+
+        // Optional: keep the same validation in derive as well
+        int lshDim = lsh.getDimensions();
+        if (lshDim > 0 && lshDim != q.length) {
+            throw new IllegalArgumentException(
+                    "Vector dimension mismatch: expected " + lshDim + " but got " + q.length);
+        }
+
         KeyVersion curr = keyService.getCurrentVersion();
-        EncryptedPoint ep = cryptoService.encryptToPoint("index", q, curr.getKey());
+
+        // FIX: use "query" here too
+        EncryptedPoint ep = cryptoService.encryptToPoint("query", q, curr.getKey());
 
         List<List<Integer>> perTable = new ArrayList<>(numTables);
         for (int t = 0; t < numTables; t++) {

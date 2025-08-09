@@ -1,6 +1,7 @@
 package com.fspann.index.service;
 
 import com.fspann.common.*;
+import com.fspann.config.SystemConfig;
 import com.fspann.crypto.AesGcmCryptoService;
 import com.fspann.crypto.CryptoService;
 import com.fspann.index.core.DimensionContext;
@@ -40,21 +41,11 @@ public class SecureLSHIndexService implements IndexService {
                                  RocksDBMetadataManager metadataManager) {
         this(crypto, keyService, metadataManager,
                 null, null, createBufferFromManager(metadataManager),
-                DEFAULT_NUM_BUCKETS, DEFAULT_NUM_TABLES);
+                /*defaultNumBuckets*/ 32,
+                /*defaultNumTables*/  4);
     }
 
-    public SecureLSHIndexService(CryptoService crypto,
-                                 KeyLifeCycleService keyService,
-                                 RocksDBMetadataManager metadataManager,
-                                 SecureLSHIndex index,
-                                 EvenLSH lsh,
-                                 EncryptedPointBuffer buffer) {
-        this(crypto, keyService, metadataManager,
-                index, lsh, buffer,
-                DEFAULT_NUM_BUCKETS, DEFAULT_NUM_TABLES);
-    }
-
-    /** Fully-configurable constructor (used by API/bootstrap). */
+    // NEW: ctor with defaults
     public SecureLSHIndexService(CryptoService crypto,
                                  KeyLifeCycleService keyService,
                                  RocksDBMetadataManager metadataManager,
@@ -73,23 +64,13 @@ public class SecureLSHIndexService implements IndexService {
         this.defaultNumTables  = Math.max(1, defaultNumTables);
     }
 
-    private static EncryptedPointBuffer createBufferFromManager(RocksDBMetadataManager manager) {
-        String pointsBase = Objects.requireNonNull(manager.getPointsBaseDir(),
-                "metadataManager.getPointsBaseDir() returned null. In tests, stub this or inject a buffer explicitly.");
-        try {
-            return new EncryptedPointBuffer(pointsBase, manager);
-        } catch (IOException e) {
-            throw new RuntimeException("Failed to initialize EncryptedPointBuffer", e);
-        }
-    }
-
     private DimensionContext getOrCreateContext(int dimension) {
         return dimensionContexts.computeIfAbsent(dimension, dim -> {
-            int buckets = Math.max(1, defaultNumBuckets);
+            int buckets = defaultNumBuckets;
             int projections = Math.max(1,
                     (int) Math.ceil(buckets * Math.log(Math.max(dim, 1) / 16.0) / Math.log(2)));
 
-            long seed = seedFor(dim, buckets, projections); // deterministic
+            long seed = seedFor(dim, buckets, projections);
             EvenLSH lshInstance = (this.lsh != null)
                     ? this.lsh
                     : new EvenLSH(dim, buckets, projections, seed);
@@ -100,6 +81,32 @@ public class SecureLSHIndexService implements IndexService {
 
             return new DimensionContext(idx, crypto, keyService, lshInstance);
         });
+    }
+
+    // NEW: let API/token factory fetch the exact LSH for a dimension
+    public EvenLSH getLshForDimension(int dimension) {
+        return getOrCreateContext(dimension).getLsh();
+    }
+
+    // (optional) convenience factory used by your AppBootstrap earlier
+    public static SecureLSHIndexService fromConfig(CryptoService crypto,
+                                                   KeyLifeCycleService keyService,
+                                                   RocksDBMetadataManager metadata,
+                                                   SystemConfig cfg) {
+        int numBuckets  = Math.max(1, cfg.getNumShards());
+        int numTables   = 4;
+        EncryptedPointBuffer buf = createBufferFromManager(metadata);
+        return new SecureLSHIndexService(crypto, keyService, metadata, null, null, buf, numBuckets, numTables);
+    }
+
+    private static EncryptedPointBuffer createBufferFromManager(RocksDBMetadataManager manager) {
+        String pointsBase = Objects.requireNonNull(manager.getPointsBaseDir(),
+                "metadataManager.getPointsBaseDir() returned null. In tests, stub this or inject a buffer explicitly.");
+        try {
+            return new EncryptedPointBuffer(pointsBase, manager);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to initialize EncryptedPointBuffer", e);
+        }
     }
 
     private static long seedFor(int dim, int buckets, int projections) {

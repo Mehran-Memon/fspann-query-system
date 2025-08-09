@@ -76,18 +76,8 @@ public final class AppBootstrap {
         CryptoService crypto = new AesGcmCryptoService(new SimpleMeterRegistry(), keySvc, metadata);
 
         // Index service wiring (map config → ctor inputs, no config type leakage into index module)
-        int numBuckets  = Math.max(1, cfg.getNumShards());   // map shards → buckets
-        int numTables   = 4;                                 // keep default (could expose later in config)
-        int flushThresh = Math.max(1, cfg.getReEncBatchSize());
+        SecureLSHIndexService indexService = SecureLSHIndexService.fromConfig(crypto, keySvc, metadata, cfg);
 
-        EncryptedPointBuffer buffer = new EncryptedPointBuffer(pointsPath.toString(), metadata, flushThresh);
-
-        SecureLSHIndexService indexService = new SecureLSHIndexService(
-                crypto, keySvc, metadata,
-                /* index */ null, /* lsh */ null, buffer,
-                /* defaultNumBuckets */ numBuckets,
-                /* defaultNumTables  */ numTables
-        );
 
         // Wire back-pointers for rotation flow
         keySvc.setCryptoService(crypto);

@@ -1,10 +1,7 @@
 package com.fspann.common;
 
 import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Objects;
+import java.util.*;
 
 /**
  * Unified query token supporting both legacy single-bucket set and per-table expansions.
@@ -42,11 +39,14 @@ public class QueryToken implements Serializable {
                       String encryptionContext,
                       int dimension,
                       int version) {
-        this.tableBuckets = deepUnmodifiableBuckets(Objects.requireNonNull(tableBuckets, "tableBuckets"));
+        this.tableBuckets = deepUnmodifiableBuckets(
+                Objects.requireNonNull(tableBuckets, "tableBuckets"));
         this.numTables = positive(numTables, "numTables");
-        this.iv = Objects.requireNonNull(iv, "iv");
-        this.encryptedQuery = Objects.requireNonNull(encryptedQuery, "encryptedQuery");
+
+        this.iv = Objects.requireNonNull(iv, "iv").clone();
+        this.encryptedQuery = Objects.requireNonNull(encryptedQuery, "encryptedQuery").clone();
         this.queryVector = Objects.requireNonNull(queryVector, "queryVector").clone();
+
         this.topK = positive(topK, "topK");
         this.encryptionContext = Objects.requireNonNull(encryptionContext, "encryptionContext");
         this.dimension = positive(dimension, "dimension");
@@ -73,14 +73,20 @@ public class QueryToken implements Serializable {
                       int dimension,
                       int shardId,
                       int version) {
-        this.candidateBuckets = List.copyOf(Objects.requireNonNull(candidateBuckets, "candidateBuckets"));
-        this.iv = Objects.requireNonNull(iv, "iv");
-        this.encryptedQuery = Objects.requireNonNull(encryptedQuery, "encryptedQuery");
+        if (candidateBuckets == null || candidateBuckets.isEmpty()) {
+            throw new IllegalArgumentException("candidateBuckets must be non-null and non-empty");
+        }
+        this.candidateBuckets = List.copyOf(candidateBuckets);
+
+        this.iv = Objects.requireNonNull(iv, "iv").clone();
+        this.encryptedQuery = Objects.requireNonNull(encryptedQuery, "encryptedQuery").clone();
         this.queryVector = Objects.requireNonNull(plaintextQuery, "plaintextQuery").clone();
+
         this.topK = positive(topK, "topK");
         this.numTables = positive(numTables, "numTables");
         this.encryptionContext = (encryptionContext == null || encryptionContext.isBlank())
-                ? ("epoch_" + version + "_dim_" + dimension) : encryptionContext;
+                ? ("epoch_" + version + "_dim_" + dimension)
+                : encryptionContext;
         this.dimension = positive(dimension, "dimension");
         this.shardId = shardId;
         this.version = version;
@@ -122,9 +128,9 @@ public class QueryToken implements Serializable {
 
     public List<List<Integer>> getPerTableBuckets() { return getTableBuckets(); }
 
-    public byte[] getIv() { return iv; }
+    public byte[] getIv() { return iv.clone(); }
 
-    public byte[] getEncryptedQuery() { return encryptedQuery; }
+    public byte[] getEncryptedQuery() { return encryptedQuery.clone(); }
 
     public double[] getPlaintextQuery() { return queryVector.clone(); }
 
@@ -143,4 +149,30 @@ public class QueryToken implements Serializable {
 
     @Deprecated
     public int getShardId() { return shardId; }
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof QueryToken other)) return false;
+
+        // Compare stable identity only (exclude iv/ciphertext)
+        return topK == other.topK
+                && numTables == other.numTables
+                && dimension == other.dimension
+                && version == other.version
+                && Objects.equals(encryptionContext, other.encryptionContext)
+                && Objects.equals(tableBuckets, other.tableBuckets)
+                && Objects.equals(candidateBuckets, other.candidateBuckets)
+                && Arrays.equals(queryVector, other.queryVector);
+    }
+
+    @Override
+    public int hashCode() {
+        int result = Objects.hash(
+                topK, numTables, encryptionContext, dimension, version,
+                tableBuckets, candidateBuckets
+        );
+        result = 31 * result + Arrays.hashCode(queryVector);
+        return result;
+    }
+
 }

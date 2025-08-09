@@ -4,6 +4,7 @@ import com.fspann.common.KeyVersion;
 import com.fspann.key.KeyManager;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
+import com.fspann.common.FsPaths;
 
 import javax.crypto.SecretKey;
 import java.io.IOException;
@@ -107,11 +108,6 @@ class KeyManagerTest {
     }
 
     @Test
-    void testNullKeyFilePathThrowsException() {
-        assertThrows(IllegalArgumentException.class, () -> new KeyManager(null));
-    }
-
-    @Test
     void testFileMissingOnDeserialization() throws IOException {
         Path missingPath = keyFile.resolveSibling("nonexistent.ser");
         assertFalse(Files.exists(missingPath));
@@ -137,5 +133,29 @@ class KeyManagerTest {
         executor.shutdown();
         executor.awaitTermination(5, TimeUnit.SECONDS);
         assertEquals(101, keyManager.getCurrentVersion().getVersion());
+    }
+
+    @Test
+    void testNullKeyFileUsesDefaultPath(@TempDir Path tempDir) throws Exception {
+        System.setProperty(FsPaths.BASE_DIR_PROP, tempDir.toString());
+        try {
+            KeyManager km = new KeyManager(null);
+            assertTrue(Files.exists(FsPaths.keyStoreFile()), "keystore should be created at default path");
+            assertNotNull(km.getCurrentVersion());
+        } finally {
+            System.clearProperty(FsPaths.BASE_DIR_PROP);
+        }
+    }
+
+    @Test
+    void testBlankKeyFileUsesDefaultPath(@TempDir Path tempDir) throws Exception {
+        System.setProperty(FsPaths.BASE_DIR_PROP, tempDir.toString());
+        try {
+            KeyManager km = new KeyManager("   ");
+            assertTrue(Files.exists(FsPaths.keyStoreFile()));
+            assertNotNull(km.getCurrentVersion());
+        } finally {
+            System.clearProperty(FsPaths.BASE_DIR_PROP);
+        }
     }
 }

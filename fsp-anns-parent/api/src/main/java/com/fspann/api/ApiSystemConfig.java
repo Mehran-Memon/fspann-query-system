@@ -24,7 +24,8 @@ public class ApiSystemConfig {
             throw new IOException("Config file is not readable: " + configFilePath);
         }
 
-        SystemConfig cachedConfig = configCache.get(configFilePath);
+        String cacheKey = path.toString();
+        SystemConfig cachedConfig = configCache.get(cacheKey);
         if (cachedConfig != null) {
             logger.debug("Returning cached configuration for: {}", configFilePath);
             this.config = cachedConfig;
@@ -33,8 +34,8 @@ public class ApiSystemConfig {
 
         try {
             logger.info("Loading configuration from: {}", configFilePath);
-            this.config = SystemConfig.load(configFilePath);
-            configCache.put(configFilePath, this.config);
+            this.config = SystemConfig.load(cacheKey);
+            configCache.put(cacheKey, this.config);
         } catch (SystemConfig.ConfigLoadException e) {
             logger.error("Failed to load configuration: {}", configFilePath, e);
             throw new IOException("Failed to load configuration: " + configFilePath, e);

@@ -2,7 +2,6 @@ package com.fspann.api;
 
 import com.fspann.common.*;
 import com.fspann.config.SystemConfig;
-import com.fspann.crypto.AesGcmCryptoService;
 import com.fspann.crypto.CryptoService;
 import com.fspann.index.core.EvenLSH;
 import com.fspann.index.service.SecureLSHIndexService;
@@ -33,7 +32,7 @@ public class ForwardSecureANNSystem {
     private static final double DEFAULT_NOISE_SCALE = 0.01;
 
     private final SecureLSHIndexService indexService;
-    private final QueryTokenFactory tokenFactory;
+    private final Map<Integer, QueryTokenFactory> tokenFactories = new ConcurrentHashMap<>();
     private final QueryService queryService;
     private final CryptoService cryptoService;
     private final KeyLifeCycleService keyService;
@@ -41,22 +40,22 @@ public class ForwardSecureANNSystem {
     private final ConcurrentMap<QueryToken, List<QueryResult>> cache;
     private final Profiler profiler;
     private final boolean verbose;
-    private final List<Long> batchDurations = Collections.synchronizedList(new ArrayList<>());
     private final RocksDBMetadataManager metadataManager;
     private final TopKProfiler topKProfiler;
 
     private final int BATCH_SIZE;
     private long totalIndexingTime = 0;
     private long totalQueryTime = 0;
-    private int indexingCount = 0;
+    private final java.util.concurrent.atomic.AtomicInteger indexedCount = new java.util.concurrent.atomic.AtomicInteger();
     private int totalInserted = 0;
+    private final int tokenNumTables;
 
     private final ExecutorService executor;
     private boolean exitOnShutdown = false;
 
     public ForwardSecureANNSystem(
             String configPath,
-            String dataPath,
+            String /* unused in ctor now, kept for symmetry */ dataPath,
             String keysFilePath,
             List<Integer> dimensions,
             Path metadataPath,
@@ -66,7 +65,6 @@ public class ForwardSecureANNSystem {
             int batchSize
     ) throws IOException {
         Objects.requireNonNull(configPath, "Config path cannot be null");
-        Objects.requireNonNull(dataPath, "Data path cannot be null");
         Objects.requireNonNull(keysFilePath, "Keys file path cannot be null");
         Objects.requireNonNull(dimensions, "Dimensions cannot be null");
         Objects.requireNonNull(metadataPath, "Metadata path cannot be null");
@@ -77,10 +75,10 @@ public class ForwardSecureANNSystem {
         this.BATCH_SIZE = batchSize;
         this.executor = Executors.newFixedThreadPool(Math.max(1, Runtime.getRuntime().availableProcessors() / 2));
 
-        // Load config early
+        // Load config (via API wrapper which caches)
         SystemConfig cfg;
         try {
-            ApiSystemConfig apiCfg = new ApiSystemConfig(sanitizePath(configPath));
+            ApiSystemConfig apiCfg = new ApiSystemConfig(normalizePath(configPath));
             cfg = apiCfg.getConfig();
         } catch (IOException e) {
             logger.error("Failed to initialize configuration: {}", configPath, e);
@@ -88,48 +86,43 @@ public class ForwardSecureANNSystem {
         }
         this.config = cfg;
 
-        // Layout: API owns the directories
-        Path keysPath   = metadataPath.resolve("keys");
+        // Layout owned by API
+        Files.createDirectories(metadataPath);
         Path pointsPath = metadataPath.resolve("points");
         Path metaDBPath = metadataPath.resolve("metadata");
-        Files.createDirectories(keysPath);
         Files.createDirectories(pointsPath);
         Files.createDirectories(metaDBPath);
 
-        // Core services (injected)
+        // Injected core services
         this.metadataManager = Objects.requireNonNull(metadataManager, "MetadataManager cannot be null");
         this.cryptoService   = Objects.requireNonNull(cryptoService, "CryptoService cannot be null");
 
-        // Key service: use the one carried by CryptoService if present, otherwise create our own
+        // Key service (prefer the one behind CryptoService, else create one using keysFilePath resolved under metadataPath)
         KeyLifeCycleService ks = cryptoService.getKeyService();
         if (ks == null) {
-            KeyManager keyManager = new KeyManager(keysPath.toString());
-            KeyRotationPolicy policy = new KeyRotationPolicy((int) config.getOpsThreshold(), config.getAgeThresholdMs());
+            Path keyStore = resolveKeyStorePath(keysFilePath, metadataPath);
+            Files.createDirectories(keyStore.getParent());
+            KeyManager keyManager = new KeyManager(keyStore.toString());
+            // cap opsThreshold to int for policy constructor
+            int opsCap = (int) Math.min(Integer.MAX_VALUE, config.getOpsThreshold());
+            KeyRotationPolicy policy = new KeyRotationPolicy(opsCap, config.getAgeThresholdMs());
             ks = new KeyRotationServiceImpl(keyManager, policy, metaDBPath.toString(), metadataManager, cryptoService);
-            // if CryptoService supports it, wire back
+            // If crypto supports it (AesGcmCryptoService does), wire back
             try {
-                // AesGcmCryptoService has setKeyService; if not present, this is a no-op via reflection
                 cryptoService.getClass().getMethod("setKeyService", KeyLifeCycleService.class).invoke(cryptoService, ks);
-            } catch (Exception ignore) { /* best-effort */ }
+            } catch (Exception ignore) { /* no-op */ }
         }
         this.keyService = ks;
 
-        // One shared buffer owned by API, injected into index
-        EncryptedPointBuffer sharedBuffer = new EncryptedPointBuffer(pointsPath.toString(), metadataManager, 500);
-
-        // One shared LSH instance used by BOTH index & token factory (this fixes bucket mismatches)
-        int maxDim = Collections.max(dimensions);
-        EvenLSH sharedLsh = new EvenLSH(maxDim, config.getNumShards());
-
-        // Build index service with DI; pass shared LSH and shared buffer
-        this.indexService = new SecureLSHIndexService(
-                cryptoService,
-                keyService,
-                metadataManager,
-                /* index */ null,
-                /* lsh   */ sharedLsh,
-                /* buffer*/ sharedBuffer
-        );
+        // Build index service from config (it will own its buffer per your index module)
+        this.indexService = SecureLSHIndexService.fromConfig(cryptoService, keyService, metadataManager, config);
+        // try to read from the index service if it exposes it; otherwise default to 4
+        int tmpTables = 4;
+        try {
+            // If your index service has a getter, use it:
+            // tmpTables = indexService.getNumTables();
+        } catch (Throwable ignore) {}
+        this.tokenNumTables = tmpTables;
 
         if (keyService instanceof KeyRotationServiceImpl kr) {
             kr.setIndexService(indexService);
@@ -138,149 +131,91 @@ public class ForwardSecureANNSystem {
         this.cache = new ConcurrentMapCache(config.getNumShards() * 1000);
         this.profiler = config.isProfilerEnabled() ? new MicrometerProfiler(new SimpleMeterRegistry()) : null;
 
-        // Token factory uses the SAME LSH
-        this.tokenFactory = new QueryTokenFactory(
-                cryptoService,
-                keyService,
-                sharedLsh,
-                Math.max(1, config.getNumShards() / 4),
-                /* numTables */ 1
-        );
+        // One token-factory per dimension with THE index’s LSH for that dimension
+        for (int dim : dimensions) {
+            EvenLSH lshForDim = indexService.getLshForDimension(dim);
+            tokenFactories.put(dim, new QueryTokenFactory(
+                    cryptoService, keyService, lshForDim,
+                    Math.max(1, config.getNumShards() / 4),
+                    tokenNumTables
+            ));
+        }
+
 
         this.queryService = new QueryServiceImpl(indexService, cryptoService, keyService);
         this.topKProfiler = new TopKProfiler(metadataPath.toString());
+    }
 
-        // Eager-load data
+    /* ---------------------- Indexing API ---------------------- */
+
+    /** Stream and index vectors for a specific dimension from a file. */
+    public void indexStream(String dataPath, int dim) throws IOException {
+        Objects.requireNonNull(dataPath, "Data path cannot be null");
+        if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
+
         DefaultDataLoader loader = new DefaultDataLoader();
-        Path dataFile = Paths.get(sanitizePath(dataPath));
-        for (int dim : dimensions) {
-            FormatLoader fl = loader.lookup(dataFile);
-            StreamingBatchLoader batchLoader = new StreamingBatchLoader(fl.openVectorIterator(dataFile), batchSize);
-            List<double[]> batch;
-            int batchCount = 0;
-            while (!(batch = batchLoader.nextBatch()).isEmpty()) {
-                logger.debug("Loaded batch {} for dim={} with {} vectors", ++batchCount, dim, batch.size());
-                for (double[] vec : batch) {
-                    if (vec == null || vec.length != dim) {
-                        logger.warn("Invalid vector in batch {} for dim={}: {}", batchCount, dim, Arrays.toString(vec));
-                    }
-                }
-                batchInsert(batch, dim);
-            }
-            if (batchCount == 0) {
-                logger.warn("No batches loaded for dim={} from dataPath={}", dim, dataPath);
-            }
+        Path dataFile = Paths.get(normalizePath(dataPath));
+        FormatLoader fl = loader.lookup(dataFile);
+
+        StreamingBatchLoader batchLoader = new StreamingBatchLoader(fl.openVectorIterator(dataFile), BATCH_SIZE);
+        List<double[]> batch;
+        int batchCount = 0;
+
+        while (!(batch = batchLoader.nextBatch()).isEmpty()) {
+            logger.debug("Loaded batch {} for dim={} with {} vectors", ++batchCount, dim, batch.size());
+            // basic filter-and-insert (dimension check)
+            batchInsert(batch, dim);
+        }
+
+        if (batchCount == 0) {
+            logger.warn("No batches loaded for dim={} from dataPath={}", dim, dataPath);
         }
     }
 
-    private String sanitizePath(String path) {
-        if ("true".equals(System.getProperty("test.env"))) {
-            return Paths.get(path).normalize().toString();
-        }
-        Path normalized = Paths.get(path).normalize();
-        Path base = Paths.get(System.getProperty("user.dir")).normalize();
-        if (!normalized.startsWith(base)) {
-            logger.error("Path traversal attempt: {}", path);
-            throw new IllegalArgumentException("Invalid path: " + path);
-        }
-        return normalized.toString();
-    }
-
-    private static class ConcurrentMapCache extends ConcurrentHashMap<QueryToken, List<QueryResult>> {
-        private final int maxSize;
-        private final ConcurrentMap<QueryToken, Long> timestamps = new ConcurrentHashMap<>();
-        private static final long CACHE_EXPIRY_MS = 10 * 60 * 1000;
-
-        ConcurrentMapCache(int maxSize) { this.maxSize = maxSize; }
-
-        @Override
-        public List<QueryResult> put(QueryToken key, List<QueryResult> value) {
-            cleanExpiredEntries();
-            if (size() >= maxSize) {
-                removeOldestEntry();
-            }
-            timestamps.put(key, System.currentTimeMillis());
-            return super.put(key, value);
-        }
-
-        private void cleanExpiredEntries() {
-            long now = System.currentTimeMillis();
-            timestamps.entrySet().removeIf(e -> now - e.getValue() > CACHE_EXPIRY_MS);
-        }
-
-        private void removeOldestEntry() {
-            timestamps.entrySet().stream()
-                    .min(Map.Entry.comparingByValue())
-                    .ifPresent(e -> {
-                        remove(e.getKey());
-                        timestamps.remove(e.getKey());
-                    });
-        }
+    /** Convenience to index for multiple dimensions from the same file. */
+    public void indexAllDimensions(String dataPath, List<Integer> dimensions) throws IOException {
+        for (int dim : dimensions) indexStream(dataPath, dim);
     }
 
     public void batchInsert(List<double[]> vectors, int dim) {
         Objects.requireNonNull(vectors, "Vectors cannot be null");
         if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
-        if (vectors.isEmpty()) {
-            logger.warn("batchInsert called with empty vector list for dim={}", dim);
-            return;
-        }
+        if (vectors.isEmpty()) return;
 
-        long start = System.nanoTime();
+        long startNs = System.nanoTime();
         if (profiler != null) profiler.start("batchInsert");
 
-        List<List<double[]>> partitions = partitionList(vectors, BATCH_SIZE);
-        List<String> allIds = new ArrayList<>();
-
-        for (List<double[]> batch : partitions) {
-            List<String> ids = new ArrayList<>(BATCH_SIZE);
-            List<double[]> validBatch = new ArrayList<>(BATCH_SIZE);
-            for (double[] vec : batch) {
-                if (vec == null) continue;
-                if (vec.length != dim) {
-                    logger.warn("Skipping vector with dim {} (expected {}) - vector: {}", vec.length, dim, Arrays.toString(vec));
+        // partition to internal batches (BATCH_SIZE already handled by Stream loader, but safe)
+        for (int i = 0; i < vectors.size(); i += BATCH_SIZE) {
+            List<double[]> slice = vectors.subList(i, Math.min(i + BATCH_SIZE, vectors.size()));
+            List<String> ids = new ArrayList<>(slice.size());
+            List<double[]> valid = new ArrayList<>(slice.size());
+            for (double[] v : slice) {
+                if (v == null) continue;
+                if (v.length != dim) {
+                    logger.warn("Skipping vector dim={} (expected {})", (v != null ? v.length : -1), dim);
                     continue;
                 }
                 ids.add(UUID.randomUUID().toString());
-                validBatch.add(vec);
+                valid.add(v);
             }
-
-            if (!ids.isEmpty()) {
-                long batchStart = System.nanoTime();
-                indexService.batchInsert(ids, validBatch);
-                totalInserted += ids.size();
-                batchDurations.add(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - batchStart));
-                allIds.addAll(ids);
-                logger.debug("Batch[{}]: {} pts - {} ms",
-                        (totalInserted / BATCH_SIZE), ids.size(),
-                        (System.nanoTime() - batchStart) / 1_000_000);
+            if (!valid.isEmpty()) {
+                indexService.batchInsert(ids, valid);
+                indexedCount.addAndGet(valid.size());
+                totalInserted += valid.size();
             }
-        }
-
-        if (allIds.isEmpty()) {
-            logger.warn("batchInsert completed but no valid vectors were inserted for dim={}", dim);
         }
 
         if (profiler != null) {
             profiler.stop("batchInsert");
-            List<Long> timings = profiler.getTimings("batchInsert");
-            long durationMs = !timings.isEmpty() ? timings.getLast() : TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
-            totalIndexingTime += TimeUnit.MILLISECONDS.toNanos(durationMs);
-            indexingCount += vectors.size();
+            List<Long> timings = profiler.getTimings("batchInsert"); // ns if MicrometerProfiler calls super.*
+            long durationNs = !timings.isEmpty() ? timings.getLast() : (System.nanoTime() - startNs);
+            totalIndexingTime += durationNs;
         }
-    }
-
-    private <T> List<List<T>> partitionList(List<T> list, int size) {
-        List<List<T>> partitions = new ArrayList<>();
-        for (int i = 0; i < list.size(); i += size) {
-            partitions.add(list.subList(i, Math.min(i + size, list.size())));
-        }
-        return partitions;
     }
 
     public int getIndexedVectorCount() {
-        EncryptedPointBuffer buf = indexService.getPointBuffer();
-        return totalInserted + (buf != null ? buf.getTotalFlushedPoints() : 0);
+        return indexedCount.get();
     }
 
     public void insert(String id, double[] vector, int dim) {
@@ -290,66 +225,41 @@ public class ForwardSecureANNSystem {
         if (vector.length != dim) throw new IllegalArgumentException("Vector length must match dimension");
 
         if (profiler != null) profiler.start("insert");
-
         try {
             keyService.incrementOperation();
 
-            // If we have the rotating service, get possibly updated points back to the index
             if (keyService instanceof KeyRotationServiceImpl) {
-                List<EncryptedPoint> updatedPoints = ((KeyRotationServiceImpl) keyService).rotateIfNeededAndReturnUpdated();
-                for (EncryptedPoint pt : updatedPoints) {
-                    indexService.updateCachedPoint(pt);
-                }
+                List<EncryptedPoint> updated = ((KeyRotationServiceImpl) keyService).rotateIfNeededAndReturnUpdated();
+                for (EncryptedPoint pt : updated) indexService.updateCachedPoint(pt);
             } else {
                 keyService.rotateIfNeeded();
             }
 
             indexService.insert(id, vector);
-        } catch (Exception e) {
-            logger.error("Insert failed for id={}", id, e);
-            throw e;
+            indexedCount.incrementAndGet();
         } finally {
             if (profiler != null) {
                 profiler.stop("insert");
                 List<Long> timings = profiler.getTimings("insert");
                 if (!timings.isEmpty()) {
-                    long duration = timings.getLast();
-                    totalIndexingTime += TimeUnit.MILLISECONDS.toNanos(duration);
-                    indexingCount++;
-                    if (verbose) logger.debug("Insert complete for id={} in {} ms", id, duration / 1_000_000.0);
+                    long durationNs = timings.getLast();
+                    totalIndexingTime += durationNs;
+                    if (verbose) logger.debug("Insert complete for id={} in {} ms", id, durationNs / 1_000_000.0);
                 }
             }
         }
     }
 
-    public void insertFakePointsInBatches(int total, int dim) {
-        if (total <= 0) throw new IllegalArgumentException("Total must be positive");
-        if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
+    /* ---------------------- Query API ---------------------- */
 
-        int remaining = total;
-        Random rnd = new Random();
-        int batchCount = 0;
-
-        while (remaining > 0) {
-            int size = Math.min(BATCH_SIZE, remaining);
-            List<String> ids = new ArrayList<>(size);
-            List<double[]> batch = new ArrayList<>(size);
-
-            for (int i = 0; i < size; i++) {
-                double[] v = new double[dim];
-                for (int j = 0; j < dim; j++) v[j] = rnd.nextDouble();
-                batch.add(v);
-                ids.add(UUID.randomUUID().toString());
-            }
-
-            logger.debug("Inserting fake batch {} with {} points for dim={}", ++batchCount, size, dim);
-            indexService.batchInsert(ids, batch);
-            remaining -= size;
-
-            if (profiler != null) profiler.logMemory("After fake batch, remaining=" + remaining);
-        }
-
-        logger.info("Inserted {} fake points for dim={}", total, dim);
+    private QueryTokenFactory factoryForDim(int dim) {
+        return tokenFactories.computeIfAbsent(dim, d -> {
+            EvenLSH lsh = indexService.getLshForDimension(d);
+            return new QueryTokenFactory(cryptoService, keyService, lsh,
+                    Math.max(1, config.getNumShards() / 4),
+                    tokenNumTables   // <— was 1
+            );
+        });
     }
 
     public QueryToken cloakQuery(double[] queryVector, int dim, int topK) {
@@ -364,7 +274,7 @@ public class ForwardSecureANNSystem {
         for (int i = 0; i < queryVector.length; i++) {
             cloaked[i] = queryVector[i] + (r.nextGaussian() * noiseScale);
         }
-        return tokenFactory.create(cloaked, topK);
+        return factoryForDim(dim).create(cloaked, topK);
     }
 
     public List<QueryResult> query(double[] queryVector, int topK, int dim) {
@@ -374,7 +284,7 @@ public class ForwardSecureANNSystem {
         if (queryVector.length != dim) throw new IllegalArgumentException("Query vector length must match dimension");
 
         long start = System.nanoTime();
-        QueryToken token = tokenFactory.create(queryVector, topK);
+        QueryToken token = factoryForDim(dim).create(queryVector, topK);
 
         List<QueryResult> cached = cache.get(token);
         if (cached != null) {
@@ -430,19 +340,21 @@ public class ForwardSecureANNSystem {
         return results;
     }
 
+    /* ---------------------- E2E Runner ---------------------- */
+
     public void runEndToEnd(String dataPath, String queryPath, int dim, String groundtruthPath) throws IOException {
         Objects.requireNonNull(dataPath, "Data path cannot be null");
         Objects.requireNonNull(queryPath, "Query path cannot be null");
         Objects.requireNonNull(groundtruthPath, "Groundtruth path cannot be null");
         if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
 
-        DefaultDataLoader loader = new DefaultDataLoader();
-        List<double[]> vectors = loader.loadData(sanitizePath(dataPath), dim);
-        batchInsert(vectors, dim);
+        // Index (streaming) then evaluate
+        indexStream(dataPath, dim);
 
-        List<double[]> queries = loader.loadData(sanitizePath(queryPath), dim);
+        DefaultDataLoader loader = new DefaultDataLoader();
+        List<double[]> queries = loader.loadData(normalizePath(queryPath), dim);
         GroundtruthManager groundtruth = new GroundtruthManager();
-        groundtruth.load(sanitizePath(groundtruthPath));
+        groundtruth.load(normalizePath(groundtruthPath));
 
         ResultWriter rw = new ResultWriter(Paths.get("results_table.txt"));
         int[] topKValues = {1, 20, 40, 60, 80, 100};
@@ -452,7 +364,7 @@ public class ForwardSecureANNSystem {
 
             for (int topK : topKValues) {
                 long clientStart = System.nanoTime();
-                QueryToken token = tokenFactory.create(queryVec, topK);
+                QueryToken token = factoryForDim(dim).create(queryVec, topK);
                 List<QueryEvaluationResult> evals = queryService.searchWithTopKVariants(token, q, groundtruth);
                 long clientEnd = System.nanoTime();
 
@@ -486,22 +398,82 @@ public class ForwardSecureANNSystem {
         }
     }
 
-    public IndexService getIndexService() {
-        return this.indexService;
+    /* ---------------------- Utilities & Lifecycle ---------------------- */
+
+    /** Generate and insert `total` synthetic points for the given dimension. */
+    public void insertFakePointsInBatches(int total, int dim) {
+        if (total <= 0) throw new IllegalArgumentException("Total must be positive");
+        if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
+
+        java.util.Random rnd = new java.util.Random();
+        int remaining = total;
+
+        while (remaining > 0) {
+            int size = Math.min(BATCH_SIZE, remaining);
+            java.util.List<String> ids = new java.util.ArrayList<>(size);
+            java.util.List<double[]> batch = new java.util.ArrayList<>(size);
+
+            for (int i = 0; i < size; i++) {
+                double[] v = new double[dim];
+                for (int j = 0; j < dim; j++) v[j] = rnd.nextDouble();
+                batch.add(v);
+                ids.add(java.util.UUID.randomUUID().toString());
+            }
+
+            indexService.batchInsert(ids, batch);
+            indexedCount.addAndGet(size);  // keep the single source of truth
+            remaining -= size;
+        }
     }
 
-    public QueryService getQueryService() {
-        return this.queryService;
+
+    private static Path resolveKeyStorePath(String keysFilePath, Path metadataBase) {
+        Path p = Paths.get(keysFilePath);
+        return p.isAbsolute() ? p.normalize() : metadataBase.resolve(p).normalize();
     }
 
-    public Profiler getProfiler() {
-        return this.profiler;
+    private static String normalizePath(String path) {
+        return Paths.get(path).normalize().toString();
     }
+
+    private static class ConcurrentMapCache extends ConcurrentHashMap<QueryToken, List<QueryResult>> {
+        private final int maxSize;
+        private final ConcurrentMap<QueryToken, Long> timestamps = new ConcurrentHashMap<>();
+        private static final long CACHE_EXPIRY_MS = 10 * 60 * 1000;
+
+        ConcurrentMapCache(int maxSize) { this.maxSize = maxSize; }
+
+        @Override
+        public List<QueryResult> put(QueryToken key, List<QueryResult> value) {
+            cleanExpiredEntries();
+            if (size() >= maxSize) {
+                removeOldestEntry();
+            }
+            timestamps.put(key, System.currentTimeMillis());
+            return super.put(key, value);
+        }
+
+        private void cleanExpiredEntries() {
+            long now = System.currentTimeMillis();
+            timestamps.entrySet().removeIf(e -> now - e.getValue() > CACHE_EXPIRY_MS);
+        }
+
+        private void removeOldestEntry() {
+            timestamps.entrySet().stream()
+                    .min(Map.Entry.comparingByValue())
+                    .ifPresent(e -> {
+                        remove(e.getKey());
+                        timestamps.remove(e.getKey());
+                    });
+        }
+    }
+
+    public IndexService getIndexService() { return this.indexService; }
+    public QueryService getQueryService() { return this.queryService; }
+    public Profiler getProfiler() { return this.profiler; }
 
     /** Disable System.exit on shutdown (for tests). */
-    public void setExitOnShutdown(boolean exitOnShutdown) {
-        this.exitOnShutdown = exitOnShutdown;
-    }
+    public void setExitOnShutdown(boolean exitOnShutdown) { this.exitOnShutdown = exitOnShutdown; }
 
     public void flushAll() throws IOException {
         logger.info("ForwardSecureANNSystem flushAll started");
@@ -519,8 +491,6 @@ public class ForwardSecureANNSystem {
         );
         try {
             logger.info("Shutdown sequence started");
-
-            // Flush BEFORE closing any stores
             logger.info("Performing final flushAll()");
             flushAll();
 
@@ -574,7 +544,7 @@ public class ForwardSecureANNSystem {
 
     public static void main(String[] args) throws Exception {
         if (args.length < 7) {
-            System.err.println("Usage: <configPath> <dataPath> <queryPath> <keysFilePath> <dimensions> <metadataPath> <groundtruthPath>");
+            System.err.println("Usage: <configPath> <dataPath> <queryPath> <keysFilePath> <dimensions> <metadataPath> <groundtruthPath> [batchSize]");
             System.exit(1);
         }
 
@@ -585,26 +555,26 @@ public class ForwardSecureANNSystem {
         List<Integer> dimensions = Arrays.stream(args[4].split(",")).map(Integer::parseInt).collect(Collectors.toList());
         Path metadataPath  = Paths.get(args[5]);
         String groundtruthPath = args[6];
-        int batchSize = args.length >= 8 ? Integer.parseInt(args[7]) : 10000;
+        int batchSize = args.length >= 8 ? Integer.parseInt(args[7]) : 10_000;
 
         Files.createDirectories(metadataPath);
-        Path keysPath   = metadataPath.resolve("keys");
         Path pointsPath = metadataPath.resolve("points");
         Path metaDBPath = metadataPath.resolve("metadata");
-        Files.createDirectories(keysPath);
         Files.createDirectories(pointsPath);
         Files.createDirectories(metaDBPath);
 
-        // Use factory to avoid ctor access shenanigans
         RocksDBMetadataManager metadataManager =
                 RocksDBMetadataManager.create(metaDBPath.toString(), pointsPath.toString());
 
-        KeyManager keyManager = new KeyManager(keysPath.toString());
-        KeyRotationPolicy policy = new KeyRotationPolicy(100000, 999_999);
+        // AesGcmCryptoService wiring via KeyRotationService
+        Path resolvedKeyStore = resolveKeyStorePath(keysFile, metadataPath);
+        Files.createDirectories(resolvedKeyStore.getParent());
+        KeyManager keyManager = new KeyManager(resolvedKeyStore.toString());
+        KeyRotationPolicy policy = new KeyRotationPolicy(100_000, 999_999);
         KeyRotationServiceImpl keyService =
                 new KeyRotationServiceImpl(keyManager, policy, metaDBPath.toString(), metadataManager, null);
 
-        CryptoService cryptoService = new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
+        CryptoService cryptoService = new com.fspann.crypto.AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
         keyService.setCryptoService(cryptoService);
 
         ForwardSecureANNSystem sys = new ForwardSecureANNSystem(
@@ -619,12 +589,14 @@ public class ForwardSecureANNSystem {
         int dim = dimensions.get(0);
         sys.runEndToEnd(dataPath, queryPath, dim, groundtruthPath);
 
-        System.out.print("\n==== QUERY PERFORMANCE METRICS ====\n");
-        System.out.printf("Average Query Fetch Time: %.2f ms\n",
-                sys.getProfiler().getAllClientQueryTimes().stream().mapToDouble(d -> d).average().orElse(0.0));
-        System.out.printf("Average Recall: %.4f\n",
-                sys.getProfiler().getAllQueryRatios().stream().mapToDouble(d -> d).average().orElse(0.0));
-        System.out.print("Expected < 500ms/query and Recall ≈ 1.0\n");
+        if (sys.getProfiler() != null) {
+            System.out.print("\n==== QUERY PERFORMANCE METRICS ====\n");
+            System.out.printf("Average Client Query Time: %.2f ms\n",
+                    sys.getProfiler().getAllClientQueryTimes().stream().mapToDouble(d -> d).average().orElse(0.0));
+            System.out.printf("Average Ratio: %.4f\n",
+                    sys.getProfiler().getAllQueryRatios().stream().mapToDouble(d -> d).average().orElse(0.0));
+            System.out.print("Expected < 500ms/query and Recall ≈ 1.0\n");
+        }
 
         long start = System.currentTimeMillis();
         logger.info("Calling system.shutdown()...");

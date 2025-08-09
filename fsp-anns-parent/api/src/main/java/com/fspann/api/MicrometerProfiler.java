@@ -1,6 +1,7 @@
 package com.fspann.api;
 
 import com.fspann.common.Profiler;
+import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
@@ -21,41 +22,35 @@ public class MicrometerProfiler extends Profiler {
     private final MeterRegistry registry;
     private final ConcurrentMap<String, Timer> timers = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Long> startTimes = new ConcurrentHashMap<>();
+    private final DistributionSummary clientSummary;
+    private final DistributionSummary serverSummary;
+    private final DistributionSummary ratioSummary;
 
     public MicrometerProfiler(MeterRegistry registry) {
         this.registry = Objects.requireNonNull(registry, "MeterRegistry cannot be null");
+        this.clientSummary = DistributionSummary.builder("fspann.query.client_ms").register(registry);
+        this.serverSummary = DistributionSummary.builder("fspann.query.server_ms").register(registry);
+        this.ratioSummary  = DistributionSummary.builder("fspann.query.ratio").register(registry);
     }
 
-    @Override
-    public void start(String operation) {
-        Timer timer = timers.computeIfAbsent(operation,
-                k -> Timer.builder("fspann.operation.duration")
-                        .tag("operation", k)
-                        .register(registry));
-        startTimes.put(operation, System.nanoTime());
-        logger.debug("Started profiling operation: {}", operation);
+    @Override public void start(String op) {
+        super.start(op);
+        timers.computeIfAbsent(op, k -> Timer.builder("fspann.operation.duration").tag("operation", k).register(registry));
+        startTimes.put(op, System.nanoTime());
     }
 
-    @Override
-    public void stop(String operation) {
-        Timer timer = timers.get(operation);
-        Long startTime = startTimes.remove(operation);
-        if (timer != null && startTime != null) {
-            long durationNs = System.nanoTime() - startTime;
-            timer.record(durationNs, TimeUnit.NANOSECONDS);
-            logger.debug("Stopped profiling operation: {}, duration: {} ns", operation, durationNs);
-        } else {
-            logger.warn("No timer or start time found for operation: {}", operation);
-        }
+    @Override public void stop(String op) {
+        super.stop(op);
+        Timer t = timers.get(op);
+        Long s = startTimes.remove(op);
+        if (t != null && s != null) t.record(System.nanoTime() - s, TimeUnit.NANOSECONDS);
     }
 
-    @Override
-    public void recordQueryMetric(String queryId, double serverMs, double clientMs, double ratio) {
-        registry.gauge("fspann.query.server_ms", serverMs);
-        registry.gauge("fspann.query.client_ms", clientMs);
-        registry.gauge("fspann.query.ratio", ratio);
-        logger.debug("Recorded query metrics for {}: serverMs={}, clientMs={}, ratio={}",
-                queryId, serverMs, clientMs, ratio);
+    @Override public void recordQueryMetric(String id, double serverMs, double clientMs, double ratio) {
+        super.recordQueryMetric(id, serverMs, clientMs, ratio);
+        serverSummary.record(serverMs);
+        clientSummary.record(clientMs);
+        ratioSummary.record(ratio);
     }
 
     @Override
@@ -67,7 +62,7 @@ public class MicrometerProfiler extends Profiler {
                 Timer timer = entry.getValue();
                 long count = timer.count();
                 double avgMs = count > 0 ? timer.totalTime(TimeUnit.MILLISECONDS) / count : 0.0;
-                writer.write(String.format("%s,%.2f,%d\n", label, avgMs, count));
+                writer.write(String.format("%s,%.2f,%d%n", label, avgMs, count));
             }
             logger.info("Exported metrics to CSV: {}", filePath);
         } catch (IOException e) {
