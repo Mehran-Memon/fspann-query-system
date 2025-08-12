@@ -43,7 +43,11 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
     public KeyVersion getCurrentVersion() { return keyManager.getCurrentVersion(); }
 
     @Override
-    public void rotateIfNeeded() { rotateIfNeededAndReturnUpdated(); }
+    public void rotateIfNeeded() {
+        if (Boolean.getBoolean("skip.rotation")) return; // gate by JVM flag
+        rotateIfNeededAndReturnUpdated();
+    }
+
 
     @Override
     public KeyVersion getPreviousVersion() { return keyManager.getPreviousVersion(); }

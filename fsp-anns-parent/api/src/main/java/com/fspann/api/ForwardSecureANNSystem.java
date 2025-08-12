@@ -670,12 +670,9 @@ public class ForwardSecureANNSystem {
         Path resolvedKeyStore = resolveKeyStorePath(keysFile, metadataPath);
         Files.createDirectories(resolvedKeyStore.getParent());
         KeyManager keyManager = new KeyManager(resolvedKeyStore.toString());
-        KeyRotationPolicy policy = new KeyRotationPolicy(100_000, 999_999);
-        KeyRotationServiceImpl keyService =
-                new KeyRotationServiceImpl(keyManager, policy, metaDBPath.toString(), metadataManager, null);
 
-        CryptoService cryptoService = new com.fspann.crypto.AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
-        keyService.setCryptoService(cryptoService);
+        CryptoService cryptoService =
+                new com.fspann.crypto.AesGcmCryptoService(new SimpleMeterRegistry(), /* keyService */ null, metadataManager);
 
         ForwardSecureANNSystem sys = new ForwardSecureANNSystem(
                 configFile, dataPath, keysFile, dimensions, metadataPath, false,
