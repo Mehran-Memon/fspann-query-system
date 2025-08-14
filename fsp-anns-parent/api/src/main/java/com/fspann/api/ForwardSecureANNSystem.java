@@ -468,11 +468,7 @@ public class ForwardSecureANNSystem {
         try {
             for (EncryptedPoint ep : metadataManager.getAllEncryptedPoints()) {
                 if (ep == null || ep.getVersion() != version) continue;
-                var key = keyManager.getSessionKey(ep.getVersion());
-                if (key == null) { logger.warn("Missing key for v{}", ep.getVersion()); continue; }
-                double[] raw = cryptoService.decryptFromPoint(ep, key);
-
-                indexService.addToIndexOnly(ep.getId(), raw);
+                indexService.addPointToIndexOnly(ep);
                 restored++;
             }
         } finally {

@@ -158,11 +158,13 @@ public class SecureLSHIndexService implements IndexService {
             }
 
             try {
-                metadataManager.batchUpdateVectorMetadata(Collections.singletonMap(pt.getId(), metadata));
-                metadataManager.saveEncryptedPoint(pt);
+                if (writeThrough) {  // <-- guard writes
+                    metadataManager.batchUpdateVectorMetadata(Collections.singletonMap(pt.getId(), metadata));
+                    metadataManager.saveEncryptedPoint(pt);
+                }
             } catch (IOException e) {
                 logger.error("Failed to persist encrypted point {}", pt.getId(), e);
-                return; // don't count failed writes
+                return;
             }
 
             // rotation accounting only when we’re actually writing
@@ -335,6 +337,13 @@ public class SecureLSHIndexService implements IndexService {
         } finally {
             writeThrough = prev;
         }
+    }
+
+    public void addPointToIndexOnly(EncryptedPoint pt) {
+        Objects.requireNonNull(pt);
+        DimensionContext ctx = getOrCreateContext(pt.getVectorLength());
+        indexedPoints.put(pt.getId(), pt);      // optional LRU cache
+        ctx.getIndex().addPoint(pt);            // no writes, no crypto
     }
 
     public void shutdown() { buffer.shutdown(); }
