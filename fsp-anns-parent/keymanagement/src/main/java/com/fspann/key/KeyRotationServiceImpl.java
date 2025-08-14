@@ -20,6 +20,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
     private final KeyRotationPolicy policy;
     private final String rotationMetaDir;
     private final RocksDBMetadataManager metadataManager;
+    private volatile KeyVersion forcedVersion = null;
 
     private CryptoService cryptoService;
     private IndexService indexService;
@@ -40,14 +41,17 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
     }
 
     @Override
-    public KeyVersion getCurrentVersion() { return keyManager.getCurrentVersion(); }
+    public KeyVersion getCurrentVersion() {
+        KeyVersion fv = forcedVersion;
+        return (fv != null) ? fv : keyManager.getCurrentVersion();
+    }
 
     @Override
     public void rotateIfNeeded() {
-        if (Boolean.getBoolean("skip.rotation")) return; // gate by JVM flag
+        if (forcedVersion != null) return;               // NEW: never rotate when pinned
+        if (Boolean.getBoolean("skip.rotation")) return; // existing JVM flag
         rotateIfNeededAndReturnUpdated();
     }
-
 
     @Override
     public KeyVersion getPreviousVersion() { return keyManager.getPreviousVersion(); }
@@ -101,6 +105,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
     }
 
     public synchronized List<EncryptedPoint> rotateIfNeededAndReturnUpdated() {
+        if (forcedVersion != null) return Collections.emptyList(); // never rotate when pinned
         boolean opsExceeded  = operationCount.get() >= policy.getMaxOperations();
         boolean timeExceeded = Duration.between(lastRotation, Instant.now()).toMillis() >= policy.getMaxIntervalMillis();
 
@@ -142,4 +147,24 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
     public void setIndexService(IndexService indexService) { this.indexService = indexService; }
     public void incrementOperation() { operationCount.incrementAndGet(); }
     public void setLastRotationTime(long timestamp) { this.lastRotation = Instant.ofEpochMilli(timestamp); }
+
+    public synchronized boolean activateVersion(int version) {
+        try {
+            javax.crypto.SecretKey key = keyManager.getSessionKey(version);
+            if (key == null) {
+                logger.warn("activateVersion({}) failed: version not found in keystore", version);
+                return false;
+            }
+            this.forcedVersion = new KeyVersion(version, key);
+            this.operationCount.set(0);
+            this.lastRotation = Instant.now();
+            logger.info("Activated key version v{}", version);
+            return true;
+        } catch (Exception e) {
+            logger.error("activateVersion({}) failed", version, e);
+            return false;
+        }
+    }
+
+
 }

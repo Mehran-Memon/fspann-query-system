@@ -42,6 +42,7 @@ public class ForwardSecureANNSystem {
     private final boolean verbose;
     private final RocksDBMetadataManager metadataManager;
     private final TopKProfiler topKProfiler;
+    private volatile boolean queryOnlyMode = false;
 
     private final int BATCH_SIZE;
     private long totalIndexingTime = 0;
@@ -424,7 +425,7 @@ public class ForwardSecureANNSystem {
                                         String.valueOf(r.getTopKRequested()),
                                         String.valueOf(r.getRetrieved()),
                                         String.format("%.4f", r.getRatio()),
-                                        String.format("%.4f", r.getRecall()),
+                                        String.format("%.4f", (r.getRetrieved() == 0 ? 0.0 : r.getRecall())),
                                         String.valueOf(r.getTimeMs())
                                 })
                                 .collect(Collectors.toList()));
@@ -468,7 +469,7 @@ public class ForwardSecureANNSystem {
         try {
             for (EncryptedPoint ep : metadataManager.getAllEncryptedPoints()) {
                 if (ep == null || ep.getVersion() != version) continue;
-                indexService.addPointToIndexOnly(ep);
+                indexService.addPointToIndexOnly(ep); // <-- direct in-memory add
                 restored++;
             }
         } finally {
@@ -515,6 +516,9 @@ public class ForwardSecureANNSystem {
                 double serverMs = ((QueryServiceImpl) queryService).getLastQueryDurationNs() / 1_000_000.0;
                 double avgRatio = evals.stream().mapToDouble(QueryEvaluationResult::getRatio).average().orElse(0.0);
 
+                // accumulate total query time (previously stayed 0 in query-only mode)
+                totalQueryTime += (clientEnd - clientStart);
+
                 if (profiler != null) {
                     profiler.recordQueryMetric("Q" + q + "_topK" + topK, serverMs, clientMs, avgRatio);
                     for (QueryEvaluationResult r : evals) {
@@ -531,7 +535,8 @@ public class ForwardSecureANNSystem {
                                         String.valueOf(r.getTopKRequested()),
                                         String.valueOf(r.getRetrieved()),
                                         String.format("%.4f", r.getRatio()),
-                                        String.format("%.4f", r.getRecall()),
+                                        // FIX: clamp recall to 0 when Retrieved==0 to avoid 1.0000/0 bugs
+                                        String.format("%.4f", (r.getRetrieved() == 0 ? 0.0 : r.getRecall())),
                                         String.valueOf(r.getTimeMs())
                                 })
                                 .collect(Collectors.toList()));
@@ -588,6 +593,30 @@ public class ForwardSecureANNSystem {
         }
     }
 
+    public void setQueryOnlyMode(boolean b) { this.queryOnlyMode = b; }
+
+    public void finalizeForSearch() {
+        try {
+            var m = indexService.getClass().getMethod("finalizeForSearch");
+            m.invoke(indexService);
+            logger.info("IndexService finalized for search");
+            return;
+        } catch (NoSuchMethodException ignore) {
+            // fall through
+        } catch (Exception e) {
+            logger.warn("Error calling finalizeForSearch()", e);
+        }
+        try {
+            var opt = indexService.getClass().getMethod("optimize");
+            opt.invoke(indexService);
+            logger.info("IndexService optimized for search");
+        } catch (NoSuchMethodException ignore) {
+            logger.info("No finalize/optimize hook on indexService; continuing");
+        } catch (Exception e) {
+            logger.warn("Error calling optimize()", e);
+        }
+    }
+
     /** Dump profiler CSVs, query list, and copies of keys/metadata/points to outDir. */
     public void exportArtifacts(Path outDir) throws IOException {
         Files.createDirectories(outDir);
@@ -627,10 +656,6 @@ public class ForwardSecureANNSystem {
             }
         }
 
-        // 4) Copy keystore + metadata directories
-        tryCopyPath(keyStorePath, outDir.resolve("keys"));
-        tryCopyPath(pointsPath, outDir.resolve("points"));
-        tryCopyPath(metaDBPath, outDir.resolve("metadata"));
     }
 
     private void tryCopyPath(Path src, Path dst) {
@@ -670,7 +695,12 @@ public class ForwardSecureANNSystem {
         logger.info("ForwardSecureANNSystem flushAll started");
         EncryptedPointBuffer buf = indexService.getPointBuffer();
         if (buf != null) buf.flushAll();
-        metadataManager.saveIndexVersion(keyService.getCurrentVersion().getVersion());
+
+        if (queryOnlyMode) {
+            logger.info("Query-only mode: skipping metadata version save");
+        } else {
+            metadataManager.saveIndexVersion(keyService.getCurrentVersion().getVersion());
+        }
         logger.info("ForwardSecureANNSystem flushAll completed");
     }
 
@@ -750,44 +780,64 @@ public class ForwardSecureANNSystem {
         RocksDBMetadataManager metadataManager =
                 RocksDBMetadataManager.create(metaDBPath.toString(), pointsPath.toString());
 
-// AesGcmCryptoService wiring via KeyRotationService
         Path resolvedKeyStore = resolveKeyStorePath(keysFile, metadataPath);
         Files.createDirectories(resolvedKeyStore.getParent());
         KeyManager keyManager = new KeyManager(resolvedKeyStore.toString());
 
-        // Load config to drive rotation policy
+        boolean queryOnly = "POINTS_ONLY".equalsIgnoreCase(dataPath) || Boolean.getBoolean("query.only");
+        int restoreVersion = Integer.getInteger("restore.version", -1);
+        if (queryOnly && restoreVersion <= 0) {
+            restoreVersion = detectLatestVersion(pointsPath); // unchanged
+        }
+
+// Load config
         ApiSystemConfig apiCfg = new ApiSystemConfig(configFile);
         SystemConfig cfg = apiCfg.getConfig();
 
-        // Use values from config.json
         int  opsCap = (int) Math.min(Integer.MAX_VALUE, cfg.getOpsThreshold());
         long ageMs  = cfg.getAgeThresholdMs();
 
-        // Build services in the correct order
-        KeyRotationPolicy policy = new KeyRotationPolicy(opsCap, ageMs);
+// 🔒 freeze rotation in query-only
+        KeyRotationPolicy policy = new KeyRotationPolicy(
+                queryOnly ? Integer.MAX_VALUE : opsCap,
+                queryOnly ? Long.MAX_VALUE : ageMs
+        );
 
         KeyRotationServiceImpl keyService =
                 new KeyRotationServiceImpl(keyManager, policy, metaDBPath.toString(), metadataManager, null);
-
         CryptoService cryptoService =
                 new com.fspann.crypto.AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
-
-        // Back-inject crypto so re-encrypt/rotation paths work
         keyService.setCryptoService(cryptoService);
+
+        // IMPORTANT to activate the desired key version BEFORE building token factories
+        if (queryOnly && restoreVersion > 0) {
+            boolean ok = keyService.activateVersion(restoreVersion);
+            if (!ok) {
+                logger.warn("Could not activate key version v{}; current is v{}",
+                        restoreVersion, keyService.getCurrentVersion().getVersion());
+            }
+        }
+        logger.info("Key current version at startup: v{}", keyService.getCurrentVersion().getVersion());
 
         ForwardSecureANNSystem sys = new ForwardSecureANNSystem(
                 configFile, dataPath, keysFile, dimensions, metadataPath, false,
                 metadataManager, cryptoService, batchSize
         );
 
-        boolean queryOnly = "POINTS_ONLY".equalsIgnoreCase(dataPath) || Boolean.getBoolean("query.only");
-        int restoreVersion = Integer.getInteger("restore.version", -1);
         if (queryOnly) {
-            if (restoreVersion <= 0) restoreVersion = detectLatestVersion(metadataPath.resolve("points"));
-            // you already created a KeyManager earlier:
-            sys.restoreIndexFromDisk(restoreVersion, keyManager);
-            sys.runQueries(queryPath, dimensions.get(0), groundtruthPath); // reuse your existing query/eval code
-            sys.exportArtifacts(Paths.get("results"));
+            sys.setQueryOnlyMode(true); // skip writes during shutdown
+            int restored = sys.restoreIndexFromDisk(restoreVersion, keyManager);
+            sys.finalizeForSearch();    // seal/optimize for querying
+
+            // Optional sanity log
+            logger.info("Ready to query: restored {} points for dim={} (requested)", restored, dimensions.get(0));
+
+            sys.runQueries(queryPath, dimensions.get(0), groundtruthPath);
+
+            if (Boolean.getBoolean("export.artifacts")) {
+                sys.exportArtifacts(Paths.get("results"));
+            }
+
             sys.shutdown();
             return;
         }
@@ -799,7 +849,9 @@ public class ForwardSecureANNSystem {
         int dim = dimensions.get(0);
         sys.runEndToEnd(dataPath, queryPath, dim, groundtruthPath);
 
-        sys.exportArtifacts(Paths.get("results"));
+        if (Boolean.getBoolean("export.artifacts")) {
+            sys.exportArtifacts(Paths.get("results"));
+        }
 
         if (sys.getProfiler() != null) {
             System.out.print("\n==== QUERY PERFORMANCE METRICS ====\n");
