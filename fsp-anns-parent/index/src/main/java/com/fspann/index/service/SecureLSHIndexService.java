@@ -28,7 +28,11 @@ public class SecureLSHIndexService implements IndexService {
 
     private final int defaultNumBuckets;
     private final int defaultNumTables;
+    private volatile boolean writeThrough =
+            !"false".equalsIgnoreCase(System.getProperty("index.writeThrough", "true"));
 
+    public void setWriteThrough(boolean enabled) { this.writeThrough = enabled; }
+    public boolean isWriteThrough() { return writeThrough; }
     private final Map<Integer, DimensionContext> dimensionContexts = new ConcurrentHashMap<>();
     private final Map<String, EncryptedPoint> indexedPoints =
             Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, true) {
@@ -138,28 +142,32 @@ public class SecureLSHIndexService implements IndexService {
         indexedPoints.put(pt.getId(), pt);
         SecureLSHIndex idx = ctx.getIndex();
         idx.addPoint(pt);
-        buffer.add(pt);
 
-        Map<String, String> metadata = new HashMap<>();
-        metadata.put("version", String.valueOf(pt.getVersion()));
-        metadata.put("dim", String.valueOf(pt.getVectorLength()));
-        List<Integer> buckets = pt.getBuckets();
-        if (buckets != null) {
-            for (int t = 0; t < buckets.size(); t++) {
-                metadata.put("b" + t, String.valueOf(buckets.get(t)));
+        // only persist + account ops if writeThrough is enabled
+        if (writeThrough) {
+            buffer.add(pt);
+
+            Map<String, String> metadata = new HashMap<>();
+            metadata.put("version", String.valueOf(pt.getVersion()));
+            metadata.put("dim", String.valueOf(pt.getVectorLength()));
+            List<Integer> buckets = pt.getBuckets();
+            if (buckets != null) {
+                for (int t = 0; t < buckets.size(); t++) {
+                    metadata.put("b" + t, String.valueOf(buckets.get(t)));
+                }
             }
-        }
 
-        try {
-            metadataManager.batchUpdateVectorMetadata(Collections.singletonMap(pt.getId(), metadata));
-            metadataManager.saveEncryptedPoint(pt);
-        } catch (IOException e) {
-            logger.error("Failed to persist encrypted point {}", pt.getId(), e);
-            return; // don't count failed writes
-        }
+            try {
+                metadataManager.batchUpdateVectorMetadata(Collections.singletonMap(pt.getId(), metadata));
+                metadataManager.saveEncryptedPoint(pt);
+            } catch (IOException e) {
+                logger.error("Failed to persist encrypted point {}", pt.getId(), e);
+                return; // don't count failed writes
+            }
 
-        // rotation accounting (kept for compatibility)
-        keyService.incrementOperation();
+            // rotation accounting only when we’re actually writing
+            keyService.incrementOperation();
+        }
     }
 
     @Override
@@ -317,6 +325,16 @@ public class SecureLSHIndexService implements IndexService {
             out.put(k, ratio);
         }
         return out;
+    }
+
+    public void addToIndexOnly(String id, double[] vec) {
+        boolean prev = writeThrough;
+        writeThrough = false;
+        try {
+            insert(id, vec);     // uses the normal indexing flow, but writes are suppressed
+        } finally {
+            writeThrough = prev;
+        }
     }
 
     public void shutdown() { buffer.shutdown(); }

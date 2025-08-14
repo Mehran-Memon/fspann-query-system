@@ -175,6 +175,11 @@ public class ForwardSecureANNSystem {
         /* ---------------------- Indexing API ---------------------- */
 
     public void indexStream(String dataPath, int dim) throws IOException {
+        if ("POINTS_ONLY".equalsIgnoreCase(dataPath)) {
+            logger.info("Query-only mode: skipping indexing");
+            return;
+        }
+
         Objects.requireNonNull(dataPath, "Data path cannot be null");
         if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
 
@@ -455,6 +460,89 @@ public class ForwardSecureANNSystem {
         }
     }
 
+    public int restoreIndexFromDisk(int version, KeyManager keyManager) throws IOException {
+        logger.info("Restoring in-memory index from metadata for v{} ...", version);
+        int restored = 0;
+        boolean prevWT = indexService.isWriteThrough();
+        indexService.setWriteThrough(false);
+        try {
+            for (EncryptedPoint ep : metadataManager.getAllEncryptedPoints()) {
+                if (ep == null || ep.getVersion() != version) continue;
+                var key = keyManager.getSessionKey(ep.getVersion());
+                if (key == null) { logger.warn("Missing key for v{}", ep.getVersion()); continue; }
+                double[] raw = cryptoService.decryptFromPoint(ep, key);
+
+                indexService.addToIndexOnly(ep.getId(), raw);
+                restored++;
+            }
+        } finally {
+            indexService.setWriteThrough(prevWT);
+        }
+        logger.info("Restore complete: {} points", restored);
+        return restored;
+    }
+
+    static int detectLatestVersion(Path pointsRoot) throws IOException {
+        try (var s = java.nio.file.Files.list(pointsRoot)) {
+            return s.filter(java.nio.file.Files::isDirectory)
+                    .map(p -> p.getFileName().toString())
+                    .filter(n -> n.startsWith("v"))
+                    .mapToInt(n -> Integer.parseInt(n.substring(1)))
+                    .max().orElseThrow();
+        }
+    }
+
+    public void runQueries(String queryPath, int dim, String groundtruthPath) throws IOException {
+        Objects.requireNonNull(queryPath);
+        Objects.requireNonNull(groundtruthPath);
+        if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
+
+        DefaultDataLoader loader = new DefaultDataLoader();
+        List<double[]> queries = loader.loadData(normalizePath(queryPath), dim);
+        GroundtruthManager groundtruth = new GroundtruthManager();
+        groundtruth.load(normalizePath(groundtruthPath));
+
+        ResultWriter rw = new ResultWriter(Paths.get("results", "results_table.txt"));
+        int[] topKValues = {1, 20, 40, 60, 80, 100};
+
+        for (int q = 0; q < queries.size(); q++) {
+            double[] queryVec = queries.get(q);
+
+            for (int topK : topKValues) {
+                long clientStart = System.nanoTime();
+                QueryToken token = factoryForDim(dim).create(queryVec, topK);
+                List<QueryEvaluationResult> evals =
+                        queryService.searchWithTopKVariants(token, q, groundtruth);
+                long clientEnd = System.nanoTime();
+
+                double clientMs = (clientEnd - clientStart) / 1_000_000.0;
+                double serverMs = ((QueryServiceImpl) queryService).getLastQueryDurationNs() / 1_000_000.0;
+                double avgRatio = evals.stream().mapToDouble(QueryEvaluationResult::getRatio).average().orElse(0.0);
+
+                if (profiler != null) {
+                    profiler.recordQueryMetric("Q" + q + "_topK" + topK, serverMs, clientMs, avgRatio);
+                    for (QueryEvaluationResult r : evals) {
+                        profiler.recordTopKVariants("Q" + q + "_topK" + topK,
+                                r.getTopKRequested(), r.getRetrieved(), r.getRatio(), r.getRecall(), r.getTimeMs());
+                    }
+                }
+                topKProfiler.record("Q" + q + "_topK" + topK, evals);
+
+                rw.writeTable("Query " + (q + 1) + " Results (dim=" + dim + ", topK=" + topK + ")",
+                        new String[]{"TopK", "Retrieved", "Ratio", "Recall", "TimeMs"},
+                        evals.stream()
+                                .map(r -> new String[]{
+                                        String.valueOf(r.getTopKRequested()),
+                                        String.valueOf(r.getRetrieved()),
+                                        String.format("%.4f", r.getRatio()),
+                                        String.format("%.4f", r.getRecall()),
+                                        String.valueOf(r.getTimeMs())
+                                })
+                                .collect(Collectors.toList()));
+            }
+        }
+    }
+
     private static Path resolveKeyStorePath(String keysFilePath, Path metadataBase) {
         Path p = Paths.get(keysFilePath);
         return p.isAbsolute() ? p.normalize() : metadataBase.resolve(p).normalize();
@@ -666,18 +754,47 @@ public class ForwardSecureANNSystem {
         RocksDBMetadataManager metadataManager =
                 RocksDBMetadataManager.create(metaDBPath.toString(), pointsPath.toString());
 
-        // AesGcmCryptoService wiring via KeyRotationService
+// AesGcmCryptoService wiring via KeyRotationService
         Path resolvedKeyStore = resolveKeyStorePath(keysFile, metadataPath);
         Files.createDirectories(resolvedKeyStore.getParent());
         KeyManager keyManager = new KeyManager(resolvedKeyStore.toString());
 
+        // Load config to drive rotation policy
+        ApiSystemConfig apiCfg = new ApiSystemConfig(configFile);
+        SystemConfig cfg = apiCfg.getConfig();
+
+        // Use values from config.json
+        int  opsCap = (int) Math.min(Integer.MAX_VALUE, cfg.getOpsThreshold());
+        long ageMs  = cfg.getAgeThresholdMs();
+
+        // Build services in the correct order
+        KeyRotationPolicy policy = new KeyRotationPolicy(opsCap, ageMs);
+
+        KeyRotationServiceImpl keyService =
+                new KeyRotationServiceImpl(keyManager, policy, metaDBPath.toString(), metadataManager, null);
+
         CryptoService cryptoService =
-                new com.fspann.crypto.AesGcmCryptoService(new SimpleMeterRegistry(), /* keyService */ null, metadataManager);
+                new com.fspann.crypto.AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
+
+        // Back-inject crypto so re-encrypt/rotation paths work
+        keyService.setCryptoService(cryptoService);
 
         ForwardSecureANNSystem sys = new ForwardSecureANNSystem(
                 configFile, dataPath, keysFile, dimensions, metadataPath, false,
                 metadataManager, cryptoService, batchSize
         );
+
+        boolean queryOnly = "POINTS_ONLY".equalsIgnoreCase(dataPath) || Boolean.getBoolean("query.only");
+        int restoreVersion = Integer.getInteger("restore.version", -1);
+        if (queryOnly) {
+            if (restoreVersion <= 0) restoreVersion = detectLatestVersion(metadataPath.resolve("points"));
+            // you already created a KeyManager earlier:
+            sys.restoreIndexFromDisk(restoreVersion, keyManager);
+            sys.runQueries(queryPath, dimensions.get(0), groundtruthPath); // reuse your existing query/eval code
+            sys.exportArtifacts(Paths.get("results"));
+            sys.shutdown();
+            return;
+        }
 
         if ("true".equals(System.getProperty("disable.exit"))) {
             sys.setExitOnShutdown(false);
