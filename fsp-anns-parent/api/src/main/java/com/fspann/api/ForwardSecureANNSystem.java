@@ -47,9 +47,9 @@ public class ForwardSecureANNSystem {
     private final int BATCH_SIZE;
     private long totalIndexingTime = 0;
     private long totalQueryTime = 0;
-    private final java.util.concurrent.atomic.AtomicInteger indexedCount = new java.util.concurrent.atomic.AtomicInteger();
     private int totalInserted = 0;
-    private final int tokenNumTables;
+    private final java.util.concurrent.atomic.AtomicInteger indexedCount = new java.util.concurrent.atomic.AtomicInteger();
+    private final java.util.concurrent.atomic.AtomicLong nextId = new java.util.concurrent.atomic.AtomicLong(0);
 
     // artifact/export helpers (now aligned with FsPaths)
     private final Path metaDBPath;
@@ -150,7 +150,6 @@ public class ForwardSecureANNSystem {
             // If indexService exposes number of tables, assign here.
             // tmpTables = indexService.getNumTables();
         } catch (Throwable ignore) {}
-        this.tokenNumTables = tmpTables;
 
         if (keyService instanceof KeyRotationServiceImpl kr) {
             kr.setIndexService(indexService);
@@ -162,11 +161,14 @@ public class ForwardSecureANNSystem {
         // Token factories by dimension
         for (int dim : dimensions) {
             EvenLSH lshForDim = indexService.getLshForDimension(dim);
+            int tables = numTablesFor(lshForDim, config);
+            int shards = shardsToProbe();
             tokenFactories.put(dim, new QueryTokenFactory(
                     cryptoService, keyService, lshForDim,
-                    Math.max(1, config.getNumShards() / 4),
-                    tokenNumTables
+                    shards,          // <-- not numShards/4; probe all shards by default
+                    tables           // <-- real table count
             ));
+            logger.info("TokenFactory created: dim={} tables={} shardsToProbe={}", dim, tables, shards);
         }
 
         this.queryService = new QueryServiceImpl(indexService, cryptoService, keyService);
@@ -214,10 +216,11 @@ public class ForwardSecureANNSystem {
         long startNs = System.nanoTime();
         if (profiler != null) profiler.start("batchInsert");
 
-        for (int i = 0; i < vectors.size(); i += BATCH_SIZE) {
-            keyService.rotateIfNeeded();
-            List<double[]> slice = vectors.subList(i, Math.min(i + BATCH_SIZE, vectors.size()));
-            List<String> ids = new ArrayList<>(slice.size());
+        for (int offset = 0; offset < vectors.size(); offset += BATCH_SIZE) {
+            // slice
+            List<double[]> slice = vectors.subList(offset, Math.min(offset + BATCH_SIZE, vectors.size()));
+
+            // filter/validate
             List<double[]> valid = new ArrayList<>(slice.size());
             for (double[] v : slice) {
                 if (v == null) continue;
@@ -225,20 +228,30 @@ public class ForwardSecureANNSystem {
                     logger.warn("Skipping vector dim={} (expected {})", (v != null ? v.length : -1), dim);
                     continue;
                 }
-                ids.add(UUID.randomUUID().toString());
                 valid.add(v);
             }
-            if (!valid.isEmpty()) {
-                indexService.batchInsert(ids, valid);
-                indexedCount.addAndGet(valid.size());
-                totalInserted += valid.size();
+            if (valid.isEmpty()) continue;
+
+            // rotate only when needed and there is work
+            keyService.rotateIfNeeded();
+
+            // assign sequential numeric IDs to match groundtruth-style ids
+            long base = nextId.getAndAdd(valid.size());
+            List<String> ids = new ArrayList<>(valid.size());
+            for (int j = 0; j < valid.size(); j++) {
+                ids.add(Long.toString(base + j)); // "0","1","2",...
             }
+
+            // index
+            indexService.batchInsert(ids, valid);
+            indexedCount.addAndGet(valid.size());
+            totalInserted += valid.size();
         }
 
         if (profiler != null) {
             profiler.stop("batchInsert");
             List<Long> timings = profiler.getTimings("batchInsert");
-            long durationNs = !timings.isEmpty() ? timings.getLast() : (System.nanoTime() - startNs);
+            long durationNs = (!timings.isEmpty() ? timings.get(timings.size() - 1) : (System.nanoTime() - startNs));
             totalIndexingTime += durationNs;
         }
     }
@@ -284,10 +297,10 @@ public class ForwardSecureANNSystem {
     private QueryTokenFactory factoryForDim(int dim) {
         return tokenFactories.computeIfAbsent(dim, d -> {
             EvenLSH lsh = indexService.getLshForDimension(d);
-            return new QueryTokenFactory(cryptoService, keyService, lsh,
-                    Math.max(1, config.getNumShards() / 4),
-                    tokenNumTables
-            );
+            int tables = numTablesFor(lsh, config);
+            int shards = shardsToProbe();
+            logger.info("TokenFactory (lazy): dim={} tables={} shardsToProbe={}", d, tables, shards);
+            return new QueryTokenFactory(cryptoService, keyService, lsh, shards, tables);
         });
     }
 
@@ -404,6 +417,7 @@ public class ForwardSecureANNSystem {
                 long clientEnd = System.nanoTime();
 
                 double clientMs = (clientEnd - clientStart) / 1_000_000.0;
+                totalQueryTime += (clientEnd - clientStart);
                 double serverMs = ((QueryServiceImpl) queryService).getLastQueryDurationNs() / 1_000_000.0;
                 double avgRatio  = evals.stream().mapToDouble(QueryEvaluationResult::getRatio).average().orElse(0.0);
                 double avgRecall = evals.stream().mapToDouble(QueryEvaluationResult::getRecall).average().orElse(0.0);
@@ -687,6 +701,32 @@ public class ForwardSecureANNSystem {
     public IndexService getIndexService() { return this.indexService; }
     public QueryService getQueryService() { return this.queryService; }
     public Profiler getProfiler() { return this.profiler; }
+    private static int numTablesFor(EvenLSH lsh, SystemConfig cfg) {
+        // Try LSH.getNumTables()
+        try {
+            var m = lsh.getClass().getMethod("getNumTables");
+            Object v = m.invoke(lsh);
+            if (v instanceof Integer n && n > 0) return n;
+        } catch (Throwable ignore) {}
+
+        // Try config.getNumTables() if you have it
+        try {
+            var m = cfg.getClass().getMethod("getNumTables");
+            Object v = m.invoke(cfg);
+            if (v instanceof Integer n && n > 0) return n;
+        } catch (Throwable ignore) {}
+
+        return 4; // last-resort fallback
+    }
+    private int shardsToProbe() {
+        // Use index's shard count if exposed; fall back to config
+        try {
+            var m = indexService.getClass().getMethod("getNumShards");
+            Object v = m.invoke(indexService);
+            if (v instanceof Integer n && n > 0) return n;
+        } catch (Throwable ignore) {}
+        return Math.max(1, config.getNumShards());
+    }
 
     /** Disable System.exit on shutdown (for tests). */
     public void setExitOnShutdown(boolean exitOnShutdown) { this.exitOnShutdown = exitOnShutdown; }

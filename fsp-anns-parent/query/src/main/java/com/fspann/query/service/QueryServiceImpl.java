@@ -101,7 +101,7 @@ public class QueryServiceImpl implements QueryService {
                     double dist = computeDistance(queryVec, ptVec);
                     topKQueue.offer(new QueryResult(pt.getId(), dist));
                     if (topKQueue.size() > token.getTopK()) {
-                        topKQueue.poll(); // remove worst
+                        topKQueue.poll(); // remove the worst
                     }
                 } catch (Exception e) {
                     logger.warn("Failed to decrypt candidate {}. Skipping.", pt.getId(), e);
@@ -194,11 +194,18 @@ public class QueryServiceImpl implements QueryService {
             long durationMs = (System.nanoTime() - start) / 1_000_000;
 
             int[] truth = groundtruthManager.getGroundtruth(queryIndex, k);
+            // groundtruth ids are integer doc ids; our retrieved ids are strings –
+            // adapting this mapping if our ids are not exactly these ints as strings.
             Set<String> truthSet = Arrays.stream(truth).mapToObj(String::valueOf).collect(Collectors.toSet());
 
-            long matchCount = retrieved.stream().map(QueryResult::getId).filter(truthSet::contains).count();
-            double ratio = matchCount / (double) k;
-            double recall = 1.0; // defined as constant for now
+            long matchCount = retrieved.stream()
+                    .map(QueryResult::getId)
+                    .filter(truthSet::contains)
+                    .count();
+
+            double ratio  = matchCount / (double) k;                  // “precision at K”
+            double recall = truthSet.isEmpty() ? 0.0 : ratio;         // if GT@K is K, recall==precision@K
+
 
             results.add(new QueryEvaluationResult(k, retrieved.size(), ratio, recall, durationMs));
         }

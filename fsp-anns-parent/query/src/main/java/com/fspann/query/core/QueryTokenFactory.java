@@ -8,6 +8,7 @@ import com.fspann.crypto.CryptoService;
 import com.fspann.index.core.EvenLSH;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import java.util.stream.Collectors;
 
 import javax.crypto.SecretKey;
 import java.util.ArrayList;
@@ -22,6 +23,9 @@ public class QueryTokenFactory {
     private final EvenLSH lsh;
     private final int expansionRange; // kept for compatibility (unused with contiguous logic)
     private final int numTables;
+    private static List<Integer> flattenDistinct(List<List<Integer>> perTable) {
+        return perTable.stream().flatMap(List::stream).distinct().collect(Collectors.toList());
+    }
 
     public QueryTokenFactory(CryptoService cryptoService, KeyLifeCycleService keyService,
                              EvenLSH lsh, int expansionRange, int numTables) {
@@ -62,17 +66,17 @@ public class QueryTokenFactory {
 
         String encryptionContext = String.format("epoch_%d_dim_%d", version, vector.length);
 
-        // FIX: use "query" to match tests
+        // Using "query" to match tests
         EncryptedPoint encrypted = cryptoService.encryptToPoint("query", vector, key);
 
         List<List<Integer>> perTable = new ArrayList<>(numTables);
-        for (int t = 0; t < numTables; t++) {
-            perTable.add(lsh.getBuckets(vector, topK, t));
-        }
+        for (int t = 0; t < numTables; t++) perTable.add(lsh.getBuckets(vector, topK, t));
+        List<Integer> flat = flattenDistinct(perTable);
+        int totalBuckets = flat.size();
+        logger.debug("Token create: dim={} topK={} tables={} totalBuckets={}", vector.length, topK, numTables, totalBuckets);
 
-        logger.debug("Created per-table QueryToken: version={}, dimension={}, tables={}", version, vector.length, numTables);
         return new QueryToken(
-                perTable,
+                flat,                      // candidateBuckets (legacy)
                 encrypted.getIv(),
                 encrypted.getCiphertext(),
                 vector.clone(),
@@ -80,6 +84,7 @@ public class QueryTokenFactory {
                 numTables,
                 encryptionContext,
                 vector.length,
+                /*shard*/ 0,
                 version
         );
     }
@@ -104,12 +109,13 @@ public class QueryTokenFactory {
         EncryptedPoint ep = cryptoService.encryptToPoint("query", q, curr.getKey());
 
         List<List<Integer>> perTable = new ArrayList<>(numTables);
-        for (int t = 0; t < numTables; t++) {
-            perTable.add(lsh.getBuckets(q, newTopK, t));
-        }
+        for (int t = 0; t < numTables; t++) perTable.add(lsh.getBuckets(q, newTopK, t));
+        List<Integer> flat = flattenDistinct(perTable);
+        int totalBuckets = flat.size();
+        logger.debug("Token derive: dim={} topK={} tables={} totalBuckets={}", q.length, newTopK, numTables, totalBuckets);
 
         return new QueryToken(
-                perTable,
+                flat,                      // candidateBuckets (legacy)
                 ep.getIv(),
                 ep.getCiphertext(),
                 q,
@@ -117,6 +123,7 @@ public class QueryTokenFactory {
                 numTables,
                 String.format("epoch_%d_dim_%d", curr.getVersion(), q.length),
                 q.length,
+                /*shard*/ 0,
                 curr.getVersion()
         );
     }
