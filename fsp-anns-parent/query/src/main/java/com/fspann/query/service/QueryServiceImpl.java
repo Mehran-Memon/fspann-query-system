@@ -162,20 +162,23 @@ public class QueryServiceImpl implements QueryService {
             if (tokenFactory != null) {
                 variant = tokenFactory.derive(baseToken, k);  // recompute per-table expansions
             } else {
-                // Force index service to compute per-table expansions for this K
+                // Reuse per-table buckets from the base token (already computed by the factory).
+                // This keeps candidateBuckets non-null and non-empty to satisfy the constructor.
+                List<List<Integer>> perTable = baseToken.getTableBuckets();
+
                 variant = new QueryToken(
-                        /*candidateBuckets*/ null,                 // no per-table buckets -> index expands
+                        perTable,
                         baseToken.getIv(),
                         baseToken.getEncryptedQuery(),
-                        baseToken.getPlaintextQuery(),             // plaintext used for LSH expansions
+                        baseToken.getPlaintextQuery(),
                         k,
                         baseToken.getNumTables(),
                         baseToken.getEncryptionContext(),
                         baseToken.getDimension(),
-                        /*shard*/ 0,
                         baseToken.getVersion()
                 );
             }
+
             long start = System.nanoTime();
             List<QueryResult> retrieved = search(variant);
             long durationMs = (System.nanoTime() - start) / 1_000_000;

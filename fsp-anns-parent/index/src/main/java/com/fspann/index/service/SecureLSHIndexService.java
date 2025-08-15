@@ -158,15 +158,13 @@ public class SecureLSHIndexService implements IndexService {
             }
 
             try {
-                // persist both metadata and the encrypted point itself
                 metadataManager.batchUpdateVectorMetadata(Collections.singletonMap(pt.getId(), metadata));
                 metadataManager.saveEncryptedPoint(pt);
             } catch (IOException e) {
                 logger.error("Failed to persist encrypted point {}", pt.getId(), e);
-                return;
+                return; // don't count failed writes
             }
 
-            // rotation accounting (kept for compatibility)
             keyService.incrementOperation();
         }
     }
@@ -239,10 +237,16 @@ public class SecureLSHIndexService implements IndexService {
         List<EncryptedPoint> filtered = new ArrayList<>(candidates.size());
         for (EncryptedPoint pt : candidates) {
             Map<String, String> m = metas.get(pt.getId());
-            if (m != null
-                    && Integer.toString(pt.getVersion()).equals(m.get("version"))
-                    && Integer.toString(pt.getVectorLength()).equals(m.get("dim"))) {
+            if (m == null) {
+                // Metadata not flushed/available yet → keep candidate;
+                // version check will still happen later during decrypt phase.
                 filtered.add(pt);
+            } else {
+                boolean versionOk = Integer.toString(pt.getVersion()).equals(m.get("version"));
+                boolean dimOk = (m.get("dim") == null) || Integer.toString(pt.getVectorLength()).equals(m.get("dim"));
+                if (versionOk && dimOk) {
+                    filtered.add(pt);
+                }
             }
         }
         return filtered;

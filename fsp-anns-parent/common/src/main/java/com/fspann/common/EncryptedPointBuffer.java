@@ -71,10 +71,20 @@ public class EncryptedPointBuffer {
         // Step 1: Prepare metadata
         Map<String, Map<String, String>> allMeta = new HashMap<>();
         for (EncryptedPoint pt : points) {
-            allMeta.put(pt.getId(), Map.of(
-                    "shardId", String.valueOf(pt.getShardId()),
-                    "version", String.valueOf(pt.getVersion())
-            ));
+            Map<String, String> meta = new HashMap<>();
+            meta.put("version", String.valueOf(pt.getVersion()));
+            meta.put("shardId", String.valueOf(pt.getShardId()));
+            meta.put("dim", String.valueOf(pt.getVectorLength())); // <-- critical
+
+        // (handy for audits & sanity checks)
+            List<Integer> buckets = pt.getBuckets();
+            if (buckets != null) {
+                for (int t = 0; t < buckets.size(); t++) {
+                    meta.put("b" + t, String.valueOf(buckets.get(t)));
+                }
+            }
+
+            allMeta.put(pt.getId(), meta);
         }
 
         // Step 2: Try batch metadata update first
