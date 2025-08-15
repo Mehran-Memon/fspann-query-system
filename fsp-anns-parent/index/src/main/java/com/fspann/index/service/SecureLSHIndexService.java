@@ -158,14 +158,14 @@ public class SecureLSHIndexService implements IndexService {
             }
 
             try {
-                if (writeThrough) { // <-- add this guard
-                    metadataManager.batchUpdateVectorMetadata(Collections.singletonMap(pt.getId(), metadata));
-                    metadataManager.saveEncryptedPoint(pt);
-                }
+                // persist both metadata and the encrypted point itself
+                metadataManager.batchUpdateVectorMetadata(Collections.singletonMap(pt.getId(), metadata));
+                metadataManager.saveEncryptedPoint(pt);
             } catch (IOException e) {
                 logger.error("Failed to persist encrypted point {}", pt.getId(), e);
-                return; // don't count failed writes
+                return;
             }
+
             // rotation accounting (kept for compatibility)
             keyService.incrementOperation();
         }

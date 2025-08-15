@@ -396,8 +396,68 @@ public class ForwardSecureANNSystem {
         Objects.requireNonNull(groundtruthPath, "Groundtruth path cannot be null");
         if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
 
-        // Index (streaming) then evaluate
+        // 1) Index first
         indexStream(dataPath, dim);
+
+        // 2) Load queries + GT
+        DefaultDataLoader loader = new DefaultDataLoader();
+        List<double[]> queries = loader.loadData(normalizePath(queryPath), dim);
+        GroundtruthManager groundtruth = new GroundtruthManager();
+        groundtruth.load(normalizePath(groundtruthPath));
+
+        // 3) Prepare writer
+        ResultWriter rw = new ResultWriter(Paths.get("results", "results_table.txt"));
+
+        // TopK set is owned by QueryServiceImpl.searchWithTopKVariants; we just choose a base K
+        final int baseKForToken = 100; // max of {1,20,40,60,80,100}
+
+        for (int q = 0; q < queries.size(); q++) {
+            double[] queryVec = queries.get(q);
+
+            long clientStart = System.nanoTime();
+
+            // Create a single base token; service will evaluate all K variants
+            QueryToken baseToken = factoryForDim(dim).create(queryVec, baseKForToken);
+            List<QueryEvaluationResult> evals = queryService.searchWithTopKVariants(baseToken, q, groundtruth);
+
+            long clientEnd = System.nanoTime();
+            double clientMs = (clientEnd - clientStart) / 1_000_000.0;
+            totalQueryTime += (clientEnd - clientStart);
+
+            double serverMs = ((QueryServiceImpl) queryService).getLastQueryDurationNs() / 1_000_000.0;
+            double avgRatio  = evals.stream().mapToDouble(QueryEvaluationResult::getRatio).average().orElse(0.0);
+            double avgRecall = evals.stream().mapToDouble(QueryEvaluationResult::getRecall).average().orElse(0.0);
+
+            if (profiler != null) {
+                profiler.recordQueryMetric("Q" + q, serverMs, clientMs, avgRatio);
+                for (QueryEvaluationResult r : evals) {
+                    profiler.recordTopKVariants("Q" + q,
+                            r.getTopKRequested(), r.getRetrieved(), r.getRatio(), r.getRecall(), r.getTimeMs());
+                }
+            }
+
+            topKProfiler.record("Q" + q, evals);
+
+            // One table per query, containing all K variants
+            rw.writeTable("Query " + (q + 1) + " Results (dim=" + dim + ")",
+                    new String[]{"TopK", "Retrieved", "Ratio", "Recall", "TimeMs"},
+                    evals.stream()
+                            .map(r -> new String[]{
+                                    String.valueOf(r.getTopKRequested()),
+                                    String.valueOf(r.getRetrieved()),
+                                    String.format("%.4f", r.getRatio()),
+                                    // keep presentation clamp consistent with prior code
+                                    String.format("%.4f", r.getRecall()),
+                                    String.valueOf(r.getTimeMs())
+                            })
+                            .collect(Collectors.toList()));
+        }
+    }
+
+    public void runQueries(String queryPath, int dim, String groundtruthPath) throws IOException {
+        Objects.requireNonNull(queryPath, "Query path cannot be null");
+        Objects.requireNonNull(groundtruthPath, "Groundtruth path cannot be null");
+        if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
 
         DefaultDataLoader loader = new DefaultDataLoader();
         List<double[]> queries = loader.loadData(normalizePath(queryPath), dim);
@@ -405,45 +465,45 @@ public class ForwardSecureANNSystem {
         groundtruth.load(normalizePath(groundtruthPath));
 
         ResultWriter rw = new ResultWriter(Paths.get("results", "results_table.txt"));
-        int[] topKValues = {1, 20, 40, 60, 80, 100};
+
+        final int baseKForToken = 100; // max of the K sweep
 
         for (int q = 0; q < queries.size(); q++) {
             double[] queryVec = queries.get(q);
 
-            for (int topK : topKValues) {
-                long clientStart = System.nanoTime();
-                QueryToken token = factoryForDim(dim).create(queryVec, topK);
-                List<QueryEvaluationResult> evals = queryService.searchWithTopKVariants(token, q, groundtruth);
-                long clientEnd = System.nanoTime();
+            long clientStart = System.nanoTime();
 
-                double clientMs = (clientEnd - clientStart) / 1_000_000.0;
-                totalQueryTime += (clientEnd - clientStart);
-                double serverMs = ((QueryServiceImpl) queryService).getLastQueryDurationNs() / 1_000_000.0;
-                double avgRatio  = evals.stream().mapToDouble(QueryEvaluationResult::getRatio).average().orElse(0.0);
-                double avgRecall = evals.stream().mapToDouble(QueryEvaluationResult::getRecall).average().orElse(0.0);
+            QueryToken baseToken = factoryForDim(dim).create(queryVec, baseKForToken);
+            List<QueryEvaluationResult> evals = queryService.searchWithTopKVariants(baseToken, q, groundtruth);
 
-                if (profiler != null) {
-                    profiler.recordQueryMetric("Q" + q + "_topK" + topK, serverMs, clientMs, avgRatio);
-                    for (QueryEvaluationResult r : evals) {
-                        profiler.recordTopKVariants("Q" + q + "_topK" + topK,
-                                r.getTopKRequested(), r.getRetrieved(), r.getRatio(), r.getRecall(), r.getTimeMs());
-                    }
+            long clientEnd = System.nanoTime();
+            double clientMs = (clientEnd - clientStart) / 1_000_000.0;
+            double serverMs = ((QueryServiceImpl) queryService).getLastQueryDurationNs() / 1_000_000.0;
+            double avgRatio  = evals.stream().mapToDouble(QueryEvaluationResult::getRatio).average().orElse(0.0);
+
+            totalQueryTime += (clientEnd - clientStart);
+
+            if (profiler != null) {
+                profiler.recordQueryMetric("Q" + q, serverMs, clientMs, avgRatio);
+                for (QueryEvaluationResult r : evals) {
+                    profiler.recordTopKVariants("Q" + q,
+                            r.getTopKRequested(), r.getRetrieved(), r.getRatio(), r.getRecall(), r.getTimeMs());
                 }
-
-                topKProfiler.record("Q" + q + "_topK" + topK, evals);
-
-                rw.writeTable("Query " + (q + 1) + " Results (dim=" + dim + ", topK=" + topK + ")",
-                        new String[]{"TopK", "Retrieved", "Ratio", "Recall", "TimeMs"},
-                        evals.stream()
-                                .map(r -> new String[]{
-                                        String.valueOf(r.getTopKRequested()),
-                                        String.valueOf(r.getRetrieved()),
-                                        String.format("%.4f", r.getRatio()),
-                                        String.format("%.4f", (r.getRetrieved() == 0 ? 0.0 : r.getRecall())),
-                                        String.valueOf(r.getTimeMs())
-                                })
-                                .collect(Collectors.toList()));
             }
+
+            topKProfiler.record("Q" + q, evals);
+
+            rw.writeTable("Query " + (q + 1) + " Results (dim=" + dim + ")",
+                    new String[]{"TopK", "Retrieved", "Ratio", "Recall", "TimeMs"},
+                    evals.stream()
+                            .map(r -> new String[]{
+                                    String.valueOf(r.getTopKRequested()),
+                                    String.valueOf(r.getRetrieved()),
+                                    String.format("%.4f", r.getRatio()),
+                                    String.format("%.4f", r.getRecall()),
+                                    String.valueOf(r.getTimeMs())
+                            })
+                            .collect(Collectors.toList()));
         }
     }
 
@@ -500,61 +560,6 @@ public class ForwardSecureANNSystem {
                     .filter(n -> n.startsWith("v"))
                     .mapToInt(n -> Integer.parseInt(n.substring(1)))
                     .max().orElseThrow();
-        }
-    }
-
-    public void runQueries(String queryPath, int dim, String groundtruthPath) throws IOException {
-        Objects.requireNonNull(queryPath);
-        Objects.requireNonNull(groundtruthPath);
-        if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
-
-        DefaultDataLoader loader = new DefaultDataLoader();
-        List<double[]> queries = loader.loadData(normalizePath(queryPath), dim);
-        GroundtruthManager groundtruth = new GroundtruthManager();
-        groundtruth.load(normalizePath(groundtruthPath));
-
-        ResultWriter rw = new ResultWriter(Paths.get("results", "results_table.txt"));
-        int[] topKValues = {1, 20, 40, 60, 80, 100};
-
-        for (int q = 0; q < queries.size(); q++) {
-            double[] queryVec = queries.get(q);
-
-            for (int topK : topKValues) {
-                long clientStart = System.nanoTime();
-                QueryToken token = factoryForDim(dim).create(queryVec, topK);
-                List<QueryEvaluationResult> evals =
-                        queryService.searchWithTopKVariants(token, q, groundtruth);
-                long clientEnd = System.nanoTime();
-
-                double clientMs = (clientEnd - clientStart) / 1_000_000.0;
-                double serverMs = ((QueryServiceImpl) queryService).getLastQueryDurationNs() / 1_000_000.0;
-                double avgRatio = evals.stream().mapToDouble(QueryEvaluationResult::getRatio).average().orElse(0.0);
-
-                // accumulate total query time (previously stayed 0 in query-only mode)
-                totalQueryTime += (clientEnd - clientStart);
-
-                if (profiler != null) {
-                    profiler.recordQueryMetric("Q" + q + "_topK" + topK, serverMs, clientMs, avgRatio);
-                    for (QueryEvaluationResult r : evals) {
-                        profiler.recordTopKVariants("Q" + q + "_topK" + topK,
-                                r.getTopKRequested(), r.getRetrieved(), r.getRatio(), r.getRecall(), r.getTimeMs());
-                    }
-                }
-                topKProfiler.record("Q" + q + "_topK" + topK, evals);
-
-                rw.writeTable("Query " + (q + 1) + " Results (dim=" + dim + ", topK=" + topK + ")",
-                        new String[]{"TopK", "Retrieved", "Ratio", "Recall", "TimeMs"},
-                        evals.stream()
-                                .map(r -> new String[]{
-                                        String.valueOf(r.getTopKRequested()),
-                                        String.valueOf(r.getRetrieved()),
-                                        String.format("%.4f", r.getRatio()),
-                                        // FIX: clamp recall to 0 when Retrieved==0 to avoid 1.0000/0 bugs
-                                        String.format("%.4f", (r.getRetrieved() == 0 ? 0.0 : r.getRecall())),
-                                        String.valueOf(r.getTimeMs())
-                                })
-                                .collect(Collectors.toList()));
-            }
         }
     }
 

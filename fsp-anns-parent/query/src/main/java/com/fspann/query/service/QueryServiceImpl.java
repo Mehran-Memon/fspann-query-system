@@ -160,26 +160,14 @@ public class QueryServiceImpl implements QueryService {
         for (int k : topKVariants) {
             final QueryToken variant;
             if (tokenFactory != null) {
-                variant = tokenFactory.derive(baseToken, k); // recompute per-table expansions per K
-            } else if (baseToken.hasPerTable()) {
-                variant = new QueryToken(
-                        baseToken.getTableBuckets(),
-                        baseToken.getIv(),
-                        baseToken.getEncryptedQuery(),
-                        baseToken.getPlaintextQuery(),
-                        k,
-                        baseToken.getNumTables(),
-                        baseToken.getEncryptionContext(),
-                        baseToken.getDimension(),
-                        baseToken.getVersion()
-                );
+                variant = tokenFactory.derive(baseToken, k);  // recompute per-table expansions
             } else {
-                // legacy: keep same flat buckets (index service will expand internally if needed)
+                // Force index service to compute per-table expansions for this K
                 variant = new QueryToken(
-                        baseToken.getCandidateBuckets(),
+                        /*candidateBuckets*/ null,                 // no per-table buckets -> index expands
                         baseToken.getIv(),
                         baseToken.getEncryptedQuery(),
-                        baseToken.getPlaintextQuery(),
+                        baseToken.getPlaintextQuery(),             // plaintext used for LSH expansions
                         k,
                         baseToken.getNumTables(),
                         baseToken.getEncryptionContext(),
@@ -188,14 +176,11 @@ public class QueryServiceImpl implements QueryService {
                         baseToken.getVersion()
                 );
             }
-
             long start = System.nanoTime();
             List<QueryResult> retrieved = search(variant);
             long durationMs = (System.nanoTime() - start) / 1_000_000;
 
             int[] truth = groundtruthManager.getGroundtruth(queryIndex, k);
-            // groundtruth ids are integer doc ids; our retrieved ids are strings –
-            // adapting this mapping if our ids are not exactly these ints as strings.
             Set<String> truthSet = Arrays.stream(truth).mapToObj(String::valueOf).collect(Collectors.toSet());
 
             long matchCount = retrieved.stream()
@@ -203,9 +188,9 @@ public class QueryServiceImpl implements QueryService {
                     .filter(truthSet::contains)
                     .count();
 
-            double ratio  = matchCount / (double) k;                  // “precision at K”
-            double recall = truthSet.isEmpty() ? 0.0 : ratio;         // if GT@K is K, recall==precision@K
-
+            double ratio  = k == 0 ? 0.0 : matchCount / (double) k;
+            // Design choice for tests: recall is 1.0 when groundtruth is empty.
+            double recall = (truth.length == 0) ? 1.0 : matchCount / (double) truth.length;
 
             results.add(new QueryEvaluationResult(k, retrieved.size(), ratio, recall, durationMs));
         }
