@@ -20,11 +20,9 @@ public class SecureLSHIndex {
 
     private final int numHashTables;
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
-
     private final Map<String, EncryptedPoint> points = new ConcurrentHashMap<>();
     // One map per table: bucketId -> list of points in that bucket
     private final List<Map<Integer, CopyOnWriteArrayList<EncryptedPoint>>> tables = new ArrayList<>();
-
     private final EvenLSH lsh;
 
     public SecureLSHIndex(int numHashTables, int numBuckets, EvenLSH lsh) {

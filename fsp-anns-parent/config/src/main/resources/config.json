@@ -1,5 +1,6 @@
 {
-  "numShards": 128,
+  "numShards": 4096,
+  "numTables": 8,
   "opsThreshold": 1000000000,
   "ageThresholdMs": 2592000000,
   "reEncBatchSize": 10000,

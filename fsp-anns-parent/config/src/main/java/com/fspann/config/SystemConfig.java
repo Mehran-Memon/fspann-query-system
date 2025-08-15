@@ -21,7 +21,7 @@ public class SystemConfig {
     private static final Logger logger = LoggerFactory.getLogger(SystemConfig.class);
 
     // caps
-    private static final int  MAX_SHARDS          = 1024;
+    private static final int  MAX_SHARDS          = 8192;
     private static final long MAX_OPS_THRESHOLD   = 1_000_000_000L;
     private static final long MAX_AGE_THRESHOLD_MS= 30L * 24 * 60 * 60 * 1000; // 30 days
     private static final int  MAX_REENC_BATCH_SIZE= 10_000;
@@ -30,6 +30,7 @@ public class SystemConfig {
     private static final ConcurrentMap<String, SystemConfig> configCache = new ConcurrentHashMap<>();
 
     @JsonProperty("numShards")      private int  numShards      = 32;
+    @JsonProperty("numShards")      private int  numTables      = 8;
     @JsonProperty("opsThreshold")   private long opsThreshold   = 500_000_000L;
     @JsonProperty("ageThresholdMs") private long ageThresholdMs = 7L * 24 * 60 * 60 * 1000; // 7 days
     @JsonProperty("reEncBatchSize") private int  reEncBatchSize = 2_000;
@@ -39,6 +40,7 @@ public class SystemConfig {
 
     // Getters
     public int getNumShards() { return numShards; }
+    public int getNumTables() { return numTables; }
     public long getOpsThreshold() { return opsThreshold; }
     public long getAgeThresholdMs() { return ageThresholdMs; }
     public int getReEncBatchSize() { return reEncBatchSize; }

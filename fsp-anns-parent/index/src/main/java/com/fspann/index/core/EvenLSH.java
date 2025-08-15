@@ -3,9 +3,7 @@ package com.fspann.index.core;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.SplittableRandom;
+import java.util.*;
 
 /**
  * EvenLSH: random Gaussian projections -> stable per-table bucketization.
@@ -22,7 +20,8 @@ public final class EvenLSH {
     private final int numProjections;        // upper-bounded to 8*numBuckets
     private final double[][] projectionVectors;
     private final long seed;
-
+    private final int bitWidth;
+    private static final int MAX_RANGE_CAP = Integer.getInteger("lsh.maxRange", 3);
     private static final int UNROLL_THRESHOLD = 256; // Loop unrolling threshold
 
     public EvenLSH(int dimensions, int numBuckets) {
@@ -42,6 +41,7 @@ public final class EvenLSH {
         this.numBuckets = numBuckets;
         this.numProjections = Math.max(numBuckets, Math.min(numProjections, numBuckets * 8));
         this.seed = seed;
+        this.bitWidth = 32 - Integer.numberOfLeadingZeros(this.numBuckets - 1);
         this.projectionVectors = new double[this.numProjections][dimensions];
 
         // Build normalized random projections (deterministic via seed)
@@ -96,17 +96,23 @@ public final class EvenLSH {
         return dot(vector, projectionVectors[idx]);
     }
 
-    /** Main bucket for a table (stable; not salted by epoch). */
+    private int signature(double[] v, int tableIndex, double[] marginsOut) {
+        int s = 0;
+        int base = (tableIndex * bitWidth) % numProjections;
+        for (int j = 0; j < bitWidth; j++) {
+            double pj = dot(v, projectionVectors[(base + j) % numProjections]);
+            if (marginsOut != null) marginsOut[j] = Math.abs(pj);
+            if (pj >= 0) s |= (1 << j);
+        }
+        return s;
+    }
+
     public int getBucketId(double[] vector, int tableIndex) {
-        double p = project(vector, tableIndex);
-        long bits = Double.doubleToLongBits(p);
-        // light avalanche; independent per table
-        bits ^= (bits << 21);
-        bits ^= (bits >>> 35);
-        bits ^= (bits << 4);
-        long mix = 0x9E3779B97F4A7C15L * (tableIndex + 1L);
-        int hashed = (int) ((bits ^ mix) & 0x7FFFFFFF);
-        return hashed % numBuckets;
+        int sig = signature(vector, tableIndex, null);
+        // if numBuckets is not power-of-two, fold:
+        return (bitWidth == Integer.numberOfTrailingZeros(Integer.highestOneBit(numBuckets)) + 1)
+                ? (sig & (numBuckets - 1))
+                : (sig % numBuckets);
     }
 
     /**
@@ -115,9 +121,13 @@ public final class EvenLSH {
      */
     public List<Integer> getBuckets(double[] vector, int topK, int tableIndex) {
         validateVector(vector);
-        int main = getBucketId(vector, tableIndex);
-        int range = calculateRange(topK);
-        return expandContiguous(main, range);
+        // knobs (with safe defaults)
+        final int limit   = Integer.getInteger("probe.perTable", 32); // total probes per table
+        final int maxFlip = Integer.getInteger("probe.bits.max", 2);  // Hamming radius (1–2 is usually enough)
+
+        double[] margins = new double[bitWidth];
+        int sig = signature(vector, tableIndex, margins);
+        return expandByHamming(sig, margins, maxFlip, limit);
     }
 
     /** Main buckets for all tables [0..numTables-1]. */
@@ -133,11 +143,15 @@ public final class EvenLSH {
     public List<List<Integer>> getBucketsForAllTables(double[] vector, int topK, int numTables) {
         validateVector(vector);
         if (numTables <= 0) throw new IllegalArgumentException("numTables must be > 0");
-        int range = calculateRange(topK);
+
+        final int limit   = Integer.getInteger("probe.perTable", 32);
+        final int maxFlip = Integer.getInteger("probe.bits.max", 2);
+
         List<List<Integer>> all = new ArrayList<>(numTables);
         for (int t = 0; t < numTables; t++) {
-            int main = getBucketId(vector, t);
-            all.add(expandContiguous(main, range));
+            double[] margins = new double[bitWidth];
+            int sig = signature(vector, t, margins);
+            all.add(expandByHamming(sig, margins, maxFlip, limit));
         }
         return all;
     }
@@ -149,17 +163,39 @@ public final class EvenLSH {
     // ---- internal helpers ----
 
     private int calculateRange(int topK) {
-        // log-based growth; cap at 25% of buckets to keep fanout bounded
         int r = Math.max(1, (int) Math.ceil(Math.log(topK + 1) / Math.log(2)));
-        return Math.min(r, Math.max(1, numBuckets / 4));
+        return Math.min(r, MAX_RANGE_CAP); // hard clamp (default 3)
     }
 
-    private List<Integer> expandContiguous(int main, int range) {
-        List<Integer> out = new ArrayList<>(range * 2 + 1);
-        for (int d = -range; d <= range; d++) {
-            out.add(Math.floorMod(main + d, numBuckets));
+    private List<Integer> expandByHamming(int sig, double[] margins, int maxBitsToFlip, int limit) {
+        // rank bit positions by ascending margin (smaller = closer to boundary = likelier neighbor)
+        Integer[] order = new Integer[bitWidth];
+        for (int i = 0; i < bitWidth; i++) order[i] = i;
+        Arrays.sort(order, Comparator.comparingDouble(i -> margins[i]));
+        List<Integer> out = new ArrayList<>();
+        out.add(sig); // primary
+
+        // 1-bit flips
+        for (int i = 0; i < Math.min(bitWidth, limit - out.size()); i++) {
+            int s = sig ^ (1 << order[i]);
+            out.add(s);
         }
-        return out;
+        if (out.size() >= limit || maxBitsToFlip < 2) return foldBuckets(out);
+
+        // 2-bit flips
+        outer:
+        for (int i = 0; i < bitWidth; i++) {
+            for (int j = i + 1; j < bitWidth; j++) {
+                out.add(sig ^ (1 << order[i]) ^ (1 << order[j]));
+                if (out.size() >= limit) break outer;
+            }
+        }
+        return foldBuckets(out);
+    }
+    private List<Integer> foldBuckets(List<Integer> sigs) {
+        List<Integer> buckets = new ArrayList<>(sigs.size());
+        for (int s : sigs) buckets.add((numBuckets & (numBuckets - 1)) == 0 ? (s & (numBuckets - 1)) : (s % numBuckets));
+        return buckets;
     }
 
     private double dot(double[] a, double[] b) {

@@ -94,7 +94,7 @@ public class SecureLSHIndexService implements IndexService {
                                                    RocksDBMetadataManager metadata,
                                                    SystemConfig cfg) {
         int numBuckets  = Math.max(1, cfg.getNumShards());
-        int numTables   = 4;
+        int numTables   = Math.max(1, cfg.getNumTables());
         EncryptedPointBuffer buf = createBufferFromManager(metadata);
         return new SecureLSHIndexService(crypto, keyService, metadata, null, null, buf, numBuckets, numTables);
     }
@@ -203,20 +203,24 @@ public class SecureLSHIndexService implements IndexService {
         Objects.requireNonNull(token, "QueryToken cannot be null");
         int dim = token.getDimension();
         DimensionContext ctx = dimensionContexts.get(dim);
-        if (ctx == null) {
-            logger.warn("No index for dimension {}", dim);
-            return Collections.emptyList();
-        }
+        if (ctx == null) return Collections.emptyList();
         SecureLSHIndex idx = ctx.getIndex();
 
-        final List<List<Integer>> perTable;
-        if (token.hasPerTable()) {
-            perTable = token.getTableBuckets();
-        } else {
-            perTable = PartitioningPolicy.expansionsForQuery(
-                    ctx.getLsh(), token.getPlaintextQuery(), idx.getNumHashTables(), token.getTopK()
-            );
+        List<List<Integer>> perTable = token.hasPerTable()
+                ? token.getTableBuckets()
+                : PartitioningPolicy.expansionsForQuery(
+                ctx.getLsh(), token.getPlaintextQuery(),
+                idx.getNumHashTables(), token.getTopK());
+
+        // ---- Adaptive fanout clamp ----
+        double target = Double.parseDouble(System.getProperty("fanout.target", "0.03")); // 3%
+        int N = Math.max(1, idx.getPointCount());
+        int cand = idx.candidateCount(perTable);
+        while ((cand / (double) N) > target && canShrink(perTable)) {
+            shrinkOuter(perTable);                  // remove one from each end per table
+            cand = idx.candidateCount(perTable);
         }
+        // --------------------------------
 
         QueryToken perTableToken = new QueryToken(
                 perTable,
@@ -237,19 +241,25 @@ public class SecureLSHIndexService implements IndexService {
         List<EncryptedPoint> filtered = new ArrayList<>(candidates.size());
         for (EncryptedPoint pt : candidates) {
             Map<String, String> m = metas.get(pt.getId());
-            if (m == null) {
-                // Metadata not flushed/available yet → keep candidate;
-                // version check will still happen later during decrypt phase.
-                filtered.add(pt);
-            } else {
-                boolean versionOk = Integer.toString(pt.getVersion()).equals(m.get("version"));
-                boolean dimOk = (m.get("dim") == null) || Integer.toString(pt.getVectorLength()).equals(m.get("dim"));
-                if (versionOk && dimOk) {
-                    filtered.add(pt);
-                }
-            }
+            if (m == null) { filtered.add(pt); continue; }
+            boolean versionOk = Integer.toString(pt.getVersion()).equals(m.get("version"));
+            boolean dimOk = (m.get("dim") == null) || Integer.toString(pt.getVectorLength()).equals(m.get("dim"));
+            if (versionOk && dimOk) filtered.add(pt);
         }
         return filtered;
+    }
+
+    private static boolean canShrink(List<List<Integer>> perTable) {
+        for (List<Integer> t : perTable) if (t.size() > 1) return true;
+        return false;
+    }
+    private static void shrinkOuter(List<List<Integer>> perTable) {
+        for (List<Integer> t : perTable) {
+            if (t.size() > 1) {
+                t.remove(t.size() - 1);
+                if (t.size() > 1) t.remove(0);
+            }
+        }
     }
 
     @Override public void delete(String id) {
