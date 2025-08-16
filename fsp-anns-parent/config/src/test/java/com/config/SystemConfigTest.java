@@ -26,7 +26,7 @@ class SystemConfigTest {
         SystemConfig.clearCache();
         SystemConfig c = SystemConfig.load(cfg.toString(), true);
 
-        assertEquals(1024, c.getNumShards());                // capped
+        assertEquals(8192, c.getNumShards());                // capped
         assertEquals(1_000_000_000L, c.getOpsThreshold());   // capped
         assertEquals(30L*24*60*60*1000, c.getAgeThresholdMs());// capped
         assertEquals(10_000, c.getReEncBatchSize());         // capped

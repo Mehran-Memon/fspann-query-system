@@ -215,9 +215,16 @@ public class SecureLSHIndexService implements IndexService {
         // ---- Adaptive fanout clamp ----
         double target = Double.parseDouble(System.getProperty("fanout.target", "0.03")); // 3%
         int N = Math.max(1, idx.getPointCount());
+        // ensure perTable is mutable (if it came from token)
+        if (token.hasPerTable()) {
+            List<List<Integer>> cp = new ArrayList<>(perTable.size());
+            for (List<Integer> l : perTable) cp.add(new ArrayList<>(l));
+            perTable = cp;
+        }
+
         int cand = idx.candidateCount(perTable);
         while ((cand / (double) N) > target && canShrink(perTable)) {
-            shrinkOuter(perTable);                  // remove one from each end per table
+            shrinkWorstTail(perTable);    // remove weakest probes first
             cand = idx.candidateCount(perTable);
         }
         // --------------------------------
@@ -253,11 +260,11 @@ public class SecureLSHIndexService implements IndexService {
         for (List<Integer> t : perTable) if (t.size() > 1) return true;
         return false;
     }
-    private static void shrinkOuter(List<List<Integer>> perTable) {
+    private static void shrinkWorstTail(List<List<Integer>> perTable) {
         for (List<Integer> t : perTable) {
-            if (t.size() > 1) {
-                t.remove(t.size() - 1);
-                if (t.size() > 1) t.remove(0);
+            int n = t.size();
+            if (n > 1) {
+                t.remove(n - 1); // drop worst tail only
             }
         }
     }

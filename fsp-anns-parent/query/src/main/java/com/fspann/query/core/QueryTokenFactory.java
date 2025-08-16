@@ -65,8 +65,13 @@ public class QueryTokenFactory {
             perTable = new ArrayList<>(numTables);
             for (int t = 0; t < numTables; t++) {
                 List<Integer> buckets = lsh.getBuckets(vector, topK, t);
-                perTable.add(buckets != null ? buckets : List.of());
+                perTable.add(buckets != null ? new ArrayList<>(buckets) : new ArrayList<>());
             }
+        } else {
+            // deep-copy to ensure mutability
+            List<List<Integer>> copy = new ArrayList<>(perTable.size());
+            for (List<Integer> l : perTable) copy.add(new ArrayList<>(l));
+            perTable = copy;
         }
 
         logger.debug("Token create: dim={} topK={} tables={} totalBuckets={}",
@@ -99,12 +104,16 @@ public class QueryTokenFactory {
         EncryptedPoint ep = cryptoService.encryptToPoint("query", q, curr.getKey());
 
         List<List<Integer>> perTable = lsh.getBucketsForAllTables(q, newTopK, numTables);
-        if (perTable == null || perTable.size() != numTables) { // numTopTables -> numTables
+        if (perTable == null || perTable.size() != numTables) {
             perTable = new ArrayList<>(numTables);
             for (int t = 0; t < numTables; t++) {
                 List<Integer> buckets = lsh.getBuckets(q, newTopK, t);
-                perTable.add(buckets != null ? buckets : List.of());
+                perTable.add(buckets != null ? new ArrayList<>(buckets) : new ArrayList<>());
             }
+        } else {
+            List<List<Integer>> copy = new ArrayList<>(perTable.size());
+            for (List<Integer> l : perTable) copy.add(new ArrayList<>(l));
+            perTable = copy;
         }
 
         logger.debug("Token derive: dim={} topK={} tables={} totalBuckets={}",

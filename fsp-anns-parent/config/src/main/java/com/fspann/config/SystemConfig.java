@@ -30,7 +30,7 @@ public class SystemConfig {
     private static final ConcurrentMap<String, SystemConfig> configCache = new ConcurrentHashMap<>();
 
     @JsonProperty("numShards")      private int  numShards      = 32;
-    @JsonProperty("numShards")      private int  numTables      = 8;
+    @JsonProperty("numTables")      private int  numTables      = 8;
     @JsonProperty("opsThreshold")   private long opsThreshold   = 500_000_000L;
     @JsonProperty("ageThresholdMs") private long ageThresholdMs = 7L * 24 * 60 * 60 * 1000; // 7 days
     @JsonProperty("reEncBatchSize") private int  reEncBatchSize = 2_000;
