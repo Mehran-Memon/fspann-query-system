@@ -19,7 +19,9 @@ public class DefaultDataLoader {
         String name = file.getFileName().toString().toLowerCase(Locale.ROOT);
         if (name.endsWith(".csv"))   return new CsvLoader();
         if (name.endsWith(".fvecs")) return new FvecsLoader();
-        if (name.endsWith(".bvecs")) return new BvecsLoader();   // added BVECs
+        if (name.endsWith(".bvecs") || name.endsWith(".bvec") || name.endsWith(".siftbin")) {
+            return new BvecsLoader();
+        }
         if (name.endsWith(".ivecs")) return new IvecsLoader();
         throw new IllegalArgumentException("Unsupported vector/index format: " + name);
     }
