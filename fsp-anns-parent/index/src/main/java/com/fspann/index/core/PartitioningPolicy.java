@@ -14,9 +14,10 @@ import java.util.Objects;
 public final class PartitioningPolicy {
 
     // Default eval sweep as requested
-    public static final int[] EVAL_TOPKS = {1, 20, 40, 60, 80, 100};
+    public static final int[] EVAL_TOPKS =
+            parseEvalSweep(System.getProperty("eval.sweep", "1,20,40,60,80,100"));
 
-    // Safety cap so expansion can't exceed a fraction of buckets (defers to EvenLSH's internal cap too)
+    // Safety cap, so expansion can't exceed a fraction of buckets (defers to EvenLSH's internal cap too)
     public static final double MAX_RANGE_FRACTION = 0.25;
 
     private PartitioningPolicy() {}
@@ -91,6 +92,25 @@ public final class PartitioningPolicy {
             all.add(expansionsForQuery(lsh, query, numTables, k));
         }
         return all;
+    }
+
+    private static int[] parseEvalSweep(String spec) {
+        // Accept "1-100" ranges, comma lists, or mixes like "1,5,10-50"
+        java.util.LinkedHashSet<Integer> out = new java.util.LinkedHashSet<>();
+        for (String tok : spec.replaceAll("\\s+", "").split(",")) {
+            if (tok.isEmpty()) continue;
+            int dash = tok.indexOf('-');
+            if (dash > 0) {
+                int a = Integer.parseInt(tok.substring(0, dash));
+                int b = Integer.parseInt(tok.substring(dash + 1));
+                if (a > b) { int t = a; a = b; b = t; }
+                for (int k = a; k <= b; k++) out.add(k);
+            } else {
+                out.add(Integer.parseInt(tok));
+            }
+        }
+        if (out.isEmpty()) out.add(100);
+        return out.stream().mapToInt(Integer::intValue).toArray();
     }
 
     public static String debugString(List<List<Integer>> perTable) {

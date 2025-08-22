@@ -186,16 +186,20 @@ public class QueryServiceImpl implements QueryService {
             int[] truth = groundtruthManager.getGroundtruth(queryIndex, k);
             Set<String> truthSet = Arrays.stream(truth).mapToObj(String::valueOf).collect(Collectors.toSet());
 
+            int retrievedCount = retrieved.size();
             long matchCount = retrieved.stream()
                     .map(QueryResult::getId)
                     .filter(truthSet::contains)
                     .count();
 
-            double ratio  = k == 0 ? 0.0 : matchCount / (double) k;
-            // Design choice for tests: recall is 1.0 when groundtruth is empty.
+            // Precision@k (use as "ratio" for backward compatibility)
+            double ratio = (retrievedCount == 0) ? 0.0 : matchCount / (double) retrievedCount;
+
+            // Recall@k (truth is top-k exact neighbors)
             double recall = (truth.length == 0) ? 1.0 : matchCount / (double) truth.length;
 
-            results.add(new QueryEvaluationResult(k, retrieved.size(), ratio, recall, durationMs));
+            results.add(new QueryEvaluationResult(k, retrievedCount, ratio, recall, durationMs));
+
         }
 
         return results;
