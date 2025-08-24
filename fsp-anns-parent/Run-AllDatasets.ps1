@@ -1,5 +1,5 @@
 # ---------- SETTINGS ----------
-$JarPath      = "target\api-0.0.1-SNAPSHOT-jar-with-dependencies.jar"
+$JarPath = "F:\fspann-query-system\fsp-anns-parent\api\target\api-0.0.1-SNAPSHOT-jar-with-dependencies.jar"
 $ConfigPath   = "F:\fspann-query-system\fsp-anns-parent\config\src\main\resources\config.json"
 $KeysPath     = "G:\fsp-run\metadata\keys.ser"
 $MetaRoot     = "G:\fsp-run\metadata"          # per-dataset subfolders will be created
@@ -45,8 +45,43 @@ $Datasets = @(
     #    GT="E:\Research Work\Datasets\Sift1B\bigann_gnd\gnd\idx_1000M.ivecs" }
 )
 
-# Ensure output root
+# Ensure directories
 New-Item -ItemType Directory -Force -Path $OutRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $MetaRoot | Out-Null
+
+# ---------- STEP 1: Generate keys if missing ----------
+if (-not (Test-Path $KeysPath)) {
+    Write-Host "keys.ser not found. Generating using first dataset..."
+    $ds = $Datasets[0]  # use first dataset just to generate keys
+    $metaDir = Join-Path $MetaRoot $ds.Name
+    New-Item -ItemType Directory -Force -Path $metaDir | Out-Null
+
+    # Use dummy metadata path and groundtruth to satisfy Java argument parser
+    $dummyMeta = $metaDir
+    $dummyGT   = $ds.GT
+    $dummyDim  = $ds.Dim
+    $dummyBatch = 1  # minimal batch for key generation
+
+    $args = @(
+        (Resolve-Path $ConfigPath),
+        $ds.Base,
+        $ds.Query,
+        $KeysPath,
+        $dummyDim,
+        $dummyMeta,
+        $dummyGT,
+        $dummyBatch
+    )
+
+    & $Java "-Xms$Xms" "-Xmx$Xmx" "-jar" (Resolve-Path $JarPath) @args
+
+    if (-not (Test-Path $KeysPath)) {
+        Write-Error "Failed to generate keys.ser. Cannot continue."
+        exit
+    }
+    Write-Host "keys.ser generated successfully."
+}
+
 
 $Combined = @()
 $CombinedPath = Join-Path $OutRoot "all_datasets_topk_eval.csv"
@@ -98,7 +133,7 @@ foreach ($ds in $Datasets) {
     }
 
     # Collect the per-run top-k CSV (assuming the jar emits 'topk_evaluation.csv')
-    $topkPath = Join-Path $runDir "topk_evaluation.csv"
+    $topkPath = Join-Path $metaDir "results\topk_evaluation.csv"
     if (Test-Path $topkPath) {
         $rows = Import-Csv $topkPath
         foreach ($r in $rows) {

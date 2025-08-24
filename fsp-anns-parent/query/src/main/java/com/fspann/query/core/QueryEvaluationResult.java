@@ -5,6 +5,7 @@ public class QueryEvaluationResult {
     private final int retrieved;
     private final double ratio;
     private final double recall;
+    private final double f1;
     private final long timeMs;
 
     public QueryEvaluationResult(int topKRequested,
@@ -22,6 +23,8 @@ public class QueryEvaluationResult {
         this.retrieved      = retrieved;
         this.ratio          = ratio;
         this.recall         = recall;
+        // Harmonic mean of precision (ratio) and recall; defined as 0 when both are 0.
+        this.f1             = (ratio + recall == 0.0) ? 0.0 : (2.0 * ratio * recall) / (ratio + recall);
         this.timeMs         = timeMs;
     }
 
@@ -29,13 +32,14 @@ public class QueryEvaluationResult {
     public int    getRetrieved()      { return retrieved;      }
     public double getRatio()          { return ratio;          }
     public double getRecall()         { return recall;         }
+    public double getF1()             { return f1;             }
     public long   getTimeMs()         { return timeMs;         }
 
     @Override
     public String toString() {
         return String.format(
-                "TopK=%d, Retrieved=%d, Ratio=%.4f, Recall=%.4f, Time=%dms",
-                topKRequested, retrieved, ratio, recall, timeMs
+                "TopK=%d, Retrieved=%d, Ratio=%.4f, Recall=%.4f, F1=%.4f, Time=%dms",
+                topKRequested, retrieved, ratio, recall, f1, timeMs
         );
     }
 }

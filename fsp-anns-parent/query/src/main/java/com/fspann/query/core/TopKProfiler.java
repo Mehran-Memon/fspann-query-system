@@ -31,6 +31,7 @@ public class TopKProfiler {
                     String.valueOf(r.getRetrieved()),
                     String.format("%.4f", r.getRatio()),
                     String.format("%.4f", r.getRecall()),
+                    String.format("%.4f", r.getF1()),
                     String.valueOf(r.getTimeMs())
             });
         }
