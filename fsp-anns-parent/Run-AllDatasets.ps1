@@ -8,7 +8,7 @@ $OutRoot      = "G:\fsp-run\out"                # where logs/CSVs will go
 # Shared JVM flags (SAME CONFIGS across datasets for fair comparison)
 $ProbePerTable = 16
 $ProbeBitsMax  = 1
-$FanoutTarget  = 0.015
+$FanoutTarget  = 0.02
 $EvalSweep     = "1-100"
 $Xms           = "4g"
 $Xmx           = "16g"
@@ -37,6 +37,43 @@ $Datasets = @(
        Base="E:\Research Work\Datasets\Enron\enron_base.fvecs";
        Query="E:\Research Work\Datasets\Enron\enron_query.fvecs";
        GT="E:\Research Work\Datasets\Enron\enron_groundtruth.ivecs" }
+
+    # Synthetic datasets
+    @{ Name="synthetic_128"; Dim=128;
+    Base="E:\Research Work\Datasets\synthetic_data\synthetic_128\base.fvecs";
+    Query="E:\Research Work\Datasets\synthetic_data\synthetic_128\query.fvecs";
+    GT="E:\Research Work\Datasets\synthetic_data\synthetic_128\groundtruth.ivecs" },
+
+    @{ Name="synthetic_256"; Dim=256;
+    Base="E:\Research Work\Datasets\synthetic_data\synthetic_256\base.fvecs";
+    Query="E:\Research Work\Datasets\synthetic_data\synthetic_256\query.fvecs";
+    GT="E:\Research Work\Datasets\synthetic_data\synthetic_256\groundtruth.ivecs" },
+
+    @{ Name="synthetic_512"; Dim=512;
+    Base="E:\Research Work\Datasets\synthetic_data\synthetic_512\base.fvecs";
+    Query="E:\Research Work\Datasets\synthetic_data\synthetic_512\query.fvecs";
+    GT="E:\Research Work\Datasets\synthetic_data\synthetic_512\groundtruth.ivecs" },
+
+    @{ Name="synthetic_1024"; Dim=1024;
+    Base="E:\Research Work\Datasets\synthetic_data\synthetic_1024\base.fvecs";
+    Query="E:\Research Work\Datasets\synthetic_data\synthetic_1024\query.fvecs";
+    GT="E:\Research Work\Datasets\synthetic_data\synthetic_1024\groundtruth.ivecs" },
+
+    # Cropped SIFT subsets
+    @{ Name="SIFT_10M"; Dim=128;
+    Base="E:\Research Work\Datasets\Sift1B\bigann_base.bvecs\bigann_10M.bvecs";
+    Query="E:\Research Work\Datasets\Sift1B\bigann_query.bvecs\queries.bvecs";
+    GT="E:\Research Work\Datasets\Sift1B\bigann_gnd\gnd\idx_10M.ivecs" },
+
+    @{ Name="SIFT_50M"; Dim=128;
+    Base="E:\Research Work\Datasets\Sift1B\bigann_base.bvecs\bigann_50M.bvecs";
+    Query="E:\Research Work\Datasets\Sift1B\bigann_query.bvecs\queries.bvecs";
+    GT="E:\Research Work\Datasets\Sift1B\bigann_gnd\gnd\idx_50M.ivecs" },
+
+    @{ Name="SIFT_100M"; Dim=128;
+    Base="E:\Research Work\Datasets\Sift1B\bigann_base.bvecs\bigann_100M.bvecs";
+    Query="E:\Research Work\Datasets\Sift1B\bigann_query.bvecs\queries.bvecs";
+    GT="E:\Research Work\Datasets\Sift1B\bigann_gnd\gnd\idx_100M.ivecs" }
 
     # You can add SIFT1B later; running it here will be very long on this box.
     # @{ Name="SIFT1B"; Dim=128;

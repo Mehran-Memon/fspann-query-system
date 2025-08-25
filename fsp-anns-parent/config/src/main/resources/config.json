@@ -1,5 +1,5 @@
 {
-  "numShards": 4096,
+  "numShards": 2048,
   "numTables": 8,
   "opsThreshold": 1000000000,
   "ageThresholdMs": 2592000000,
