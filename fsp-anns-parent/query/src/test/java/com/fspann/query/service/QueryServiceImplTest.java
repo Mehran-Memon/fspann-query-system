@@ -24,11 +24,21 @@ class QueryServiceImplTest {
 
     private QueryServiceImpl service;
 
+    @Mock private EncryptedPointBuffer pointBuffer;
+
     @BeforeEach
     void setUp() {
         MockitoAnnotations.openMocks(this);
+
+        // Provide a fake buffer with dummy metrics
+        when(indexService.getPointBuffer()).thenReturn(pointBuffer);
+        when(pointBuffer.getLastBatchInsertTimeMs()).thenReturn(5L);
+        when(pointBuffer.getTotalFlushedPoints()).thenReturn(100);
+        when(pointBuffer.getFlushThreshold()).thenReturn(1000);
+
         service = new QueryServiceImpl(indexService, cryptoService, keyService);
     }
+
 
     @AfterEach
     void tearDown() {

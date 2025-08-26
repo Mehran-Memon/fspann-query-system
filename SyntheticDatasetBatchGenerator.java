@@ -5,14 +5,13 @@ import java.util.*;
 public class SyntheticDatasetBatchGenerator {
 
     public static void main(String[] args) throws IOException {
-        // Settings
         int[] dimensions = {128, 256, 512, 1024};
         int numBase = 1_000_000;
         int numQuery = 10_000;
         int topK = 10;
         String baseOutputDir = "E:\\Research Work\\Datasets\\synthetic_data";
 
-        Random rnd = new Random(12345L); // fixed seed for reproducibility
+        Random rnd = new Random(12345L);
 
         for (int dim : dimensions) {
             String folderName = "synthetic_" + dim;
@@ -21,37 +20,78 @@ public class SyntheticDatasetBatchGenerator {
 
             System.out.printf("Generating synthetic dataset: %s (dim=%d)%n", folderName, dim);
 
-            // Generate base vectors
-            float[][] baseVectors = new float[numBase][dim];
-            for (int i = 0; i < numBase; i++) {
-                for (int j = 0; j < dim; j++) {
-                    baseVectors[i][j] = (float) rnd.nextGaussian();
+            // --- Base vectors ---
+            Path baseFile = outDir.resolve("base.fvecs");
+            try (DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(baseFile)))) {
+                for (int i = 0; i < numBase; i++) {
+                    dos.writeInt(Integer.reverseBytes(dim));
+                    for (int j = 0; j < dim; j++) {
+                        dos.writeFloat((float) rnd.nextGaussian());
+                    }
                 }
             }
-            Path baseFile = outDir.resolve("base.fvecs");
-            writeFvecs(baseFile, baseVectors);
             System.out.println("Base vectors saved to: " + baseFile);
 
-            // Generate query vectors
-            float[][] queryVectors = new float[numQuery][dim];
-            for (int i = 0; i < numQuery; i++) {
-                for (int j = 0; j < dim; j++) {
-                    queryVectors[i][j] = (float) rnd.nextGaussian();
+            // --- Query vectors ---
+            Path queryFile = outDir.resolve("query.fvecs");
+            float[][] queryVectors = new float[numQuery][dim]; // queries kept in memory
+            try (DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(queryFile)))) {
+                for (int i = 0; i < numQuery; i++) {
+                    dos.writeInt(Integer.reverseBytes(dim));
+                    for (int j = 0; j < dim; j++) {
+                        queryVectors[i][j] = (float) rnd.nextGaussian();
+                        dos.writeFloat(queryVectors[i][j]);
+                    }
                 }
             }
-            Path queryFile = outDir.resolve("query.fvecs");
-            writeFvecs(queryFile, queryVectors);
             System.out.println("Query vectors saved to: " + queryFile);
 
-            // Compute groundtruth top-K for each query
+            // --- Groundtruth (exact top-K, streaming base vectors) ---
             Path gtFile = outDir.resolve("groundtruth.ivecs");
-            try (DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(gtFile)))) {
-                for (float[] query : queryVectors) {
-                    int[] indices = topKNearest(query, baseVectors, topK);
-                    dos.writeInt(Integer.reverseBytes(topK)); // .ivecs uses little-endian
-                    for (int idx : indices) {
-                        dos.writeInt(Integer.reverseBytes(idx));
+            try (DataOutputStream dosGT = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(gtFile)));
+                 DataInputStream disBase = new DataInputStream(new BufferedInputStream(Files.newInputStream(baseFile)))) {
+
+                // Read base vectors one by one, compute distances for all queries
+                List<PriorityQueue<int[]>> topKQueues = new ArrayList<>();
+                for (int q = 0; q < numQuery; q++) {
+                    // max-heap for top-K (store {index, distance})
+                    topKQueues.add(new PriorityQueue<>(Comparator.comparingDouble(a -> -a[1])));
+                }
+
+                for (int i = 0; i < numBase; i++) {
+                    int dimBase = Integer.reverseBytes(disBase.readInt());
+                    if (dimBase != dim) throw new IllegalStateException("Dimension mismatch!");
+
+                    float[] baseVec = new float[dim];
+                    for (int d = 0; d < dim; d++) baseVec[d] = disBase.readFloat();
+
+                    for (int q = 0; q < numQuery; q++) {
+                        float[] query = queryVectors[q];
+                        double dist = 0.0;
+                        for (int d = 0; d < dim; d++) {
+                            double diff = query[d] - baseVec[d];
+                            dist += diff * diff;
+                        }
+                        PriorityQueue<int[]> pq = topKQueues.get(q);
+                        if (pq.size() < topK) {
+                            pq.offer(new int[]{i, (int) dist});
+                        } else if (dist < pq.peek()[1]) {
+                            pq.poll();
+                            pq.offer(new int[]{i, (int) dist});
+                        }
                     }
+
+                    if ((i+1) % 100_000 == 0) System.out.printf("Processed %d/%d base vectors%n", i+1, numBase);
+                }
+
+                // Write .ivecs file
+                for (PriorityQueue<int[]> pq : topKQueues) {
+                    dosGT.writeInt(Integer.reverseBytes(topK));
+                    int[] indices = new int[topK];
+                    for (int k = topK - 1; k >= 0; k--) {
+                        indices[k] = pq.poll()[0];
+                    }
+                    for (int idx : indices) dosGT.writeInt(Integer.reverseBytes(idx));
                 }
             }
             System.out.println("Groundtruth saved to: " + gtFile);
@@ -59,39 +99,5 @@ public class SyntheticDatasetBatchGenerator {
         }
 
         System.out.println("All synthetic datasets generated successfully!");
-    }
-
-    private static void writeFvecs(Path path, float[][] vectors) throws IOException {
-        try (DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(path)))) {
-            for (float[] vec : vectors) {
-                dos.writeInt(Integer.reverseBytes(vec.length)); // little-endian
-                for (float v : vec) {
-                    dos.writeFloat(v);
-                }
-            }
-        }
-    }
-
-    private static int[] topKNearest(float[] query, float[][] base, int k) {
-        PriorityQueue<int[]> pq = new PriorityQueue<>(Comparator.comparingDouble(a -> -a[1]));
-        for (int i = 0; i < base.length; i++) {
-            float dist = 0;
-            for (int j = 0; j < query.length; j++) {
-                float d = query[j] - base[i][j];
-                dist += d * d;
-            }
-            int[] pair = new int[]{i, (int) dist}; // index and distance
-            if (pq.size() < k) {
-                pq.offer(pair);
-            } else if (dist < pq.peek()[1]) {
-                pq.poll();
-                pq.offer(pair);
-            }
-        }
-        int[] indices = new int[k];
-        for (int i = k - 1; i >= 0; i--) {
-            indices[i] = pq.poll()[0];
-        }
-        return indices;
     }
 }

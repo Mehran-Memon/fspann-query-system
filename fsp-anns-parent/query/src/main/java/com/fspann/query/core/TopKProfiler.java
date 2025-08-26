@@ -24,6 +24,7 @@ public class TopKProfiler {
     public void record(String queryId, List<QueryEvaluationResult> results) {
         Objects.requireNonNull(queryId, "Query ID cannot be null");
         Objects.requireNonNull(results, "Results cannot be null");
+
         for (QueryEvaluationResult r : results) {
             topKRecords.add(new String[]{
                     queryId,
@@ -31,8 +32,11 @@ public class TopKProfiler {
                     String.valueOf(r.getRetrieved()),
                     String.format("%.4f", r.getRatio()),
                     String.format("%.4f", r.getRecall()),
-                    String.format("%.4f", r.getF1()),
-                    String.valueOf(r.getTimeMs())
+                    String.valueOf(r.getTimeMs()),
+                    String.valueOf(r.getInsertTimeMs()),
+                    String.valueOf(r.getCandidateCount()),
+                    String.valueOf(r.getTokenSizeBytes()),
+                    String.valueOf(r.getVectorDim())
             });
         }
     }
@@ -42,13 +46,11 @@ public class TopKProfiler {
         Path basePath = Paths.get(baseDir).normalize().toAbsolutePath();
         Path outPath = Paths.get(filePath);
 
-        // Always write into baseDir unless explicitly absolute inside baseDir
         if (!outPath.isAbsolute()) {
             outPath = basePath.resolve(outPath);
         }
         outPath = outPath.normalize().toAbsolutePath();
 
-        // Do not allow writing outside baseDir
         if (!outPath.startsWith(basePath)) {
             logger.error("Export path {} is outside profiler baseDir {}", outPath, basePath);
             throw new IllegalArgumentException("Invalid export path: " + filePath);
@@ -57,7 +59,8 @@ public class TopKProfiler {
         try {
             Files.createDirectories(outPath.getParent());
             try (BufferedWriter bw = Files.newBufferedWriter(outPath)) {
-                bw.write("QueryID,TopK,Retrieved,Ratio,Recall,TimeMs\n");
+                // CSV header including new metrics
+                bw.write("QueryID,TopK,Retrieved,Ratio,Recall,TimeMs,InsertTimeMs,CandidateCount,TokenSizeBytes,VectorDim\n");
                 for (String[] row : topKRecords) {
                     bw.write(String.join(",", row) + "\n");
                 }

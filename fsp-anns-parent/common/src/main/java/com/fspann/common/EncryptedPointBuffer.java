@@ -19,6 +19,7 @@ public class EncryptedPointBuffer {
     private final int flushThreshold;
     private int globalBufferCount = 0;
     private int totalFlushedPoints = 0;
+    private long lastBatchInsertTimeMs = 0;
 
     public EncryptedPointBuffer(String pointsPath, RocksDBMetadataManager metadataManager) throws IOException {
         this(pointsPath, metadataManager, 1000);
@@ -60,6 +61,7 @@ public class EncryptedPointBuffer {
     }
 
     public synchronized void flush(int version) {
+        long flushStart = System.nanoTime();
         List<EncryptedPoint> points = versionBuffer.get(version);
         if (points == null || points.isEmpty()) return;
 
@@ -117,6 +119,8 @@ public class EncryptedPointBuffer {
         totalFlushedPoints += flushedSize;
         batchCounters.put(version, batchIndex + 1);
         versionBuffer.remove(version);
+        lastBatchInsertTimeMs = (System.nanoTime() - flushStart) / 1_000_000;
+
     }
 
     public int getBufferSize() {
@@ -129,6 +133,10 @@ public class EncryptedPointBuffer {
 
     public int getFlushThreshold() {
         return flushThreshold;
+    }
+
+    public long getLastBatchInsertTimeMs() {
+        return lastBatchInsertTimeMs;
     }
 
     public void shutdown() {

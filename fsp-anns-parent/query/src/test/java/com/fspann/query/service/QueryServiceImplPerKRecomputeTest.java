@@ -35,17 +35,23 @@ class QueryServiceImplPerKRecomputeTest {
         groundtruth = mock(GroundtruthManager.class);
         factory = mock(QueryTokenFactory.class);
 
+        // 1️⃣ Add a mock EncryptedPointBuffer
+        EncryptedPointBuffer buffer = mock(EncryptedPointBuffer.class);
+        when(buffer.getLastBatchInsertTimeMs()).thenReturn(5L);
+        when(buffer.getTotalFlushedPoints()).thenReturn(100);
+        when(buffer.getFlushThreshold()).thenReturn(1000);
+
+        // 2️⃣ Make indexService return this buffer
+        when(indexService.getPointBuffer()).thenReturn(buffer);
+
         service = new QueryServiceImpl(indexService, cryptoService, keyService, factory);
 
         SecretKey key = new SecretKeySpec(new byte[32], "AES");
         when(keyService.getVersion(anyInt())).thenReturn(new KeyVersion(1, key));
         when(keyService.getCurrentVersion()).thenReturn(new KeyVersion(1, key));
-        when(cryptoService.decryptQuery(any(), any(), eq(key))).thenAnswer(inv -> {
-            // always return a 2D vector
-            return new double[]{1.0, 2.0};
-        });
+        when(cryptoService.decryptQuery(any(), any(), eq(key))).thenReturn(new double[]{1.0, 2.0});
 
-        // index lookup returns empty (we only care about which tokens were used)
+        // index lookup returns empty (we only care about token derivation)
         when(indexService.lookup(any(QueryToken.class))).thenReturn(List.of());
 
         // groundtruth: empty to avoid extra logic

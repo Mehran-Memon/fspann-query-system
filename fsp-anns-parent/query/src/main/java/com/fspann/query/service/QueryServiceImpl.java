@@ -160,12 +160,9 @@ public class QueryServiceImpl implements QueryService {
         for (int k : topKVariants) {
             final QueryToken variant;
             if (tokenFactory != null) {
-                variant = tokenFactory.derive(baseToken, k);  // recompute per-table expansions
+                variant = tokenFactory.derive(baseToken, k);
             } else {
-                // Reuse per-table buckets from the base token (already computed by the factory).
-                // This keeps candidateBuckets non-null and non-empty to satisfy the constructor.
                 List<List<Integer>> perTable = baseToken.getTableBuckets();
-
                 variant = new QueryToken(
                         perTable,
                         baseToken.getIv(),
@@ -179,10 +176,32 @@ public class QueryServiceImpl implements QueryService {
                 );
             }
 
-            long start = System.nanoTime();
-            List<QueryResult> retrieved = search(variant);
-            long durationMs = (System.nanoTime() - start) / 1_000_000;
+            // -----------------------------
+            long startQueryNs = System.nanoTime();
 
+            // Perform search
+            List<QueryResult> retrieved = search(variant);
+            long queryDurationMs = (System.nanoTime() - startQueryNs) / 1_000_000;
+
+            // Candidate count (lookup inside indexService)
+//            List<EncryptedPoint> candidates = indexService.lookup(variant);
+//            int candidateCount = candidates != null ? candidates.size() : 0;
+            int candidateCount = retrieved.size(); // use already retrieved list
+
+
+            // Insert time
+            EncryptedPointBuffer buf = indexService.getPointBuffer();
+            long insertTimeMs = indexService.getPointBuffer().getLastBatchInsertTimeMs();
+            int totalFlushed = indexService.getPointBuffer().getTotalFlushedPoints();
+            int flushThreshold = indexService.getPointBuffer().getFlushThreshold();
+
+            // Token size
+            int tokenSizeBytes = variant.getEncryptedQuery() != null ? variant.getEncryptedQuery().length : 0;
+
+            // Vector dimension
+            int vectorDim = variant.getDimension();
+
+            // Compute ratio and recall
             int[] truth = groundtruthManager.getGroundtruth(queryIndex, k);
             Set<String> truthSet = Arrays.stream(truth).mapToObj(String::valueOf).collect(Collectors.toSet());
 
@@ -192,18 +211,28 @@ public class QueryServiceImpl implements QueryService {
                     .filter(truthSet::contains)
                     .count();
 
-            // Precision@k (use as "ratio" for backward compatibility)
-            double ratio = (retrievedCount == 0) ? 0.0 : matchCount / (double) retrievedCount;
+            double ratio = retrievedCount == 0 ? 0.0 : matchCount / (double) retrievedCount;
+            double recall = truth.length == 0 ? 1.0 : matchCount / (double) truth.length;
 
-            // Recall@k (truth is top-k exact neighbors)
-            double recall = (truth.length == 0) ? 1.0 : matchCount / (double) truth.length;
-
-            results.add(new QueryEvaluationResult(k, retrievedCount, ratio, recall, durationMs));
-
+            // Add evaluation result with all metrics
+            results.add(new QueryEvaluationResult(
+                    k,
+                    retrievedCount,
+                    ratio,
+                    recall,
+                    queryDurationMs,
+                    insertTimeMs,
+                    candidateCount,
+                    tokenSizeBytes,
+                    vectorDim,
+                    totalFlushed,
+                    flushThreshold
+            ));
         }
 
         return results;
     }
+
 
     public long getLastQueryDurationNs() {
         return lastQueryDurationNs;
