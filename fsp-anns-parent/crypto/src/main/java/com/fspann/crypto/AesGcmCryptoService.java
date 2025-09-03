@@ -52,7 +52,11 @@ public class AesGcmCryptoService implements CryptoService {
     // CryptoService API
     // ---------------------------------------------------------------------
 
-    // Encrypt a query-like point with an explicitly provided key.
+    /**
+     * Encrypt a query-like point with an explicitly provided key.
+     * NOTE: This is typically used to protect ephemeral query vectors.
+     * It does NOT bind AAD to ID/version/dim (kept stateless for interop).
+     */
     @Override
     public EncryptedPoint encryptToPoint(String id, double[] vector, SecretKey key) {
         Objects.requireNonNull(id, "id");
@@ -65,11 +69,10 @@ public class AesGcmCryptoService implements CryptoService {
         return encryptTimer.record(() -> {
             try {
                 KeyVersion cur = keyService.getCurrentVersion();
-
                 byte[] iv = EncryptionUtils.generateIV();
-                byte[] ciphertext = EncryptionUtils.encryptVector(vector, iv, key);
+                byte[] ciphertext = EncryptionUtils.encryptVector(vector, iv, key); // stateless (no AAD)
 
-                // Don't touch metadata here (query tokens are ephemeral)
+                // No metadata persistence here; intended for ephemeral usage.
                 return new EncryptedPoint(id, 0, iv, ciphertext, cur.getVersion(), vector.length, null);
             } catch (GeneralSecurityException e) {
                 logger.error("Encryption failed for point {}", id, e);
@@ -78,7 +81,9 @@ public class AesGcmCryptoService implements CryptoService {
         });
     }
 
-    // Encrypt a stored point with the CURRENT key version.
+    /**
+     * Encrypt a stored point with the CURRENT key version, binding AAD = (id, version, dim).
+     */
     @Override
     public EncryptedPoint encrypt(String id, double[] vector) {
         Objects.requireNonNull(id, "Point ID cannot be null");
@@ -105,18 +110,21 @@ public class AesGcmCryptoService implements CryptoService {
                 }
 
                 SecretKey key = cachedVersion.getKey();
+                int dim = vector.length;
                 byte[] iv = EncryptionUtils.generateIV();
-                byte[] ciphertext = EncryptionUtils.encryptVector(vector, iv, key);
+                byte[] aad = aadForStored(id, cachedVersion.getVersion(), dim);
+                byte[] ciphertext = EncryptionUtils.encryptVectorWithAad(vector, iv, key, aad);
 
                 EncryptedPoint point = new EncryptedPoint(
-                        id, 0, iv, ciphertext, cachedVersion.getVersion(), vector.length, null
+                        id, 0, iv, ciphertext, cachedVersion.getVersion(), dim, null
                 );
 
                 // Persist minimal metadata (version/dim) for filtering and rotation sanity
                 metadataManager.updateVectorMetadata(id, Map.of(
-                        "version", String.valueOf(cachedVersion.getVersion())
+                        "version", String.valueOf(cachedVersion.getVersion()),
+                        "dim", String.valueOf(dim)
                 ));
-                logger.debug("Encrypted point {} with version {}", id, cachedVersion.getVersion());
+                logger.debug("Encrypted point {} with version {} (dim={})", id, cachedVersion.getVersion(), dim);
                 return point;
             } catch (GeneralSecurityException e) {
                 logger.error("Encryption failed for point {}", id, e);
@@ -125,24 +133,30 @@ public class AesGcmCryptoService implements CryptoService {
         });
     }
 
-    // Decrypt an existing stored point with a supplied key (usually by version).
+    /**
+     * Decrypt an existing stored point with a supplied key (usually by version),
+     * enforcing AAD = (id, version, dim).
+     */
     @Override
     public double[] decryptFromPoint(EncryptedPoint pt, SecretKey key) {
         Objects.requireNonNull(pt, "pt");
         Objects.requireNonNull(key, "key");
 
-        logger.debug("Decrypting point: id={}, version={}", pt.getId(), pt.getVersion());
+        logger.debug("Decrypting point: id={}, version={}, dim={}", pt.getId(), pt.getVersion(), pt.getVectorLength());
         return decryptTimer.record(() -> {
             try {
-                return EncryptionUtils.decryptVector(pt.getCiphertext(), pt.getIv(), key);
+                byte[] aad = aadForStored(pt.getId(), pt.getVersion(), pt.getVectorLength());
+                return EncryptionUtils.decryptVectorWithAad(pt.getCiphertext(), pt.getIv(), key, aad);
             } catch (GeneralSecurityException e) {
-                logger.error("Decryption failed (possibly due to stale key) for point {}: {}", pt.getId(), e.getMessage());
-                throw new CryptoException("Forward security breach: invalid decryption key", e);
+                logger.error("Decryption failed for point {} (version {}): {}", pt.getId(), pt.getVersion(), e.getMessage());
+                throw new CryptoException("Decryption failed (AAD mismatch or invalid key)", e);
             }
         });
     }
 
-    // Stateless vector encrypt (explicit key+IV).
+    /**
+     * Stateless vector encrypt (explicit key+IV). No AAD by design (query traffic).
+     */
     @Override
     public byte[] encrypt(double[] vector, SecretKey key, byte[] iv) {
         Objects.requireNonNull(vector, "vector");
@@ -160,7 +174,9 @@ public class AesGcmCryptoService implements CryptoService {
         });
     }
 
-    // Stateless vector decrypt (explicit key+IV) used for query traffic.
+    /**
+     * Stateless vector decrypt (explicit key+IV) used for query traffic. No AAD.
+     */
     @Override
     public double[] decryptQuery(byte[] ciphertext, byte[] iv, SecretKey key) {
         Objects.requireNonNull(ciphertext, "ciphertext");
@@ -178,7 +194,10 @@ public class AesGcmCryptoService implements CryptoService {
         });
     }
 
-    // Re-encrypt a stored point to the current key version.
+    /**
+     * Re-encrypt a stored point to the current key version (forward security).
+     * Decrypt with AAD(old id, old ver, dim), re-encrypt with AAD(new id, new ver, dim).
+     */
     @Override
     public EncryptedPoint reEncrypt(EncryptedPoint pt, SecretKey newKey, byte[] newIv) {
         Objects.requireNonNull(pt, "pt");
@@ -196,21 +215,25 @@ public class AesGcmCryptoService implements CryptoService {
             }
 
             try {
-                double[] plaintext = EncryptionUtils.decryptVector(pt.getCiphertext(), pt.getIv(), oldKey);
-                byte[] ciphertext = EncryptionUtils.encryptVector(plaintext, newIv, newKey);
-                int newVersion = keyService.getCurrentVersion().getVersion();
+                byte[] aadOld = aadForStored(pt.getId(), pt.getVersion(), pt.getVectorLength());
+                double[] plaintext = EncryptionUtils.decryptVectorWithAad(pt.getCiphertext(), pt.getIv(), oldKey, aadOld);
 
+                int newVersion = keyService.getCurrentVersion().getVersion();
                 if (newVersion == pt.getVersion()) {
                     logger.debug("Skipping re-encryption for point {}: already at latest version v{}", pt.getId(), newVersion);
                     return pt;
                 }
+
+                byte[] aadNew = aadForStored(pt.getId(), newVersion, pt.getVectorLength());
+                byte[] ciphertext = EncryptionUtils.encryptVectorWithAad(plaintext, newIv, newKey, aadNew);
 
                 EncryptedPoint reEncrypted = new EncryptedPoint(
                         pt.getId(), pt.getShardId(), newIv, ciphertext, newVersion, pt.getVectorLength(), pt.getBuckets()
                 );
 
                 metadataManager.updateVectorMetadata(pt.getId(), Map.of(
-                        "version", String.valueOf(newVersion)
+                        "version", String.valueOf(newVersion),
+                        "dim", String.valueOf(pt.getVectorLength())
                 ));
                 logger.debug("Re-encrypted point {} from v{} to v{}", pt.getId(), oldVersion, newVersion);
                 return reEncrypted;
@@ -230,6 +253,13 @@ public class AesGcmCryptoService implements CryptoService {
     public KeyLifeCycleService getKeyService() { return this.keyService; }
 
     // ---------------------------------------------------------------------
+
+    private static byte[] aadForStored(String id, int version, int dim) {
+        // Compact, deterministic AAD: "id:<id>|v:<version>|d:<dim>"
+        // Do NOT include secrets; this only binds invariants.
+        String s = "id:" + id + "|v:" + version + "|d:" + dim;
+        return s.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
 
     public static class CryptoException extends RuntimeException {
         public CryptoException(String message, Throwable cause) { super(message, cause); }

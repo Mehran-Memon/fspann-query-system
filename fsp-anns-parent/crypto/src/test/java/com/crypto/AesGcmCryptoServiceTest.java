@@ -46,10 +46,10 @@ class AesGcmCryptoServiceTest {
     void encrypt_then_decrypt_roundTrip() {
         double[] vec = new double[]{0.1, -2.5, 3.14, 9.0};
 
-        // encrypt(id, vector) uses current version & writes metadata
+        // Stored encryption binds AAD (id, version, dim) and writes metadata (version + dim)
         EncryptedPoint pt = crypto.encrypt("v123", vec);
         assertEquals(1, pt.getVersion());
-        verify(meta).updateVectorMetadata(eq("v123"), eq(Map.of("version", "1")));
+        verify(meta).updateVectorMetadata(eq("v123"), eq(Map.of("version", "1", "dim", String.valueOf(vec.length))));
 
         double[] out = crypto.decryptFromPoint(pt, keyV1);
         assertArrayEquals(vec, out, 1e-12);
@@ -66,15 +66,14 @@ class AesGcmCryptoServiceTest {
     }
 
     @Test
-    void reEncrypt_usesOldAndNewKeys_andUpdatesVersion() throws Exception {
-        // original with v1
+    void reEncrypt_usesOldAndNewKeys_andUpdatesVersion() {
+        // original with v1 (create via service so AAD matches)
         double[] vec = new double[]{7.0, 8.0};
-        byte[] iv1 = EncryptionUtils.generateIV();
-        byte[] ct1 = EncryptionUtils.encryptVector(vec, iv1, keyV1);
 
-        EncryptedPoint original = new EncryptedPoint("z1", 0, iv1, ct1, 1, vec.length, null);
+        when(keySvc.getCurrentVersion()).thenReturn(new KeyVersion(1, keyV1));
+        EncryptedPoint original = crypto.encrypt("z1", vec);
 
-        // now key service current is v2, but also able to fetch v1
+        // now current is v2, and v1 must still be retrievable for re-encryption
         when(keySvc.getVersion(1)).thenReturn(new KeyVersion(1, keyV1));
         when(keySvc.getCurrentVersion()).thenReturn(new KeyVersion(2, keyV2));
 
@@ -85,7 +84,7 @@ class AesGcmCryptoServiceTest {
         double[] round = crypto.decryptFromPoint(upd, keyV2);
         assertArrayEquals(vec, round, 1e-12);
 
-        verify(meta).updateVectorMetadata(eq("z1"), eq(Map.of("version", "2")));
+        verify(meta).updateVectorMetadata(eq("z1"), eq(Map.of("version", "2", "dim", String.valueOf(vec.length))));
     }
 
     @Test
@@ -98,7 +97,7 @@ class AesGcmCryptoServiceTest {
         double[] vec = new double[]{1,2,3};
         EncryptedPoint pt = crypto.encrypt("abc", vec);
 
-        // wrong key (new current)
+        // wrong key (simulate different current key)
         when(keySvc.getCurrentVersion()).thenReturn(new KeyVersion(99, keyV2));
 
         assertThrows(AesGcmCryptoService.CryptoException.class, () ->
