@@ -9,10 +9,10 @@ public class BvecsHead {
         try (DataInputStream din = new DataInputStream(new BufferedInputStream(Files.newInputStream(in)));
              DataOutputStream dout = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(out)))) {
             for (long i=0; i<N; i++) {
-                int dimLE = Integer.reverseBytes(din.readInt()); // read dim (LE)
-                byte[] vec = din.readNBytes(dimLE);
-                if (vec.length != dimLE) break; // reached EOF
-                dout.writeInt(Integer.reverseBytes(dimLE)); // write dim (LE)
+                int dim = Integer.reverseBytes(din.readInt());
+                dout.writeInt(Integer.reverseBytes(dim));
+                byte[] vec = din.readNBytes(dim);
+                if (vec.length != dim) break; // EOF
                 dout.write(vec);
             }
         }
