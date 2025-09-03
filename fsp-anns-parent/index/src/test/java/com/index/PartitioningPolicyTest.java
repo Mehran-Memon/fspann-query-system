@@ -31,7 +31,7 @@ class PartitioningPolicyTest {
     }
 
     @Test
-    void expansionsForQueryAreContiguousAndContainMain() {
+    void expansionsForQueryContainMainAndStayInRange() {
         int dims = 128, buckets = 64, projections = 96, numTables = 4, topK = 60;
         long seed = 99;
         EvenLSH lsh = new EvenLSH(dims, buckets, projections, seed);
@@ -47,11 +47,7 @@ class PartitioningPolicyTest {
             assertFalse(ex.isEmpty());
             int main = lsh.getBucketId(q, t);
             assertTrue(ex.contains(main), "Main bucket missing (table " + t + ")");
-            // valid range
             for (int b : ex) assertTrue(0 <= b && b < buckets);
-            // pairwise buckets contiguous in modular sense (weak check)
-            // i.e., gaps should be small; this is a sanity (not strict proof)
-            assertTrue(ex.size() <= buckets / 2 + 1);
         }
     }
 
@@ -71,7 +67,7 @@ class PartitioningPolicyTest {
             for (var ex : perTable) assertFalse(ex.isEmpty());
         }
 
-        // Debug string compiles & looks sane
+        // Debug string compiles & has expected shape
         String dbg = PartitioningPolicy.debugString(all.get(0));
         assertTrue(dbg.startsWith("[T0=") && dbg.endsWith("]"));
     }

@@ -27,7 +27,7 @@ class SecureLSHIndexTest {
     }
 
     @Test
-    void testConcurrentAddAndQueryAll() throws InterruptedException {
+    void concurrentAddAndQueryAllBucketsReturnsAllPoints() throws InterruptedException {
         int numTables = index.getNumHashTables();
         int numBuckets = lsh.getNumBuckets();
 
@@ -41,7 +41,7 @@ class SecureLSHIndexTest {
             index.addPoint(pt);
         }));
         executor.shutdown();
-        executor.awaitTermination(5, TimeUnit.SECONDS);
+        assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS), "executor did not terminate");
 
         // Build a token that scans ALL buckets in each table -> should fetch all 100
         List<List<Integer>> tableBuckets = new ArrayList<>(index.getNumHashTables());

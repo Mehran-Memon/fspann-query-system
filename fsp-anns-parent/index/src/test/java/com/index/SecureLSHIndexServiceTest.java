@@ -1,9 +1,9 @@
 package com.index;
 
-import com.fspann.common.*;
+import com.fspann.common.EncryptedPoint;
+import com.fspann.common.KeyLifeCycleService;
+import com.fspann.common.RocksDBMetadataManager;
 import com.fspann.crypto.CryptoService;
-import com.fspann.index.core.EvenLSH;
-import com.fspann.index.core.SecureLSHIndex;
 import com.fspann.index.service.SecureLSHIndexService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,7 +32,7 @@ class SecureLSHIndexServiceTest {
     }
 
     @Test
-    void testInsert_VectorEncryptedAndMetadataWritten() throws Exception {
+    void insert_VectorIsEncryptedAndMetadataPersisted() throws Exception {
         String id = "test";
         double[] vector = {1.0, 2.0};
         int dimension = vector.length;
@@ -45,7 +45,6 @@ class SecureLSHIndexServiceTest {
 
         verify(metadataManager).batchUpdateVectorMetadata(argThat(map -> {
             Map<String, String> m = map.get(id);
-            // New design: require version + dim; (b0..bN optional, not asserted)
             return m != null
                     && "1".equals(m.get("version"))
                     && String.valueOf(dimension).equals(m.get("dim"));
@@ -55,9 +54,8 @@ class SecureLSHIndexServiceTest {
     }
 
     @Test
-    void testInsert_PreEncryptedPoint_WritesMetadata() throws Exception {
-        // Build a point with per-table buckets (DEFAULT_NUM_TABLES = 4)
-        var buckets = java.util.Arrays.asList(1,1,1,1);
+    void insert_PreEncryptedPoint_WritesMetadata() throws Exception {
+        var buckets = java.util.Arrays.asList(1, 1, 1, 1);
         EncryptedPoint pt = new EncryptedPoint("vec123", buckets.get(0), new byte[]{0}, new byte[]{1}, 99, 2, buckets);
 
         indexService.insert(pt);

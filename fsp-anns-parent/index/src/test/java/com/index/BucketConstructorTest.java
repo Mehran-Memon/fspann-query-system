@@ -10,25 +10,11 @@ import static org.junit.jupiter.api.Assertions.*;
 class BucketConstructorTest {
 
     @Test
-    void testApplyFakePadsBucketsCorrectly() {
-        EncryptedPoint fakeTemplate = new EncryptedPoint(
-                "real",
-                0,
-                new byte[12],
-                new byte[32],
-                1,
-                128,
-                null // not indexing these; just padding test
-        );
-
-        List<List<EncryptedPoint>> buckets = new ArrayList<>();
-        List<EncryptedPoint> bucket = new ArrayList<>();
-        bucket.add(fakeTemplate);
-        buckets.add(bucket);
-
-        BucketConstructor.applyFake(buckets, 5, fakeTemplate);
-
-        assertEquals(5, buckets.get(0).size());
-        assertTrue(buckets.get(0).stream().anyMatch(p -> p.getId().startsWith("FAKE_")));
+    void testApplyFakeIsUnsupported() {
+        EncryptedPoint fakeTemplate = new EncryptedPoint("real", 0, new byte[12], new byte[32], 1, 128, null);
+        List<List<EncryptedPoint>> buckets = List.of(List.of(fakeTemplate));
+        assertThrows(UnsupportedOperationException.class,
+                () -> BucketConstructor.applyFake(buckets, 5, fakeTemplate));
     }
+
 }

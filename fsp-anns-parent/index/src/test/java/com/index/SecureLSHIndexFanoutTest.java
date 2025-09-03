@@ -65,7 +65,6 @@ class SecureLSHIndexFanoutTest {
     private static double[] randVec(Random r, int n) {
         double[] x = new double[n];
         for (int i = 0; i < n; i++) x[i] = r.nextGaussian();
-        // (no need to unit-normalize for LSH; randomness is fine)
         return x;
     }
 }

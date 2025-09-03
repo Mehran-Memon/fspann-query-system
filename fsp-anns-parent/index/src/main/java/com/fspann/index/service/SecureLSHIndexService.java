@@ -179,7 +179,6 @@ public class SecureLSHIndexService implements IndexService {
     // IndexService API
     // -----------------------------------------------------------------
 
-    @Override
     public void batchInsert(List<String> ids, List<double[]> vectors) {
         if (ids == null || vectors == null || ids.size() != vectors.size()) {
             throw new IllegalArgumentException("IDs and vectors must be non-null and of equal size");
@@ -443,6 +442,33 @@ public class SecureLSHIndexService implements IndexService {
         indexedPoints.put(pt.getId(), pt);
         if (isPartitioned() && paperEngine != null) paperEngine.insert(pt);
         else getOrCreateLegacyContext(pt.getVectorLength()).getIndex().addPoint(pt);
+    }
+
+    @Override
+    public int candidateCount(QueryToken token) {
+        Objects.requireNonNull(token, "QueryToken cannot be null");
+
+        if (isPartitioned() && paperEngine != null) {
+            // Paper engines may override with more precise accounting
+            List<EncryptedPoint> cands = paperEngine.lookup(token);
+            return (cands != null) ? cands.size() : 0;
+        }
+
+        // Legacy multiprobe path
+        int dim = token.getDimension();
+        DimensionContext ctx = dimensionContexts.get(dim);
+        if (ctx == null) return 0;
+        SecureLSHIndex idx = ctx.getIndex();
+
+        List<List<Integer>> perTable = token.hasPerTable()
+                ? token.getTableBuckets()
+                : PartitioningPolicy.expansionsForQuery(
+                ctx.getLsh(),
+                token.getPlaintextQuery(),
+                idx.getNumHashTables(),
+                token.getTopK());
+
+        return idx.candidateCount(perTable);
     }
 
     public void shutdown() { buffer.shutdown(); }
