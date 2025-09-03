@@ -107,7 +107,7 @@ public class QueryToken implements Serializable {
         if (hasPerTable()) return tableBuckets;
         int t = (tables <= 0) ? this.numTables : tables;
         List<List<Integer>> out = new ArrayList<>(t);
-        for (int i = 0; i < t; i++) out.add(candidateBuckets);
+        for (int i = 0; i < t; i++) out.add(List.copyOf(candidateBuckets)); // copy per table
         return out;
     }
 

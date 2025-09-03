@@ -8,7 +8,6 @@ import com.fspann.crypto.CryptoService;
 import com.fspann.index.core.EvenLSH;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import java.util.stream.Collectors;
 
 import javax.crypto.SecretKey;
 import java.util.ArrayList;
@@ -21,17 +20,21 @@ public class QueryTokenFactory {
     private final CryptoService cryptoService;
     private final KeyLifeCycleService keyService;
     private final EvenLSH lsh;
-    private final int expansionRange; // kept for compatibility (unused with contiguous logic)
+    /** Unused with contiguous/Hamming expansion. Retained for compatibility. */
+    @SuppressWarnings("unused")
+    private final int expansionRange;
     private final int numTables;
 
-    public QueryTokenFactory(CryptoService cryptoService, KeyLifeCycleService keyService,
-                             EvenLSH lsh, int expansionRange, int numTables) {
+    public QueryTokenFactory(CryptoService cryptoService,
+                             KeyLifeCycleService keyService,
+                             EvenLSH lsh,
+                             int expansionRange,
+                             int numTables) {
         this.cryptoService = Objects.requireNonNull(cryptoService, "CryptoService must not be null");
         this.keyService = Objects.requireNonNull(keyService, "KeyService must not be null");
         this.lsh = Objects.requireNonNull(lsh, "EvenLSH must not be null");
-        if (expansionRange < 0 || numTables <= 0) {
-            throw new IllegalArgumentException("Expansion range and number of tables must be positive");
-        }
+        if (numTables <= 0) throw new IllegalArgumentException("numTables must be positive");
+        if (expansionRange < 0) throw new IllegalArgumentException("expansionRange must be >= 0");
         this.expansionRange = expansionRange;
         this.numTables = numTables;
     }
@@ -40,13 +43,13 @@ public class QueryTokenFactory {
                              KeyLifeCycleService keyService,
                              EvenLSH lsh,
                              int numTables) {
-        this(cryptoService, keyService, lsh, /*expansionRange=*/0, numTables);
+        this(cryptoService, keyService, lsh, 0, numTables);
     }
 
     public QueryToken create(double[] vector, int topK) {
-        if (vector == null || vector.length == 0) throw new IllegalArgumentException("Input vector must be non-null and non-empty");
-        if (topK <= 0) throw new IllegalArgumentException("topK must be greater than zero");
-
+        Objects.requireNonNull(vector, "vector");
+        if (vector.length == 0) throw new IllegalArgumentException("vector must be non-empty");
+        if (topK <= 0) throw new IllegalArgumentException("topK must be > 0");
         int lshDim = lsh.getDimensions();
         if (lshDim > 0 && lshDim != vector.length) {
             throw new IllegalArgumentException("Vector dimension mismatch: expected " + lshDim + " but got " + vector.length);
@@ -55,32 +58,28 @@ public class QueryTokenFactory {
         KeyVersion currentVersion = keyService.getCurrentVersion();
         SecretKey key = currentVersion.getKey();
         int version = currentVersion.getVersion();
-        String encryptionContext = String.format("epoch_%d_dim_%d", version, vector.length);
+        String encryptionContext = "epoch_" + version + "_dim_" + vector.length;
 
-        EncryptedPoint encrypted = cryptoService.encryptToPoint("query", vector, key);
+        EncryptedPoint ep = cryptoService.encryptToPoint("query", vector, key);
 
-        // Prefer one-shot API used by tests, fall back to per-table calls
         List<List<Integer>> perTable = lsh.getBucketsForAllTables(vector, topK, numTables);
+        // deep mutable copy
+        List<List<Integer>> copy = new ArrayList<>(numTables);
         if (perTable == null || perTable.size() != numTables) {
-            perTable = new ArrayList<>(numTables);
             for (int t = 0; t < numTables; t++) {
-                List<Integer> buckets = lsh.getBuckets(vector, topK, t);
-                perTable.add(buckets != null ? new ArrayList<>(buckets) : new ArrayList<>());
+                copy.add(new ArrayList<>(lsh.getBuckets(vector, topK, t)));
             }
         } else {
-            // deep-copy to ensure mutability
-            List<List<Integer>> copy = new ArrayList<>(perTable.size());
             for (List<Integer> l : perTable) copy.add(new ArrayList<>(l));
-            perTable = copy;
         }
 
-        logger.debug("Token create: dim={} topK={} tables={} totalBuckets={}",
-                vector.length, topK, numTables, perTable.stream().mapToInt(List::size).sum());
+        int total = copy.stream().mapToInt(List::size).sum();
+        logger.debug("Created token: dim={}, topK={}, tables={}, totalProbes={}", vector.length, topK, numTables, total);
 
         return new QueryToken(
-                perTable,
-                encrypted.getIv(),
-                encrypted.getCiphertext(),
+                copy,
+                ep.getIv(),
+                ep.getCiphertext(),
                 vector.clone(),
                 topK,
                 numTables,
@@ -104,29 +103,26 @@ public class QueryTokenFactory {
         EncryptedPoint ep = cryptoService.encryptToPoint("query", q, curr.getKey());
 
         List<List<Integer>> perTable = lsh.getBucketsForAllTables(q, newTopK, numTables);
+        List<List<Integer>> copy = new ArrayList<>(numTables);
         if (perTable == null || perTable.size() != numTables) {
-            perTable = new ArrayList<>(numTables);
             for (int t = 0; t < numTables; t++) {
-                List<Integer> buckets = lsh.getBuckets(q, newTopK, t);
-                perTable.add(buckets != null ? new ArrayList<>(buckets) : new ArrayList<>());
+                copy.add(new ArrayList<>(lsh.getBuckets(q, newTopK, t)));
             }
         } else {
-            List<List<Integer>> copy = new ArrayList<>(perTable.size());
             for (List<Integer> l : perTable) copy.add(new ArrayList<>(l));
-            perTable = copy;
         }
 
-        logger.debug("Token derive: dim={} topK={} tables={} totalBuckets={}",
-                q.length, newTopK, numTables, perTable.stream().mapToInt(List::size).sum());
+        int total = copy.stream().mapToInt(List::size).sum();
+        logger.debug("Derived token: dim={}, topK={}, tables={}, totalProbes={}", q.length, newTopK, numTables, total);
 
         return new QueryToken(
-                perTable,
+                copy,
                 ep.getIv(),
                 ep.getCiphertext(),
-                q,
+                q.clone(),
                 newTopK,
                 numTables,
-                String.format("epoch_%d_dim_%d", curr.getVersion(), q.length),
+                "epoch_" + curr.getVersion() + "_dim_" + q.length,
                 q.length,
                 curr.getVersion()
         );

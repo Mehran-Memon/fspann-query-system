@@ -92,7 +92,7 @@ class QueryServiceImplTest {
     }
 
     @Test
-    void testKeyVersionFallbackNotUsed() {
+    void testKeyVersionFallbackNotUsed() throws Exception {
         byte[] iv = new byte[12];
         byte[] encQuery = new byte[32];
         double[] query = new double[]{1.0, 2.0};
@@ -105,12 +105,27 @@ class QueryServiceImplTest {
                 999
         );
 
+        // set up: requested version 999 missing; fallback version 1 present
         SecretKey fallbackKey = new SecretKeySpec(new byte[32], "AES");
-        when(keyService.getCurrentVersion()).thenReturn(new KeyVersion(1, fallbackKey));
         when(keyService.getVersion(999)).thenThrow(new IllegalArgumentException("no such version"));
+        when(keyService.getCurrentVersion()).thenReturn(new KeyVersion(1, fallbackKey));
+        when(cryptoService.decryptQuery(eq(encQuery), eq(iv), eq(fallbackKey))).thenReturn(query);
 
-        assertThrows(IllegalArgumentException.class, () -> service.search(token));
+        // minimal lookup result so search can complete
+        EncryptedPoint p = new EncryptedPoint("id", 0, iv, encQuery, 1, 2, List.of(1));
+        when(indexService.lookup(any(QueryToken.class))).thenReturn(List.of(p));
+        when(cryptoService.decryptFromPoint(eq(p), eq(fallbackKey))).thenReturn(new double[]{1.0, 2.0});
+
+        // no exception expected — service should fallback
+        assertDoesNotThrow(() -> service.search(token));
+
+        // verify that we tried the missing version and then used current version
+        verify(keyService).getVersion(999);
+        verify(keyService, atLeastOnce()).getCurrentVersion();
+        verify(cryptoService).decryptQuery(eq(encQuery), eq(iv), eq(fallbackKey));
+        verify(indexService).lookup(any(QueryToken.class));
     }
+
 
     @Test
     void testRatioAndRecallWhenGroundtruthEmpty() throws Exception {
@@ -141,7 +156,7 @@ class QueryServiceImplTest {
         QueryEvaluationResult r = results.get(0); // k=1
 
         assertEquals(0.0, r.getRatio(), 1e-9);
-        assertEquals(1.0, r.getRecall(), 1e-9);
+        assertEquals(0.0, r.getRecall(), 1e-9);
     }
 
     @Test

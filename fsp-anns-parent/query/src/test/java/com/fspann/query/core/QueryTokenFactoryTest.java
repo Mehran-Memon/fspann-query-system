@@ -88,7 +88,9 @@ class QueryTokenFactoryTest {
 
     @Test
     void testNullVectorThrowsException() {
-        assertThrows(IllegalArgumentException.class, () -> factory.create(null, 5));
+        var npe = assertThrows(NullPointerException.class, () -> factory.create(null, 5));
+        assertEquals("vector", npe.getMessage());
+
     }
 
     @Test
