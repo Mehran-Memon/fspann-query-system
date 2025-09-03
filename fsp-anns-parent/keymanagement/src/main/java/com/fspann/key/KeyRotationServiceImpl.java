@@ -13,6 +13,18 @@ import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * KeyRotationServiceImpl
+ * -----------------------------------------------------------------------------
+ * Implements KeyLifeCycleService:
+ *  - Current/previous/specific version access
+ *  - Operation/time-based rotation (with ability to pin/activate a version)
+ *  - Full re-encryption pass that respects forward security (re-inserts with current key)
+ *
+ * Notes:
+ *  - When a version is "forced" (pinned), auto-rotation is disabled.
+ *  - Re-encryption enumerates points via metadata manager; falls back gracefully if unsupported.
+ */
 public class KeyRotationServiceImpl implements KeyLifeCycleService {
     private static final Logger logger = LoggerFactory.getLogger(KeyRotationServiceImpl.class);
 
@@ -20,6 +32,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
     private final KeyRotationPolicy policy;
     private final String rotationMetaDir;
     private final RocksDBMetadataManager metadataManager;
+
     private volatile KeyVersion forcedVersion = null;
 
     private CryptoService cryptoService;
@@ -48,8 +61,8 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
 
     @Override
     public void rotateIfNeeded() {
-        if (forcedVersion != null) return;               // NEW: never rotate when pinned
-        if (Boolean.getBoolean("skip.rotation")) return; // existing JVM flag
+        if (forcedVersion != null) return;               // pinned → never rotate
+        if (Boolean.getBoolean("skip.rotation")) return; // runtime flag
         rotateIfNeededAndReturnUpdated();
     }
 
@@ -65,7 +78,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
 
     @Override
     public void reEncryptAll() {
-        logger.info("Starting manual re-encryption of all vectors");
+        logger.info("Starting re-encryption pass (forward-secure)");
 
         if (cryptoService == null || metadataManager == null || indexService == null) {
             logger.warn("Re-encryption skipped: services not initialized");
@@ -76,39 +89,38 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
         Set<String> seen = new HashSet<>();
 
         try {
-            // Preferred path: use metadata to enumerate points (implement these if missing).
+            // Prefer enumerating via metadata manager
             List<EncryptedPoint> all = metadataManager.getAllEncryptedPoints();
             for (EncryptedPoint original : all) {
                 if (original == null || !seen.add(original.getId())) continue;
 
+                // Decrypt with the point's version key, then re-insert (encrypts with current key)
                 KeyVersion pointVer = getVersion(original.getVersion());
                 double[] raw = cryptoService.decryptFromPoint(original, pointVer.getKey());
 
-                // Re-insert with same id; index service will encrypt with CURRENT key and recompute buckets
-                indexService.insert(original.getId(), raw);
+                indexService.insert(original.getId(), raw); // index layer will persist & account ops
                 total++;
             }
 
             EncryptedPointBuffer buf = indexService.getPointBuffer();
             if (buf != null) buf.flushAll();
 
-            // Optionally clean stale metadata keys
-            metadataManager.cleanupStaleMetadata(seen);
+            // Optional cleanup (stale metadata keys etc.)
+            try { metadataManager.cleanupStaleMetadata(seen); } catch (UnsupportedOperationException ignore) {}
 
             logger.info("Re-encryption completed for {} vectors", total);
         } catch (UnsupportedOperationException | NoSuchMethodError e) {
-            // If your RocksDBMetadataManager doesn't support enumeration yet, log and skip silently.
             logger.warn("Metadata enumeration not supported; skipping re-encryption pass.");
         } catch (Exception e) {
             logger.error("Re-encryption pipeline failed", e);
         }
     }
 
+    /** Internal helper used by scheduled/automatic rotation. Returns updated points if you later want to stream events. */
     public synchronized List<EncryptedPoint> rotateIfNeededAndReturnUpdated() {
-        if (forcedVersion != null) return Collections.emptyList(); // never rotate when pinned
+        if (forcedVersion != null) return Collections.emptyList();
         boolean opsExceeded  = operationCount.get() >= policy.getMaxOperations();
         boolean timeExceeded = Duration.between(lastRotation, Instant.now()).toMillis() >= policy.getMaxIntervalMillis();
-
         if (!(opsExceeded || timeExceeded)) return Collections.emptyList();
 
         logger.info("Initiating key rotation...");
@@ -124,17 +136,18 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
             throw new RuntimeException(e);
         }
 
-        reEncryptAll();
+        reEncryptAll(); // forward security: old keys can be discarded after this
         return Collections.emptyList();
     }
 
+    /** Manual rotation endpoint. */
     public synchronized KeyVersion rotateKey() {
         logger.debug("Manual key rotation requested");
         try {
             KeyVersion newVersion = keyManager.rotateKey();
             lastRotation = Instant.now();
             operationCount.set(0);
-            logger.info("Manual key rotation complete: version={}", newVersion.getVersion());
+            logger.info("Manual key rotation complete: v{}", newVersion.getVersion());
             reEncryptAll();
             return newVersion;
         } catch (Exception e) {
@@ -148,9 +161,10 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
     public void incrementOperation() { operationCount.incrementAndGet(); }
     public void setLastRotationTime(long timestamp) { this.lastRotation = Instant.ofEpochMilli(timestamp); }
 
+    /** Pin the active key version; disables auto-rotation until cleared. */
     public synchronized boolean activateVersion(int version) {
         try {
-            javax.crypto.SecretKey key = keyManager.getSessionKey(version);
+            SecretKey key = keyManager.getSessionKey(version);
             if (key == null) {
                 logger.warn("activateVersion({}) failed: version not found in keystore", version);
                 return false;
@@ -166,5 +180,12 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
         }
     }
 
+    /** Unpin any forced version and return to automatic rotation mode. */
+    public synchronized void clearActivatedVersion() {
+        this.forcedVersion = null;
+        this.operationCount.set(0);
+        this.lastRotation = Instant.now();
+        logger.info("Cleared forced key version; auto-rotation re-enabled");
+    }
 
 }
