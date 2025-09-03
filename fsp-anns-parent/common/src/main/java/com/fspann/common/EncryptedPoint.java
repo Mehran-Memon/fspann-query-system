@@ -13,6 +13,7 @@ public class EncryptedPoint implements Serializable {
     private final int version;
     private final int vectorLength;
     private final List<Integer> buckets;
+    private transient int _hc;
 
     public EncryptedPoint(String id, int shardId, byte[] iv, byte[] ciphertext, int version, int vectorLength, List<Integer> buckets) {
         this.id = Objects.requireNonNull(id, "ID must not be null");
@@ -48,10 +49,17 @@ public class EncryptedPoint implements Serializable {
                 Objects.equals(buckets, that.buckets);
     }
 
-    @Override
-    public int hashCode() {
-        return Objects.hash(id, shardId, Arrays.hashCode(iv), Arrays.hashCode(ciphertext), version, vectorLength, buckets);
+    @Override public int hashCode() {
+        int h = _hc;
+        if (h == 0) {
+            h = Objects.hash(id, shardId, version, vectorLength, buckets);
+            h = 31*h + Arrays.hashCode(iv);
+            h = 31*h + Arrays.hashCode(ciphertext);
+            _hc = (h == 0 ? 1 : h);
+        }
+        return _hc;
     }
+
 
     @Override
     public String toString() {

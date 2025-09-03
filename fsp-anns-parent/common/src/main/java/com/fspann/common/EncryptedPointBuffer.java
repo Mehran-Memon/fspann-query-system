@@ -15,7 +15,8 @@ public class EncryptedPointBuffer {
     private final Map<Integer, Integer> batchCounters = new HashMap<>();
     private final Path pointsDir;
     private final RocksDBMetadataManager metadataManager;
-    private static final double MEMORY_THRESHOLD_RATIO = 0.80;
+    private static final double MEMORY_THRESHOLD_RATIO =
+            Double.parseDouble(System.getProperty("buffer.mem.ratio", "0.80"));
     private final int flushThreshold;
     private int globalBufferCount = 0;
     private int totalFlushedPoints = 0;
