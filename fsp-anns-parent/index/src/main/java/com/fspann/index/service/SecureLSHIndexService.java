@@ -16,79 +16,108 @@ import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * SecureLSHIndexService
+ * -----------------------------------------------------------------------------
+ * Unified entry point for indexing and lookup with two modes:
+
+ *  1) partitioned (DEFAULT, paper-aligned):
+ *     - Routes to a PaperSearchEngine (Coding → GreedyPartition → TagQuery).
+ *     - Client-side kNN over small subset(s), forward-secure (re-encrypt only).
+ *  2) multiprobe (legacy):
+ *     - EvenLSH + SecureLSHIndex with per-table multi-probe bucket unions.
+ *     - Retained for A/B tests and backwards compatibility.
+ * Configure with: -Dfspann.mode=partitioned | multiprobe
+  * Storage/crypto/lifecycle (RocksDB/AES-GCM/KeyService) are shared across modes.
+ */
 public class SecureLSHIndexService implements IndexService {
     private static final Logger logger = LoggerFactory.getLogger(SecureLSHIndexService.class);
 
+    // ----------------------------- Modes -----------------------------
+    private static final String MODE = System.getProperty("fspann.mode", "partitioned");
+    private static boolean isPartitioned() { return "partitioned".equalsIgnoreCase(MODE); }
+    public static String getMode() { return MODE; }
+
+    // --------------------------- Core deps ---------------------------
     private final CryptoService crypto;
     private final KeyLifeCycleService keyService;
     private final RocksDBMetadataManager metadataManager;
-    private final SecureLSHIndex index;   // optional injected single-index (tests)
-    private final EvenLSH lsh;            // optional injected LSH (tests)
+
+    // Legacy (multiprobe) optional test-injected components:
+    private final SecureLSHIndex legacyIndex;     // may be null
+    private final EvenLSH legacyLsh;              // may be null
+
+    // Paper-aligned (partitioned) engine (inject your implementation; can be null)
+    private final PaperSearchEngine paperEngine;
+
+    // Write buffer (shared across modes)
     private final EncryptedPointBuffer buffer;
 
+    // Legacy defaults (used only in multiprobe mode)
     private final int defaultNumBuckets;
     private final int defaultNumTables;
+
+    // Write-through toggle (persist to Rocks + metrics account)
     private volatile boolean writeThrough =
             !"false".equalsIgnoreCase(System.getProperty("index.writeThrough", "true"));
-
     public void setWriteThrough(boolean enabled) { this.writeThrough = enabled; }
     public boolean isWriteThrough() { return writeThrough; }
+
+    // Legacy per-dimension contexts (multiprobe path only)
     private final Map<Integer, DimensionContext> dimensionContexts = new ConcurrentHashMap<>();
+
+    // Small LRU of recently indexed points (for quick fetch/delete)
     private final Map<String, EncryptedPoint> indexedPoints =
             Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, true) {
-                private static final int MAX = 200_000; // tune for your box
+                private static final int MAX = 200_000; // tune for your host
                 @Override protected boolean removeEldestEntry(Map.Entry<String,EncryptedPoint> e) {
                     return size() > MAX;
                 }
             });
 
-    public SecureLSHIndexService(CryptoService crypto,
-                                 KeyLifeCycleService keyService,
-                                 RocksDBMetadataManager metadataManager) {
-        this(crypto, keyService, metadataManager,
-                null, null, createBufferFromManager(metadataManager),
-                32, 4);
-    }
+    // -----------------------------------------------------------------
+    // Constructors
+    // -----------------------------------------------------------------
 
+    /**
+     * Production constructor. Pass a PaperSearchEngine for the default paper mode.
+     * If null, service seamlessly falls back to the legacy multiprobe path.
+     */
     public SecureLSHIndexService(CryptoService crypto,
                                  KeyLifeCycleService keyService,
                                  RocksDBMetadataManager metadataManager,
-                                 SecureLSHIndex index,
-                                 EvenLSH lsh,
+                                 PaperSearchEngine paperEngine,
+                                 SecureLSHIndex legacyIndex,
+                                 EvenLSH legacyLsh,
                                  EncryptedPointBuffer buffer,
                                  int defaultNumBuckets,
                                  int defaultNumTables) {
         this.crypto = (crypto != null) ? crypto : new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
         this.keyService = Objects.requireNonNull(keyService, "keyService");
         this.metadataManager = Objects.requireNonNull(metadataManager, "metadataManager");
-        this.index = index;
-        this.lsh = lsh;
+        this.paperEngine = paperEngine;
+        this.legacyIndex = legacyIndex;
+        this.legacyLsh = legacyLsh;
         this.buffer = Objects.requireNonNull(buffer, "buffer");
         this.defaultNumBuckets = Math.max(1, defaultNumBuckets);
         this.defaultNumTables  = Math.max(1, defaultNumTables);
+        logger.info("SecureLSHIndexService initialized in '{}' mode", MODE);
     }
 
-    private DimensionContext getOrCreateContext(int dimension) {
-        return dimensionContexts.computeIfAbsent(dimension, dim -> {
-            int buckets = defaultNumBuckets;
-            int projections = Math.max(1,
-                    (int) Math.ceil(buckets * Math.log(Math.max(dim, 1) / 16.0) / Math.log(2)));
-
-            long seed = seedFor(dim, buckets, projections);
-            EvenLSH lshInstance = (this.lsh != null)
-                    ? this.lsh
-                    : new EvenLSH(dim, buckets, projections, seed);
-
-            SecureLSHIndex idx = (this.index != null)
-                    ? this.index
-                    : new SecureLSHIndex(defaultNumTables, buckets, lshInstance);
-
-            return new DimensionContext(idx, crypto, keyService, lshInstance);
-        });
+    /** Legacy-compatible convenience constructor (no paper engine → multiprobe). */
+    public SecureLSHIndexService(CryptoService crypto,
+                                 KeyLifeCycleService keyService,
+                                 RocksDBMetadataManager metadataManager) {
+        this(crypto, keyService, metadataManager,
+                /*paperEngine*/ null,
+                /*legacyIndex*/ null,
+                /*legacyLsh*/ null,
+                createBufferFromManager(metadataManager),
+                /*defaultNumBuckets*/ 32,
+                /*defaultNumTables*/ 4);
     }
 
-    public EvenLSH getLshForDimension(int dimension) { return getOrCreateContext(dimension).getLsh(); }
-
+    /** Legacy-style factory from SystemConfig. */
     public static SecureLSHIndexService fromConfig(CryptoService crypto,
                                                    KeyLifeCycleService keyService,
                                                    RocksDBMetadataManager metadata,
@@ -96,18 +125,22 @@ public class SecureLSHIndexService implements IndexService {
         int numBuckets  = Math.max(1, cfg.getNumShards());
         int numTables   = Math.max(1, cfg.getNumTables());
         EncryptedPointBuffer buf = createBufferFromManager(metadata);
-        return new SecureLSHIndexService(crypto, keyService, metadata, null, null, buf, numBuckets, numTables);
+        return new SecureLSHIndexService(crypto, keyService, metadata, null, null, null, buf, numBuckets, numTables);
     }
 
     private static EncryptedPointBuffer createBufferFromManager(RocksDBMetadataManager manager) {
         String pointsBase = Objects.requireNonNull(manager.getPointsBaseDir(),
-                "metadataManager.getPointsBaseDir() returned null. In tests, stub this or inject a buffer explicitly.");
+                "metadataManager.getPointsBaseDir() returned null. In tests, stub or inject a buffer explicitly.");
         try {
             return new EncryptedPointBuffer(pointsBase, manager);
         } catch (IOException e) {
             throw new RuntimeException("Failed to initialize EncryptedPointBuffer", e);
         }
     }
+
+    // -----------------------------------------------------------------
+    // Legacy (multiprobe) helpers
+    // -----------------------------------------------------------------
 
     private static long seedFor(int dim, int buckets, int projections) {
         long x = 0x9E3779B97F4A7C15L;
@@ -120,10 +153,33 @@ public class SecureLSHIndexService implements IndexService {
         return x;
     }
 
-    // ---------------------------------------------------------------------
-    // IndexService API
-    // ---------------------------------------------------------------------
+    private DimensionContext getOrCreateLegacyContext(int dimension) {
+        return dimensionContexts.computeIfAbsent(dimension, dim -> {
+            int buckets = defaultNumBuckets;
+            int projections = Math.max(1,
+                    (int) Math.ceil(buckets * Math.log(Math.max(dim, 1) / 16.0) / Math.log(2)));
 
+            long seed = seedFor(dim, buckets, projections);
+            EvenLSH lshInstance = (this.legacyLsh != null)
+                    ? this.legacyLsh
+                    : new EvenLSH(dim, buckets, projections, seed);
+
+            SecureLSHIndex idx = (this.legacyIndex != null)
+                    ? this.legacyIndex
+                    : new SecureLSHIndex(defaultNumTables, buckets, lshInstance);
+
+            return new DimensionContext(idx, crypto, keyService, lshInstance);
+        });
+    }
+
+    /** Exposed for tests/diagnostics in multiprobe mode. */
+    public EvenLSH getLshForDimension(int dimension) { return getOrCreateLegacyContext(dimension).getLsh(); }
+
+    // -----------------------------------------------------------------
+    // IndexService API
+    // -----------------------------------------------------------------
+
+    @Override
     public void batchInsert(List<String> ids, List<double[]> vectors) {
         if (ids == null || vectors == null || ids.size() != vectors.size()) {
             throw new IllegalArgumentException("IDs and vectors must be non-null and of equal size");
@@ -136,14 +192,19 @@ public class SecureLSHIndexService implements IndexService {
     @Override
     public void insert(EncryptedPoint pt) {
         Objects.requireNonNull(pt, "EncryptedPoint cannot be null");
-        int dimension = pt.getVectorLength();
-        DimensionContext ctx = getOrCreateContext(dimension);
-
         indexedPoints.put(pt.getId(), pt);
-        SecureLSHIndex idx = ctx.getIndex();
-        idx.addPoint(pt);
 
-        // only persist + account ops if writeThrough is enabled
+        if (isPartitioned() && paperEngine != null) {
+            // Paper-aligned engines own placement via coding & partitions
+            paperEngine.insert(pt);
+        } else {
+            // Legacy multiprobe
+            int dimension = pt.getVectorLength();
+            DimensionContext ctx = getOrCreateLegacyContext(dimension);
+            ctx.getIndex().addPoint(pt);
+        }
+
+        // Write-through persistence
         if (writeThrough) {
             buffer.add(pt);
 
@@ -151,20 +212,15 @@ public class SecureLSHIndexService implements IndexService {
             metadata.put("version", String.valueOf(pt.getVersion()));
             metadata.put("dim", String.valueOf(pt.getVectorLength()));
             List<Integer> buckets = pt.getBuckets();
-            if (buckets != null) {
-                for (int t = 0; t < buckets.size(); t++) {
-                    metadata.put("b" + t, String.valueOf(buckets.get(t)));
-                }
-            }
+            if (buckets != null) for (int t = 0; t < buckets.size(); t++) metadata.put("b" + t, String.valueOf(buckets.get(t)));
 
             try {
                 metadataManager.batchUpdateVectorMetadata(Collections.singletonMap(pt.getId(), metadata));
                 metadataManager.saveEncryptedPoint(pt);
             } catch (IOException e) {
                 logger.error("Failed to persist encrypted point {}", pt.getId(), e);
-                return; // don't count failed writes
+                return; // do not account failed writes
             }
-
             keyService.incrementOperation();
         }
     }
@@ -174,33 +230,47 @@ public class SecureLSHIndexService implements IndexService {
         Objects.requireNonNull(id, "Point ID cannot be null");
         Objects.requireNonNull(vector, "Vector cannot be null");
 
-        int dimension = vector.length;
-        DimensionContext ctx = getOrCreateContext(dimension);
-        SecureLSHIndex idx = ctx.getIndex();
-
+        // Encrypt first (shared across modes)
         EncryptedPoint enc = crypto.encrypt(id, vector);
 
-        List<Integer> perTableBuckets = new ArrayList<>(idx.getNumHashTables());
-        for (int t = 0; t < idx.getNumHashTables(); t++) {
-            perTableBuckets.add(ctx.getLsh().getBucketId(vector, t));
+        if (isPartitioned() && paperEngine != null) {
+            // Paper engine derives code & partitions internally
+            paperEngine.insert(enc, vector);
+        } else {
+            // Legacy multiprobe
+            int dimension = vector.length;
+            DimensionContext ctx = getOrCreateLegacyContext(dimension);
+            SecureLSHIndex idx = ctx.getIndex();
+
+            List<Integer> perTableBuckets = new ArrayList<>(idx.getNumHashTables());
+            for (int t = 0; t < idx.getNumHashTables(); t++) {
+                perTableBuckets.add(ctx.getLsh().getBucketId(vector, t));
+            }
+
+            EncryptedPoint ep = new EncryptedPoint(
+                    enc.getId(),
+                    perTableBuckets.get(0), // legacy field
+                    enc.getIv(),
+                    enc.getCiphertext(),
+                    enc.getVersion(),
+                    vector.length,
+                    perTableBuckets
+            );
+
+            insert(ep);
         }
-
-        EncryptedPoint ep = new EncryptedPoint(
-                enc.getId(),
-                perTableBuckets.get(0), // legacy field
-                enc.getIv(),
-                enc.getCiphertext(),
-                enc.getVersion(),
-                vector.length,
-                perTableBuckets
-        );
-
-        insert(ep);
     }
 
     @Override
     public List<EncryptedPoint> lookup(QueryToken token) {
         Objects.requireNonNull(token, "QueryToken cannot be null");
+
+        if (isPartitioned() && paperEngine != null) {
+            // Paper-aligned path: TagQuery → subset(s) → client-side kNN (within engine)
+            return paperEngine.lookup(token);
+        }
+
+        // -------- Legacy multiprobe path --------
         int dim = token.getDimension();
         DimensionContext ctx = dimensionContexts.get(dim);
         if (ctx == null) return Collections.emptyList();
@@ -212,9 +282,10 @@ public class SecureLSHIndexService implements IndexService {
                 ctx.getLsh(), token.getPlaintextQuery(),
                 idx.getNumHashTables(), token.getTopK());
 
-        // ---- Adaptive fanout clamp ----
-        double target = Double.parseDouble(System.getProperty("fanout.target", "0.03")); // 3%
+        // Adaptive fanout clamp: default 12% (lower values can crush recall)
+        double target = Double.parseDouble(System.getProperty("fanout.target", "0.12"));
         int N = Math.max(1, idx.getPointCount());
+
         // ensure perTable is mutable (if it came from token)
         if (token.hasPerTable()) {
             List<List<Integer>> cp = new ArrayList<>(perTable.size());
@@ -224,10 +295,9 @@ public class SecureLSHIndexService implements IndexService {
 
         int cand = idx.candidateCount(perTable);
         while ((cand / (double) N) > target && canShrink(perTable)) {
-            shrinkWorstTail(perTable);    // remove weakest probes first
+            shrinkWorstTail(perTable); // drop worst tails first
             cand = idx.candidateCount(perTable);
         }
-        // --------------------------------
 
         QueryToken perTableToken = new QueryToken(
                 perTable,
@@ -244,6 +314,7 @@ public class SecureLSHIndexService implements IndexService {
         List<EncryptedPoint> candidates = idx.queryEncrypted(perTableToken);
         if (candidates.isEmpty()) return Collections.emptyList();
 
+        // Consistency guard w.r.t. metadata version/dimension
         Map<String, Map<String, String>> metas = fetchMetadata(candidates);
         List<EncryptedPoint> filtered = new ArrayList<>(candidates.size());
         for (EncryptedPoint pt : candidates) {
@@ -263,36 +334,45 @@ public class SecureLSHIndexService implements IndexService {
     private static void shrinkWorstTail(List<List<Integer>> perTable) {
         for (List<Integer> t : perTable) {
             int n = t.size();
-            if (n > 1) {
-                t.remove(n - 1); // drop worst tail only
-            }
+            if (n > 1) t.remove(n - 1);
         }
     }
 
-    @Override public void delete(String id) {
+    @Override
+    public void delete(String id) {
         Objects.requireNonNull(id, "Point ID cannot be null");
-        EncryptedPoint pt = indexedPoints.remove(id);
+        indexedPoints.remove(id);
+
+        // Paper engine owns its structures in partitioned mode
+        if (isPartitioned() && paperEngine != null) {
+            paperEngine.delete(id);
+            return;
+        }
+
+        // Legacy multiprobe cleanup
+        EncryptedPoint pt = getEncryptedPoint(id);
         if (pt != null) {
             DimensionContext ctx = dimensionContexts.get(pt.getVectorLength());
             if (ctx != null) ctx.getIndex().removePoint(id);
-            else logger.warn("No context found for dimension {} during delete", pt.getVectorLength());
+            else logger.warn("No legacy context for dimension {} during delete", pt.getVectorLength());
         }
     }
 
     private Map<String, Map<String, String>> fetchMetadata(List<EncryptedPoint> points) {
         Map<String, Map<String, String>> out = new HashMap<>(points.size());
-        for (EncryptedPoint p : points) {
-            out.put(p.getId(), metadataManager.getVectorMetadata(p.getId()));
-        }
+        for (EncryptedPoint p : points) out.put(p.getId(), metadataManager.getVectorMetadata(p.getId()));
         return out;
     }
 
     @Override public void markDirty(int shardId) { /* no-op */ }
+
     @Override public int getIndexedVectorCount() { return indexedPoints.size(); }
+
     @Override public Set<Integer> getRegisteredDimensions() { return dimensionContexts.keySet(); }
 
     @Override
     public int getVectorCountForDimension(int dimension) {
+        if (isPartitioned() && paperEngine != null) return paperEngine.getVectorCountForDimension(dimension);
         DimensionContext ctx = dimensionContexts.get(dimension);
         return (ctx == null) ? 0 : ctx.getIndex().getPointCount();
     }
@@ -317,9 +397,10 @@ public class SecureLSHIndexService implements IndexService {
 
     @Override
     public int getShardIdForVector(double[] vector) {
+        if (isPartitioned()) return -1; // diagnostic is meaningless in partitioned mode
         int dim = Objects.requireNonNull(vector, "vector").length;
-        DimensionContext ctx = getOrCreateContext(dim);
-        return ctx.getLsh().getBucketId(vector, 0); // legacy diagnostic only
+        DimensionContext ctx = getOrCreateLegacyContext(dim);
+        return ctx.getLsh().getBucketId(vector, 0);
     }
 
     public void clearCache() {
@@ -328,13 +409,16 @@ public class SecureLSHIndexService implements IndexService {
         logger.info("Cleared {} cached points", size);
     }
 
+    // Legacy eval helper (multiprobe only). In paper mode, prefer recall@k vs exact-k baselines.
     public Map<Integer, Double> evaluateFanoutRatio(double[] query) {
         return evaluateFanoutRatio(query, new int[]{1, 20, 40, 60, 80, 100});
     }
 
     public Map<Integer, Double> evaluateFanoutRatio(double[] query, int[] topKs) {
         Objects.requireNonNull(query, "query");
-        DimensionContext ctx = getOrCreateContext(query.length);
+        if (isPartitioned()) return Collections.emptyMap();
+
+        DimensionContext ctx = getOrCreateLegacyContext(query.length);
         SecureLSHIndex idx = ctx.getIndex();
         Map<Integer, Double> out = new LinkedHashMap<>();
         int N = Math.max(1, idx.getPointCount());
@@ -343,8 +427,7 @@ public class SecureLSHIndexService implements IndexService {
             List<List<Integer>> perTable = PartitioningPolicy
                     .expansionsForQuery(ctx.getLsh(), query, idx.getNumHashTables(), k);
             int cand = idx.candidateCount(perTable);
-            double ratio = cand / (double) N;
-            out.put(k, ratio);
+            out.put(k, cand / (double) N);
         }
         return out;
     }
@@ -352,21 +435,37 @@ public class SecureLSHIndexService implements IndexService {
     public void addToIndexOnly(String id, double[] vec) {
         boolean prev = writeThrough;
         writeThrough = false;
-        try {
-            insert(id, vec);     // uses the normal indexing flow, but writes are suppressed
-        } finally {
-            writeThrough = prev;
-        }
+        try { insert(id, vec); } finally { writeThrough = prev; }
     }
 
     public void addPointToIndexOnly(EncryptedPoint pt) {
         Objects.requireNonNull(pt, "EncryptedPoint");
-        DimensionContext ctx = getOrCreateContext(pt.getVectorLength());
-        // Optional cache (helps deletes/gets):
         indexedPoints.put(pt.getId(), pt);
-        // Directly place the stored per-table buckets into the in-memory index:
-        ctx.getIndex().addPoint(pt);
+        if (isPartitioned() && paperEngine != null) paperEngine.insert(pt);
+        else getOrCreateLegacyContext(pt.getVectorLength()).getIndex().addPoint(pt);
     }
 
     public void shutdown() { buffer.shutdown(); }
+
+    // -----------------------------------------------------------------
+    // Paper-aligned engine contract (inject your implementation)
+    // -----------------------------------------------------------------
+    /**
+     * PaperSearchEngine abstracts the paper-aligned pipeline:
+     *  - Coding (Algorithm-1)
+     *  - Greedy partition + map index I (Algorithm-2)
+     *  - Tag query + subset retrieval + client kNN (Algorithm-3)
+     *
+     * Implementations must:
+     *  - Persist G, I, tag→subset mapping, and w
+     *  - Preserve forward-security when rotating keys (re-encrypt; keep tags)
+     *  - Exclude fake points from evaluation/candidate sets
+     */
+    public interface PaperSearchEngine {
+        void insert(EncryptedPoint pt);                       // encrypted only
+        void insert(EncryptedPoint pt, double[] plaintextVector); // with vector for coding
+        List<EncryptedPoint> lookup(QueryToken token);        // returns encrypted candidates (re-rank inside engine)
+        void delete(String id);
+        int getVectorCountForDimension(int dimension);
+    }
 }

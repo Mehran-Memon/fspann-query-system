@@ -1,100 +1,100 @@
 package com.fspann.index.core;
 
 import com.fspann.common.EncryptedPoint;
-import java.security.SecureRandom;
-import java.util.*;
+
+import java.util.Collections;
+import java.util.List;
+import java.util.Objects;
 import java.util.function.Function;
-import java.util.stream.Collectors;
 
 /**
- * Provides static methods for secure and realistic bucket construction in high-dimensional encrypted ANN settings.
+ * @deprecated
+ * This class previously offered cosine-based bucket merging and "fake point" padding.
+ * Those behaviors are NOT part of the SANNP / mSANNP architecture and can harm accuracy.
+ * Replace all usages with the paper-aligned pipeline:
+ *
+ *   1) LSH-based coding (Algorithm-1) to produce the linear code C,
+ *   2) Greedy partition over the sorted codes with width w (Algorithm-2),
+ *   3) Tag-based lookup (Algorithm-3) returning one or two subsets per query,
+ *   4) Client-side kNN over the returned (≤ 2w) plaintext candidates.
+ *
+ * See: SANNP model & algorithms (coding, greedy partition, tag query). :contentReference[oaicite:0]{index=0}
+ * Also see your dissertation proposal sections aligning the framework with LSH + Greedy Partition. :contentReference[oaicite:1]{index=1}
+ *
+ * This class is retained only for source/binary compatibility during migration.
+ * All former methods now throw UnsupportedOperationException with guidance.
  */
+@Deprecated
 public final class BucketConstructor {
-    private static final SecureRandom RANDOM = new SecureRandom();
 
-    private BucketConstructor() {}
+    private BucketConstructor() {
+        // no instances
+    }
 
     /**
-     * Greedily merges encrypted points based on cosine similarity to an evolving reference.
-     * @param points list of encrypted points
-     * @param maxSize maximum bucket size
-     * @param unpackFunc function to extract plaintext vector from EncryptedPoint
-     * @return list of similarity-aware merged buckets
+     * @deprecated Do not use. Cosine-based greedy merging of plaintext vectors is not part of SANNP.
+     * Use the paper-aligned build:
+     *   - Compute C(v) via LSH coding (Algorithm-1),
+     *   - Sort by C and run GreedyPartitioner (Algorithm-2) to produce subsets SD_i and map index I.
+     *
+     * If you need a placeholder during refactors, call {@link #noOp()} to obtain an empty, immutable list.
+     *
+     * @throws UnsupportedOperationException always
      */
+    @Deprecated
     public static List<List<EncryptedPoint>> greedyMerge(
             List<EncryptedPoint> points,
             int maxSize,
             Function<EncryptedPoint, double[]> unpackFunc) {
-
-        List<List<EncryptedPoint>> buckets = new ArrayList<>();
-        Set<EncryptedPoint> unassigned = new HashSet<>(points);
-
-        while (!unassigned.isEmpty()) {
-            List<EncryptedPoint> bucket = new ArrayList<>();
-            Iterator<EncryptedPoint> it = unassigned.iterator();
-            EncryptedPoint seed = it.next();
-            it.remove();
-            bucket.add(seed);
-
-            double[] refVec = unpackFunc.apply(seed);
-
-            List<EncryptedPoint> sorted = unassigned.stream()
-                    .sorted(Comparator.comparingDouble(pt -> -cosineSimilarity(refVec, unpackFunc.apply(pt))))
-                    .limit(maxSize - 1)
-                    .collect(Collectors.toList());
-
-            bucket.addAll(sorted);
-            unassigned.removeAll(sorted);
-            buckets.add(bucket);
-        }
-        return buckets;
+        throw new UnsupportedOperationException(
+                "BucketConstructor.greedyMerge(...) has been removed.\n" +
+                        "Migrate to the SANNP build: C(v) coding -> greedy partition (Algorithm-2) -> tag index. " +
+                        "[ref: SANNP paper Algorithms 1–3]"); // :contentReference[oaicite:2]{index=2}
     }
 
     /**
-     * Pads each bucket with randomized fake points derived from a template.
-     * @param buckets list of real buckets
-     * @param cap desired uniform size
-     * @param template source encrypted point
-     * @return buckets padded with unique-looking fake points
+     * @deprecated Do not use. Fake-point padding must NOT contaminate the searchable in-memory index.
+     * Size-hiding, if required, should be implemented at the storage layer only, and excluded from
+     * candidate generation & evaluation.
+     *
+     * @throws UnsupportedOperationException always
      */
+    @Deprecated
     public static List<List<EncryptedPoint>> applyFake(
             List<List<EncryptedPoint>> buckets,
             int cap,
             EncryptedPoint template) {
-
-        for (List<EncryptedPoint> bucket : buckets) {
-            int shard = template.getShardId();
-            int version = template.getVersion();
-            while (bucket.size() < cap) {
-                byte[] newIv = new byte[template.getIv().length];
-                RANDOM.nextBytes(newIv);
-
-                byte[] fakeCiphertext = Arrays.copyOf(template.getCiphertext(), template.getCiphertext().length);
-                RANDOM.nextBytes(fakeCiphertext); // overwrite ciphertext randomness
-
-                EncryptedPoint fake = new EncryptedPoint(
-                        "FAKE_" + UUID.randomUUID(),
-                        shard,
-                        newIv,
-                        fakeCiphertext,
-                        version,
-                        template.getVectorLength(),
-                null
-                );
-                bucket.add(fake);
-            }
-        }
-        return buckets;
+        throw new UnsupportedOperationException(
+                "BucketConstructor.applyFake(...) has been removed.\n" +
+                        "Do not insert fake points into the searchable index. If size-hiding is required, " +
+                        "perform it at the storage layer and filter from query results.");
     }
 
-    // Cosine similarity (assumes vectors are not null or empty)
-    private static double cosineSimilarity(double[] a, double[] b) {
-        double dot = 0, normA = 0, normB = 0;
-        for (int i = 0; i < a.length; i++) {
-            dot += a[i] * b[i];
-            normA += a[i] * a[i];
-            normB += b[i] * b[i];
+    /**
+     * Utility: returns an empty, immutable list. Helpful as a drop-in while removing
+     * old call sites that expected a list of buckets from this class.
+     */
+    public static <T> List<List<T>> noOp() {
+        return Collections.emptyList();
+    }
+
+    /**
+     * Helper for legacy clean-up: detect the old fake-ID convention ("FAKE_*").
+     * During migration, you can filter such points from any residual candidate set.
+     */
+    public static boolean isLegacyFakeId(String id) {
+        return id != null && id.startsWith("FAKE_");
+    }
+
+    /**
+     * Validate an {@link EncryptedPoint} reference (non-null, minimal fields). This is only
+     * provided to make refactors less noisy while deleting old BucketConstructor usages.
+     */
+    public static void requireValid(EncryptedPoint pt) {
+        Objects.requireNonNull(pt, "EncryptedPoint cannot be null");
+        // Minimal sanity checks; full validation belongs in indexing services.
+        if (pt.getVectorLength() <= 0) {
+            throw new IllegalArgumentException("EncryptedPoint.vectorLength must be > 0");
         }
-        return dot / (Math.sqrt(normA) * Math.sqrt(normB) + 1e-9);
     }
 }

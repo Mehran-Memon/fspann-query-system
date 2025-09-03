@@ -1,32 +1,58 @@
 package com.fspann.index.core;
 
 import java.util.ArrayList;
-import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 
 /**
- * Single source of truth for bucket assignment (insert) and probing expansions (query).
- * - Per-table primary bucket for inserts
- * - Per-table contiguous expansions for queries (multi-probe cloak)
- * - Helper presets for topK sweeps (1..100 step 20) used by eval
+ * LEGACY: PartitioningPolicy (multi-probe fanout over EvenLSH)
+ * ------------------------------------------------------------------
+ * This utility maps a plaintext vector to:
+ *   - per-table primary buckets (insert path),
+ *   - per-table multi-probe expansions (query path).
+ *
+ * It belongs to the older "multiprobe" mode and is retained ONLY for
+ * backward compatibility and A/B experiments:
+ *
+ *   -Dfspann.mode=multiprobe    -> use EvenLSH + PartitioningPolicy
+ *   -Dfspann.mode=partitioned   -> use Coding (Alg-1) + GreedyPartition (Alg-2) + TagQuery (Alg-3)
+ *
+ * The paper-aligned default path should NOT route through this class.
+ * In SANNP/mSANNP, queries are resolved via tag-indexed subsets, not
+ * Hamming-ball bucket unions.
+ *
+ * Thread-safety: stateless; all methods are pure functions.
  */
+@Deprecated
 public final class PartitioningPolicy {
 
-    // Default eval sweep as requested
+    /**
+     * Default evaluation sweep for topK (kept for historical comparability).
+     * Accepts override with: -Deval.sweep="1,5,10-50"
+     */
     public static final int[] EVAL_TOPKS =
             parseEvalSweep(System.getProperty("eval.sweep", "1,20,40,60,80,100"));
 
-    // Safety cap, so expansion can't exceed a fraction of buckets (defers to EvenLSH's internal cap too)
+    /**
+     * @deprecated Unused in current implementation. Historically used to bound
+     * contiguous range as a fraction of numBuckets. Retained for source compatibility.
+     */
+    @Deprecated
     public static final double MAX_RANGE_FRACTION = 0.25;
 
-    private PartitioningPolicy() {}
+    private PartitioningPolicy() { /* no instances */ }
+
+    // -------------------------------------------------------------------------
+    // INSERT PATH (legacy)
+    // -------------------------------------------------------------------------
 
     /**
      * Compute per-table primary buckets for an insert.
-     * @param lsh        the EvenLSH for this dimension
-     * @param vector     raw vector (plaintext)
+     * @param lsh        EvenLSH router (legacy multiprobe mode)
+     * @param vector     plaintext vector (dimensionality must match lsh)
      * @param numTables  number of hash tables
+     * @return list of primary bucket ids, one per table
      */
     public static List<Integer> bucketsForInsert(EvenLSH lsh, double[] vector, int numTables) {
         Objects.requireNonNull(lsh, "lsh");
@@ -40,14 +66,19 @@ public final class PartitioningPolicy {
         return out;
     }
 
+    // -------------------------------------------------------------------------
+    // QUERY PATH (legacy multiprobe)
+    // -------------------------------------------------------------------------
+
     /**
-     * Per-table contiguous expansions for a query, using the same logic that insert uses for primary buckets.
-     * This is the cloak width controller via topK -> range mapping (log-scaled).
+     * Per-table multi-probe expansions for a query. This is the "fanout" driver
+     * in the legacy path. For paper-aligned SANNP, use TagQuery over the map index.
      *
-     * @param lsh        the EvenLSH for this dimension
-     * @param query      query vector
-     * @param numTables  number of hash tables to probe
-     * @param topK       topK knob (drives contiguous range per table)
+     * @param lsh        EvenLSH router
+     * @param query      plaintext query vector
+     * @param numTables  number of tables to probe
+     * @param topK       intent knob (not directly used; EvenLSH reads its own limits)
+     * @return list of per-table bucket id lists
      */
     public static List<List<Integer>> expansionsForQuery(EvenLSH lsh, double[] query, int numTables, int topK) {
         Objects.requireNonNull(lsh, "lsh");
@@ -63,8 +94,11 @@ public final class PartitioningPolicy {
     }
 
     /**
-     * Vectorized variant: different topK per table (rare, but useful for budget tuning).
-     * @param perTableTopK must have length == numTables
+     * Vectorized variant: custom topK per table (rare; useful for budget tuning in experiments).
+     * @param lsh            EvenLSH router
+     * @param query          plaintext query vector
+     * @param numTables      number of tables
+     * @param perTableTopK   array of topK values, one per table (must match numTables)
      */
     public static List<List<Integer>> expansionsForQuery(EvenLSH lsh, double[] query, int numTables, int[] perTableTopK) {
         Objects.requireNonNull(lsh, "lsh");
@@ -84,9 +118,14 @@ public final class PartitioningPolicy {
     }
 
     /**
-     * Convenience: preset sweep for evaluation {1,20,40,60,80,100}.
+     * Convenience for evaluation sweeps: expands for each K in {@link #EVAL_TOPKS}.
+     * Kept to make legacy ratios/ART plots reproducible during A/B runs.
      */
     public static List<List<List<Integer>>> expansionsForEvalSweep(EvenLSH lsh, double[] query, int numTables) {
+        Objects.requireNonNull(lsh, "lsh");
+        Objects.requireNonNull(query, "query");
+        if (numTables <= 0) throw new IllegalArgumentException("numTables must be > 0");
+
         List<List<List<Integer>>> all = new ArrayList<>(EVAL_TOPKS.length);
         for (int k : EVAL_TOPKS) {
             all.add(expansionsForQuery(lsh, query, numTables, k));
@@ -94,9 +133,13 @@ public final class PartitioningPolicy {
         return all;
     }
 
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
+
+    /** Parse sweep spec like "1,5,10-50" into a unique, ascending int[] */
     private static int[] parseEvalSweep(String spec) {
-        // Accept "1-100" ranges, comma lists, or mixes like "1,5,10-50"
-        java.util.LinkedHashSet<Integer> out = new java.util.LinkedHashSet<>();
+        LinkedHashSet<Integer> out = new LinkedHashSet<>();
         for (String tok : spec.replaceAll("\\s+", "").split(",")) {
             if (tok.isEmpty()) continue;
             int dash = tok.indexOf('-');
@@ -110,9 +153,11 @@ public final class PartitioningPolicy {
             }
         }
         if (out.isEmpty()) out.add(100);
+        // toArray preserves insertion order in LinkedHashSet
         return out.stream().mapToInt(Integer::intValue).toArray();
     }
 
+    /** Human-friendly dump of per-table expansions for debugging. */
     public static String debugString(List<List<Integer>> perTable) {
         StringBuilder sb = new StringBuilder("[");
         for (int t = 0; t < perTable.size(); t++) {

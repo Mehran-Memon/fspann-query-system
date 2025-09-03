@@ -191,9 +191,9 @@ public class QueryServiceImpl implements QueryService {
 
             // Insert time
             EncryptedPointBuffer buf = indexService.getPointBuffer();
-            long insertTimeMs = indexService.getPointBuffer().getLastBatchInsertTimeMs();
-            int totalFlushed = indexService.getPointBuffer().getTotalFlushedPoints();
-            int flushThreshold = indexService.getPointBuffer().getFlushThreshold();
+            long insertTimeMs = buf != null ? buf.getLastBatchInsertTimeMs() : 0;
+            int totalFlushed   = buf != null ? buf.getTotalFlushedPoints()   : 0;
+            int flushThreshold = buf != null ? buf.getFlushThreshold()        : 0;
 
             // Token size
             int tokenSizeBytes = variant.getEncryptedQuery() != null ? variant.getEncryptedQuery().length : 0;
