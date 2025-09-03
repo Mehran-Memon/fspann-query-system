@@ -24,25 +24,25 @@ public final class EncryptionUtils {
 
     private EncryptionUtils() {}
 
-    /**
-     * Securely generates a 12-byte IV for AES-GCM.
-     */
+    /** Securely generates a 12-byte IV for AES-GCM. */
     public static byte[] generateIV() {
         byte[] iv = new byte[GCM_IV_LENGTH];
         SECURE_RANDOM.nextBytes(iv);
         return iv;
     }
 
-    /**
-     * Encrypts a double[] vector using AES-GCM.
-     *
-     * @param vector the plaintext vector
-     * @param iv initialization vector (12 bytes)
-     * @param key AES SecretKey (256-bit recommended)
-     * @return encrypted byte[]
-     * @throws GeneralSecurityException if encryption fails
-     */
+    /** Encrypts a double[] vector using AES-GCM (no AAD). */
     public static byte[] encryptVector(double[] vector, byte[] iv, SecretKey key) throws GeneralSecurityException {
+        return encryptVectorWithAad(vector, iv, key, null);
+    }
+
+    /** Decrypts AES-GCM ciphertext to double[] (no AAD). */
+    public static double[] decryptVector(byte[] ciphertext, byte[] iv, SecretKey key) throws GeneralSecurityException {
+        return decryptVectorWithAad(ciphertext, iv, key, null);
+    }
+
+    /** Encrypts a double[] vector using AES-GCM with optional AAD. */
+    public static byte[] encryptVectorWithAad(double[] vector, byte[] iv, SecretKey key, byte[] aad) throws GeneralSecurityException {
         validateParams(vector, iv, key);
         if (vector.length == 0) throw new IllegalArgumentException("Vector cannot be empty");
         for (double v : vector) {
@@ -53,6 +53,7 @@ public final class EncryptionUtils {
         byte[] plaintext = doubleArrayToBytes(vector);
         Cipher cipher = Cipher.getInstance(TRANSFORMATION);
         cipher.init(Cipher.ENCRYPT_MODE, key, new GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv));
+        if (aad != null && aad.length > 0) cipher.updateAAD(aad);
         try {
             logger.debug("Encrypting vector of size {} with IV: {}", vector.length, Base64.getEncoder().encodeToString(iv));
             return cipher.doFinal(plaintext);
@@ -61,21 +62,13 @@ public final class EncryptionUtils {
         }
     }
 
-    /**
-     * Decrypts an encrypted byte[] to double[].
-     *
-     * @param ciphertext the encrypted bytes
-     * @param iv the initialization vector used during encryption
-     * @param key the SecretKey used for encryption
-     * @return the decrypted vector
-     * @throws GeneralSecurityException if decryption fails
-     */
-    public static double[] decryptVector(byte[] ciphertext, byte[] iv, SecretKey key) throws GeneralSecurityException {
-        logger.debug("Decrypting with ciphertext length: {}", ciphertext.length);
+    /** Decrypts AES-GCM ciphertext with optional AAD to double[]. */
+    public static double[] decryptVectorWithAad(byte[] ciphertext, byte[] iv, SecretKey key, byte[] aad) throws GeneralSecurityException {
         validateParams(ciphertext, iv, key);
-        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-        GCMParameterSpec spec = new GCMParameterSpec(128, iv);
+        Cipher cipher = Cipher.getInstance(TRANSFORMATION);
+        GCMParameterSpec spec = new GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv);
         cipher.init(Cipher.DECRYPT_MODE, key, spec);
+        if (aad != null && aad.length > 0) cipher.updateAAD(aad);
         byte[] decrypted = cipher.doFinal(ciphertext);
         try {
             ByteBuffer buffer = ByteBuffer.wrap(decrypted);
@@ -95,6 +88,7 @@ public final class EncryptionUtils {
         return buffer.array();
     }
 
+    @SuppressWarnings("unused")
     private static double[] bytesToDoubleArray(byte[] bytes) {
         if (bytes.length % Double.BYTES != 0) {
             throw new IllegalArgumentException("Invalid byte array length for double array conversion");

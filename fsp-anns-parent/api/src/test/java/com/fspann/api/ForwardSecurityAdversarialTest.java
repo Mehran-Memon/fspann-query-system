@@ -117,11 +117,19 @@ public class ForwardSecurityAdversarialTest {
                     EncryptedPoint p = system.getIndexService().getEncryptedPoint(id);
                     assertEquals(expectedVersion, p.getVersion(), "Version mismatch for dim=" + dim);
 
-                    assertTrue(KeyUtils.tryDecryptWithKeyOnly(p, compromisedKey).isEmpty(),
-                            "Old key should not decrypt");
+                    // Old key MUST NOT decrypt (using key-only helper is fine for this negative check)
+                    assertTrue(
+                            KeyUtils.tryDecryptWithKeyOnly(p, compromisedKey).isEmpty(),
+                            "Old key should not decrypt"
+                    );
+
+                    // New key SHOULD decrypt — must use the CryptoService (includes AAD/encryption context)
                     SecretKey currentKey = keyService.getVersion(p.getVersion()).getKey();
-                    assertTrue(KeyUtils.tryDecryptWithKeyOnly(p, currentKey).isPresent(),
-                            "New key should decrypt");
+                    double[] plaintext = assertDoesNotThrow(
+                            () -> cryptoService.decryptFromPoint(p, currentKey),
+                            "New key failed to decrypt via CryptoService"
+                    );
+                    assertNotNull(plaintext, "Decryption returned null plaintext with current key");
                 }
 
                 // sanity query; prefer non-empty, but don't fail the whole test-suite if empty

@@ -234,6 +234,7 @@ public class PerformanceVisualizer {
 
         int[] bins = new int[10];
         for (double r : ratios) {
+            double clamped = Math.max(0.0, Math.min(1.0, r));
             int idx = Math.min((int) Math.floor(r), bins.length - 1);
             bins[idx]++;
         }

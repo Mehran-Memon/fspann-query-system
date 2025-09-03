@@ -17,7 +17,6 @@ import com.fspann.query.core.QueryTokenFactory;
 import com.fspann.query.core.TopKProfiler;
 import com.fspann.query.service.QueryService;
 import com.fspann.query.service.QueryServiceImpl;
-import com.fspann.query.core.QueryEvaluationResult;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,6 +26,8 @@ import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.stream.Collectors;
+
+import static java.util.Locale.filter;
 
 public class ForwardSecureANNSystem {
     private static final Logger logger = LoggerFactory.getLogger(ForwardSecureANNSystem.class);
@@ -68,6 +69,13 @@ public class ForwardSecureANNSystem {
     private static final int     AUDIT_SAMPLE_EVERY = Integer.getInteger("audit.sample.every", 200); // sample every Nth query
     private static final int     AUDIT_WORST_KEEP   = Integer.getInteger("audit.worst.keep", 50);    // keep N worst
 
+    // remember previous FsPaths props to restore on shutdown
+    private final String prevBaseProp;
+    private final String prevMetaProp;
+    private final String prevPointsProp;
+    private final String prevKeyStoreProp;
+
+
     public ForwardSecureANNSystem(
             String configPath,
             String /* unused in ctor now, kept for symmetry */ dataPath,
@@ -103,9 +111,12 @@ public class ForwardSecureANNSystem {
 
         // ---- Centralize paths via FsPaths, but keep test-time @TempDir compatibility ----
         // Ensure FsPaths resolves to the provided metadataPath (temp dir in tests).
-        System.setProperty(FsPaths.BASE_DIR_PROP, metadataPath.toString());
-        System.setProperty(FsPaths.METADB_PROP, metadataPath.resolve("metadata").toString());
-        System.setProperty(FsPaths.POINTS_PROP, metadataPath.resolve("points").toString());
+        this.prevBaseProp   = System.getProperty(FsPaths.BASE_DIR_PROP);
+        this.prevMetaProp   = System.getProperty(FsPaths.METADB_PROP);
+        this.prevPointsProp = System.getProperty(FsPaths.POINTS_PROP);
+        System.setProperty(FsPaths.BASE_DIR_PROP,  metadataPath.toString());
+        System.setProperty(FsPaths.METADB_PROP,    metadataPath.resolve("metadata").toString());
+        System.setProperty(FsPaths.POINTS_PROP,    metadataPath.resolve("points").toString());
 
         // Resolve and persist fields
         this.pointsPath = FsPaths.pointsDir();
@@ -119,7 +130,9 @@ public class ForwardSecureANNSystem {
 
         // Key service (also align FsPaths KEYSTORE_PROP)
         Path derivedKeyRoot = resolveKeyStorePath(keysFilePath, metadataPath);
+        this.prevKeyStoreProp = System.getProperty(FsPaths.KEYSTORE_PROP);
         System.setProperty(FsPaths.KEYSTORE_PROP, derivedKeyRoot.toString());
+
         KeyLifeCycleService ks = cryptoService.getKeyService();
         if (ks == null) {
             Files.createDirectories(derivedKeyRoot.getParent());
@@ -133,7 +146,7 @@ public class ForwardSecureANNSystem {
         }
         this.keyService = ks;
 
-        // Capture actual keystore path for export
+        // Capture an actual keystore path for export
         Path ksp = derivedKeyRoot;
         try {
             if (keyService instanceof KeyRotationServiceImpl kr) {
@@ -154,7 +167,7 @@ public class ForwardSecureANNSystem {
         // per-token tables (fallback to 4 if index doesn't expose it)
         int tmpTables = 4;
         try {
-            // If indexService exposes number of tables, assign here.
+            // If indexService exposes the number of tables, assign here.
             // tmpTables = indexService.getNumTables();
         } catch (Throwable ignore) {}
 
@@ -369,7 +382,7 @@ public class ForwardSecureANNSystem {
         long start = System.nanoTime();
         QueryToken token = cloakQuery(queryVector, dim, topK);
 
-        // record pre-cloak version; you could also store the cloaked vector if you prefer
+        // record a pre-cloak version; you could also store the cloaked vector if you prefer
         recordRecent(queryVector);
 
         List<QueryResult> cached = cache.get(token);
@@ -403,9 +416,7 @@ public class ForwardSecureANNSystem {
         if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
 
         // 1) Index the corpus
-        long startInsert = System.nanoTime();
         indexStream(dataPath, dim);
-        long insertDurationMs = (System.nanoTime() - startInsert) / 1_000_000;
 
         // 2) Ensure metadata is persisted and index is sealed for search
         try {
@@ -445,6 +456,10 @@ public class ForwardSecureANNSystem {
 
             // Capture server-side query duration
             double serverMs = ((QueryServiceImpl) queryService).getLastQueryDurationNs() / 1_000_000.0;
+            if (profiler != null) {
+                // store client/server metrics per query id; ratio not applicable here, keep 0.0 placeholder
+                profiler.recordQueryMetric("Q" + q, serverMs, clientMs, 0.0);
+                }
 
             // Capture EncryptedPointBuffer metrics
             EncryptedPointBuffer buf = indexService.getPointBuffer();
@@ -590,7 +605,7 @@ public class ForwardSecureANNSystem {
 
             topKProfiler.record("Q" + q, enriched);
 
-            // Write CSV/table for query
+            // Write CSV/table for the query
             rw.writeTable("Query " + (q+1) + " Results (dim=" + dim + ")",
                     new String[]{"TopK","Retrieved","Ratio","Recall","TimeMs","InsertTimeMs","Candidates","TokenSize","VectorDim","TotalFlushed","FlushThreshold"},
                     enriched.stream()
@@ -673,7 +688,7 @@ public class ForwardSecureANNSystem {
         }
     }
 
-    public int restoreIndexFromDisk(int version, KeyManager keyManager) throws IOException {
+    public int restoreIndexFromDisk(int version) throws IOException {
         logger.info("Restoring in-memory index from metadata for v{} ...", version);
         int restored = 0;
         boolean prevWT = indexService.isWriteThrough();
@@ -696,7 +711,9 @@ public class ForwardSecureANNSystem {
             return s.filter(java.nio.file.Files::isDirectory)
                     .map(p -> p.getFileName().toString())
                     .filter(n -> n.startsWith("v"))
-                    .mapToInt(n -> Integer.parseInt(n.substring(1)))
+                    .map(n -> n.substring(1))
+                    .filter(str -> str.matches("\\d+"))
+                    .mapToInt(Integer::parseInt)
                     .max().orElseThrow();
         }
     }
@@ -727,16 +744,34 @@ public class ForwardSecureANNSystem {
             return super.put(key, value);
         }
 
+        @Override
+       public List<QueryResult> get(Object key) {
+            List<QueryResult> v = super.get(key);
+            if (v != null) {
+                // refresh recency on read
+                timestamps.put((QueryToken) key, System.currentTimeMillis());
+                }
+            cleanExpiredEntries();
+            return v;
+            }
+
         private void cleanExpiredEntries() {
             long now = System.currentTimeMillis();
-            timestamps.entrySet().removeIf(e -> now - e.getValue() > CACHE_EXPIRY_MS);
+            // remove from BOTH maps when expired
+            timestamps.entrySet().removeIf(e -> {
+                boolean expired = now - e.getValue() > CACHE_EXPIRY_MS;
+                        if (expired) {
+                            super.remove(e.getKey());
+                        }
+                        return expired;
+                        });
         }
 
         private void removeOldestEntry() {
             timestamps.entrySet().stream()
                     .min(Map.Entry.comparingByValue())
                     .ifPresent(e -> {
-                        remove(e.getKey());
+                        super.remove(e.getKey());
                         timestamps.remove(e.getKey());
                     });
         }
@@ -774,7 +809,7 @@ public class ForwardSecureANNSystem {
         }
     }
 
-    public class Worst {
+    public static final class Worst {
         private final int qIndex;
         private final double ratio;
 
@@ -1004,6 +1039,16 @@ public class ForwardSecureANNSystem {
             if (exitOnShutdown && !"true".equals(System.getProperty("test.env"))) {
                 System.exit(0);
             }
+
+            // restore global FsPaths props after shutdown to avoid cross-run contamination
+            if (prevBaseProp == null)  System.clearProperty(FsPaths.BASE_DIR_PROP);
+            else System.setProperty(FsPaths.BASE_DIR_PROP,  prevBaseProp);
+            if (prevMetaProp == null)  System.clearProperty(FsPaths.METADB_PROP);
+            else System.setProperty(FsPaths.METADB_PROP,    prevMetaProp);
+            if (prevPointsProp == null)System.clearProperty(FsPaths.POINTS_PROP);
+            else System.setProperty(FsPaths.POINTS_PROP,    prevPointsProp);
+            if (prevKeyStoreProp == null) System.clearProperty(FsPaths.KEYSTORE_PROP);
+            else System.setProperty(FsPaths.KEYSTORE_PROP, prevKeyStoreProp);
         }
     }
 
@@ -1042,14 +1087,14 @@ public class ForwardSecureANNSystem {
             restoreVersion = detectLatestVersion(pointsPath); // unchanged
         }
 
-// Load config
+        // Load config
         ApiSystemConfig apiCfg = new ApiSystemConfig(configFile);
         SystemConfig cfg = apiCfg.getConfig();
 
         int  opsCap = (int) Math.min(Integer.MAX_VALUE, cfg.getOpsThreshold());
         long ageMs  = cfg.getAgeThresholdMs();
 
-// 🔒 freeze rotation in query-only
+        // 🔒 freeze rotation in query-only
         KeyRotationPolicy policy = new KeyRotationPolicy(
                 queryOnly ? Integer.MAX_VALUE : opsCap,
                 queryOnly ? Long.MAX_VALUE : ageMs
@@ -1078,7 +1123,7 @@ public class ForwardSecureANNSystem {
 
         if (queryOnly) {
             sys.setQueryOnlyMode(true); // skip writes during shutdown
-            int restored = sys.restoreIndexFromDisk(restoreVersion, keyManager);
+            int restored = sys.restoreIndexFromDisk(restoreVersion);
             sys.finalizeForSearch();    // seal/optimize for querying
 
             // Optional sanity log
