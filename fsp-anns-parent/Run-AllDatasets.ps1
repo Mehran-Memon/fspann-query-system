@@ -16,7 +16,7 @@ $Xmx = "16g"
 # Java executable
 $Java = "java"
 
-# ----------------- EXPLORE/WIDTH CONFIGS (choose breadth vs speed) -----------------
+# ----------------- EXPLORE/WIDTH CONFIGS -----------------
 # A) Recall-first, B) Balanced (baseline), C) Throughput-first
 $Configs = @(
     @{ Label="recall_first"; ProbePerTable=24; ProbeBitsMax=2; FanoutTarget=0.05 },
@@ -26,12 +26,12 @@ $Configs = @(
 
 # Datasets: only include ones you have base + query + groundtruth
 $Datasets = @(
-    @{ Name="SIFT1M";   Dim=128;
+    @{ Name="SIFT1M"; Dim=128;
     Base="E:\Research Work\Datasets\sift_dataset\sift_base.fvecs";
     Query="E:\Research Work\Datasets\sift_dataset\sift_query.fvecs";
     GT="E:\Research Work\Datasets\sift_dataset\sift_groundtruth.ivecs" },
 
-    @{ Name="Audio";   Dim=192;
+    @{ Name="Audio"; Dim=192;
     Base="E:\Research Work\Datasets\audio\audio_base.fvecs";
     Query="E:\Research Work\Datasets\audio\audio_query.fvecs";
     GT="E:\Research Work\Datasets\audio\audio_groundtruth.ivecs" },
@@ -82,8 +82,6 @@ $Datasets = @(
     Base="E:\Research Work\Datasets\Sift1B\bigann_base.bvecs\bigann_100M.bvecs";
     Query="E:\Research Work\Datasets\Sift1B\bigann_query.bvecs\queries.bvecs";
     GT="E:\Research Work\Datasets\Sift1B\bigann_gnd\gnd\idx_100M.ivecs" }
-
-# SIFT1B omitted intentionally for time/memory.
 )
 
 # ---------- PREP FOLDERS ----------
@@ -92,24 +90,33 @@ New-Item -ItemType Directory -Force -Path $MetaRoot | Out-Null
 
 # ---------- HELPERS ----------
 function Get-XmxForDataset([string]$datasetName, [string]$defaultXmx) {
-    if ($datasetName -in @("SIFT_50M","SIFT_100M")) { return "32g" } # bump heap for very large sets
+    if ($datasetName -in @("SIFT_50M","SIFT_100M")) { return "32g" }
     return $defaultXmx
 }
 
 function Ensure-Files([string]$base,[string]$query,[string]$gt) {
     $ok = $true
-    if (-not (Test-Path $base))  { Write-Error "Missing base:  $base";  $ok = $false }
-    if (-not (Test-Path $query)) { Write-Error "Missing query: $query"; $ok = $false }
-    if (-not (Test-Path $gt))    { Write-Error "Missing GT:    $gt";    $ok = $false }
+    if ([string]::IsNullOrWhiteSpace($base)  -or -not (Test-Path -LiteralPath $base))  { Write-Error "Missing base:  $base";  $ok = $false }
+    if ([string]::IsNullOrWhiteSpace($query) -or -not (Test-Path -LiteralPath $query)) { Write-Error "Missing query: $query"; $ok = $false }
+    if ([string]::IsNullOrWhiteSpace($gt)    -or -not (Test-Path -LiteralPath $gt))    { Write-Error "Missing GT:    $gt";    $ok = $false }
     return $ok
 }
 
+function Find-FirstValidDataset {
+    foreach ($d in $Datasets) {
+        if (Ensure-Files $d.Base $d.Query $d.GT) { return $d }
+    }
+    return $null
+}
+
 # ---------- STEP 1: Generate keys if missing ----------
-$ForceRegenKeys = $false   # set to $true when you know classes changed
+$ForceRegenKeys = $false  # set to $true to force a fresh keystore (e.g., after class changes)
 
 function New-Keys {
-    Write-Host "Generating keys.ser using first dataset..."
-    $ds = $Datasets[0]
+    $ds = Find-FirstValidDataset
+    if ($null -eq $ds) { throw "No valid dataset found to generate keys. Check your dataset paths." }
+
+    Write-Host "Generating keys.ser using dataset: $($ds.Name)"
     $metaDir = Join-Path $MetaRoot $ds.Name
     New-Item -ItemType Directory -Force -Path $metaDir | Out-Null
 
@@ -133,7 +140,6 @@ function New-Keys {
 
 $needKeys = -not (Test-Path -LiteralPath $KeysPath)
 if (-not $needKeys) {
-    # Regenerate if JAR is newer than keys, or when forced
     $jarNewer = (Get-Item $JarPath).LastWriteTimeUtc -gt (Get-Item $KeysPath).LastWriteTimeUtc
     if ($ForceRegenKeys -or $jarNewer) {
         Write-Host "Removing incompatible/outdated keys.ser..."
@@ -142,7 +148,6 @@ if (-not $needKeys) {
     }
 }
 if ($needKeys) { New-Keys }
-
 
 # ---------- RUN ALL DATASETS x CONFIGS ----------
 $Combined = @()
@@ -169,10 +174,10 @@ foreach ($ds in $Datasets) {
         Get-ChildItem -Filter "*.csv" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
         $XmxThis = Get-XmxForDataset $name $Xmx
+        $logFile = Join-Path $runDir "run.log"
 
         Write-Host "=== Running $name ($label) dim=$dim (Xmx=$XmxThis) ==="
 
-        # JVM flags include GC tuning; app picks up breadth knobs via -D system props.
         $jvm = @(
             "-Xms$Xms","-Xmx$XmxThis",
             "-XX:+UseG1GC","-XX:MaxGCPauseMillis=200",
@@ -193,11 +198,16 @@ foreach ($ds in $Datasets) {
             "100000"  # sample cap / batch limit
         )
 
-        & $Java @jvm @app
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        & $Java @jvm @app *>&1 | Tee-Object -FilePath $logFile
+        $sw.Stop()
+
         if ($LASTEXITCODE -ne 0) {
-            Write-Warning "Run failed for $name ($label)"
+            Write-Warning "Run failed for $name ($label) — see $logFile"
             Pop-Location
             continue
+        } else {
+            Add-Content -Path $logFile -Value ("Elapsed: {0:N1} sec" -f ($sw.Elapsed.TotalSeconds))
         }
 
         # Collect the per-run top-k CSV (emitted under metaDir\results)
