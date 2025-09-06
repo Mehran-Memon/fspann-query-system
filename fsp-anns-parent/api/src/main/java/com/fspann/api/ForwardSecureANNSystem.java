@@ -28,8 +28,6 @@ import java.util.concurrent.*;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-import static java.util.Locale.filter;
-
 public class ForwardSecureANNSystem {
     private static final Logger logger = LoggerFactory.getLogger(ForwardSecureANNSystem.class);
     private static final double DEFAULT_NOISE_SCALE = 0.01;
@@ -224,7 +222,6 @@ public class ForwardSecureANNSystem {
     }
 
         /* ---------------------- Indexing API ---------------------- */
-
     public void indexStream(String dataPath, int dim) throws IOException {
         if ("POINTS_ONLY".equalsIgnoreCase(dataPath)) {
             logger.info("Query-only mode: skipping indexing");
@@ -250,10 +247,6 @@ public class ForwardSecureANNSystem {
         if (batchCount == 0) {
             logger.warn("No batches loaded for dim={} from dataPath={}", dim, dataPath);
         }
-    }
-
-    public void indexAllDimensions(String dataPath, List<Integer> dimensions) throws IOException {
-        for (int dim : dimensions) indexStream(dataPath, dim);
     }
 
     public void batchInsert(List<double[]> vectors, int dim) {
@@ -341,7 +334,6 @@ public class ForwardSecureANNSystem {
     }
 
     /* ---------------------- Query API ---------------------- */
-
     private QueryTokenFactory factoryForDim(int dim) {
         return tokenFactories.computeIfAbsent(dim, d -> {
             EvenLSH lsh = indexService.getLshForDimension(d);
@@ -456,7 +448,7 @@ public class ForwardSecureANNSystem {
             logger.warn("Pre-query flush/optimize failed; continuing", e);
         }
 
-        // 3) Load queries & groundtruth
+        // 3) Load queries and ground-truth
         DefaultDataLoader loader = new DefaultDataLoader();
         List<double[]> queries = new ArrayList<>();
         while (true) {
@@ -510,7 +502,7 @@ public class ForwardSecureANNSystem {
             for (QueryEvaluationResult r : evals) {
                 enriched.add(new QueryEvaluationResult(
                         r.getTopKRequested(), r.getRetrieved(), r.getRatio(),
-                        Double.NaN, // NaN expected from service
+                        Double.NaN, // keep NaN; global recall is computed below
                         r.getTimeMs(), insertTimeMs, r.getCandidateCount(),
                         tokenSizeBytes, vectorDim, totalFlushed, flushThreshold
                 ));
@@ -584,29 +576,8 @@ public class ForwardSecureANNSystem {
                 auditOut.appendWorst(w.qIndex(), AUDIT_K, ratio, recall, retrieved, truth);
             }
         }
+        writeGlobalRecallCsv(dim, K_VARIANTS, globalMatches, globalTruth);
 
-        // ---- write global_recall.csv: one row per k ----
-        try {
-            Files.createDirectories(Paths.get("results"));
-            Path p = Paths.get("results", "global_recall.csv");
-            boolean exists = Files.exists(p);
-            if (!exists) {
-                Files.writeString(p, "dimension,topK,global_recall,matches,truth\n",
-                        StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-            }
-            for (int k : K_VARIANTS) {
-                long truth = globalTruth.get(k);
-                long matches = globalMatches.get(k);
-                double grecall = (truth == 0) ? 0.0 : (double) matches / (double) truth;
-                String line = String.format(Locale.ROOT,
-                        "GlobalRecall@K=%d (dim=%d): %.6f  [matches=%d, truth=%d]",
-                        k, dim, grecall, matches, truth);
-                logger.info(line);
-                System.out.println(line);
-            }
-        } catch (IOException ioe) {
-            logger.warn("Failed to write global_recall.csv", ioe);
-        }
     }
 
     public void runQueries(String queryPath, int dim, String groundtruthPath) throws IOException {
@@ -664,7 +635,7 @@ public class ForwardSecureANNSystem {
             // keep per-query recall as NaN
             List<QueryEvaluationResult> enriched = evals.stream().map(r -> new QueryEvaluationResult(
                     r.getTopKRequested(), r.getRetrieved(), r.getRatio(),
-                    Double.NaN, // NaN expected from service
+                    Double.NaN, // keep NaN; compute global recall below
                     r.getTimeMs(), insertTimeMs, r.getCandidateCount(),
                     tokenSizeBytes, vectorDim, totalFlushed, flushThreshold
             )).collect(Collectors.toList());
@@ -736,32 +707,10 @@ public class ForwardSecureANNSystem {
             }
         }
 
-        // ---- write global_recall.csv: one row per k ----
-        try {
-            Files.createDirectories(Paths.get("results"));
-            Path p = Paths.get("results", "global_recall.csv");
-            boolean exists = Files.exists(p);
-            if (!exists) {
-                Files.writeString(p, "dimension,topK,global_recall,matches,truth\n",
-                        StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-            }
-            for (int k : K_VARIANTS) {
-                long truth = globalTruth.get(k);
-                long matches = globalMatches.get(k);
-                double grecall = (truth == 0) ? 0.0 : (double) matches / (double) truth;
-                String line = String.format(Locale.ROOT,
-                        "GlobalRecall@K=%d (dim=%d): %.6f  [matches=%d, truth=%d]",
-                        k, dim, grecall, matches, truth);
-                logger.info(line);
-                System.out.println(line);
-            }
-        } catch (IOException ioe) {
-            logger.warn("Failed to write global_recall.csv", ioe);
-        }
+        writeGlobalRecallCsv(dim, K_VARIANTS, globalMatches, globalTruth);
     }
 
     /* ---------------------- Utilities & Lifecycle ---------------------- */
-
     /** Generate and insert `total` synthetic points for the given dimension. */
     public void insertFakePointsInBatches(int total, int dim) {
         if (total <= 0) throw new IllegalArgumentException("Total must be positive");
@@ -993,6 +942,40 @@ public class ForwardSecureANNSystem {
             }
         } catch (Exception e) {
             logger.warn("Failed copying {} → {}", src, dst, e);
+        }
+    }
+
+    /** Append global recall rows to results/global_recall.csv (creates header once). */
+    private static void writeGlobalRecallCsv(
+            int dim,
+            int[] kVariants,
+            Map<Integer, Long> globalMatches,
+            Map<Integer, Long> globalTruth
+    ) {
+        try {
+            Files.createDirectories(Paths.get("results"));
+            Path p = Paths.get("results", "global_recall.csv");
+            if (!Files.exists(p)) {
+                Files.writeString(p, "dimension,topK,global_recall,matches,truth\n",
+                        StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+            }
+            try (var w = Files.newBufferedWriter(p, StandardOpenOption.CREATE, StandardOpenOption.APPEND)) {
+                for (int k : kVariants) {
+                    long truth = globalTruth.getOrDefault(k, 0L);
+                    long matches = globalMatches.getOrDefault(k, 0L);
+                    double grecall = (truth == 0) ? 0.0 : (double) matches / (double) truth;
+
+                    w.write(String.format(Locale.ROOT, "%d,%d,%.6f,%d,%d%n", dim, k, grecall, matches, truth));
+
+                    String line = String.format(Locale.ROOT,
+                            "GlobalRecall@K=%d (dim=%d): %.6f  [matches=%d, truth=%d]",
+                            k, dim, grecall, matches, truth);
+                    logger.info(line);
+                    System.out.println(line);
+                }
+            }
+        } catch (IOException ioe) {
+            logger.warn("Failed to write global_recall.csv", ioe);
         }
     }
 
