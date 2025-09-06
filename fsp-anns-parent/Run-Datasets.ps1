@@ -26,25 +26,25 @@ $Configs = @(
 
 # Datasets: only include ones you have base + query + groundtruth
 $Datasets = @(
-    @{ Name="SIFT1M"; Dim=128;
-    Base="E:\Research Work\Datasets\sift_dataset\sift_base.fvecs";
-    Query="E:\Research Work\Datasets\sift_dataset\sift_query.fvecs";
-    GT="E:\Research Work\Datasets\sift_dataset\sift_groundtruth.ivecs" },
-
-    @{ Name="Audio"; Dim=192;
-    Base="E:\Research Work\Datasets\audio\audio_base.fvecs";
-    Query="E:\Research Work\Datasets\audio\audio_query.fvecs";
-    GT="E:\Research Work\Datasets\audio\audio_groundtruth.ivecs" },
-
-    @{ Name="GloVe100"; Dim=100;
-    Base="E:\Research Work\Datasets\glove-100\glove-100_base.fvecs";
-    Query="E:\Research Work\Datasets\glove-100\glove-100_query.fvecs";
-    GT="E:\Research Work\Datasets\glove-100\glove-100_groundtruth.ivecs" },
-
-    @{ Name="Enron"; Dim=1369;
-    Base="E:\Research Work\Datasets\Enron\enron_base.fvecs";
-    Query="E:\Research Work\Datasets\Enron\enron_query.fvecs";
-    GT="E:\Research Work\Datasets\Enron\enron_groundtruth.ivecs" },
+#    @{ Name="SIFT1M"; Dim=128;
+#    Base="E:\Research Work\Datasets\sift_dataset\sift_base.fvecs";
+#    Query="E:\Research Work\Datasets\sift_dataset\sift_query.fvecs";
+#    GT="E:\Research Work\Datasets\sift_dataset\sift_groundtruth.ivecs" },
+#
+#    @{ Name="Audio"; Dim=192;
+#    Base="E:\Research Work\Datasets\audio\audio_base.fvecs";
+#    Query="E:\Research Work\Datasets\audio\audio_query.fvecs";
+#    GT="E:\Research Work\Datasets\audio\audio_groundtruth.ivecs" },
+#
+#    @{ Name="GloVe100"; Dim=100;
+#    Base="E:\Research Work\Datasets\glove-100\glove-100_base.fvecs";
+#    Query="E:\Research Work\Datasets\glove-100\glove-100_query.fvecs";
+#    GT="E:\Research Work\Datasets\glove-100\glove-100_groundtruth.ivecs" },
+#
+#    @{ Name="Enron"; Dim=1369;
+#    Base="E:\Research Work\Datasets\Enron\enron_base.fvecs";
+#    Query="E:\Research Work\Datasets\Enron\enron_query.fvecs";
+#    GT="E:\Research Work\Datasets\Enron\enron_groundtruth.ivecs" },
 
     # Synthetic datasets
     @{ Name="synthetic_128"; Dim=128;
@@ -65,23 +65,23 @@ $Datasets = @(
     @{ Name="synthetic_1024"; Dim=1024;
     Base="E:\Research Work\Datasets\synthetic_data\synthetic_1024\base.fvecs";
     Query="E:\Research Work\Datasets\synthetic_data\synthetic_1024\query.fvecs";
-    GT="E:\Research Work\Datasets\synthetic_data\synthetic_1024\groundtruth.ivecs" },
+    GT="E:\Research Work\Datasets\synthetic_data\synthetic_1024\groundtruth.ivecs" }
 
-    # Cropped SIFT subsets
-    @{ Name="SIFT_10M"; Dim=128;
-    Base="E:\Research Work\Datasets\Sift1B\bigann_base.bvecs\bigann_10M.bvecs";
-    Query="E:\Research Work\Datasets\Sift1B\bigann_query.bvecs\queries.bvecs";
-    GT="E:\Research Work\Datasets\Sift1B\bigann_gnd\gnd\idx_10M.ivecs" },
-
-    @{ Name="SIFT_50M"; Dim=128;
-    Base="E:\Research Work\Datasets\Sift1B\bigann_base.bvecs\bigann_50M.bvecs";
-    Query="E:\Research Work\Datasets\Sift1B\bigann_query.bvecs\queries.bvecs";
-    GT="E:\Research Work\Datasets\Sift1B\bigann_gnd\gnd\idx_50M.ivecs" },
-
-    @{ Name="SIFT_100M"; Dim=128;
-    Base="E:\Research Work\Datasets\Sift1B\bigann_base.bvecs\bigann_100M.bvecs";
-    Query="E:\Research Work\Datasets\Sift1B\bigann_query.bvecs\queries.bvecs";
-    GT="E:\Research Work\Datasets\Sift1B\bigann_gnd\gnd\idx_100M.ivecs" }
+#    # Cropped SIFT subsets
+#    @{ Name="SIFT_10M"; Dim=128;
+#    Base="E:\Research Work\Datasets\Sift1B\bigann_base.bvecs\bigann_10M.bvecs";
+#    Query="E:\Research Work\Datasets\Sift1B\bigann_query.bvecs\queries.bvecs";
+#    GT="E:\Research Work\Datasets\Sift1B\bigann_gnd\gnd\idx_10M.ivecs" },
+#
+#    @{ Name="SIFT_50M"; Dim=128;
+#    Base="E:\Research Work\Datasets\Sift1B\bigann_base.bvecs\bigann_50M.bvecs";
+#    Query="E:\Research Work\Datasets\Sift1B\bigann_query.bvecs\queries.bvecs";
+#    GT="E:\Research Work\Datasets\Sift1B\bigann_gnd\gnd\idx_50M.ivecs" },
+#
+#    @{ Name="SIFT_100M"; Dim=128;
+#    Base="E:\Research Work\Datasets\Sift1B\bigann_base.bvecs\bigann_100M.bvecs";
+#    Query="E:\Research Work\Datasets\Sift1B\bigann_query.bvecs\queries.bvecs";
+#    GT="E:\Research Work\Datasets\Sift1B\bigann_gnd\gnd\idx_100M.ivecs" }
 )
 
 # ---------- PREP FOLDERS ----------
@@ -110,7 +110,7 @@ function Find-FirstValidDataset {
 }
 
 # ---------- STEP 1: Generate keys if missing ----------
-$ForceRegenKeys = $false  # set to $true to force a fresh keystore (e.g., after class changes)
+$ForceRegenKeys = $true  # set to $true to force a fresh keystore (e.g., after class changes)
 
 function New-Keys {
     $ds = Find-FirstValidDataset
@@ -203,7 +203,7 @@ foreach ($ds in $Datasets) {
         $sw.Stop()
 
         if ($LASTEXITCODE -ne 0) {
-            Write-Warning "Run failed for $name ($label) — see $logFile"
+            Write-Warning "Run failed for $name ($label) -- see $logFile"
             Pop-Location
             continue
         } else {

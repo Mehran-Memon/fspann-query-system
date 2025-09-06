@@ -99,21 +99,21 @@ public class QueryTokenFactory {
             throw new IllegalArgumentException("Vector dimension mismatch: expected " + lshDim + " but got " + q.length);
         }
 
-        KeyVersion curr = keyService.getCurrentVersion();
-        EncryptedPoint ep = cryptoService.encryptToPoint("query", q, curr.getKey());
+        // Use the SAME version as the base token
+        int version = base.getVersion();
+        KeyVersion kv = keyService.getVersion(version);
+        EncryptedPoint ep = cryptoService.encryptToPoint("query", q, kv.getKey());
 
         List<List<Integer>> perTable = lsh.getBucketsForAllTables(q, newTopK, numTables);
         List<List<Integer>> copy = new ArrayList<>(numTables);
         if (perTable == null || perTable.size() != numTables) {
-            for (int t = 0; t < numTables; t++) {
-                copy.add(new ArrayList<>(lsh.getBuckets(q, newTopK, t)));
-            }
+            for (int t = 0; t < numTables; t++) copy.add(new ArrayList<>(lsh.getBuckets(q, newTopK, t)));
         } else {
             for (List<Integer> l : perTable) copy.add(new ArrayList<>(l));
         }
 
-        int total = copy.stream().mapToInt(List::size).sum();
-        logger.debug("Derived token: dim={}, topK={}, tables={}, totalProbes={}", q.length, newTopK, numTables, total);
+        logger.debug("Derived token: dim={}, topK={}, tables={}, totalProbes={}",
+                q.length, newTopK, numTables, copy.stream().mapToInt(List::size).sum());
 
         return new QueryToken(
                 copy,
@@ -122,9 +122,9 @@ public class QueryTokenFactory {
                 q.clone(),
                 newTopK,
                 numTables,
-                "epoch_" + curr.getVersion() + "_dim_" + q.length,
+                base.getEncryptionContext(), // preserve context
                 q.length,
-                curr.getVersion()
+                version                      // preserve version
         );
     }
 }

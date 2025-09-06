@@ -5,6 +5,7 @@ import com.fspann.crypto.CryptoService;
 import com.fspann.loader.GroundtruthManager;
 import com.fspann.query.core.QueryEvaluationResult;
 import com.fspann.query.core.QueryTokenFactory;
+import com.fspann.index.service.SecureLSHIndexService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -47,7 +48,7 @@ public class QueryServiceImpl implements QueryService {
             throw new IllegalArgumentException("Invalid or incomplete QueryToken");
         }
 
-        keyService.rotateIfNeeded();
+//        keyService.rotateIfNeeded();
         KeyVersion queryVersion = resolveKeyVersion(token.getEncryptionContext());
         SecretKey key = queryVersion.getKey();
 
@@ -150,15 +151,22 @@ public class QueryServiceImpl implements QueryService {
             List<QueryResult> retrieved = search(variant);
             long queryDurationMs = (System.nanoTime() - t0) / 1_000_000;
 
-            // NOTE: true candidate count would require an IndexService API; proxy with returned size for now.
-            int candidateCount = indexService.candidateCount(variant);
+            // true candidate count would require an IndexService API; proxy with returned size for now.
+            final int candidateCount;
+            if (indexService instanceof SecureLSHIndexService
+                    && "partitioned".equalsIgnoreCase(SecureLSHIndexService.getMode())) {
+                // In partitioned mode, the engine already executed the lookup — don't do it twice.
+                candidateCount = retrieved.size();
+            } else {
+                candidateCount = indexService.candidateCount(variant);
+            }
 
             EncryptedPointBuffer buf = indexService.getPointBuffer();
             long insertTimeMs = (buf != null) ? buf.getLastBatchInsertTimeMs() : 0;
             int totalFlushed   = (buf != null) ? buf.getTotalFlushedPoints()   : 0;
             int flushThreshold = (buf != null) ? buf.getFlushThreshold()        : 0;
 
-            int tokenSizeBytes = estimateTokenSizeBytes(variant);
+            int tokenSizeBytes = QueryServiceImpl.estimateTokenSizeBytes(baseToken);
             int vectorDim = variant.getDimension();
 
             // Groundtruth
@@ -169,20 +177,12 @@ public class QueryServiceImpl implements QueryService {
             long matchCount = retrieved.stream().map(QueryResult::getId).filter(truthSet::contains).count();
 
             double ratio  = (retrievedCount == 0) ? 0.0 : matchCount / (double) retrievedCount;
-            double recall = (truth.length == 0)     ? 0.0 : matchCount / (double) truth.length;
+            // Recall is now a dataset-level statistic, not per-query/k. Mark as NaN for the row.
+            double recall = Double.NaN;
 
             out.add(new QueryEvaluationResult(
-                    k,
-                    retrievedCount,
-                    ratio,
-                    recall,
-                    queryDurationMs,
-                    insertTimeMs,
-                    candidateCount,
-                    tokenSizeBytes,
-                    vectorDim,
-                    totalFlushed,
-                    flushThreshold
+                    k, retrievedCount, ratio, recall, queryDurationMs, insertTimeMs,
+                    candidateCount, tokenSizeBytes, vectorDim, totalFlushed, flushThreshold
             ));
         }
         return out;
@@ -203,7 +203,7 @@ public class QueryServiceImpl implements QueryService {
         }
     }
 
-    private static int estimateTokenSizeBytes(QueryToken t) {
+    public static int estimateTokenSizeBytes(QueryToken t) {
         int bytes = 0;
         bytes += (t.getIv() != null) ? t.getIv().length : 0;
         bytes += (t.getEncryptedQuery() != null) ? t.getEncryptedQuery().length : 0;
