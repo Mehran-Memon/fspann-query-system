@@ -14,6 +14,7 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 public class QueryServiceImpl implements QueryService {
     private static final Logger logger = LoggerFactory.getLogger(QueryServiceImpl.class);
@@ -127,7 +128,9 @@ public class QueryServiceImpl implements QueryService {
     }
 
     @Override
-    public List<QueryEvaluationResult> searchWithTopKVariants(QueryToken baseToken, int queryIndex, GroundtruthManager gt) {
+    public List<QueryEvaluationResult> searchWithTopKVariants(QueryToken baseToken,
+                                                              int queryIndex,
+                                                              GroundtruthManager gt) {
         Objects.requireNonNull(baseToken, "baseToken");
         List<Integer> topKVariants = List.of(1, 20, 40, 60, 80, 100);
         List<QueryEvaluationResult> out = new ArrayList<>(topKVariants.size());
@@ -148,41 +151,67 @@ public class QueryServiceImpl implements QueryService {
             );
 
             long t0 = System.nanoTime();
-            List<QueryResult> retrieved = search(variant);
+            List<QueryResult> retrievedAll = search(variant);
             long queryDurationMs = (System.nanoTime() - t0) / 1_000_000;
 
-            // true candidate count would require an IndexService API; proxy with returned size for now.
+            // Evaluate strictly on top-k slice (guards if search over-returns)
+            List<QueryResult> retrieved = (retrievedAll == null)
+                    ? Collections.emptyList()
+                    : retrievedAll.subList(0, Math.min(k, retrievedAll.size()));
+            int retrievedCount = retrieved.size();
+
+            // Candidate count (keep your existing behavior)
             final int candidateCount;
             if (indexService instanceof SecureLSHIndexService
                     && "partitioned".equalsIgnoreCase(SecureLSHIndexService.getMode())) {
-                // In partitioned mode, the engine already executed the lookup — don't do it twice.
-                candidateCount = retrieved.size();
+                candidateCount = (retrievedAll == null) ? 0 : retrievedAll.size();
             } else {
                 candidateCount = indexService.candidateCount(variant);
             }
 
             EncryptedPointBuffer buf = indexService.getPointBuffer();
-            long insertTimeMs = (buf != null) ? buf.getLastBatchInsertTimeMs() : 0;
+            long insertTimeMs = (buf != null) ? buf.getLastBatchInsertTimeMs() : 0L;
             int totalFlushed   = (buf != null) ? buf.getTotalFlushedPoints()   : 0;
-            int flushThreshold = (buf != null) ? buf.getFlushThreshold()        : 0;
+            int flushThreshold = (buf != null) ? buf.getFlushThreshold()       : 0;
 
             int tokenSizeBytes = QueryServiceImpl.estimateTokenSizeBytes(baseToken);
             int vectorDim = variant.getDimension();
 
-            // Groundtruth
-            int[] truth = (gt != null) ? safeGt(gt, queryIndex, k) : new int[0];
-            Set<String> truthSet = Arrays.stream(truth).mapToObj(String::valueOf).collect(Collectors.toSet());
+            // --- Groundtruth (per query index, dimension-aware) ---
+            int[] gtArr;
+            try {
+                gtArr = (gt != null) ? gt.getGroundtruth(queryIndex, vectorDim) : new int[0];
+            } catch (Exception e) {
+                gtArr = new int[0]; // be defensive
+            }
+            Set<String> truthSet = (gtArr == null || gtArr.length == 0)
+                    ? Collections.emptySet()
+                    : Arrays.stream(gtArr).mapToObj(String::valueOf).collect(Collectors.toSet());
 
-            int retrievedCount = retrieved.size();
-            long matchCount = retrieved.stream().map(QueryResult::getId).filter(truthSet::contains).count();
+            // --- Hits among top-k ---
+            long hits = retrieved.stream()
+                    .map(QueryResult::getId)
+                    .filter(truthSet::contains)
+                    .count();
 
-            double ratio  = (retrievedCount == 0) ? 0.0 : matchCount / (double) retrievedCount;
-            // Recall is now a dataset-level statistic, not per-query/k. Mark as NaN for the row.
-            double recall = Double.NaN;
+            // --- Safe metrics (no NaN) ---
+            int denomRatio  = retrievedCount;                 // how many we returned (top-k slice)
+            int denomRecall = Math.min(k, truthSet.size());   // how many relevant up to k
+            double ratio    = (denomRatio  == 0) ? 0.0 : (double) hits / denomRatio;
+            double recall   = (denomRecall == 0) ? 0.0 : (double) hits / denomRecall;
 
             out.add(new QueryEvaluationResult(
-                    k, retrievedCount, ratio, recall, queryDurationMs, insertTimeMs,
-                    candidateCount, tokenSizeBytes, vectorDim, totalFlushed, flushThreshold
+                    k,
+                    retrievedCount,
+                    ratio,
+                    recall,
+                    queryDurationMs,
+                    insertTimeMs,
+                    candidateCount,
+                    tokenSizeBytes,
+                    vectorDim,
+                    totalFlushed,
+                    flushThreshold
             ));
         }
         return out;
