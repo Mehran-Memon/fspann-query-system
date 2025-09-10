@@ -48,7 +48,8 @@ public class SecureLSHIndexService implements IndexService {
     private final EvenLSH legacyLsh;              // may be null
 
     // Paper-aligned (partitioned) engine (inject your implementation; can be null)
-    private final PaperSearchEngine paperEngine;
+    private volatile PaperSearchEngine paperEngine;
+    public void setPaperEngine(PaperSearchEngine eng) { this.paperEngine = eng; }
 
     // Write buffer (shared across modes)
     private final EncryptedPointBuffer buffer;
@@ -330,6 +331,7 @@ public class SecureLSHIndexService implements IndexService {
         for (List<Integer> t : perTable) if (t.size() > 1) return true;
         return false;
     }
+
     private static void shrinkWorstTail(List<List<Integer>> perTable) {
         for (List<Integer> t : perTable) {
             int n = t.size();

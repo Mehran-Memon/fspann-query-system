@@ -6,6 +6,8 @@ import com.fspann.loader.GroundtruthManager;
 import com.fspann.query.core.QueryEvaluationResult;
 import com.fspann.query.core.QueryTokenFactory;
 import com.fspann.index.service.SecureLSHIndexService;
+import com.fspann.common.KeyLifeCycleService;
+import com.fspann.common.KeyVersion;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -14,7 +16,7 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
-import java.util.stream.IntStream;
+
 
 public class QueryServiceImpl implements QueryService {
     private static final Logger logger = LoggerFactory.getLogger(QueryServiceImpl.class);
@@ -132,8 +134,8 @@ public class QueryServiceImpl implements QueryService {
                                                               int queryIndex,
                                                               GroundtruthManager gt) {
         Objects.requireNonNull(baseToken, "baseToken");
-        List<Integer> topKVariants = List.of(1, 20, 40, 60, 80, 100);
-        List<QueryEvaluationResult> out = new ArrayList<>(topKVariants.size());
+        final List<Integer> topKVariants = List.of(1, 20, 40, 60, 80, 100);
+        final List<QueryEvaluationResult> out = new ArrayList<>(topKVariants.size());
 
         for (int k : topKVariants) {
             final QueryToken variant = (tokenFactory != null)
@@ -150,86 +152,68 @@ public class QueryServiceImpl implements QueryService {
                     baseToken.getVersion()
             );
 
-            long t0 = System.nanoTime();
-            List<QueryResult> retrievedAll = search(variant);
-            long queryDurationMs = (System.nanoTime() - t0) / 1_000_000;
+            // time this K specifically
+            final long t0 = System.nanoTime();
+            final List<QueryResult> retrievedAll = search(variant);
+            final long queryDurationMs = (System.nanoTime() - t0) / 1_000_000;
 
-            // Evaluate strictly on top-k slice (guards if search over-returns)
-            List<QueryResult> retrieved = (retrievedAll == null)
+            // slice defensively to k
+            final List<QueryResult> retrieved = (retrievedAll == null)
                     ? Collections.emptyList()
                     : retrievedAll.subList(0, Math.min(k, retrievedAll.size()));
-            int retrievedCount = retrieved.size();
+            final int retrievedCount = retrieved.size();
 
-            // Candidate count (keep your existing behavior)
-            final int candidateCount;
-            if (indexService instanceof SecureLSHIndexService
-                    && "partitioned".equalsIgnoreCase(SecureLSHIndexService.getMode())) {
-                candidateCount = (retrievedAll == null) ? 0 : retrievedAll.size();
-            } else {
-                candidateCount = indexService.candidateCount(variant);
+            // candidateCount (same behavior as before)
+            final int candidateCount =
+                    (indexService instanceof SecureLSHIndexService
+                            && "partitioned".equalsIgnoreCase(SecureLSHIndexService.getMode()))
+                            ? (retrievedAll == null ? 0 : retrievedAll.size())
+                            : indexService.candidateCount(variant);
+
+            // ground truth @k — initialize first to avoid definite-assignment warnings
+            int[] gtArr = new int[0];
+            if (gt != null) {
+                try {
+                    gtArr = gt.getGroundtruth(queryIndex, k);
+                } catch (Exception ignore) {
+                    // keep empty gtArr
+                }
             }
 
-            EncryptedPointBuffer buf = indexService.getPointBuffer();
-            long insertTimeMs = (buf != null) ? buf.getLastBatchInsertTimeMs() : 0L;
-            int totalFlushed   = (buf != null) ? buf.getTotalFlushedPoints()   : 0;
-            int flushThreshold = (buf != null) ? buf.getFlushThreshold()       : 0;
-
-            int tokenSizeBytes = QueryServiceImpl.estimateTokenSizeBytes(baseToken);
-            int vectorDim = variant.getDimension();
-
-            // --- Groundtruth (per query index, dimension-aware) ---
-            int[] gtArr;
-            try {
-                gtArr = (gt != null) ? gt.getGroundtruth(queryIndex, vectorDim) : new int[0];
-            } catch (Exception e) {
-                gtArr = new int[0]; // be defensive
-            }
-            Set<String> truthSet = (gtArr == null || gtArr.length == 0)
+            final Set<String> truthSet = (gtArr.length == 0)
                     ? Collections.emptySet()
                     : Arrays.stream(gtArr).mapToObj(String::valueOf).collect(Collectors.toSet());
 
-            // --- Hits among top-k ---
-            long hits = retrieved.stream()
-                    .map(QueryResult::getId)
-                    .filter(truthSet::contains)
-                    .count();
+            final long hits = truthSet.isEmpty()
+                    ? 0L
+                    : retrieved.stream().map(QueryResult::getId).filter(truthSet::contains).count();
 
-            // --- Safe metrics (no NaN) ---
-            int denomRatio  = retrievedCount;                 // how many we returned (top-k slice)
-            int denomRecall = Math.min(k, truthSet.size());   // how many relevant up to k
-            double ratio    = (denomRatio  == 0) ? 0.0 : (double) hits / denomRatio;
-            double recall   = (denomRecall == 0) ? 0.0 : (double) hits / denomRecall;
+            final int denomRatio  = retrievedCount;
+            final int denomRecall = Math.min(k, gtArr.length);
+            final double ratio    = (denomRatio  == 0) ? 0.0 : (double) hits / denomRatio;
+            final double recall   = (denomRecall == 0) ? 0.0 : (double) hits / denomRecall;
+
+            final EncryptedPointBuffer buf = indexService.getPointBuffer();
+            final long insertTimeMs   = (buf != null) ? buf.getLastBatchInsertTimeMs() : 0L;
+            final int  totalFlushed   = (buf != null) ? buf.getTotalFlushedPoints()   : 0;
+            final int  flushThreshold = (buf != null) ? buf.getFlushThreshold()       : 0;
+            final int  tokenSizeBytes = QueryServiceImpl.estimateTokenSizeBytes(baseToken);
+            final int  vectorDim      = variant.getDimension();
 
             out.add(new QueryEvaluationResult(
-                    k,
-                    retrievedCount,
-                    ratio,
-                    recall,
-                    queryDurationMs,
-                    insertTimeMs,
-                    candidateCount,
-                    tokenSizeBytes,
-                    vectorDim,
-                    totalFlushed,
-                    flushThreshold
+                    k, retrievedCount, ratio, recall,
+                    queryDurationMs, insertTimeMs, candidateCount,
+                    tokenSizeBytes, vectorDim, totalFlushed, flushThreshold
             ));
         }
+
         return out;
     }
 
-    private static List<List<Integer>> deepCopy(List<List<Integer>> src) {
+        private static List<List<Integer>> deepCopy(List<List<Integer>> src) {
         List<List<Integer>> out = new ArrayList<>(src.size());
         for (List<Integer> l : src) out.add(new ArrayList<>(l));
         return out;
-    }
-
-    private static int[] safeGt(GroundtruthManager gt, int idx, int k) {
-        try {
-            int[] arr = gt.getGroundtruth(idx, k);
-            return (arr != null) ? arr : new int[0];
-        } catch (Exception e) {
-            return new int[0];
-        }
     }
 
     public static int estimateTokenSizeBytes(QueryToken t) {
