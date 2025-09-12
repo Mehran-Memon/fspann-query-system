@@ -265,12 +265,12 @@ public class SecureLSHIndexService implements IndexService {
     public List<EncryptedPoint> lookup(QueryToken token) {
         Objects.requireNonNull(token, "QueryToken cannot be null");
 
+        // ---- Partitioned path (paper engine) ----
         if (isPartitioned() && paperEngine != null) {
-            // Paper-aligned path: TagQuery → subset(s) → client-side kNN (within engine)
             return paperEngine.lookup(token);
         }
 
-        // -------- Legacy multiprobe path --------
+        // ---- Legacy multiprobe path ----
         int dim = token.getDimension();
         DimensionContext ctx = dimensionContexts.get(dim);
         if (ctx == null) return Collections.emptyList();
@@ -282,11 +282,11 @@ public class SecureLSHIndexService implements IndexService {
                 ctx.getLsh(), token.getPlaintextQuery(),
                 idx.getNumHashTables(), token.getTopK());
 
-        // Adaptive fanout clamp: default 12% (lower values can crush recall)
+        // Adaptive fanout clamp: do NOT shrink below K (with a small floor for stability)
         double target = Double.parseDouble(System.getProperty("fanout.target", "0.12"));
         int N = Math.max(1, idx.getPointCount());
 
-        // ensure perTable is mutable (if it came from token)
+        // ensure perTable mutable if it came from token
         if (token.hasPerTable()) {
             List<List<Integer>> cp = new ArrayList<>(perTable.size());
             for (List<Integer> l : perTable) cp.add(new ArrayList<>(l));
@@ -294,8 +294,9 @@ public class SecureLSHIndexService implements IndexService {
         }
 
         int cand = idx.candidateCount(perTable);
-        while ((cand / (double) N) > target && canShrink(perTable)) {
-            shrinkWorstTail(perTable); // drop worst tails first
+        final int needAtLeast = Math.max(token.getTopK(), 100);
+        while ((cand / (double) N) > target && cand > needAtLeast && canShrink(perTable)) {
+            shrinkWorstTail(perTable);
             cand = idx.candidateCount(perTable);
         }
 
@@ -311,20 +312,7 @@ public class SecureLSHIndexService implements IndexService {
                 token.getVersion()
         );
 
-        List<EncryptedPoint> candidates = idx.queryEncrypted(perTableToken);
-        if (candidates.isEmpty()) return Collections.emptyList();
-
-        // Consistency guard w.r.t. metadata version/dimension
-        Map<String, Map<String, String>> metas = fetchMetadata(candidates);
-        List<EncryptedPoint> filtered = new ArrayList<>(candidates.size());
-        for (EncryptedPoint pt : candidates) {
-            Map<String, String> m = metas.get(pt.getId());
-            if (m == null) { filtered.add(pt); continue; }
-            boolean versionOk = Integer.toString(pt.getVersion()).equals(m.get("version"));
-            boolean dimOk = (m.get("dim") == null) || Integer.toString(pt.getVectorLength()).equals(m.get("dim"));
-            if (versionOk && dimOk) filtered.add(pt);
-        }
-        return filtered;
+        return idx.queryEncrypted(perTableToken);
     }
 
     private static boolean canShrink(List<List<Integer>> perTable) {

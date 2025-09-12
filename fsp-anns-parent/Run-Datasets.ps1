@@ -23,9 +23,7 @@ $CleanAllNow = $false  # set $true to wipe ALL per-dataset metadata under $MetaR
 # Force key (re)generation when jar changed / class schema changed
 $ForceRegenKeys = $false
 
-# ----------------- EXPLORE/WIDTH CONFIGS -----------------
 # ----------------- EXPLORE/WIDTH CONFIGS (ordered) -----------------
-
 $Configs = @(
 # 💨 throughput: smallest fanout, fewer probes, coarse partitions → ratio ~1.3–1.4, best ART
     @{ Label="throughput";
@@ -247,6 +245,26 @@ foreach ($ds in $Datasets) {
 
         Write-Host "=== Running $name ($label) dim=$dim (Xmx=$XmxThis) ==="
 
+        # ---- Per-config widening / target tuning for paper engine ----
+        $passFlags = @()
+        switch ($label) {
+            "throughput" {
+                $passFlags += "-Dpaper.target.mult=1.55"
+                $passFlags += "-Dpaper.expand.radius.max=2"
+                $passFlags += "-Dpaper.expand.radius.hard=3"
+            }
+            "balanced" {
+                $passFlags += "-Dpaper.target.mult=1.60"
+                $passFlags += "-Dpaper.expand.radius.max=2"
+                $passFlags += "-Dpaper.expand.radius.hard=4"
+            }
+            "recall_first" {
+                $passFlags += "-Dpaper.target.mult=1.70"
+                $passFlags += "-Dpaper.expand.radius.max=2"
+                $passFlags += "-Dpaper.expand.radius.hard=5"
+            }
+        }
+
         # JVM/system tuning
         $jvm = @(
             "-Xms$Xms","-Xmx$XmxThis",
@@ -264,9 +282,9 @@ foreach ($ds in $Datasets) {
             "-Dpaper.m=$($cfg.PaperM)",
             "-Dpaper.lambda=$($cfg.PaperLambda)",
             "-Dpaper.divisions=$($cfg.PaperDivisions)",
-            "-Dpaper.maxCandidates=$($cfg.PaperMaxCandidates)",
-
-            # evaluation wiring
+            "-Dpaper.maxCandidates=$($cfg.PaperMaxCandidates)"
+        ) + $passFlags + @(
+        # evaluation wiring
             "-Deval.computePrecision=false",
             "-Dbase.path=$base",
             "-Daudit.enable=false",
@@ -274,7 +292,6 @@ foreach ($ds in $Datasets) {
             "-Dfile.encoding=UTF-8",
             "-jar", (Resolve-Path $JarPath)
         )
-
 
         $app = @(
             (Resolve-Path $ConfigPath),

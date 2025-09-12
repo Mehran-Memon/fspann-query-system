@@ -386,7 +386,7 @@ public class ForwardSecureANNSystem {
         if (topK <= 0) throw new IllegalArgumentException("TopK must be positive");
 
         double noiseScale = (System.getProperty("cloak.noise") != null)
-                ? NOISE_SCALE
+                ? Double.parseDouble(System.getProperty("cloak.noise"))
                 : (topK <= 20 ? DEFAULT_NOISE_SCALE / 2 : DEFAULT_NOISE_SCALE);
         double[] cloaked = new double[queryVector.length];
         Random r = new Random();
@@ -924,49 +924,103 @@ public class ForwardSecureANNSystem {
 
    //lightweight, zero-copy random-access reader
     static final class BaseVectorReader implements AutoCloseable {
-        private final FileChannel ch;
-        private final MappedByteBuffer map;
-        private final boolean bvecs;
-        private final int dim;
-        private final int recordBytes;
-        private final int count; // optional: derived if file size known
+       private final FileChannel ch;
+       private final MappedByteBuffer map;
+       private final boolean bvecs;
+       private final int dim;
+       private final int recordBytes;
+       private final boolean streaming;
+       // per-thread direct buffer for streaming mode
+       private final ThreadLocal<ByteBuffer> tlBuf;
+       private final int count; // optional: derived if file size known
 
-        // fvecs: [int32 dim][float dim]; bvecs: [int32 dim][uint8 dim]
-        static BaseVectorReader open(Path path, int dim, boolean bvecs) throws IOException {
-            FileChannel ch = FileChannel.open(path, StandardOpenOption.READ);
-            long size = ch.size();
-            int rec = 4 + (bvecs ? dim : dim * 4);
-            int cnt = (int)(size / rec);
-            MappedByteBuffer map = ch.map(FileChannel.MapMode.READ_ONLY, 0, size).load();
-            map.order(ByteOrder.LITTLE_ENDIAN);
-            return new BaseVectorReader(ch, map, bvecs, dim, rec, cnt);
-        }
-        private BaseVectorReader(FileChannel ch, MappedByteBuffer map, boolean bvecs, int dim, int rec, int cnt) {
-            this.ch = ch; this.map = map; this.bvecs = bvecs; this.dim = dim; this.recordBytes = rec; this.count = cnt;
-        }
-        double l2(double[] q, int id) {
-            int offset = id * recordBytes;
-            // skip stored dim (first 4 bytes)
-            int pos = offset + 4;
-            double sum = 0.0;
-            if (bvecs) {
-                for (int i = 0; i < dim; i++) {
-                    int ui = map.get(pos + i) & 0xFF;
-                    double d = q[i] - ui;
-                    sum += d * d;
-                }
-            } else {
-                // fvecs floats
-                for (int i = 0; i < dim; i++) {
-                    float v = map.getFloat(pos + i * 4);
-                    double d = q[i] - v;
-                    sum += d * d;
-                }
-            }
-            return Math.sqrt(sum);
-        }
-        @Override public void close() throws IOException { ch.close(); }
-    }
+
+       static BaseVectorReader open(Path path, int dim, boolean bvecs) throws IOException {
+           FileChannel ch = FileChannel.open(path, StandardOpenOption.READ);
+           long size = ch.size();
+           int rec = 4 + (bvecs ? dim : dim * 4);
+           int cnt = (int) (size / rec);
+
+           if (size <= (long) Integer.MAX_VALUE) {
+               MappedByteBuffer map = ch.map(FileChannel.MapMode.READ_ONLY, 0, size).load();
+               map.order(ByteOrder.LITTLE_ENDIAN);
+               return new BaseVectorReader(ch, map, bvecs, dim, rec, cnt, /*streaming*/ false);
+           } else {
+               // fall back to streaming reads
+               return new BaseVectorReader(ch, null, bvecs, dim, rec, cnt, /*streaming*/ true);
+           }
+       }
+
+       private BaseVectorReader(FileChannel ch, MappedByteBuffer map, boolean bvecs, int dim,
+                                int rec, int cnt, boolean streaming) {
+           this.ch = ch;
+           this.map = map;
+           this.bvecs = bvecs;
+           this.dim = dim;
+           this.recordBytes = rec;
+           this.count = cnt;
+           this.streaming = streaming;
+           this.tlBuf = streaming
+                   ? ThreadLocal.withInitial(() -> ByteBuffer.allocateDirect(recordBytes).order(ByteOrder.LITTLE_ENDIAN))
+                   : null;
+       }
+
+       double l2(double[] q, int id) {
+           final int skipDimBytes = 4;
+           if (!streaming) {
+               int offset = id * recordBytes;
+               int pos = offset + skipDimBytes;
+               double sum = 0.0;
+               if (bvecs) {
+                   for (int i = 0; i < dim; i++) {
+                       int ui = map.get(pos + i) & 0xFF;
+                       double d = q[i] - ui;
+                       sum += d * d;
+                   }
+               } else {
+                   for (int i = 0; i < dim; i++) {
+                       float v = map.getFloat(pos + i * 4);
+                       double d = q[i] - v;
+                       sum += d * d;
+                   }
+               }
+               return Math.sqrt(sum);
+           } else {
+               try {
+                   long offset = (long) id * (long) recordBytes;
+                   ByteBuffer buf = tlBuf.get();
+                   buf.clear();
+                   // read exactly one record
+                   int n = ch.read(buf, offset);
+                   if (n < recordBytes) throw new IOException("Short read at id=" + id + " bytes=" + n);
+                   buf.flip();
+                   buf.getInt(); // skip stored dim
+                   double sum = 0.0;
+                   if (bvecs) {
+                       for (int i = 0; i < dim; i++) {
+                           int ui = buf.get() & 0xFF;
+                           double d = q[i] - ui;
+                           sum += d * d;
+                       }
+                   } else {
+                       for (int i = 0; i < dim; i++) {
+                           float v = buf.getFloat();
+                           double d = q[i] - v;
+                           sum += d * d;
+                       }
+                   }
+                   return Math.sqrt(sum);
+               } catch (IOException ioe) {
+                   throw new RuntimeException(ioe);
+               }
+           }
+       }
+
+       @Override
+       public void close() throws IOException {
+           ch.close();
+       }
+   }
 
     /** Dump profiler CSVs, query list, and copies of keys/metadata/points to outDir. */
     public void exportArtifacts(Path outDir) throws IOException {

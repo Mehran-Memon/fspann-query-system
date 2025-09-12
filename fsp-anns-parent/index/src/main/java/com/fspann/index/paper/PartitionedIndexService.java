@@ -111,39 +111,93 @@ public class PartitionedIndexService implements PaperSearchEngine {
     @Override
     public List<EncryptedPoint> lookup(QueryToken token) {
         Objects.requireNonNull(token, "QueryToken");
-        int d = token.getDimension();
-        DimensionState S = dims.get(d);
+        final int d = token.getDimension();
+        final DimensionState S = dims.get(d);
         if (S == null) return Collections.emptyList();
 
         ensureBuilt(S); // build once if not built yet
 
-        // Collect candidates across ℓ divisions via tag queries
-        Set<String> seen = new LinkedHashSet<>();
-        List<EncryptedPoint> cands = new ArrayList<>();
+        // ---- Tunables (via JVM props) ----
+        final int K = Math.max(1, token.getTopK());
+        final double targetMult = Double.parseDouble(System.getProperty("paper.target.mult", "1.6"));
+        final int maxRadius = Integer.getInteger("paper.expand.radius.max", 2);
+        final int maxRadiusHard = Integer.getInteger("paper.expand.radius.hard", Math.max(3, maxRadius + 1));
 
-        double[] q = token.getPlaintextQuery();
+        // modest overfetch per division; scale with ℓ and K
+        final int perDivTarget = Math.max(2, (int) Math.ceil(targetMult * K / Math.max(1, divisions)));
+        final int perDivTarget2 = Math.max(perDivTarget, (int) Math.ceil(2.0 * K / Math.max(1, divisions))); // for 2nd pass
+
+        final Set<String> seen = new LinkedHashSet<>();
+        final List<EncryptedPoint> cands = new ArrayList<>();
+        final double[] q = token.getPlaintextQuery();
+
+        // ---------- PASS 1: direct hits + limited symmetric expansion ----------
         for (DivisionState div : S.divisions) {
             if (div.I.isEmpty()) continue;
             BitSet Cq = Coding.C(q, div.G);
-            List<String> tags = TagQuery.buildTags(Cq, div.I);
-            for (String t : tags) {
-                List<EncryptedPoint> subset = div.tagToSubset.get(t);
-                if (subset == null) continue;
-                for (EncryptedPoint p : subset) {
-                    if (seen.add(p.getId())) {
-                        cands.add(p);
-                        if (cands.size() >= maxCandidates) break;
+
+            List<Integer> hitIdxs = findCoveringIntervals(Cq, div.I);
+            if (hitIdxs.isEmpty()) continue;
+
+            int gatheredThisDiv = 0;
+            for (int idx : hitIdxs) {
+                int radius = 0;
+                while (radius <= maxRadius && gatheredThisDiv < perDivTarget) {
+                    for (int j = idx - radius; j <= idx + radius; j++) {
+                        if (j < 0 || j >= div.I.size()) continue;
+                        GreedyPartitioner.SubsetBounds sb = div.I.get(j);
+                        List<EncryptedPoint> subset = div.tagToSubset.get(sb.tag);
+                        if (subset == null) continue;
+
+                        for (EncryptedPoint p : subset) {
+                            if (seen.add(p.getId())) {
+                                cands.add(p);
+                                gatheredThisDiv++;
+                                if (cands.size() >= maxCandidates) return cands;
+                                if (cands.size() >= K) return cands; // early stop as soon as we have ≥K globally
+                                if (gatheredThisDiv >= perDivTarget) break;
+                            }
+                        }
                     }
+                    radius++;
                 }
             }
         }
+        if (cands.size() >= K || S.divisions.isEmpty()) return cands;
 
-        if (cands.isEmpty()) return cands;
+        // ---------- PASS 2: gentle widening if still short of K ----------
+        final int deficit = K - cands.size();
+        if (deficit > 0) {
+            for (DivisionState div : S.divisions) {
+                if (div.I.isEmpty()) continue;
+                BitSet Cq = Coding.C(q, div.G);
 
-        // Client-side exact kNN re-rank over the decrypted plaintext vectors.
-        // NOTE: This reference engine returns the encrypted points only. In your
-        // full system, decrypt and score here (Euclidean L2) and then select topK.
-        // For now, we just return unique candidates to keep glue code minimal.
+                List<Integer> hitIdxs = findCoveringIntervals(Cq, div.I);
+                if (hitIdxs.isEmpty()) continue;
+
+                int gatheredThisDiv = 0;
+                for (int idx : hitIdxs) {
+                    for (int radius = maxRadius + 1; radius <= maxRadiusHard && gatheredThisDiv < perDivTarget2; radius++) {
+                        for (int j = idx - radius; j <= idx + radius; j++) {
+                            if (j < 0 || j >= div.I.size()) continue;
+                            GreedyPartitioner.SubsetBounds sb = div.I.get(j);
+                            List<EncryptedPoint> subset = div.tagToSubset.get(sb.tag);
+                            if (subset == null) continue;
+
+                            for (EncryptedPoint p : subset) {
+                                if (seen.add(p.getId())) {
+                                    cands.add(p);
+                                    gatheredThisDiv++;
+                                    if (cands.size() >= maxCandidates) return cands;
+                                    if (cands.size() >= K) return cands; // stop as soon as we hit K
+                                }
+                            }
+                        }
+                    }
+                }
+                if (cands.size() >= K) break;
+            }
+        }
         return cands;
     }
 
@@ -191,6 +245,27 @@ public class PartitionedIndexService implements PaperSearchEngine {
     // --------------------------------------------------------------------
     // Build helpers
     // --------------------------------------------------------------------
+
+    static List<Integer> findCoveringIntervals(BitSet code, List<GreedyPartitioner.SubsetBounds> I) {
+        if (I.isEmpty()) return Collections.emptyList();
+        GreedyPartitioner.CodeComparator cmp = new GreedyPartitioner.CodeComparator(I.get(0).codeBits);
+        // binary search lower-bound
+        int lo = 0, hi = I.size() - 1, ans = -1;
+        while (lo <= hi) {
+            int mid = (lo + hi) >>> 1;
+            if (cmp.compare(I.get(mid).lower, code) <= 0) { ans = mid; lo = mid + 1; }
+            else { hi = mid - 1; }
+        }
+        if (ans < 0) return Collections.emptyList();
+        // walk around ans for any intervals that include code
+        List<Integer> hits = new ArrayList<>();
+        for (int j = Math.max(0, ans - 1); j <= Math.min(I.size() - 1, ans + 1); j++) {
+            if (cmp.compare(I.get(j).lower, code) <= 0 && cmp.compare(code, I.get(j).upper) <= 0) {
+                hits.add(j);
+            }
+        }
+        return hits.isEmpty() ? List.of(Math.max(0, Math.min(ans, I.size() - 1))) : hits;
+    }
 
     private void maybeBuild(DimensionState S) {
         if (isBuilt(S)) return;
