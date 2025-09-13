@@ -62,6 +62,8 @@ public class ForwardSecureANNSystem {
     final int OVERRIDE_ROWS   = Integer.getInteger("lsh.rowsPerBand", -1);
     final int OVERRIDE_PROBE  = Integer.getInteger("probe.shards", -1);
     final double NOISE_SCALE  = Double.parseDouble(System.getProperty("cloak.noise", "0.0"));
+    private static final boolean WRITE_GLOBAL_RECALL =
+            Boolean.getBoolean("eval.writeGlobalRecall");
 
     // artifact/export helpers (now aligned with FsPaths)
     private final Path metaDBPath;
@@ -610,18 +612,17 @@ public class ForwardSecureANNSystem {
                     }).collect(Collectors.toList())
             );
 
-            // (optional) global recall block — keep commented for speed
-            // if (computePrecision) {
-            //     for (int k : K_VARIANTS) {
-            //         QueryToken tk = factoryForDim(dim).derive(baseToken, k);
-            //         List<QueryResult> retrieved = queryService.search(tk);
-            //         int[] truth = groundtruth.getGroundtruth(q, k);
-            //         Set<String> truthSet = Arrays.stream(truth).mapToObj(String::valueOf).collect(Collectors.toSet());
-            //         long matches = retrieved.stream().map(QueryResult::getId).filter(truthSet::contains).count();
-            //         globalMatches.put(k, globalMatches.get(k) + matches);
-            //         globalTruth.put(k,   globalTruth.get(k)   + truth.length);
-            //     }
-            // }
+             if (computePrecision) {
+                 for (int k : K_VARIANTS) {
+                     QueryToken tk = factoryForDim(dim).derive(baseToken, k);
+                     List<QueryResult> retrieved = queryService.search(tk);
+                     int[] truth = groundtruth.getGroundtruth(q, k);
+                     Set<String> truthSet = Arrays.stream(truth).mapToObj(String::valueOf).collect(Collectors.toSet());
+                     long matches = retrieved.stream().map(QueryResult::getId).filter(truthSet::contains).count();
+                     globalMatches.put(k, globalMatches.get(k) + matches);
+                     globalTruth.put(k,   globalTruth.get(k)   + truth.length);
+                 }
+             }
 
             QueryEvaluationResult atK = enriched.stream()
                     .filter(e -> e.getTopKRequested() == AUDIT_K)
@@ -632,7 +633,9 @@ public class ForwardSecureANNSystem {
             totalQueryTime += (long)(clientMs * 1_000_000L);
         }
 
-        // If you re-enable global recall above, also call writeGlobalRecallCsv(...) here.
+        if (WRITE_GLOBAL_RECALL && computePrecision) {
+            writeGlobalRecallCsv(dim, K_VARIANTS, globalMatches, globalTruth);
+        }
     }
 
     public void runQueries(String queryPath, int dim, String groundtruthPath) throws IOException {
@@ -733,17 +736,17 @@ public class ForwardSecureANNSystem {
             );
 
             // (optional) global recall — keep commented for speed
-            // if (computePrecision) {
-            //     for (int k : K_VARIANTS) {
-            //         QueryToken tk = factoryForDim(dim).derive(baseToken, k);
-            //         List<QueryResult> retrieved = queryService.search(tk);
-            //         int[] truth = groundtruth.getGroundtruth(q, k);
-            //         Set<String> truthSet = Arrays.stream(truth).mapToObj(String::valueOf).collect(Collectors.toSet());
-            //         long matches = retrieved.stream().map(QueryResult::getId).filter(truthSet::contains).count();
-            //         globalMatches.put(k, globalMatches.get(k) + matches);
-            //         globalTruth.put(k,   globalTruth.get(k)   + truth.length);
-            //     }
-            // }
+             if (computePrecision) {
+                 for (int k : K_VARIANTS) {
+                     QueryToken tk = factoryForDim(dim).derive(baseToken, k);
+                     List<QueryResult> retrieved = queryService.search(tk);
+                     int[] truth = groundtruth.getGroundtruth(q, k);
+                     Set<String> truthSet = Arrays.stream(truth).mapToObj(String::valueOf).collect(Collectors.toSet());
+                     long matches = retrieved.stream().map(QueryResult::getId).filter(truthSet::contains).count();
+                     globalMatches.put(k, globalMatches.get(k) + matches);
+                     globalTruth.put(k,   globalTruth.get(k)   + truth.length);
+                 }
+             }
 
             QueryEvaluationResult atK = enriched.stream()
                     .filter(e -> e.getTopKRequested() == AUDIT_K)
@@ -754,7 +757,9 @@ public class ForwardSecureANNSystem {
             totalQueryTime += (long)(clientMs * 1_000_000L);
         }
 
-        // If you re-enable global recall above, also call writeGlobalRecallCsv(...) here.
+        if (WRITE_GLOBAL_RECALL && computePrecision) {
+            writeGlobalRecallCsv(dim, K_VARIANTS, globalMatches, globalTruth);
+        }
     }
 
     /* ---------------------- Utilities & Lifecycle ---------------------- */

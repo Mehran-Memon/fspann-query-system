@@ -1,13 +1,13 @@
 # ============================
-# FSP-ANN batch runner (3 configs)
+# FSP-ANN batch runner (3 configs) — full indexing + querying
 # ============================
 
 # ---------- SETTINGS ----------
 $JarPath    = "F:\fspann-query-system\fsp-anns-parent\api\target\api-0.0.1-SNAPSHOT-jar-with-dependencies.jar"
 $ConfigPath = "F:\fspann-query-system\fsp-anns-parent\config\src\main\resources\config.json"
-$KeysPath   = "G:\fsp-run\metadata\keys.ser"
-$MetaRoot   = "G:\fsp-run\metadata"   # per-dataset subfolders will be created
-$OutRoot    = "G:\fsp-run\out"        # where logs/CSVs will go
+$KeysPath   = "G:\fsp-run\metadata\keys.ser"   # will be created if missing
+$MetaRoot   = "G:\fsp-run\metadata"            # per-dataset subfolders will be created
+$OutRoot    = "G:\fsp-run\out"                 # where logs/CSVs will go
 
 # Default JVM sizing (dataset-specific bump is applied later)
 $Xms = "4g"
@@ -20,22 +20,19 @@ $Java = "java"
 $CleanPerRun = $true   # clean metadata/points/results for each dataset×config before running
 $CleanAllNow = $false  # set $true to wipe ALL per-dataset metadata under $MetaRoot once and exit
 
-# Force key (re)generation when jar changed / class schema changed
-$ForceRegenKeys = $false
-
 # ----------------- EXPLORE/WIDTH CONFIGS (ordered) -----------------
 $Configs = @(
-# 💨 throughput: smallest fanout, fewer probes, coarse partitions → ratio ~1.3–1.4, best ART
+# 💨 throughput
     @{ Label="throughput";
     ProbePerTable=6;  ProbeBitsMax=1; FanoutTarget=0.008;
     PaperM=10; PaperLambda=5; PaperDivisions=6; PaperMaxCandidates=12000 },
 
-    # ⚖️ balanced: mid fanout/probes, moderate partitions → ratio ~1.2–1.35, good ART
+    # ⚖️ balanced
     @{ Label="balanced";
     ProbePerTable=12; ProbeBitsMax=1; FanoutTarget=0.012;
     PaperM=12; PaperLambda=6; PaperDivisions=8; PaperMaxCandidates=20000 },
 
-    # 🎯 recall-first: wider fanout/probes, finer partitions → ratio ~1.0–1.15, higher ART
+    # 🎯 recall-first
     @{ Label="recall_first";
     ProbePerTable=20; ProbeBitsMax=2; FanoutTarget=0.025;
     PaperM=14; PaperLambda=7; PaperDivisions=10; PaperMaxCandidates=50000 }
@@ -103,13 +100,6 @@ function Ensure-Files([string]$base,[string]$query,[string]$gt) {
     return $ok
 }
 
-function Find-FirstValidDataset {
-    foreach ($d in $Datasets) {
-        if (Ensure-Files $d.Base $d.Query $d.GT) { return $d }
-    }
-    return $null
-}
-
 # ---------- FAST DELETE ----------
 function Invoke-FastDelete([string]$PathToDelete) {
     if (-not (Test-Path -LiteralPath $PathToDelete)) { return }
@@ -164,55 +154,7 @@ if ($CleanAllNow) {
     return
 }
 
-# ---------- STEP 2: Generate keys if missing ----------
-function New-Keys {
-    $ds = Find-FirstValidDataset
-    if ($null -eq $ds) { throw "No valid dataset found to generate keys. Check your dataset paths." }
-
-    Write-Host "Generating keys.ser (query-only) using dataset: $($ds.Name)"
-    $metaDir = Join-Path $MetaRoot $ds.Name
-    New-Item -ItemType Directory -Force -Path $metaDir | Out-Null
-
-    $jvm = @(
-        "-Xms$Xms","-Xmx$Xmx",
-        "-Dquery.only=false",
-        "-Drestore.version=1",
-        "-Ddisable.exit=true",
-        "-Deval.writeGlobalRecall=true",
-        "-jar", (Resolve-Path $JarPath)
-    )
-
-    $args = @(
-        (Resolve-Path $ConfigPath),
-        "POINTS_ONLY",
-        $ds.Query,
-        $KeysPath,
-        [string]$ds.Dim,
-        (Resolve-Path $metaDir),
-        $ds.GT,
-        "100000"
-    )
-
-    & $Java @jvm @args
-    if (-not (Test-Path -LiteralPath $KeysPath)) {
-        throw "Failed to generate keys.ser"
-    }
-    Write-Host "keys.ser generated: $KeysPath"
-}
-
-# If keys missing or forced
-$needKeys = -not (Test-Path -LiteralPath $KeysPath)
-if (-not $needKeys) {
-    $jarNewer = (Get-Item $JarPath).LastWriteTimeUtc -gt (Get-Item $KeysPath).LastWriteTimeUtc
-    if ($ForceRegenKeys -or $jarNewer) {
-        Write-Host "Removing incompatible/outdated keys.ser..."
-        Remove-Item -LiteralPath $KeysPath -Force -ErrorAction SilentlyContinue
-        $needKeys = $true
-    }
-}
-if ($needKeys) { New-Keys }
-
-# ---------- STEP 3: RUN ALL DATASETS x CONFIGS ----------
+# ---------- STEP 2: RUN ALL DATASETS x CONFIGS ----------
 $CombinedTopK   = @()
 $CombinedRecall = @()
 $CombinedTopKPath    = Join-Path $OutRoot "all_datasets_topk_eval.csv"
@@ -250,21 +192,9 @@ foreach ($ds in $Datasets) {
         # ---- Per-config widening / target tuning for paper engine ----
         $passFlags = @()
         switch ($label) {
-            "throughput" {
-                $passFlags += "-Dpaper.target.mult=1.55"
-                $passFlags += "-Dpaper.expand.radius.max=2"
-                $passFlags += "-Dpaper.expand.radius.hard=3"
-            }
-            "balanced" {
-                $passFlags += "-Dpaper.target.mult=1.60"
-                $passFlags += "-Dpaper.expand.radius.max=2"
-                $passFlags += "-Dpaper.expand.radius.hard=4"
-            }
-            "recall_first" {
-                $passFlags += "-Dpaper.target.mult=1.70"
-                $passFlags += "-Dpaper.expand.radius.max=2"
-                $passFlags += "-Dpaper.expand.radius.hard=5"
-            }
+            "throughput"   { $passFlags += "-Dpaper.target.mult=1.55"; $passFlags += "-Dpaper.expand.radius.max=2"; $passFlags += "-Dpaper.expand.radius.hard=3" }
+            "balanced"     { $passFlags += "-Dpaper.target.mult=1.60"; $passFlags += "-Dpaper.expand.radius.max=2"; $passFlags += "-Dpaper.expand.radius.hard=4" }
+            "recall_first" { $passFlags += "-Dpaper.target.mult=1.70"; $passFlags += "-Dpaper.expand.radius.max=2"; $passFlags += "-Dpaper.expand.radius.hard=5" }
         }
 
         # JVM/system tuning
@@ -286,10 +216,17 @@ foreach ($ds in $Datasets) {
             "-Dpaper.divisions=$($cfg.PaperDivisions)",
             "-Dpaper.maxCandidates=$($cfg.PaperMaxCandidates)",
             "-Dpaper.buildThreshold=1000",
-            "-Dindex.writeThrough=true"
+
+            # write-through on so points hit Rocks/points immediately
+            "-Dindex.writeThrough=true",
+
+            # full scale (index + query). To run in query-only later:
+            # "-Dquery.only=true","-Drestore.version=<N>"
+            "-Dquery.only=false"
         ) + $passFlags + @(
-            "-Deval.computePrecision=false",
-            "-Dbase.path=$base",
+        # evaluation wiring
+            "-Deval.computePrecision=true",   # enables precision/ratio metrics in app
+            "-Dbase.path=$base",              # for distance-ratio computation
             "-Daudit.enable=false",
             "-Dexport.artifacts=true",
             "-Dfile.encoding=UTF-8",

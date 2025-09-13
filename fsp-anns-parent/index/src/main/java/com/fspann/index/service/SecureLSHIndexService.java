@@ -230,23 +230,22 @@ public class SecureLSHIndexService implements IndexService {
         Objects.requireNonNull(id, "Point ID cannot be null");
         Objects.requireNonNull(vector, "Vector cannot be null");
 
-        // 1) Encrypt once (shared across modes)
+        // Encrypt first (shared across modes)
         EncryptedPoint enc = crypto.encrypt(id, vector);
 
-        // 2) Paper-mode: placement happens in the paper engine
+        // ---- Partitioned path (paper engine) ----
         if (isPartitioned() && paperEngine != null) {
-            paperEngine.insert(enc, vector);    // owns coding/partitioning
-
-            // 3) Mirror legacy semantics: hold in memory + persist to Rocks
+            // Keep cache hot for quick fetch/delete
             indexedPoints.put(enc.getId(), enc);
 
+            // Write-through persistence (Rocks + buffer + key ops)
             if (writeThrough) {
                 buffer.add(enc);
 
                 Map<String, String> metadata = new HashMap<>();
                 metadata.put("version", String.valueOf(enc.getVersion()));
-                metadata.put("dim", String.valueOf(enc.getVectorLength()));
-                // (no per-table buckets in paper mode)
+                metadata.put("dim", String.valueOf(vector.length));
+                // (No per-table buckets at this stage for paper mode — that's OK)
 
                 try {
                     metadataManager.batchUpdateVectorMetadata(
@@ -254,26 +253,31 @@ public class SecureLSHIndexService implements IndexService {
                     metadataManager.saveEncryptedPoint(enc);
                 } catch (IOException e) {
                     logger.error("Failed to persist encrypted point {}", enc.getId(), e);
-                    return; // don't account failed writes
+                    return; // do not account failed writes
                 }
                 keyService.incrementOperation();
             }
-            return; // important: avoid re-routing to legacy path
+
+            // Hand placement to the paper engine (needs plaintext vector for coding)
+            paperEngine.insert(enc, vector);
+            return;
         }
 
-        // 4) Legacy multiprobe path (unchanged)
+        // ---- Legacy multiprobe path ----
         int dimension = vector.length;
         DimensionContext ctx = getOrCreateLegacyContext(dimension);
         SecureLSHIndex idx = ctx.getIndex();
 
+        // Compute per-table bucket ids
         List<Integer> perTableBuckets = new ArrayList<>(idx.getNumHashTables());
         for (int t = 0; t < idx.getNumHashTables(); t++) {
             perTableBuckets.add(ctx.getLsh().getBucketId(vector, t));
         }
 
+        // Build legacy-style EncryptedPoint carrying bucket tags
         EncryptedPoint ep = new EncryptedPoint(
                 enc.getId(),
-                perTableBuckets.get(0),
+                perTableBuckets.get(0), // legacy shard/bucket field
                 enc.getIv(),
                 enc.getCiphertext(),
                 enc.getVersion(),
@@ -281,7 +285,8 @@ public class SecureLSHIndexService implements IndexService {
                 perTableBuckets
         );
 
-        insert(ep); // will persist + account via existing code
+        // Delegate to the common insert(pt) which also handles write-through
+        insert(ep);
     }
 
 
