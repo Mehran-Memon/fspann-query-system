@@ -60,7 +60,6 @@ public class EncryptedPoint implements Serializable {
         return _hc;
     }
 
-
     @Override
     public String toString() {
         return String.format("EncryptedPoint[id=%s, shard=%d, version=%d, dim=%d]", id, shardId, version, vectorLength);

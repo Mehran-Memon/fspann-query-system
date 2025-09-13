@@ -804,13 +804,15 @@ public class ForwardSecureANNSystem {
 
     static int detectLatestVersion(Path pointsRoot) throws IOException {
         try (var s = java.nio.file.Files.list(pointsRoot)) {
-            return s.filter(java.nio.file.Files::isDirectory)
+            OptionalInt latest = s.filter(java.nio.file.Files::isDirectory)
                     .map(p -> p.getFileName().toString())
                     .filter(n -> n.startsWith("v"))
                     .map(n -> n.substring(1))
                     .filter(str -> str.matches("\\d+"))
                     .mapToInt(Integer::parseInt)
-                    .max().orElseThrow();
+                    .max();
+
+            return latest.orElse(-1);  // ← instead of .orElseThrow()
         }
     }
 

@@ -230,36 +230,60 @@ public class SecureLSHIndexService implements IndexService {
         Objects.requireNonNull(id, "Point ID cannot be null");
         Objects.requireNonNull(vector, "Vector cannot be null");
 
-        // Encrypt first (shared across modes)
+        // 1) Encrypt once (shared across modes)
         EncryptedPoint enc = crypto.encrypt(id, vector);
 
+        // 2) Paper-mode: placement happens in the paper engine
         if (isPartitioned() && paperEngine != null) {
-            // Paper engine derives code & partitions internally
-            paperEngine.insert(enc, vector);
-        } else {
-            // Legacy multiprobe
-            int dimension = vector.length;
-            DimensionContext ctx = getOrCreateLegacyContext(dimension);
-            SecureLSHIndex idx = ctx.getIndex();
+            paperEngine.insert(enc, vector);    // owns coding/partitioning
 
-            List<Integer> perTableBuckets = new ArrayList<>(idx.getNumHashTables());
-            for (int t = 0; t < idx.getNumHashTables(); t++) {
-                perTableBuckets.add(ctx.getLsh().getBucketId(vector, t));
+            // 3) Mirror legacy semantics: hold in memory + persist to Rocks
+            indexedPoints.put(enc.getId(), enc);
+
+            if (writeThrough) {
+                buffer.add(enc);
+
+                Map<String, String> metadata = new HashMap<>();
+                metadata.put("version", String.valueOf(enc.getVersion()));
+                metadata.put("dim", String.valueOf(enc.getVectorLength()));
+                // (no per-table buckets in paper mode)
+
+                try {
+                    metadataManager.batchUpdateVectorMetadata(
+                            Collections.singletonMap(enc.getId(), metadata));
+                    metadataManager.saveEncryptedPoint(enc);
+                } catch (IOException e) {
+                    logger.error("Failed to persist encrypted point {}", enc.getId(), e);
+                    return; // don't account failed writes
+                }
+                keyService.incrementOperation();
             }
-
-            EncryptedPoint ep = new EncryptedPoint(
-                    enc.getId(),
-                    perTableBuckets.get(0), // legacy field
-                    enc.getIv(),
-                    enc.getCiphertext(),
-                    enc.getVersion(),
-                    vector.length,
-                    perTableBuckets
-            );
-
-            insert(ep);
+            return; // important: avoid re-routing to legacy path
         }
+
+        // 4) Legacy multiprobe path (unchanged)
+        int dimension = vector.length;
+        DimensionContext ctx = getOrCreateLegacyContext(dimension);
+        SecureLSHIndex idx = ctx.getIndex();
+
+        List<Integer> perTableBuckets = new ArrayList<>(idx.getNumHashTables());
+        for (int t = 0; t < idx.getNumHashTables(); t++) {
+            perTableBuckets.add(ctx.getLsh().getBucketId(vector, t));
+        }
+
+        EncryptedPoint ep = new EncryptedPoint(
+                enc.getId(),
+                perTableBuckets.get(0),
+                enc.getIv(),
+                enc.getCiphertext(),
+                enc.getVersion(),
+                vector.length,
+                perTableBuckets
+        );
+
+        insert(ep); // will persist + account via existing code
     }
+
 
     @Override
     public List<EncryptedPoint> lookup(QueryToken token) {

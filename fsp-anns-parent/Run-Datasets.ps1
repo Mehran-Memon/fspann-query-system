@@ -175,8 +175,10 @@ function New-Keys {
 
     $jvm = @(
         "-Xms$Xms","-Xmx$Xmx",
-        "-Dquery.only=true",
+        "-Dquery.only=false",
+        "-Drestore.version=1",
         "-Ddisable.exit=true",
+        "-Deval.writeGlobalRecall=true",
         "-jar", (Resolve-Path $JarPath)
     )
 
@@ -282,9 +284,10 @@ foreach ($ds in $Datasets) {
             "-Dpaper.m=$($cfg.PaperM)",
             "-Dpaper.lambda=$($cfg.PaperLambda)",
             "-Dpaper.divisions=$($cfg.PaperDivisions)",
-            "-Dpaper.maxCandidates=$($cfg.PaperMaxCandidates)"
+            "-Dpaper.maxCandidates=$($cfg.PaperMaxCandidates)",
+            "-Dpaper.buildThreshold=1000",
+            "-Dindex.writeThrough=true"
         ) + $passFlags + @(
-        # evaluation wiring
             "-Deval.computePrecision=false",
             "-Dbase.path=$base",
             "-Daudit.enable=false",
