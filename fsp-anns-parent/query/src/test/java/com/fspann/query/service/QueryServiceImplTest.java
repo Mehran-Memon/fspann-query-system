@@ -39,21 +39,19 @@ class QueryServiceImplTest {
         service = new QueryServiceImpl(indexService, cryptoService, keyService);
     }
 
-
     @AfterEach
     void tearDown() {
         clearInvocations(indexService, cryptoService, keyService, groundtruthManager);
     }
 
     private QueryToken tokenWithPerTable(int dim, int topK, int numTables, String ctx, int version) {
-        // trivial single-bucket expansion per table for tests
         List<List<Integer>> tableBuckets = new ArrayList<>(numTables);
         for (int t = 0; t < numTables; t++) tableBuckets.add(List.of(1));
         return new QueryToken(
                 tableBuckets,
                 new byte[12],
                 new byte[32],
-                new double[]{1.0, 2.0}, // dim must match caller
+                new double[]{1.0, 2.0}, // test vectors use dim=2
                 topK,
                 numTables,
                 ctx,
@@ -84,8 +82,8 @@ class QueryServiceImplTest {
         EncryptedPoint bad  = new EncryptedPoint("bad",  0, iv, encQuery, 7, 2, List.of(1));
 
         when(indexService.lookup(token)).thenReturn(List.of(good, bad));
-        when(cryptoService.decryptFromPoint(good, key)).thenReturn(new double[]{1.0, 2.0});
-        when(cryptoService.decryptFromPoint(bad,  key)).thenReturn(new double[]{100.0, 100.0});
+        when(cryptoService.decryptFromPoint(good, key)).thenReturn(new double[]{1.0, 2.0});     // dist=0
+        when(cryptoService.decryptFromPoint(bad,  key)).thenReturn(new double[]{100.0, 100.0}); // far
 
         List<QueryResult> results = service.search(token);
         assertEquals("good", results.get(0).getId());
@@ -105,31 +103,28 @@ class QueryServiceImplTest {
                 999
         );
 
-        // set up: requested version 999 missing; fallback version 1 present
+        // requested version missing; fallback to current version
         SecretKey fallbackKey = new SecretKeySpec(new byte[32], "AES");
         when(keyService.getVersion(999)).thenThrow(new IllegalArgumentException("no such version"));
         when(keyService.getCurrentVersion()).thenReturn(new KeyVersion(1, fallbackKey));
         when(cryptoService.decryptQuery(eq(encQuery), eq(iv), eq(fallbackKey))).thenReturn(query);
 
-        // minimal lookup result so search can complete
         EncryptedPoint p = new EncryptedPoint("id", 0, iv, encQuery, 1, 2, List.of(1));
         when(indexService.lookup(any(QueryToken.class))).thenReturn(List.of(p));
         when(cryptoService.decryptFromPoint(eq(p), eq(fallbackKey))).thenReturn(new double[]{1.0, 2.0});
 
-        // no exception expected — service should fallback
         assertDoesNotThrow(() -> service.search(token));
 
-        // verify that we tried the missing version and then used current version
         verify(keyService).getVersion(999);
         verify(keyService, atLeastOnce()).getCurrentVersion();
         verify(cryptoService).decryptQuery(eq(encQuery), eq(iv), eq(fallbackKey));
         verify(indexService).lookup(any(QueryToken.class));
     }
 
-
     @Test
     void testRatioAndRecallWhenGroundtruthEmpty() throws Exception {
-        // ratio = 0.0 when GT empty, recall stays 1.0 (by design)
+        // In this layer (service), "ratio" is not computed -> NaN.
+        // Precision@K (stored in 'recall' field) should be 0.0 when GT is empty.
         double[] query = new double[]{0.5, 0.6};
         String ctx = "epoch_1_dim_2";
         QueryToken token = new QueryToken(
@@ -155,12 +150,13 @@ class QueryServiceImplTest {
         List<QueryEvaluationResult> results = service.searchWithTopKVariants(token, 1, groundtruthManager);
         QueryEvaluationResult r = results.get(0); // k=1
 
-        assertEquals(0.0, r.getRatio(), 1e-9);
+        assertTrue(Double.isNaN(r.getRatio()), "ratio should be NaN in QueryServiceImpl layer");
         assertEquals(0.0, r.getRecall(), 1e-9);
     }
 
     @Test
-    void testRatioCalculationWithGroundtruth_MatchAtTop1() throws Exception {
+    void testPrecisionWithGroundtruth_MatchAtTop1_RatioDeferred() throws Exception {
+        // Ratio remains NaN here; precision@1 should be 1.0 when the retrieved id matches GT.
         byte[] iv = new byte[12];
         byte[] encQuery = new byte[32];
         double[] queryVec = new double[]{1.0, 1.0};
@@ -190,7 +186,65 @@ class QueryServiceImplTest {
                 .filter(r -> r.getTopKRequested() == 1)
                 .findFirst().orElseThrow();
 
-        assertEquals(1.0, top1Result.getRatio(), 1e-6);
+        assertTrue(Double.isNaN(top1Result.getRatio()), "ratio is computed in ForwardSecureANNSystem, not here");
         assertEquals(1.0, top1Result.getRecall(), 1e-6);
+    }
+
+    @Test
+    void testVersionFilterSkipsMismatchedCandidates() throws Exception {
+        byte[] iv = new byte[12];
+        byte[] encQuery = new byte[32];
+        double[] query = new double[]{0.0, 0.0};
+
+        // Query token says epoch_2, version=2
+        String ctx = "epoch_2_dim_2";
+        SecretKey k2 = new SecretKeySpec(new byte[32], "AES");
+        when(keyService.getVersion(2)).thenReturn(new KeyVersion(2, k2));
+        when(keyService.getCurrentVersion()).thenReturn(new KeyVersion(2, k2));
+        when(cryptoService.decryptQuery(encQuery, iv, k2)).thenReturn(query);
+
+        QueryToken token = new QueryToken(
+                List.of(List.of(1)), iv, encQuery, query,
+                5, 1, ctx, 2, 2
+        );
+
+        // One matching version (2), one mismatched (1)
+        EncryptedPoint v2 = new EncryptedPoint("ok",   0, iv, encQuery, 2, 2, List.of(1));
+        EncryptedPoint v1 = new EncryptedPoint("skip", 0, iv, encQuery, 1, 2, List.of(1));
+        when(indexService.lookup(token)).thenReturn(List.of(v2, v1));
+
+        when(cryptoService.decryptFromPoint(eq(v2), eq(k2))).thenReturn(new double[]{0.0, 0.0});
+
+        List<QueryResult> results = service.search(token);
+
+        assertEquals(1, results.size(), "Only same-version candidate should be considered");
+        assertEquals("ok", results.get(0).getId());
+        verify(cryptoService, never()).decryptFromPoint(eq(v1), any());
+    }
+
+    @Test
+    void testNoCandidatesPathCounters() throws Exception {
+        byte[] iv = new byte[12];
+        byte[] encQuery = new byte[32];
+        double[] query = new double[]{0.0, 0.0};
+
+        SecretKey key = new SecretKeySpec(new byte[32], "AES");
+        when(keyService.getVersion(1)).thenReturn(new KeyVersion(1, key));
+        when(keyService.getCurrentVersion()).thenReturn(new KeyVersion(1, key));
+        when(cryptoService.decryptQuery(encQuery, iv, key)).thenReturn(query);
+
+        QueryToken token = new QueryToken(
+                List.of(List.of(1)), iv, encQuery, query,
+                3, 1, "epoch_1_dim_2", 2, 1
+        );
+
+        when(indexService.lookup(token)).thenReturn(List.of()); // no candidates
+
+        List<QueryResult> out = service.search(token);
+        assertTrue(out.isEmpty());
+        assertEquals(0, service.getLastCandTotal());
+        assertEquals(0, service.getLastCandKeptVersion());
+        assertEquals(0, service.getLastCandDecrypted());
+        assertEquals(0, service.getLastReturned());
     }
 }

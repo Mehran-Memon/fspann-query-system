@@ -209,7 +209,7 @@ public class ForwardSecureANNSystem {
         for (int dim : dimensions) {
             EvenLSH lshForDim = indexService.getLshForDimension(dim);
 
-            // --- apply m (rows per band / hash funcs) override, if exposed ---
+            // --- apply m (rows per band / hash functions) override, if exposed ---
             if (OVERRIDE_ROWS > 0) {
                 try {
                     // common names in LSH implementations
@@ -228,7 +228,7 @@ public class ForwardSecureANNSystem {
             // --- apply ℓ override ---
             int tables = (OVERRIDE_TABLES > 0) ? OVERRIDE_TABLES : numTablesFor(lshForDim, config);
 
-            // --- apply shards-to-probe override (see #2) ---
+            // --- apply shards-to-probe override ---
             int shards = shardsToProbe();
 
             tokenFactories.put(dim, new QueryTokenFactory(
@@ -503,31 +503,23 @@ public class ForwardSecureANNSystem {
 
         // Numerator: best (smallest) distance among the retrieved K
         double num = Double.POSITIVE_INFINITY;
+        String bestId = "NA";
         final int upto = Math.min(k, retrievedTopK.size());
         for (int i = 0; i < upto; i++) {
-            // IDs are ordinals strings (see batchInsert) — be defensive anyway
             String id = retrievedTopK.get(i).getId();
             int baseIdx;
-            try {
-                baseIdx = Integer.parseInt(id);
-            } catch (NumberFormatException nfe) {
-                logger.warn("Non-ordinal retrieved id='{}' at top-{}; skipping for ratio calc", id, i + 1);
-                continue;
-            }
+            try { baseIdx = Integer.parseInt(id); } catch (NumberFormatException nfe) { continue; }
             double d = baseReader.l2(q, baseIdx);
-            if (!Double.isNaN(d) && d < num) num = d;
+            if (!Double.isNaN(d) && d < num) { num = d; bestId = id; }
         }
-        if (!Double.isFinite(num)) return Double.NaN; // none usable
+        if (!Double.isFinite(num)) return Double.NaN;
 
-        final double ratio = num / denom;
-
-        // Sanity: ratio should be >= 1, warn if not (usually indicates ID/GT mismatch)
+        double ratio = num / denom;
         if (ratio + 1e-12 < 1.0) {
             logger.warn("Distance ratio < 1.0 ({}). Possible ID/GT misalignment. " +
                             "Denom(trueNN)={}, Num(bestRetrieved)={}, k={}, trueIdx={}, bestRetrievedId={}",
                     String.format(Locale.ROOT, "%.6f", ratio),
-                    denom, num, k, trueIdx,
-                    (retrievedTopK.isEmpty() ? "NA" : retrievedTopK.get(0).getId()));
+                    denom, num, k, trueIdx, bestId);
         }
         return ratio;
     }
@@ -576,10 +568,12 @@ public class ForwardSecureANNSystem {
                             "Ratios/recall may be unreliable if orders differ.",
                     groundtruth.size(), queries.size());
         }
-        int idxCount = indexService.getIndexedVectorCount();
-        if (idxCount <= 0) {
-            logger.warn("Index appears empty (indexedVectorCount=0) before querying. " +
-                    "Check indexing/paths; continuing for diagnostics.");
+        // Normalize/validate now that we know N
+        int idxCount = indexService.getIndexedVectorCount(); // N in the base set
+        groundtruth.normalizeIndexBaseIfNeeded(idxCount);
+
+        if (!groundtruth.isConsistentWithDatasetSize(idxCount)) {
+            logger.warn("Groundtruth IDs not in [0, {}). Check GT/base pairing.", idxCount);
         }
 
 
@@ -738,10 +732,12 @@ public class ForwardSecureANNSystem {
                             "Ratios/recall may be unreliable if orders differ.",
                     groundtruth.size(), queries.size());
         }
-        int idxCount = indexService.getIndexedVectorCount();
-        if (idxCount <= 0) {
-            logger.warn("Index appears empty (indexedVectorCount=0) before querying. " +
-                    "Check indexing/paths; continuing for diagnostics.");
+        // Normalize/validate now that we know N
+        int idxCount = indexService.getIndexedVectorCount(); // N in the base set
+        groundtruth.normalizeIndexBaseIfNeeded(idxCount);
+
+        if (!groundtruth.isConsistentWithDatasetSize(idxCount)) {
+            logger.warn("Groundtruth IDs not in [0, {}). Check GT/base pairing.", idxCount);
         }
 
         ResultWriter rw = new ResultWriter(Paths.get("results", "results_table.txt"));

@@ -30,9 +30,7 @@ public class GroundtruthManager {
                 this.rows.add(new int[0]);
                 continue;
             }
-            // Deduplicate and sort for safety
-            int[] sanitized = Arrays.stream(row).distinct().sorted().toArray();
-            this.rows.add(sanitized);
+            this.rows.add(row.clone());
         }
 
         if (badRows > 0) {
@@ -73,4 +71,29 @@ public class GroundtruthManager {
         }
         return true;
     }
+
+    public void normalizeIndexBaseIfNeeded(int datasetSize) {
+        boolean force1 = Boolean.getBoolean("gt.forceOneBased");
+        int min = Integer.MAX_VALUE, max = Integer.MIN_VALUE;
+        for (int[] row : rows) {
+            if (row == null) continue;
+            for (int id : row) { if (id < min) min = id; if (id > max) max = id; }
+        }
+
+        if (force1 || (min >= 1 && (max == datasetSize || max == datasetSize - 1 || max > datasetSize))) {
+            for (int i = 0; i < rows.size(); i++) {
+                int[] r = rows.get(i);
+                for (int j = 0; j < r.length; j++) r[j] = r[j] - 1;
+            }
+            logger.info("Groundtruth indices converted from 1-based to 0-based{}.",
+                    force1 ? " (forced via -Dgt.forceOneBased=true)" : "");
+            return;
+        }
+
+        if (min == 0 && max <= datasetSize - 1) return; // ok
+
+        logger.warn("Groundtruth index range looks odd: min={}, max={}, datasetSize={}.", min, max, datasetSize);
+    }
+
+
 }
