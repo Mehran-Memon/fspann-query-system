@@ -2,7 +2,10 @@ package com.fspann.index.paper;
 
 import com.fspann.common.EncryptedPoint;
 import com.fspann.common.QueryToken;
+import com.fspann.index.service.SecureLSHIndexService;
 import com.fspann.index.service.SecureLSHIndexService.PaperSearchEngine;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -30,6 +33,7 @@ public class PartitionedIndexService implements PaperSearchEngine {
     private final long seedBase;        // base seed to derive per-division seeds
     private final int buildThreshold;   // min items per dimension to build partitions
     private final int maxCandidates;    // safety cap for re-rank set size
+    private static final Logger logger = LoggerFactory.getLogger(PartitionedIndexService.class);
 
     public PartitionedIndexService(int m, int lambda, int divisions, long seedBase) {
         this(m, lambda, divisions, seedBase,
@@ -102,9 +106,23 @@ public class PartitionedIndexService implements PaperSearchEngine {
         idToDim.put(pt.getId(), pt.getVectorLength());
         DimensionState S = dims.computeIfAbsent(pt.getVectorLength(), DimensionState::new);
         synchronized (S) {
-            S.staged.add(pt);
-            S.stagedVectors.add(plaintextVector.clone());
-            maybeBuild(S);
+            if (isBuilt(S)) {
+                // Fast-path: place directly into existing partitions (no staging)
+                for (DivisionState div : S.divisions) {
+                    BitSet code = Coding.C(plaintextVector, div.G);
+                    List<Integer> hits = findCoveringIntervals(code, div.I);
+                    if (hits.isEmpty()) continue;
+                    for (int idx : hits) {
+                        GreedyPartitioner.SubsetBounds sb = div.I.get(idx);
+                        div.tagToSubset.computeIfAbsent(sb.tag, k -> new ArrayList<>()).add(pt);
+                    }
+                }
+            } else {
+                // Pre-build: stage until we have G and I
+                S.staged.add(pt);
+                S.stagedVectors.add(plaintextVector.clone());
+                maybeBuild(S);
+            }
         }
     }
 
@@ -163,6 +181,12 @@ public class PartitionedIndexService implements PaperSearchEngine {
                 }
             }
         }
+        if (cands.isEmpty()) {
+            logger.warn("Paper lookup produced 0 candidates for dim={} (K={}, divisions={}). " +
+                            "Check partitions build (threshold={}, stagedSize≈{}).",
+                    d, K, divisions, buildThreshold, S.staged.size());
+        }
+
         if (cands.size() >= K || S.divisions.isEmpty()) return cands;
 
         // ---------- PASS 2: gentle widening if still short of K ----------

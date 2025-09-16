@@ -19,6 +19,7 @@ public class RocksDBMetadataManager implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(RocksDBMetadataManager.class);
     private static final Object LOCK = new Object();
     private static RocksDBMetadataManager instance = null;
+    private volatile boolean syncWrites = false;
 
     private final RocksDB db;
     private final String dbPath;
@@ -175,7 +176,7 @@ public class RocksDBMetadataManager implements AutoCloseable {
 
     public synchronized void batchPutMetadata(Map<String, Map<String, String>> allMetadata) {
         Objects.requireNonNull(allMetadata, "allMetadata");
-        try (WriteBatch batch = new WriteBatch(); WriteOptions wo = new WriteOptions()) {
+        try (WriteBatch batch = new WriteBatch(); WriteOptions wo = new WriteOptions().setSync(syncWrites)) {
             for (Map.Entry<String, Map<String, String>> e : allMetadata.entrySet()) {
                 batch.put(e.getKey().getBytes(StandardCharsets.UTF_8), serializeMetadata(e.getValue()));
             }
@@ -193,14 +194,66 @@ public class RocksDBMetadataManager implements AutoCloseable {
         Path versionDir = Paths.get(baseDir, safeVersion);
         Files.createDirectories(versionDir);
 
-        Path filePath = versionDir.resolve(pt.getId() + ".point");
-        PersistenceUtils.saveObject(pt, filePath.toString(), baseDir);
+        // write to a temp file, then atomically move
+        Path tmp = versionDir.resolve(pt.getId() + ".point.tmp");
+        Path dst = versionDir.resolve(pt.getId() + ".point");
 
-        // keep metadata up to date (version as numeric is okay; loaders handle both)
+        // 1) write temp
+        PersistenceUtils.saveObject(pt, tmp.toString(), baseDir);
+
+        // 2) atomic move
+        Files.move(tmp, dst, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+
+        // 3) finally, metadata (include minimal fields that query/restore rely on)
         Map<String, String> meta = new HashMap<>();
         meta.put("version", String.valueOf(pt.getVersion()));
         meta.put("shardId", String.valueOf(pt.getShardId()));
-        updateVectorMetadata(pt.getId(), meta);
+        meta.put("dim", String.valueOf(pt.getVectorLength()));  // cheap and very useful
+        try {
+            updateVectorMetadata(pt.getId(), meta);
+        } catch (RuntimeException e) {
+            // rollback the file so we never have “file exists, metadata missing”
+            try { Files.deleteIfExists(dst); } catch (IOException ignore) {}
+            throw e;
+        }
+    }
+
+    public void saveEncryptedPointsBatch(Collection<EncryptedPoint> points) throws IOException {
+        if (points == null || points.isEmpty()) return;
+
+        // 1) write all files to temp
+        List<Path> tmps = new ArrayList<>(points.size());
+        List<Path> dsts = new ArrayList<>(points.size());
+        for (EncryptedPoint pt : points) {
+            String safeVersion = "v" + pt.getVersion();
+            Path versionDir = Paths.get(baseDir, safeVersion);
+            Files.createDirectories(versionDir);
+            Path tmp = versionDir.resolve(pt.getId() + ".point.tmp");
+            Path dst = versionDir.resolve(pt.getId() + ".point");
+            PersistenceUtils.saveObject(pt, tmp.toString(), baseDir);
+            tmps.add(tmp); dsts.add(dst);
+        }
+
+        // 2) atomically move all
+        for (int i = 0; i < tmps.size(); i++) {
+            Files.move(tmps.get(i), dsts.get(i), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        }
+
+        // 3) single write-batch for metadata
+        Map<String, Map<String, String>> allMeta = new LinkedHashMap<>();
+        for (EncryptedPoint pt : points) {
+            Map<String, String> m = new HashMap<>();
+            m.put("version", String.valueOf(pt.getVersion()));
+            m.put("shardId", String.valueOf(pt.getShardId()));
+            m.put("dim", String.valueOf(pt.getVectorLength()));
+            // (buckets optional, but helpful if present on pt)
+            List<Integer> buckets = pt.getBuckets();
+            if (buckets != null) {
+                for (int t = 0; t < buckets.size(); t++) m.put("b" + t, String.valueOf(buckets.get(t)));
+            }
+            allMeta.put(pt.getId(), m);
+        }
+        batchPutMetadata(allMeta);
     }
 
     public List<EncryptedPoint> getAllEncryptedPoints() {
@@ -217,7 +270,7 @@ public class RocksDBMetadataManager implements AutoCloseable {
 
                             Map<String, String> meta = getVectorMetadata(pt.getId());
                             if (meta.isEmpty() || !meta.containsKey("version") || !meta.containsKey("shardId")) {
-                                // skip if missing essential metadata
+                                logger.warn("Skipping point {} due to missing metadata (version/shardId).", pt.getId());
                                 return;
                             }
                             list.add(pt);
@@ -228,6 +281,7 @@ public class RocksDBMetadataManager implements AutoCloseable {
         } catch (IOException e) {
             logger.warn("getAllEncryptedPoints walk failed", e);
         }
+        logger.info("Loaded {} encrypted points from disk ({} unique ids).", list.size(), list.stream().map(EncryptedPoint::getId).distinct().count());
         return list;
     }
 
@@ -309,6 +363,7 @@ public class RocksDBMetadataManager implements AutoCloseable {
             logger.debug("rocksdb.stats:\n{}", db.getProperty("rocksdb.stats"));
         } catch (RocksDBException ignore) {}
     }
+    public void setSyncWrites(boolean on) { this.syncWrites = on; }
 
     public void printSummary() {
         try {
@@ -316,9 +371,52 @@ public class RocksDBMetadataManager implements AutoCloseable {
             logger.debug("num-live-sst-files={}", db.getProperty("rocksdb.num-live-sst-files"));
         } catch (RocksDBException ignore) {}
     }
+    public String quickSummaryLine() {
+        int version = loadIndexVersion();
+        int metaKeys = getAllVectorIds().size();
+        long files = 0L;
+        try (Stream<Path> s = Files.walk(Paths.get(baseDir))) {
+            files = s.filter(Files::isRegularFile).filter(p -> p.toString().endsWith(".point")).count();
+        } catch (IOException ignore) {}
+        return String.format("RocksDB[%s] v=%d metaKeys=%d pointFiles=%d", dbPath, version, metaKeys, files);
+    }
 
     public String getDbPath() { return dbPath; }
     public String getPointsBaseDir() { return baseDir; }
+
+    public DriftReport auditDrift() {
+        Set<String> idsInMeta = new HashSet<>(getAllVectorIds());
+
+        Set<String> idsOnDisk = new HashSet<>();
+        try (Stream<Path> s = Files.walk(Paths.get(baseDir))) {
+            s.filter(Files::isRegularFile)
+                    .filter(p -> p.toString().endsWith(".point"))
+                    .forEach(p -> idsOnDisk.add(stripExt(p.getFileName().toString())));
+        } catch (IOException e) {
+            logger.warn("auditDrift walk failed", e);
+        }
+
+        Set<String> onlyMeta = new HashSet<>(idsInMeta); onlyMeta.removeAll(idsOnDisk);
+        Set<String> onlyDisk = new HashSet<>(idsOnDisk); onlyDisk.removeAll(idsInMeta);
+
+        if (!onlyMeta.isEmpty() || !onlyDisk.isEmpty()) {
+            logger.warn("Drift detected: onlyInMeta={}, onlyOnDisk={}", onlyMeta.size(), onlyDisk.size());
+        } else {
+            logger.info("Drift audit: OK ({} ids)", idsInMeta.size());
+        }
+        return new DriftReport(idsInMeta.size(), idsOnDisk.size(), onlyMeta, onlyDisk);
+    }
+    private static String stripExt(String name) {
+        int i = name.lastIndexOf('.');
+        return (i < 0) ? name : name.substring(0, i);
+    }
+    public static final class DriftReport {
+        public final int metaCount, diskCount;
+        public final Set<String> onlyMeta, onlyDisk;
+        DriftReport(int metaCount, int diskCount, Set<String> onlyMeta, Set<String> onlyDisk) {
+            this.metaCount = metaCount; this.diskCount = diskCount; this.onlyMeta = onlyMeta; this.onlyDisk = onlyDisk;
+        }
+    }
 
     // ------------------- serialization helpers -------------------
 

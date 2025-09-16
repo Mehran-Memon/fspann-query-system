@@ -20,22 +20,28 @@ $Java = "java"
 $CleanPerRun = $true   # clean metadata/points/results for each dataset×config before running
 $CleanAllNow = $false  # set $true to wipe ALL per-dataset metadata under $MetaRoot once and exit
 
+function Get-XmxForDataset([string]$datasetName, [string]$defaultXmx) {
+    if ($datasetName -in @("SIFT_50M","SIFT_100M","synthetic_1024")) { return "32g" }
+    return $defaultXmx
+}
+
 # ----------------- EXPLORE/WIDTH CONFIGS (ordered) -----------------
 $Configs = @(
 # 💨 throughput
     @{ Label="throughput";
     ProbePerTable=6;  ProbeBitsMax=1; FanoutTarget=0.008;
-    PaperM=10; PaperLambda=5; PaperDivisions=6; PaperMaxCandidates=12000 },
+    PaperM=10; PaperLambda=5; PaperDivisions=6; PaperMaxCandidates=60000 },
 
     # ⚖️ balanced
     @{ Label="balanced";
     ProbePerTable=12; ProbeBitsMax=1; FanoutTarget=0.012;
-    PaperM=12; PaperLambda=6; PaperDivisions=8; PaperMaxCandidates=20000 },
+    PaperM=12; PaperLambda=6; PaperDivisions=8; PaperMaxCandidates=80000 },
 
     # 🎯 recall-first
     @{ Label="recall_first";
-    ProbePerTable=20; ProbeBitsMax=2; FanoutTarget=0.025;
-    PaperM=14; PaperLambda=7; PaperDivisions=10; PaperMaxCandidates=50000 }
+    ProbePerTable=28; ProbeBitsMax=3; FanoutTarget=0.035;
+    PaperM=14; PaperLambda=8; PaperDivisions=10; PaperMaxCandidates=120000 }
+
 )
 
 # -------------- DATASETS (only include ones you have base+query+GT) --------------
@@ -87,11 +93,6 @@ New-Item -ItemType Directory -Force -Path $OutRoot  | Out-Null
 New-Item -ItemType Directory -Force -Path $MetaRoot | Out-Null
 
 # ---------- HELPERS ----------
-function Get-XmxForDataset([string]$datasetName, [string]$defaultXmx) {
-    if ($datasetName -in @("SIFT_50M","SIFT_100M")) { return "32g" }
-    return $defaultXmx
-}
-
 function Ensure-Files([string]$base,[string]$query,[string]$gt) {
     $ok = $true
     if ([string]::IsNullOrWhiteSpace($base)  -or -not (Test-Path -LiteralPath $base))  { Write-Error "Missing base:  $base";  $ok = $false }
@@ -187,14 +188,35 @@ foreach ($ds in $Datasets) {
         $XmxThis = Get-XmxForDataset $name $Xmx
         $logFile = Join-Path $runDir "run.log"
 
-        Write-Host "=== Running $name ($label) dim=$dim (Xmx=$XmxThis) ==="
+        # Dataset-specific widening for hard cases (e.g., 1024-dim)
+        if ($name -eq "synthetic_1024" -and $label -eq "recall_first") {
+            # push width and cap higher for deep partitions
+            $cfg.PaperMaxCandidates = [Math]::Max($cfg.PaperMaxCandidates, 200000)
+            $cfg.ProbePerTable = [Math]::Max($cfg.ProbePerTable, 32)
+            $cfg.ProbeBitsMax  = [Math]::Max($cfg.ProbeBitsMax, 3)
+            $cfg.FanoutTarget  = [Math]::Max($cfg.FanoutTarget, 0.04)
+        }
+
+        Write-Host "Running $name ($label) dim=$dim (Xmx=$XmxThis)"
 
         # ---- Per-config widening / target tuning for paper engine ----
         $passFlags = @()
         switch ($label) {
-            "throughput"   { $passFlags += "-Dpaper.target.mult=1.55"; $passFlags += "-Dpaper.expand.radius.max=2"; $passFlags += "-Dpaper.expand.radius.hard=3" }
-            "balanced"     { $passFlags += "-Dpaper.target.mult=1.60"; $passFlags += "-Dpaper.expand.radius.max=2"; $passFlags += "-Dpaper.expand.radius.hard=4" }
-            "recall_first" { $passFlags += "-Dpaper.target.mult=1.70"; $passFlags += "-Dpaper.expand.radius.max=2"; $passFlags += "-Dpaper.expand.radius.hard=5" }
+            "throughput" {
+                $passFlags += "-Dpaper.target.mult=1.60"
+                $passFlags += "-Dpaper.expand.radius.max=2"
+                $passFlags += "-Dpaper.expand.radius.hard=4"
+            }
+            "balanced" {
+                $passFlags += "-Dpaper.target.mult=1.75"
+                $passFlags += "-Dpaper.expand.radius.max=3"
+                $passFlags += "-Dpaper.expand.radius.hard=5"
+            }
+            "recall_first" {
+                $passFlags += "-Dpaper.target.mult=1.85"
+                $passFlags += "-Dpaper.expand.radius.max=3"
+                $passFlags += "-Dpaper.expand.radius.hard=6"
+            }
         }
 
         # JVM/system tuning
@@ -253,7 +275,7 @@ foreach ($ds in $Datasets) {
         }
 
         # Collect per-run CSVs
-        $resultsDir = Join-Path $metaDir "results"
+        $resultsDir = Join-Path $runDir "results"
         $topkPath   = Join-Path $resultsDir "topk_evaluation.csv"
         $grecall    = Join-Path $resultsDir "global_recall.csv"
 

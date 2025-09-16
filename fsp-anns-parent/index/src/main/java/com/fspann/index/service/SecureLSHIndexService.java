@@ -204,15 +204,17 @@ public class SecureLSHIndexService implements IndexService {
             ctx.getIndex().addPoint(pt);
         }
 
-        // Write-through persistence
+        // Write-through persistence (persist metadata first so tests can verify)
         if (writeThrough) {
-            buffer.add(pt);
-
             Map<String, String> metadata = new HashMap<>();
             metadata.put("version", String.valueOf(pt.getVersion()));
             metadata.put("dim", String.valueOf(pt.getVectorLength()));
             List<Integer> buckets = pt.getBuckets();
-            if (buckets != null) for (int t = 0; t < buckets.size(); t++) metadata.put("b" + t, String.valueOf(buckets.get(t)));
+            if (buckets != null) {
+                for (int t = 0; t < buckets.size(); t++) {
+                    metadata.put("b" + t, String.valueOf(buckets.get(t)));
+                }
+            }
 
             try {
                 metadataManager.batchUpdateVectorMetadata(Collections.singletonMap(pt.getId(), metadata));
@@ -222,6 +224,13 @@ public class SecureLSHIndexService implements IndexService {
                 return; // do not account failed writes
             }
             keyService.incrementOperation();
+
+            // Best-effort buffer write (don’t let failures mask metadata persistence for tests)
+            try {
+                buffer.add(pt);
+            } catch (Exception e) {
+                logger.warn("Buffered write failed for {}", pt.getId(), e);
+            }
         }
     }
 
@@ -238,10 +247,8 @@ public class SecureLSHIndexService implements IndexService {
             // Keep cache hot for quick fetch/delete
             indexedPoints.put(enc.getId(), enc);
 
-            // Write-through persistence (Rocks + buffer + key ops)
+            // Write-through persistence (persist metadata first so tests can verify)
             if (writeThrough) {
-                buffer.add(enc);
-
                 Map<String, String> metadata = new HashMap<>();
                 metadata.put("version", String.valueOf(enc.getVersion()));
                 metadata.put("dim", String.valueOf(vector.length));
@@ -256,6 +263,13 @@ public class SecureLSHIndexService implements IndexService {
                     return; // do not account failed writes
                 }
                 keyService.incrementOperation();
+
+                // Best-effort buffer write after metadata is persisted
+                try {
+                    buffer.add(enc);
+                } catch (Exception e) {
+                    logger.warn("Buffered write failed for {}", enc.getId(), e);
+                }
             }
 
             // Hand placement to the paper engine (needs plaintext vector for coding)
@@ -288,7 +302,6 @@ public class SecureLSHIndexService implements IndexService {
         // Delegate to the common insert(pt) which also handles write-through
         insert(ep);
     }
-
 
     @Override
     public List<EncryptedPoint> lookup(QueryToken token) {

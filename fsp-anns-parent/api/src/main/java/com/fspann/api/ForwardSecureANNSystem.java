@@ -80,6 +80,7 @@ public class ForwardSecureANNSystem {
     private static final int     AUDIT_K            = Integer.getInteger("audit.k", 100);       // evaluate @K
     private static final int     AUDIT_SAMPLE_EVERY = Integer.getInteger("audit.sample.every", 200); // sample every Nth query
     private static final int     AUDIT_WORST_KEEP   = Integer.getInteger("audit.worst.keep", 50);    // keep N worst
+    private final java.util.concurrent.atomic.AtomicLong fileOrdinal = new java.util.concurrent.atomic.AtomicLong(0);
 
     // remember previous FsPaths props to restore on shutdown
     private final String prevBaseProp;
@@ -239,7 +240,8 @@ public class ForwardSecureANNSystem {
 
 
         this.queryService = new QueryServiceImpl(indexService, cryptoService, keyService);
-        this.topKProfiler = new TopKProfiler(metadataPath.toString());
+        String resultsRoot = System.getProperty("results.dir", metadataPath.toString());
+        this.topKProfiler = new TopKProfiler(resultsRoot);
 
         String basePathProp = System.getProperty("base.path", "").trim();
         if (!basePathProp.isEmpty()) {
@@ -260,6 +262,8 @@ public class ForwardSecureANNSystem {
 
         /* ---------------------- Indexing API ---------------------- */
     public void indexStream(String dataPath, int dim) throws IOException {
+        fileOrdinal.set(0);
+
         if ("POINTS_ONLY".equalsIgnoreCase(dataPath)) {
             logger.info("Query-only mode: skipping indexing");
             return;
@@ -284,6 +288,14 @@ public class ForwardSecureANNSystem {
         if (batchCount == 0) {
             logger.warn("No batches loaded for dim={} from dataPath={}", dim, dataPath);
         }
+
+        logger.info("Indexing completed for dim={} : indexedInThisRun={}, totalIndexedCounter={}, bufferSize={}, flushedTotal={}",
+                dim,
+                totalInserted,
+                getIndexedVectorCount(),
+                (indexService.getPointBuffer() != null ? indexService.getPointBuffer().getBufferSize() : -1),
+                (indexService.getPointBuffer() != null ? indexService.getPointBuffer().getTotalFlushedPoints() : -1));
+
     }
 
     public void batchInsert(List<double[]> vectors, int dim) {
@@ -295,32 +307,34 @@ public class ForwardSecureANNSystem {
         if (profiler != null) profiler.start("batchInsert");
 
         for (int offset = 0; offset < vectors.size(); offset += BATCH_SIZE) {
-            // slice
             List<double[]> slice = vectors.subList(offset, Math.min(offset + BATCH_SIZE, vectors.size()));
 
-            // filter/validate
+            // Keep mapping from ORIGINAL RECORD INDEX → vector (skip invalid but never re-pack ordinals)
             List<double[]> valid = new ArrayList<>(slice.size());
-            for (double[] v : slice) {
-                if (v == null) continue;
-                if (v.length != dim) {
-                    logger.warn("Skipping vector dim={} (expected {})", (v != null ? v.length : -1), dim);
+            List<String>   ids   = new ArrayList<>(slice.size());
+
+            for (int j = 0; j < slice.size(); j++) {
+                double[] v = slice.get(j);
+                long ord = fileOrdinal.getAndIncrement(); // <-- original file position for this record
+
+                if (v == null) {
+                    logger.warn("Skipping null vector at ordinal={}", ord);
                     continue;
                 }
+                if (v.length != dim) {
+                    logger.warn("Skipping vector at ordinal={} with dim={} (expected {})", ord, v.length, dim);
+                    continue;
+                }
+                // Use the ORIGINAL ordinal as the ID so it matches ground-truth indices
+                ids.add(Long.toString(ord));
                 valid.add(v);
             }
+
             if (valid.isEmpty()) continue;
 
             // rotate only when needed and there is work
             keyService.rotateIfNeeded();
 
-            // assign sequential numeric IDs to match groundtruth-style ids
-            long base = nextId.getAndAdd(valid.size());
-            List<String> ids = new ArrayList<>(valid.size());
-            for (int j = 0; j < valid.size(); j++) {
-                ids.add(Long.toString(base + j)); // "0","1","2",...
-            }
-
-            // index
             indexService.batchInsert(ids, valid);
             indexedCount.addAndGet(valid.size());
             totalInserted += valid.size();
@@ -473,26 +487,51 @@ public class ForwardSecureANNSystem {
                                     List<QueryResult> retrievedTopK,
                                     int[] groundtruthAtK,
                                     int k) {
-        if (baseReader == null) return Double.NaN; // guard when -Dbase.path is missing
-        if (retrievedTopK == null || retrievedTopK.isEmpty() || groundtruthAtK == null || groundtruthAtK.length == 0) {
+        // Preconditions
+        if (baseReader == null) return Double.NaN;
+        if (q == null || retrievedTopK == null || retrievedTopK.isEmpty()
+                || groundtruthAtK == null || groundtruthAtK.length == 0 || k <= 0) {
             return Double.NaN;
         }
 
-        // denominator: true NN distance
-        int trueIdx = groundtruthAtK[0];
-        double denom = baseReader.l2(q, trueIdx);
-        if (denom == 0.0) return 1.0;
+        // Denominator: true-NN distance
+        final int trueIdx = groundtruthAtK[0];
+        final double denom = baseReader.l2(q, trueIdx);
+        final double eps = 1e-12;
+        if (Double.isNaN(denom)) return Double.NaN;   // corrupt data
+        if (denom <= eps) return 1.0;                 // degenerate: query equals its NN
 
-        // numerator: best (smallest) distance among the retrieved K
+        // Numerator: best (smallest) distance among the retrieved K
         double num = Double.POSITIVE_INFINITY;
-        int upto = Math.min(k, retrievedTopK.size());
+        final int upto = Math.min(k, retrievedTopK.size());
         for (int i = 0; i < upto; i++) {
-            int baseIdx = Integer.parseInt(retrievedTopK.get(i).getId());
+            // IDs are ordinals strings (see batchInsert) — be defensive anyway
+            String id = retrievedTopK.get(i).getId();
+            int baseIdx;
+            try {
+                baseIdx = Integer.parseInt(id);
+            } catch (NumberFormatException nfe) {
+                logger.warn("Non-ordinal retrieved id='{}' at top-{}; skipping for ratio calc", id, i + 1);
+                continue;
+            }
             double d = baseReader.l2(q, baseIdx);
-            if (d < num) num = d;
+            if (!Double.isNaN(d) && d < num) num = d;
         }
-        return num / denom;
+        if (!Double.isFinite(num)) return Double.NaN; // none usable
+
+        final double ratio = num / denom;
+
+        // Sanity: ratio should be >= 1, warn if not (usually indicates ID/GT mismatch)
+        if (ratio + 1e-12 < 1.0) {
+            logger.warn("Distance ratio < 1.0 ({}). Possible ID/GT misalignment. " +
+                            "Denom(trueNN)={}, Num(bestRetrieved)={}, k={}, trueIdx={}, bestRetrievedId={}",
+                    String.format(Locale.ROOT, "%.6f", ratio),
+                    denom, num, k, trueIdx,
+                    (retrievedTopK.isEmpty() ? "NA" : retrievedTopK.get(0).getId()));
+        }
+        return ratio;
     }
+
 
 
     // ---------------------- E2E Runner ----------------------
@@ -531,6 +570,19 @@ public class ForwardSecureANNSystem {
             logger.info("Candidate fanout ratios for Q0: {}", fanout);
         }
 
+        // Quick dataset sanity: query/GT sizes and index counts
+        if (groundtruth.size() != queries.size()) {
+            logger.warn("Groundtruth rows ({}) != number of queries ({}). " +
+                            "Ratios/recall may be unreliable if orders differ.",
+                    groundtruth.size(), queries.size());
+        }
+        int idxCount = indexService.getIndexedVectorCount();
+        if (idxCount <= 0) {
+            logger.warn("Index appears empty (indexedVectorCount=0) before querying. " +
+                    "Check indexing/paths; continuing for diagnostics.");
+        }
+
+
         // 4) Writer & audit helpers
         ResultWriter rw = new ResultWriter(Paths.get("results", "results_table.txt"));
         final int baseKForToken = Math.max(AUDIT_K, 100);
@@ -542,6 +594,16 @@ public class ForwardSecureANNSystem {
         Map<Integer, Long> globalMatches = new HashMap<>();
         Map<Integer, Long> globalTruth   = new HashMap<>();
         for (int k : K_VARIANTS) { globalMatches.put(k, 0L); globalTruth.put(k, 0L); }
+
+        int indexedNow = indexService.getIndexedVectorCount();
+        if (indexedNow <= 0) {
+            logger.warn("No points in memory before querying! " +
+                    "Check indexing/logs or restoreFromDisk. Continuing for diagnostics.");
+        }
+        int dimCountMem = indexService.getVectorCountForDimension(dim);
+        if (dimCountMem <= 0) {
+            logger.warn("No points registered for dim={} before querying. Continuing anyway.", dim);
+        }
 
         // 5) Query loop
         for (int q = 0; q < queries.size(); q++) {
@@ -585,23 +647,30 @@ public class ForwardSecureANNSystem {
 
                 enriched.add(new QueryEvaluationResult(
                         k, r.getRetrieved(),
-                        distRatio,                     // Ratio = distance-ratio
-                        Double.NaN,                    // per-query recall not shown
+                        distRatio,               // ratio = literature ratio (distance-based)
+                        r.getRecall(),           // keep: this carries Precision@K from QueryServiceImpl
                         r.getTimeMs(), insertTimeMs, r.getCandidateCount(),
                         tokenSizeBytes, vectorDim, totalFlushed, flushThreshold
                 ));
             }
 
-            topKProfiler.record("Q" + q, enriched);
+            QueryServiceImpl qs = (QueryServiceImpl) queryService;
+            topKProfiler.record("Q" + q, enriched,
+                    qs.getLastCandTotal(),
+                    qs.getLastCandKeptVersion(),
+                    qs.getLastCandDecrypted(),
+                    qs.getLastReturned());
 
             // Write per-query table once per query (re-use rw created above)
             rw.writeTable("Query " + (q + 1) + " Results (dim=" + dim + ")",
-                    new String[]{"TopK","Retrieved","Ratio","Recall","TimeMs","InsertTimeMs","Candidates","TokenSize","VectorDim","TotalFlushed","FlushThreshold"},
+                    new String[]{"TopK","Retrieved","LiteratureRatio","Precision","TimeMs",
+                            "InsertTimeMs","Candidates","TokenSize","VectorDim","TotalFlushed","FlushThreshold"},
+
                     enriched.stream().map(r -> new String[]{
                             String.valueOf(r.getTopKRequested()),
                             String.valueOf(r.getRetrieved()),
-                            String.format(Locale.ROOT, "%.4f", r.getRatio()),
-                            fmt4(r.getRecall()),
+                            (Double.isNaN(r.getRatio()) ? "NaN" : String.format(Locale.ROOT, "%.4f", r.getRatio())),
+                            String.format(Locale.ROOT, "%.4f", r.getRecall()),     // label as Precision
                             String.valueOf(r.getTimeMs()),
                             String.valueOf(r.getInsertTimeMs()),
                             String.valueOf(r.getCandidateCount()),
@@ -611,6 +680,7 @@ public class ForwardSecureANNSystem {
                             String.valueOf(r.getFlushThreshold())
                     }).collect(Collectors.toList())
             );
+
 
              if (computePrecision) {
                  for (int k : K_VARIANTS) {
@@ -662,6 +732,18 @@ public class ForwardSecureANNSystem {
         GroundtruthManager groundtruth = new GroundtruthManager();
         groundtruth.load(normalizePath(groundtruthPath));
 
+        // Quick dataset sanity: query/GT sizes and index counts
+        if (groundtruth.size() != queries.size()) {
+            logger.warn("Groundtruth rows ({}) != number of queries ({}). " +
+                            "Ratios/recall may be unreliable if orders differ.",
+                    groundtruth.size(), queries.size());
+        }
+        int idxCount = indexService.getIndexedVectorCount();
+        if (idxCount <= 0) {
+            logger.warn("Index appears empty (indexedVectorCount=0) before querying. " +
+                    "Check indexing/paths; continuing for diagnostics.");
+        }
+
         ResultWriter rw = new ResultWriter(Paths.get("results", "results_table.txt"));
         final int baseKForToken = Math.max(AUDIT_K, 100);
         final RetrievedAudit audit = AUDIT_ENABLE ? new RetrievedAudit(Paths.get("results")) : null;
@@ -671,6 +753,16 @@ public class ForwardSecureANNSystem {
         Map<Integer, Long> globalMatches = new HashMap<>();
         Map<Integer, Long> globalTruth   = new HashMap<>();
         for (int k : K_VARIANTS) { globalMatches.put(k, 0L); globalTruth.put(k, 0L); }
+
+        int indexedNow = indexService.getIndexedVectorCount();
+        if (indexedNow <= 0) {
+            logger.warn("No points in memory before querying! " +
+                    "Check indexing/logs or restoreFromDisk. Continuing for diagnostics.");
+        }
+        int dimCountMem = indexService.getVectorCountForDimension(dim);
+        if (dimCountMem <= 0) {
+            logger.warn("No points registered for dim={} before querying. Continuing anyway.", dim);
+        }
 
         for (int q = 0; q < queries.size(); q++) {
             double[] queryVec = queries.get(q);
@@ -709,22 +801,29 @@ public class ForwardSecureANNSystem {
 
                 enriched.add(new QueryEvaluationResult(
                         k, r.getRetrieved(),
-                        distRatio,
-                        Double.NaN,
+                        distRatio,               // ratio = literature ratio (distance-based)
+                        r.getRecall(),           // keep: this carries Precision@K from QueryServiceImpl
                         r.getTimeMs(), insertTimeMs, r.getCandidateCount(),
                         tokenSizeBytes, vectorDim, totalFlushed, flushThreshold
                 ));
             }
 
-            topKProfiler.record("Q" + q, enriched);
+            QueryServiceImpl qs = (QueryServiceImpl) queryService;
+            topKProfiler.record("Q" + q, enriched,
+                    qs.getLastCandTotal(),
+                    qs.getLastCandKeptVersion(),
+                    qs.getLastCandDecrypted(),
+                    qs.getLastReturned());
 
             rw.writeTable("Query " + (q + 1) + " Results (dim=" + dim + ")",
-                    new String[]{"TopK","Retrieved","Ratio","Recall","TimeMs","InsertTimeMs","Candidates","TokenSize","VectorDim","TotalFlushed","FlushThreshold"},
+                    new String[]{"TopK","Retrieved","LiteratureRatio","Precision","TimeMs",
+                            "InsertTimeMs","Candidates","TokenSize","VectorDim","TotalFlushed","FlushThreshold"},
+
                     enriched.stream().map(r -> new String[]{
                             String.valueOf(r.getTopKRequested()),
                             String.valueOf(r.getRetrieved()),
-                            String.format(Locale.ROOT, "%.4f", r.getRatio()),
-                            fmt4(r.getRecall()),
+                            (Double.isNaN(r.getRatio()) ? "NaN" : String.format(Locale.ROOT, "%.4f", r.getRatio())),
+                            String.format(Locale.ROOT, "%.4f", r.getRecall()),     // label as Precision
                             String.valueOf(r.getTimeMs()),
                             String.valueOf(r.getInsertTimeMs()),
                             String.valueOf(r.getCandidateCount()),
@@ -1054,7 +1153,8 @@ public class ForwardSecureANNSystem {
         }
 
         // 2) Top-K evaluation (if used)
-        try { topKProfiler.export(outDir.resolve("topk_evaluation.csv").toString()); }
+        try { topKProfiler.export(outDir.resolve("topk_evaluation.csv").toString());
+        }
         catch (Exception ignore) { /* ok if not used */ }
 
         // 3) dump recent queries
@@ -1210,7 +1310,7 @@ public class ForwardSecureANNSystem {
 
     public void shutdown() {
         System.out.printf(
-                "%n=== System Shutdown ===%nTotal indexing time: %d ms%nTotal query time: %d ms%n%n",
+                "Total indexing time: %d ms%nTotal query time: %d ms%n%n",
                 TimeUnit.NANOSECONDS.toMillis(totalIndexingTime),
                 TimeUnit.NANOSECONDS.toMillis(totalQueryTime)
         );
@@ -1366,12 +1466,10 @@ public class ForwardSecureANNSystem {
         }
 
         if (sys.getProfiler() != null) {
-            System.out.print("\n==== QUERY PERFORMANCE METRICS ====\n");
             System.out.printf("Average Client Query Time: %.2f ms\n",
                     sys.getProfiler().getAllClientQueryTimes().stream().mapToDouble(d -> d).average().orElse(0.0));
             System.out.printf("Average Ratio: %.4f\n",
                     sys.getProfiler().getAllQueryRatios().stream().mapToDouble(d -> d).average().orElse(0.0));
-            System.out.print("Expected < 500ms/query and Recall ≈ 1.0\n");
         }
 
         long start = System.currentTimeMillis();
