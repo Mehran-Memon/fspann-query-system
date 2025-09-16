@@ -92,6 +92,6 @@
                     <reuseForks>true</reuseForks>
                 </configuration>
             </plugin>
-        </plugins>
+                   </plugins>
     </build>
 </project>
