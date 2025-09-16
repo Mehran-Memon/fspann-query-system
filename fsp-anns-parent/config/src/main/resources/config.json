@@ -1,0 +1,8 @@
+{
+  "numShards": 128,
+  "numTables": 8,
+  "opsThreshold": 1000000000,
+  "ageThresholdMs": 2592000000,
+  "reEncBatchSize": 10000,
+  "profilerEnabled": true
+}
