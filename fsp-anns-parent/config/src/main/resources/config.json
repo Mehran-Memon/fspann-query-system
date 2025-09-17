@@ -1,8 +1,32 @@
 {
-  "numShards": 128,
-  "numTables": 8,
-  "opsThreshold": 1000000000,
-  "ageThresholdMs": 2592000000,
-  "reEncBatchSize": 10000,
-  "profilerEnabled": true
+  "lsh": {
+    "rowsPerBand": 12,
+    "numTables": 8,
+    "bucketWidth": 0.0
+  },
+  "search": {
+    "shardsToProbe": 1,
+    "maxCandidates": 20000
+  },
+  "paperEngine": {
+    "enabled": false,
+    "m": 12,
+    "lambda": 6,
+    "divisions": 8,
+    "seed": 42
+  },
+  "results": {
+    "verbose": false,
+    "writeGlobalRecall": true
+  },
+  "audit": {
+    "enable": false,
+    "k": 100
+  },
+  "paths": {
+    "base": "/data/ds/base.fvecs",
+    "query": "/data/ds/query.fvecs",
+    "groundtruth": "/data/ds/gt.ivecs",
+    "metadataDir": "/tmp/work"
+  }
 }

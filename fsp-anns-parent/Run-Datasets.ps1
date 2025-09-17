@@ -30,17 +30,17 @@ $Configs = @(
 # 💨 throughput
     @{ Label="throughput";
     ProbePerTable=6;  ProbeBitsMax=1; FanoutTarget=0.008;
-    PaperM=10; PaperLambda=5; PaperDivisions=6; PaperMaxCandidates=60000 },
+    PaperM=10; PaperLambda=5; PaperDivisions=8; PaperMaxCandidates=80000 },
 
     # ⚖️ balanced
     @{ Label="balanced";
     ProbePerTable=12; ProbeBitsMax=1; FanoutTarget=0.012;
-    PaperM=12; PaperLambda=6; PaperDivisions=8; PaperMaxCandidates=80000 },
+    PaperM=12; PaperLambda=6; PaperDivisions=10; PaperMaxCandidates=120000 },
 
     # 🎯 recall-first
     @{ Label="recall_first";
     ProbePerTable=28; ProbeBitsMax=3; FanoutTarget=0.035;
-    PaperM=14; PaperLambda=8; PaperDivisions=10; PaperMaxCandidates=120000 }
+    PaperM=14; PaperLambda=8; PaperDivisions=12; PaperMaxCandidates=200000 }
 
 )
 
@@ -99,6 +99,18 @@ function Ensure-Files([string]$base,[string]$query,[string]$gt) {
     if ([string]::IsNullOrWhiteSpace($query) -or -not (Test-Path -LiteralPath $query)) { Write-Error "Missing query: $query"; $ok = $false }
     if ([string]::IsNullOrWhiteSpace($gt)    -or -not (Test-Path -LiteralPath $gt))    { Write-Error "Missing GT:    $gt";    $ok = $false }
     return $ok
+}
+
+function Safe-Resolve([string]$Path, [bool]$AllowMissing = $false) {
+    try {
+        if ($AllowMissing) {
+            # return original if missing (e.g., keystore file that will be created)
+            if (-not (Test-Path -LiteralPath $Path)) { return $Path }
+        }
+        return (Resolve-Path -LiteralPath $Path).Path
+    } catch {
+        if ($AllowMissing) { return $Path } else { throw }
+    }
 }
 
 # ---------- FAST DELETE ----------
@@ -238,6 +250,7 @@ foreach ($ds in $Datasets) {
             "-Dpaper.divisions=$($cfg.PaperDivisions)",
             "-Dpaper.maxCandidates=$($cfg.PaperMaxCandidates)",
             "-Dpaper.buildThreshold=1000",
+            "-Dcloak.noise=0.0",
 
             # write-through on so points hit Rocks/points immediately
             "-Dindex.writeThrough=true",
@@ -247,7 +260,7 @@ foreach ($ds in $Datasets) {
             "-Dquery.only=false"
         ) + $passFlags + @(
         # evaluation wiring
-            "-Deval.computePrecision=true",   # enables precision/ratio metrics in app
+            "-Deval.computePrecision=false",   # enables precision/ratio metrics in app
             "-Dbase.path=$base",              # for distance-ratio computation
             "-Daudit.enable=false",
             "-Dexport.artifacts=true",
@@ -255,10 +268,18 @@ foreach ($ds in $Datasets) {
             "-jar", (Resolve-Path $JarPath)
         )
 
+        # Ensure keystore directory exists; don't Resolve-Path the  file itself
+        $KeysDir = Split-Path -Parent $KeysPath
+        New-Item -ItemType Directory -Force -Path $KeysDir | Out-Null
+
         $app = @(
-            (Resolve-Path $ConfigPath),
-            $base, $query, (Resolve-Path $KeysPath),
-            $dim,  (Resolve-Path $metaDir), $gt,
+            (Safe-Resolve $ConfigPath),
+            (Safe-Resolve $base),
+            (Safe-Resolve $query),
+            (Safe-Resolve $KeysPath $true),  # allow missing
+            $dim,
+            (Safe-Resolve $metaDir),
+            (Safe-Resolve $gt),
             "100000"
         )
 

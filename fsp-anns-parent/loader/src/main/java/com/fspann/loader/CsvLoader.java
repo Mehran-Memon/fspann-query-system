@@ -1,4 +1,3 @@
-// loader/src/main/java/com/fspann/loader/CsvLoader.java
 package com.fspann.loader;
 
 import java.io.*;
@@ -10,8 +9,7 @@ import java.util.*;
 /**
  * Streaming CSV loader for vectors or integer indices.
  * - Skips blank lines and lines starting with '#' (comments).
- * - Tolerates headers: if the first non-empty line contains any non-numeric tokens,
- *   it is skipped automatically.
+ * - Tolerates a single header line: if the FIRST non-empty line is non-numeric, it is skipped once.
  * - Tolerates extra spaces and trailing commas.
  * - Handles UTF-8 BOM if present.
  */
@@ -21,7 +19,40 @@ public class CsvLoader implements FormatLoader {
     public Iterator<double[]> openVectorIterator(Path file) throws IOException {
         BufferedReader br = newBufferedReader(file);
         return new Iterator<>() {
-            String nextLine = fetchNextDataLine(br, /*numeric=*/true);
+            String nextLine;
+            boolean headerChecked = false;
+
+            {
+                nextLine = fetchNextDataLine(/*numeric=*/true);
+            }
+
+            private String fetchNextDataLine(boolean numeric) {
+                try {
+                    String line;
+                    while ((line = br.readLine()) != null) {
+                        line = sanitize(line);
+                        if (line.isEmpty() || line.charAt(0) == '#') continue;
+
+                        if (!headerChecked) {
+                            headerChecked = true;
+                            // First candidate line: if not numeric, treat as header and continue once
+                            if (numeric ? !isAllNumeric(line) : !isAllIntegers(line)) {
+                                continue;
+                            }
+                        } else {
+                            // After the first data line, just skip malformed lines silently
+                            if (numeric ? !isAllNumeric(line) : !isAllIntegers(line)) {
+                                continue;
+                            }
+                        }
+                        return line;
+                    }
+                    return null;
+                } catch (IOException e) {
+                    closeQuietly(br);
+                    throw new UncheckedIOException(e);
+                }
+            }
 
             @Override public boolean hasNext() { return nextLine != null; }
 
@@ -29,7 +60,7 @@ public class CsvLoader implements FormatLoader {
                 if (nextLine == null) throw new NoSuchElementException();
                 try {
                     double[] v = parseDoubles(nextLine);
-                    nextLine = fetchNextDataLine(br, /*numeric=*/true);
+                    nextLine = fetchNextDataLine(/*numeric=*/true);
                     return v;
                 } finally {
                     if (nextLine == null) closeQuietly(br);
@@ -42,7 +73,38 @@ public class CsvLoader implements FormatLoader {
     public Iterator<int[]> openIndexIterator(Path file) throws IOException {
         BufferedReader br = newBufferedReader(file);
         return new Iterator<>() {
-            String nextLine = fetchNextDataLine(br, /*numeric=*/false);
+            String nextLine;
+            boolean headerChecked = false;
+
+            {
+                nextLine = fetchNextDataLine(/*numeric=*/false);
+            }
+
+            private String fetchNextDataLine(boolean numeric) {
+                try {
+                    String line;
+                    while ((line = br.readLine()) != null) {
+                        line = sanitize(line);
+                        if (line.isEmpty() || line.charAt(0) == '#') continue;
+
+                        if (!headerChecked) {
+                            headerChecked = true;
+                            if (numeric ? !isAllNumeric(line) : !isAllIntegers(line)) {
+                                continue; // skip header once
+                            }
+                        } else {
+                            if (numeric ? !isAllNumeric(line) : !isAllIntegers(line)) {
+                                continue;
+                            }
+                        }
+                        return line;
+                    }
+                    return null;
+                } catch (IOException e) {
+                    closeQuietly(br);
+                    throw new UncheckedIOException(e);
+                }
+            }
 
             @Override public boolean hasNext() { return nextLine != null; }
 
@@ -50,7 +112,7 @@ public class CsvLoader implements FormatLoader {
                 if (nextLine == null) throw new NoSuchElementException();
                 try {
                     int[] v = parseInts(nextLine);
-                    nextLine = fetchNextDataLine(br, /*numeric=*/false);
+                    nextLine = fetchNextDataLine(/*numeric=*/false);
                     return v;
                 } finally {
                     if (nextLine == null) closeQuietly(br);
@@ -75,34 +137,10 @@ public class CsvLoader implements FormatLoader {
         return new BufferedReader(new InputStreamReader(pb, StandardCharsets.UTF_8));
     }
 
-    private static String fetchNextDataLine(BufferedReader br, boolean numeric) {
-        try {
-            String line;
-            while ((line = br.readLine()) != null) {
-                line = sanitize(line);
-                if (line.isEmpty() || line.charAt(0) == '#') continue;
-
-                // Header detection: if the first 'data' line has any non-numeric token, skip it once.
-                // After the first usable line is found, we don't apply header detection again.
-                if (numeric ? !isAllNumeric(line) : !isAllIntegers(line)) {
-                    // treat as header, skip and continue
-                    continue;
-                }
-                return line;
-            }
-            return null;
-        } catch (IOException e) {
-            closeQuietly(br);
-            throw new UncheckedIOException(e);
-        }
-    }
-
     private static String sanitize(String s) {
-        // Trim and drop trailing commas and extra whitespace
         s = s.trim();
-        // remove trailing commas/spaces
-        while (!s.isEmpty() && (s.endsWith(",") || Character.isWhitespace(s.charAt(s.length()-1)))) {
-            s = s.substring(0, s.length()-1).trim();
+        while (!s.isEmpty() && (s.endsWith(",") || Character.isWhitespace(s.charAt(s.length() - 1)))) {
+            s = s.substring(0, s.length() - 1).trim();
         }
         return s;
     }
@@ -110,18 +148,14 @@ public class CsvLoader implements FormatLoader {
     private static boolean isAllNumeric(String line) {
         String[] toks = splitFlexible(line);
         if (toks.length == 0) return false;
-        for (String t : toks) {
-            if (!isDouble(t)) return false;
-        }
+        for (String t : toks) if (!isDouble(t)) return false;
         return true;
     }
 
     private static boolean isAllIntegers(String line) {
         String[] toks = splitFlexible(line);
         if (toks.length == 0) return false;
-        for (String t : toks) {
-            if (!isInt(t)) return false;
-        }
+        for (String t : toks) if (!isInt(t)) return false;
         return true;
     }
 
@@ -140,7 +174,6 @@ public class CsvLoader implements FormatLoader {
     }
 
     private static String[] splitFlexible(String line) {
-        // Split on commas or any whitespace, collapsing runs; ignore empty tokens.
         return Arrays.stream(line.split("[,\\s]+"))
                 .filter(tok -> !tok.isEmpty())
                 .toArray(String[]::new);
@@ -149,6 +182,7 @@ public class CsvLoader implements FormatLoader {
     private static boolean isDouble(String s) {
         try { Double.parseDouble(s); return true; } catch (Exception e) { return false; }
     }
+
     private static boolean isInt(String s) {
         try { Integer.parseInt(s); return true; } catch (Exception e) { return false; }
     }

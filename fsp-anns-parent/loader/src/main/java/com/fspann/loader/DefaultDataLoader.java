@@ -1,19 +1,20 @@
-// loader/src/main/java/com/fspann/loader/DefaultDataLoader.java
 package com.fspann.loader;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
-public class DefaultDataLoader {
+public class DefaultDataLoader implements Closeable {
 
-    // Stateful per-file cursor so repeated calls consume the file in batches
-    private final Map<String, Long> vectorOffsets = new ConcurrentHashMap<>();
-
-    // Default batch size (overridable via -Dfspann.loader.batchSize=N)
+    // Sensible default; override with -Dfspann.loader.batchSize=NNN
     private static final int DEFAULT_BATCH_SIZE =
-            Integer.getInteger("fspann.loader.batchSize", 3);
+            Integer.getInteger("fspann.loader.batchSize", 10_000);
+
+    // Keep streaming iterators per path so repeated calls don't re-scan files
+    private final Map<String, Iterator<double[]>> vectorIts = new ConcurrentHashMap<>();
+    private final Map<String, Iterator<int[]>>    indexIts  = new ConcurrentHashMap<>();
 
     public FormatLoader lookup(Path file) {
         String name = file.getFileName().toString().toLowerCase(Locale.ROOT);
@@ -26,54 +27,60 @@ public class DefaultDataLoader {
         throw new IllegalArgumentException("Unsupported vector/index format: " + name);
     }
 
-    /**
-     * Eager-load a small batch of vectors from the given file, remembering
-     * how many have already been consumed for that path. Subsequent calls
-     * will continue from where the previous call left off.
-     */
-    public List<double[]> loadData(String path, int dim) throws IOException {
+    /** Stream next batch of vectors filtered by expected dimension. */
+    public List<double[]> loadData(String path, int expectedDim) throws IOException {
+        return loadData(path, expectedDim, DEFAULT_BATCH_SIZE);
+    }
+
+    /** Stream next batch of vectors filtered by expected dimension. */
+    public List<double[]> loadData(String path, int expectedDim, int batchSize) throws IOException {
         Path p = Path.of(path).toAbsolutePath().normalize();
         String key = p.toString();
 
-        FormatLoader fl = lookup(p);
-        Iterator<double[]> it = fl.openVectorIterator(p);
+        Iterator<double[]> it = vectorIts.computeIfAbsent(key, k -> {
+            try { return lookup(p).openVectorIterator(p); }
+            catch (IOException e) { throw new RuntimeException(e); }
+        });
 
-        // Skip to last offset
-        long offset = vectorOffsets.getOrDefault(key, 0L);
-        long skipped = 0;
-        while (skipped < offset && it.hasNext()) {
-            it.next();
-            skipped++;
-        }
-        // If file already exhausted, return empty
-        if (skipped < offset && !it.hasNext()) {
-            return Collections.emptyList();
-        }
-
-        // Read up to DEFAULT_BATCH_SIZE matching-dimension vectors
-        List<double[]> out = new ArrayList<>(DEFAULT_BATCH_SIZE);
-        int read = 0;
-        while (it.hasNext() && read < DEFAULT_BATCH_SIZE) {
+        List<double[]> out = new ArrayList<>(batchSize);
+        while (it.hasNext() && out.size() < batchSize) {
             double[] v = it.next();
-            if (v != null && v.length == dim) {
-                out.add(v);
-                read++;
-            }
+            if (v != null && v.length == expectedDim) out.add(v);
         }
-
-        // Advance the cursor by how many items we actually returned (not lines skipped due to dim mismatch)
-        vectorOffsets.put(key, offset + read);
+        if (!it.hasNext()) vectorIts.remove(key); // iterator closes itself at EOF
         return out;
     }
 
-    /** Eager load groundtruth indices (CSV or IVECS). No batching/cursor. */
-    public List<int[]> loadGroundtruth(String path) throws IOException {
+    /** Stream next batch of ground-truth rows. */
+    public List<int[]> loadGroundtruth(String path, int batchSize) throws IOException {
         Path p = Path.of(path).toAbsolutePath().normalize();
-        FormatLoader fl = lookup(p);
-        List<int[]> out = new ArrayList<>();
-        for (Iterator<int[]> it = fl.openIndexIterator(p); it.hasNext(); ) {
+        String key = p.toString();
+
+        Iterator<int[]> it = indexIts.computeIfAbsent(key, k -> {
+            try { return lookup(p).openIndexIterator(p); }
+            catch (IOException e) { throw new RuntimeException(e); }
+        });
+
+        List<int[]> out = new ArrayList<>(batchSize);
+        while (it.hasNext() && out.size() < batchSize) {
             out.add(it.next());
         }
+        if (!it.hasNext()) indexIts.remove(key);
         return out;
+    }
+
+    /** Convenience: read all ground-truth rows (for medium-sized GT files). */
+    public List<int[]> loadGroundtruthAll(String path) throws IOException {
+        List<int[]> all = new ArrayList<>();
+        List<int[]> batch;
+        while (!(batch = loadGroundtruth(path, DEFAULT_BATCH_SIZE)).isEmpty()) {
+            all.addAll(batch);
+        }
+        return all;
+    }
+
+    @Override public void close() {
+        vectorIts.clear();
+        indexIts.clear();
     }
 }
