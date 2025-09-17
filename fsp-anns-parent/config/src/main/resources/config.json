@@ -1,32 +1,71 @@
 {
-  "lsh": {
-    "rowsPerBand": 12,
+  "base": {
+    "numShards": 32,
     "numTables": 8,
-    "bucketWidth": 0.0
+    "opsThreshold": 500000000,
+    "ageThresholdMs": 604800000,
+    "reEncBatchSize": 2000,
+    "profilerEnabled": true,
+
+    "eval": {
+      "computePrecision": true,
+      "writeGlobalRecallCsv": true,
+      "kVariants": [1, 20, 40, 60, 80, 100]
+    },
+    "ratio": {
+      "source": "auto",
+      "gtSample": 64,
+      "gtMismatchTolerance": 0.02
+    },
+    "audit": {
+      "enable": false,
+      "k": 100,
+      "sampleEvery": 200,
+      "worstKeep": 50
+    },
+    "output": {
+      "resultsDir": "results",
+      "exportArtifacts": true,
+      "suppressLegacyMetrics": false
+    },
+    "cloak": {
+      "noise": 0.0
+    },
+    "lsh": {
+      "numTables": 0,
+      "rowsPerBand": 0,
+      "probeShards": 0
+    },
+    "paper": {
+      "enabled": false,
+      "m": 12,
+      "lambda": 6,
+      "divisions": 8,
+      "seed": 42
+    }
   },
-  "search": {
-    "shardsToProbe": 1,
-    "maxCandidates": 20000
-  },
-  "paperEngine": {
-    "enabled": false,
-    "m": 12,
-    "lambda": 6,
-    "divisions": 8,
-    "seed": 42
-  },
-  "results": {
-    "verbose": false,
-    "writeGlobalRecall": true
-  },
-  "audit": {
-    "enable": false,
-    "k": 100
-  },
-  "paths": {
-    "base": "/data/ds/base.fvecs",
-    "query": "/data/ds/query.fvecs",
-    "groundtruth": "/data/ds/gt.ivecs",
-    "metadataDir": "/tmp/work"
-  }
+
+  "profiles": [
+    {
+      "name": "throughput",
+      "overrides": {
+        "lsh": { "numTables": 8, "rowsPerBand": 6,  "probeShards": 4 },
+        "paper": { "enabled": false }
+      }
+    },
+    {
+      "name": "balanced",
+      "overrides": {
+        "lsh": { "numTables": 12, "rowsPerBand": 8,  "probeShards": 8 },
+        "paper": { "enabled": true, "m": 12, "lambda": 6, "divisions": 10 }
+      }
+    },
+    {
+      "name": "recall_first",
+      "overrides": {
+        "lsh": { "numTables": 16, "rowsPerBand": 10, "probeShards": 14 },
+        "paper": { "enabled": true, "m": 14, "lambda": 8, "divisions": 12 }
+      }
+    }
+  ]
 }

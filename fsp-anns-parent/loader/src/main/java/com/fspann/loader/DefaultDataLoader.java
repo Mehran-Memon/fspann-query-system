@@ -8,13 +8,17 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class DefaultDataLoader implements Closeable {
 
-    // Sensible default; override with -Dfspann.loader.batchSize=NNN
+    // Default batch size; can be overridden with -Dfspann.loader.batchSize=NNN
     private static final int DEFAULT_BATCH_SIZE =
             Integer.getInteger("fspann.loader.batchSize", 10_000);
 
-    // Keep streaming iterators per path so repeated calls don't re-scan files
+    // Per-path live iterators (streaming)
     private final Map<String, Iterator<double[]>> vectorIts = new ConcurrentHashMap<>();
     private final Map<String, Iterator<int[]>>    indexIts  = new ConcurrentHashMap<>();
+
+    // Paths that have reached EOF (so we don't reopen and rescan)
+    private final Set<String> exhaustedVectors = ConcurrentHashMap.newKeySet();
+    private final Set<String> exhaustedIndices = ConcurrentHashMap.newKeySet();
 
     public FormatLoader lookup(Path file) {
         String name = file.getFileName().toString().toLowerCase(Locale.ROOT);
@@ -37,6 +41,11 @@ public class DefaultDataLoader implements Closeable {
         Path p = Path.of(path).toAbsolutePath().normalize();
         String key = p.toString();
 
+        // If we've already reached EOF on this path, stay exhausted.
+        if (exhaustedVectors.contains(key)) {
+            return Collections.emptyList();
+        }
+
         Iterator<double[]> it = vectorIts.computeIfAbsent(key, k -> {
             try { return lookup(p).openVectorIterator(p); }
             catch (IOException e) { throw new RuntimeException(e); }
@@ -47,7 +56,12 @@ public class DefaultDataLoader implements Closeable {
             double[] v = it.next();
             if (v != null && v.length == expectedDim) out.add(v);
         }
-        if (!it.hasNext()) vectorIts.remove(key); // iterator closes itself at EOF
+
+        // If iterator is finished, mark the path as exhausted and drop the iterator.
+        if (!it.hasNext()) {
+            exhaustedVectors.add(key);
+            vectorIts.remove(key);
+        }
         return out;
     }
 
@@ -55,6 +69,10 @@ public class DefaultDataLoader implements Closeable {
     public List<int[]> loadGroundtruth(String path, int batchSize) throws IOException {
         Path p = Path.of(path).toAbsolutePath().normalize();
         String key = p.toString();
+
+        if (exhaustedIndices.contains(key)) {
+            return Collections.emptyList();
+        }
 
         Iterator<int[]> it = indexIts.computeIfAbsent(key, k -> {
             try { return lookup(p).openIndexIterator(p); }
@@ -65,7 +83,11 @@ public class DefaultDataLoader implements Closeable {
         while (it.hasNext() && out.size() < batchSize) {
             out.add(it.next());
         }
-        if (!it.hasNext()) indexIts.remove(key);
+
+        if (!it.hasNext()) {
+            exhaustedIndices.add(key);
+            indexIts.remove(key);
+        }
         return out;
     }
 
@@ -79,8 +101,11 @@ public class DefaultDataLoader implements Closeable {
         return all;
     }
 
-    @Override public void close() {
+    @Override
+    public void close() {
         vectorIts.clear();
         indexIts.clear();
+        exhaustedVectors.clear();
+        exhaustedIndices.clear();
     }
 }

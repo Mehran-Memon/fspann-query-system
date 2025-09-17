@@ -18,10 +18,10 @@ import com.fspann.query.core.TopKProfiler;
 import com.fspann.query.service.QueryService;
 import com.fspann.query.service.QueryServiceImpl;
 import com.fspann.common.KeyLifeCycleService;
-
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 import java.nio.*;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
@@ -49,8 +49,21 @@ public class ForwardSecureANNSystem {
     private final TopKProfiler topKProfiler;
     private volatile boolean queryOnlyMode = false;
     private BaseVectorReader baseReader = null;
-    private final boolean computePrecision = Boolean.parseBoolean(System.getProperty("eval.computePrecision", "true"));
+
+    // Config-driven toggles (replacing scattered -D flags)
+    private final boolean computePrecision;
+    private final boolean writeGlobalRecallCsv;
+    private final int[] K_VARIANTS;
+    private final boolean auditEnable;
+    private final int auditK;
+    private final int auditSampleEvery;
+    private final int auditWorstKeep;
+    private final Path resultsDir;
+    private final double configuredNoiseScale;
+
     enum RatioSource { AUTO, GT, BASE }
+    private final RatioSource ratioSource;
+
     static final class TrueNN { final int id; final double d; TrueNN(int id, double d){this.id=id; this.d=d;} }
 
     private final int BATCH_SIZE;
@@ -58,17 +71,14 @@ public class ForwardSecureANNSystem {
     private long totalQueryTime = 0;
     private int totalInserted = 0;
     private final java.util.concurrent.atomic.AtomicInteger indexedCount = new java.util.concurrent.atomic.AtomicInteger();
-    private final java.util.concurrent.atomic.AtomicLong nextId = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong fileOrdinal = new java.util.concurrent.atomic.AtomicLong(0);
 
-    // Read once at startup
-    final int OVERRIDE_TABLES = Integer.getInteger("lsh.tables", -1);
-    final int OVERRIDE_ROWS   = Integer.getInteger("lsh.rowsPerBand", -1);
-    final int OVERRIDE_PROBE  = Integer.getInteger("probe.shards", -1);
-    final double NOISE_SCALE  = Double.parseDouble(System.getProperty("cloak.noise", "0.0"));
-    private static final boolean WRITE_GLOBAL_RECALL =
-            Boolean.getBoolean("eval.writeGlobalRecall");
+    // Legacy override hooks (still honored if set), otherwise use config.getLsh()
+    private final int OVERRIDE_TABLES;
+    private final int OVERRIDE_ROWS;
+    private final int OVERRIDE_PROBE;
 
-    // artifact/export helpers (now aligned with FsPaths)
+    // artifact/export helpers (aligned with FsPaths)
     private final Path metaDBPath;
     private final Path pointsPath;
     private final Path keyStorePath;
@@ -78,20 +88,11 @@ public class ForwardSecureANNSystem {
     private final ExecutorService executor;
     private boolean exitOnShutdown = false;
 
-    // ---- Audit controls (tweak with -Daudit.*=...) ----
-    private static final boolean AUDIT_ENABLE       = Boolean.getBoolean("audit.enable");       // default: off
-    private static final int     AUDIT_K            = Integer.getInteger("audit.k", 100);       // evaluate @K
-    private static final int     AUDIT_SAMPLE_EVERY = Integer.getInteger("audit.sample.every", 200); // sample every Nth query
-    private static final int     AUDIT_WORST_KEEP   = Integer.getInteger("audit.worst.keep", 50);    // keep N worst
-    private final java.util.concurrent.atomic.AtomicLong fileOrdinal = new java.util.concurrent.atomic.AtomicLong(0);
-    private static final boolean RESULTS_VERBOSE = Boolean.getBoolean("results.verbose");
-
     // remember previous FsPaths props to restore on shutdown
     private final String prevBaseProp;
     private final String prevMetaProp;
     private final String prevPointsProp;
     private final String prevKeyStoreProp;
-
 
     public ForwardSecureANNSystem(
             String configPath,
@@ -115,7 +116,7 @@ public class ForwardSecureANNSystem {
         this.BATCH_SIZE = batchSize;
         this.executor = Executors.newFixedThreadPool(Math.max(1, Runtime.getRuntime().availableProcessors() / 2));
 
-        // Load config
+        // Load config (JSON/YAML)
         SystemConfig cfg;
         try {
             ApiSystemConfig apiCfg = new ApiSystemConfig(normalizePath(configPath));
@@ -126,8 +127,52 @@ public class ForwardSecureANNSystem {
         }
         this.config = cfg;
 
+        // ---- Materialize commonly used settings from config ----
+        this.computePrecision     = propOr(
+                config.getEval().computePrecision,
+                "eval.computePrecision", "computePrecision");
+
+        this.writeGlobalRecallCsv = propOr(
+                config.getEval().writeGlobalRecallCsv,
+                "eval.writeGlobalRecallCsv", "eval.writeGlobalRecall", "writeGlobalRecallCsv");
+
+        this.K_VARIANTS          = (config.getEval().kVariants != null && config.getEval().kVariants.length > 0)
+                ? config.getEval().kVariants.clone()
+                : new int[]{1,20,40,60,80,100};
+        this.auditEnable         = config.getAudit().enable;
+        this.auditK              = config.getAudit().k;
+        this.auditSampleEvery    = config.getAudit().sampleEvery;
+        this.auditWorstKeep      = config.getAudit().worstKeep;
+        String resultsDirStr = (config.getOutput() != null && config.getOutput().resultsDir != null && !config.getOutput().resultsDir.isBlank())
+                ? config.getOutput().resultsDir
+                : System.getProperty("results.dir", "results");
+        this.resultsDir = Paths.get(resultsDirStr);
+        this.configuredNoiseScale= Math.max(0.0, config.getCloak().noise);
+
+        // ratio source
+        String rs = (config.getRatio().source == null ? "auto" : config.getRatio().source).toLowerCase(Locale.ROOT);
+        this.ratioSource = switch (rs) {
+            case "gt"   -> RatioSource.GT;
+            case "base" -> RatioSource.BASE;
+            default     -> RatioSource.AUTO;
+        };
+
+        // legacy override hooks (fallback if config.lsh not set)
+        this.OVERRIDE_TABLES = (config.getLsh().numTables > 0)
+                ? config.getLsh().numTables
+                : Integer.getInteger("lsh.tables", -1);
+        this.OVERRIDE_ROWS = (config.getLsh().rowsPerBand > 0)
+                ? config.getLsh().rowsPerBand
+                : Integer.getInteger("lsh.rowsPerBand", -1);
+        this.OVERRIDE_PROBE = (config.getLsh().probeShards > 0)
+                ? config.getLsh().probeShards
+                : Integer.getInteger("probe.shards", -1);
+
+        try { Files.createDirectories(resultsDir); } catch (IOException ioe) {
+            logger.warn("Could not create resultsDir {}; falling back to CWD", resultsDir, ioe);
+        }
+
         // ---- Centralize paths via FsPaths, but keep test-time @TempDir compatibility ----
-        // Ensure FsPaths resolves to the provided metadataPath (temp dir in tests).
         this.prevBaseProp   = System.getProperty(FsPaths.BASE_DIR_PROP);
         this.prevMetaProp   = System.getProperty(FsPaths.METADB_PROP);
         this.prevPointsProp = System.getProperty(FsPaths.POINTS_PROP);
@@ -135,7 +180,6 @@ public class ForwardSecureANNSystem {
         System.setProperty(FsPaths.METADB_PROP,    metadataPath.resolve("metadata").toString());
         System.setProperty(FsPaths.POINTS_PROP,    metadataPath.resolve("points").toString());
 
-        // Resolve and persist fields
         this.pointsPath = FsPaths.pointsDir();
         this.metaDBPath = FsPaths.metadataDb();
         Files.createDirectories(pointsPath);
@@ -181,26 +225,18 @@ public class ForwardSecureANNSystem {
         // Build index service
         this.indexService = SecureLSHIndexService.fromConfig(cryptoService, keyService, metadataManager, config);
 
-        if (Boolean.getBoolean("paper.mode")) {
-            int m        = Integer.getInteger("paper.m", 12);
-            int lambda   = Integer.getInteger("paper.lambda", 6);
-            int divisions= Integer.getInteger("paper.divisions", 8);
-            long seed    = Long.getLong("paper.seed", 42L);
+        // Optional paper engine (config-driven)
+        if (config.getPaper().enabled) {
+            int m        = config.getPaper().m;
+            int lambda   = config.getPaper().lambda;
+            int divisions= config.getPaper().divisions;
+            long seed    = config.getPaper().seed;
 
             com.fspann.index.paper.PartitionedIndexService paperEngine =
                     new com.fspann.index.paper.PartitionedIndexService(m, lambda, divisions, seed);
-
-            // Hand it to the LSH service so inserts & lookups can delegate to the paper path.
             indexService.setPaperEngine(paperEngine);
             logger.info("Paper engine enabled (m={}, λ={}, ℓ={}, seed={})", m, lambda, divisions, seed);
         }
-
-        // per-token tables (fallback to 4 if index doesn't expose it)
-        int tmpTables = 4;
-        try {
-            // If indexService exposes the number of tables, assign here.
-            // tmpTables = indexService.getNumTables();
-        } catch (Throwable ignore) {}
 
         if (keyService instanceof KeyRotationServiceImpl kr) {
             kr.setIndexService(indexService);
@@ -209,30 +245,25 @@ public class ForwardSecureANNSystem {
         this.cache = new ConcurrentMapCache(config.getNumShards() * 1000);
         this.profiler = config.isProfilerEnabled() ? new MicrometerProfiler(new SimpleMeterRegistry()) : null;
 
-        // Token factories by dimension
+        // Token factories by dimension (apply LSH overrides if present)
         for (int dim : dimensions) {
             EvenLSH lshForDim = indexService.getLshForDimension(dim);
 
-            // --- apply m (rows per band / hash functions) override, if exposed ---
+            // m override (rows per band / hash funcs per table)
             if (OVERRIDE_ROWS > 0) {
                 try {
-                    // common names in LSH implementations
-                    lshForDim.getClass().getMethod("setRowsPerBand", int.class)
-                            .invoke(lshForDim, OVERRIDE_ROWS);
+                    lshForDim.getClass().getMethod("setRowsPerBand", int.class).invoke(lshForDim, OVERRIDE_ROWS);
                 } catch (Throwable ignore) {
                     try {
-                        lshForDim.getClass().getMethod("setNumHashFuncsPerTable", int.class)
-                                .invoke(lshForDim, OVERRIDE_ROWS);
-                    } catch (Throwable ignore2) {
-                        // (optional) tighten bucket width instead, e.g. setBucketWidth(...)
-                    }
+                        lshForDim.getClass().getMethod("setNumHashFuncsPerTable", int.class).invoke(lshForDim, OVERRIDE_ROWS);
+                    } catch (Throwable ignored2) { /* optional */ }
                 }
             }
 
-            // --- apply ℓ override ---
+            // tables override
             int tables = (OVERRIDE_TABLES > 0) ? OVERRIDE_TABLES : numTablesFor(lshForDim, config);
 
-            // --- apply shards-to-probe override ---
+            // probe-shards override
             int shards = shardsToProbe();
 
             tokenFactories.put(dim, new QueryTokenFactory(
@@ -242,9 +273,9 @@ public class ForwardSecureANNSystem {
                     dim, tables, shards, (OVERRIDE_ROWS > 0 ? OVERRIDE_ROWS : "default"));
         }
 
-
         this.queryService = new QueryServiceImpl(indexService, cryptoService, keyService);
-        String resultsRoot = System.getProperty("results.dir", metadataPath.toString());
+
+        String resultsRoot = resultsDir.toString();
         this.topKProfiler = new TopKProfiler(resultsRoot);
 
         String basePathProp = System.getProperty("base.path", "").trim();
@@ -261,10 +292,9 @@ public class ForwardSecureANNSystem {
         } else {
             logger.info("No -Dbase.path provided; distance-ratio will be skipped.");
         }
-
     }
 
-        /* ---------------------- Indexing API ---------------------- */
+    /* ---------------------- Indexing API ---------------------- */
     public void indexStream(String dataPath, int dim) throws IOException {
         fileOrdinal.set(0);
 
@@ -299,7 +329,6 @@ public class ForwardSecureANNSystem {
                 getIndexedVectorCount(),
                 (indexService.getPointBuffer() != null ? indexService.getPointBuffer().getBufferSize() : -1),
                 (indexService.getPointBuffer() != null ? indexService.getPointBuffer().getTotalFlushedPoints() : -1));
-
     }
 
     public void batchInsert(List<double[]> vectors, int dim) {
@@ -336,7 +365,6 @@ public class ForwardSecureANNSystem {
 
             if (valid.isEmpty()) continue;
 
-            // rotate only when needed and there is work
             keyService.rotateIfNeeded();
 
             indexService.batchInsert(ids, valid);
@@ -364,8 +392,6 @@ public class ForwardSecureANNSystem {
 
         if (profiler != null) profiler.start("insert");
         try {
-            // REMOVE this line: keyService.incrementOperation();
-
             if (keyService instanceof KeyRotationServiceImpl) {
                 List<EncryptedPoint> updated = ((KeyRotationServiceImpl) keyService).rotateIfNeededAndReturnUpdated();
                 for (EncryptedPoint pt : updated) indexService.updateCachedPoint(pt);
@@ -392,7 +418,7 @@ public class ForwardSecureANNSystem {
     private QueryTokenFactory factoryForDim(int dim) {
         return tokenFactories.computeIfAbsent(dim, d -> {
             EvenLSH lsh = indexService.getLshForDimension(d);
-            int tables = numTablesFor(lsh, config);
+            int tables = (OVERRIDE_TABLES > 0) ? OVERRIDE_TABLES : numTablesFor(lsh, config);
             int shards = shardsToProbe();
             logger.info("TokenFactory (lazy): dim={} tables={} shardsToProbe={}", d, tables, shards);
             return new QueryTokenFactory(cryptoService, keyService, lsh, shards, tables);
@@ -405,9 +431,11 @@ public class ForwardSecureANNSystem {
         if (queryVector.length != dim) throw new IllegalArgumentException("Query vector length must match dimension");
         if (topK <= 0) throw new IllegalArgumentException("TopK must be positive");
 
-        double noiseScale = (System.getProperty("cloak.noise") != null)
-                ? Double.parseDouble(System.getProperty("cloak.noise"))
+        // If config sets noise > 0 use it; else retain old adaptive default
+        double noiseScale = (configuredNoiseScale > 0.0)
+                ? configuredNoiseScale
                 : (topK <= 20 ? DEFAULT_NOISE_SCALE / 2 : DEFAULT_NOISE_SCALE);
+
         double[] cloaked = new double[queryVector.length];
         Random r = new Random();
         for (int i = 0; i < queryVector.length; i++) {
@@ -425,7 +453,6 @@ public class ForwardSecureANNSystem {
         long start = System.nanoTime();
         QueryToken token = factoryForDim(dim).create(queryVector, topK);
 
-        // record plaintext query (for artifact export) — safe for tests/local runs
         recordRecent(queryVector);
 
         List<QueryResult> cached = cache.get(token);
@@ -459,7 +486,6 @@ public class ForwardSecureANNSystem {
         long start = System.nanoTime();
         QueryToken token = cloakQuery(queryVector, dim, topK);
 
-        // record a pre-cloak version; you could also store the cloaked vector if you prefer
         recordRecent(queryVector);
 
         List<QueryResult> cached = cache.get(token);
@@ -483,6 +509,89 @@ public class ForwardSecureANNSystem {
         }
         if (verbose) logger.debug("Cloaked query returned {} results for topK={}", results.size(), topK);
         return results;
+    }
+
+    // === compute distance-ratio@K; returns NaN if we can't compute
+    /** Distance-ratio at K: (best retrieved distance) / (true NN distance). */
+    private double distanceRatioAtK(double[] q,
+                                    List<QueryResult> retrievedTopK,
+                                    int[] groundtruthAtK,
+                                    int k) {
+        if (baseReader == null) return Double.NaN;
+        if (q == null || retrievedTopK == null || retrievedTopK.isEmpty()
+                || groundtruthAtK == null || groundtruthAtK.length == 0 || k <= 0) {
+            return Double.NaN;
+        }
+
+        final int trueIdx = groundtruthAtK[0];
+        final double denom = baseReader.l2(q, trueIdx);
+        final double eps = 1e-12;
+        if (Double.isNaN(denom)) return Double.NaN;
+        if (denom <= eps) return 1.0;
+
+        double num = Double.POSITIVE_INFINITY;
+        String bestId = "NA";
+        final int upto = Math.min(k, retrievedTopK.size());
+        for (int i = 0; i < upto; i++) {
+            String id = retrievedTopK.get(i).getId();
+            int baseIdx;
+            try { baseIdx = Integer.parseInt(id); } catch (NumberFormatException nfe) { continue; }
+            double d = baseReader.l2(q, baseIdx);
+            if (!Double.isNaN(d) && d < num) { num = d; bestId = id; }
+        }
+        if (!Double.isFinite(num)) return Double.NaN;
+
+        double ratio = num / denom;
+        if (ratio + 1e-12 < 1.0) {
+            logger.warn("Distance ratio < 1.0 ({}). Possible ID/GT misalignment. " +
+                            "Denom(trueNN)={}, Num(bestRetrieved)={}, k={}, trueIdx={}, bestRetrievedId={}",
+                    String.format(Locale.ROOT, "%.6f", ratio),
+                    denom, num, k, trueIdx, bestId);
+        }
+        return ratio;
+    }
+
+    /** Literature ratio@K = best(returned K) / trueNN(base). Does not rely on GT. */
+    private double distanceRatioFromBase(double[] q, List<QueryResult> retrievedTopK, int k) {
+        if (baseReader == null || q == null || retrievedTopK == null || retrievedTopK.isEmpty() || k <= 0) {
+            return Double.NaN;
+        }
+
+        final double eps = 1e-12;
+
+        double denom = Double.POSITIVE_INFINITY;
+        int    trueIdx = -1;
+        final int N = baseReader.count;
+        for (int i = 0; i < N; i++) {
+            double d = baseReader.l2(q, i);
+            if (!Double.isNaN(d) && d < denom) {
+                denom = d;
+                trueIdx = i;
+            }
+        }
+        if (Double.isNaN(denom) || !Double.isFinite(denom)) return Double.NaN;
+        if (denom <= eps) return 1.0;
+
+        double num = Double.POSITIVE_INFINITY;
+        String bestId = "NA";
+        final int upto = Math.min(k, retrievedTopK.size());
+        for (int i = 0; i < upto; i++) {
+            String id = retrievedTopK.get(i).getId();
+            int baseIdx;
+            try { baseIdx = Integer.parseInt(id); } catch (NumberFormatException nfe) { continue; }
+            double d = baseReader.l2(q, baseIdx);
+            if (!Double.isNaN(d) && d < num) { num = d; bestId = id; }
+        }
+        if (!Double.isFinite(num)) return Double.NaN;
+
+        double ratio = num / denom;
+        if (ratio + 1e-12 < 1.0) {
+            logger.warn("Distance ratio < 1.0 ({}). This should not happen with base-scan. " +
+                            "Denom(trueNN)={}, Num(bestRetrieved)={}, k={}, trueIdx={}, bestRetrievedId={}",
+                    String.format(Locale.ROOT, "%.6f", ratio),
+                    denom, num, k, trueIdx, bestId);
+        }
+        return ratio;
     }
 
     // ---------------------- E2E Runner ----------------------
@@ -518,18 +627,16 @@ public class ForwardSecureANNSystem {
 
         if (!queries.isEmpty()) {
             Map<Integer, Double> fanout = indexService.evaluateFanoutRatio(
-                    queries.get(0), new int[]{1, 20, 40, 60, 80, 100});
+                    queries.get(0), K_VARIANTS);
             logger.info("Candidate fanout ratios for Q0: {}", fanout);
         }
 
-        // Quick dataset sanity: query/GT sizes and index counts
         if (groundtruth.size() != queries.size()) {
             logger.warn("Groundtruth rows ({}) != number of queries ({}). " +
                             "Ratios/recall may be unreliable if orders differ.",
                     groundtruth.size(), queries.size());
         }
 
-        // Normalize / validate with known dataset size
         int datasetSize = (baseReader != null)
                 ? baseReader.count
                 : Math.max(indexService.getIndexedVectorCount(), totalInserted);
@@ -539,8 +646,8 @@ public class ForwardSecureANNSystem {
         boolean dimsOk  = (baseReader != null) && sampleDimsOk(baseReader);
         boolean sampleOk = (baseReader != null) &&
                 sampleGtMatchesTrueNN(queries, groundtruth, baseReader,
-                        Integer.getInteger("ratio.gtSample", 20),
-                        Double.parseDouble(System.getProperty("ratio.gtMismatchTolerance", "0.02")));
+                        Math.max(0, config.getRatio().gtSample),
+                        Math.max(0.0, Math.min(1.0, config.getRatio().gtMismatchTolerance)));
 
         boolean gtTrusted = (baseReader != null) && idsOk && dimsOk && sampleOk;
         logger.info("Ratio trust gate: gtTrusted={}, idsOk={}, dimsOk={}, sampleOk={}", gtTrusted, idsOk, dimsOk, sampleOk);
@@ -549,21 +656,18 @@ public class ForwardSecureANNSystem {
         }
 
         // 4) Writer & audit helpers
-        ResultWriter rw = new ResultWriter(Paths.get("results", "results_table.txt"));
-        final int baseKForToken = Math.max(AUDIT_K, 100);
-        final RetrievedAudit audit = AUDIT_ENABLE ? new RetrievedAudit(Paths.get("results")) : null;
+        ResultWriter rw = new ResultWriter(resultsDir.resolve("results_table.txt"));
+        final int baseKForToken = Math.max(auditK, 100);
+        final RetrievedAudit audit = auditEnable ? new RetrievedAudit(resultsDir) : null;
         PriorityQueue<Worst> worstPQ = new PriorityQueue<>(Comparator.comparingDouble(Worst::ratio).reversed());
 
-        // ---- global recall accumulators (used only if computePrecision=true) ----
-        final int[] K_VARIANTS = new int[]{1, 20, 40, 60, 80, 100};
         Map<Integer, Long> globalMatches = new HashMap<>();
         Map<Integer, Long> globalTruth   = new HashMap<>();
         for (int k : K_VARIANTS) { globalMatches.put(k, 0L); globalTruth.put(k, 0L); }
 
         int indexedNow = indexService.getIndexedVectorCount();
         if (indexedNow <= 0) {
-            logger.warn("No points in memory before querying! " +
-                    "Check indexing/logs or restoreFromDisk. Continuing for diagnostics.");
+            logger.warn("No points in memory before querying! Check indexing/logs or restoreFromDisk. Continuing for diagnostics.");
         }
         int dimCountMem = indexService.getVectorCountForDimension(dim);
         if (dimCountMem <= 0) {
@@ -575,7 +679,7 @@ public class ForwardSecureANNSystem {
             double[] queryVec = queries.get(q);
             QueryToken baseToken = factoryForDim(dim).create(queryVec, baseKForToken);
 
-            // ---- Choose denominator once per query, per mode (auto/gt/base) ----
+            // Choose denominator once per query
             double denom = Double.NaN;
             int trueIdx = -1;
             if (baseReader != null) {
@@ -607,14 +711,12 @@ public class ForwardSecureANNSystem {
             }
 
             long clientStart = System.nanoTime();
-            // single-pass variants
             List<QueryEvaluationResult> evals =
                     queryService.searchWithTopKVariants(baseToken, q, groundtruth);
             long clientEnd = System.nanoTime();
             double clientMs = (clientEnd - clientStart) / 1_000_000.0;
             double serverMs = ((QueryServiceImpl) queryService).getLastQueryDurationNs() / 1_000_000.0;
 
-            // metadata for table rows
             EncryptedPointBuffer buf = indexService.getPointBuffer();
             long insertTimeMs   = buf != null ? buf.getLastBatchInsertTimeMs() : 0;
             int  totalFlushed   = buf != null ? buf.getTotalFlushedPoints()   : 0;
@@ -622,7 +724,6 @@ public class ForwardSecureANNSystem {
             int  tokenSizeBytes = QueryServiceImpl.estimateTokenSizeBytes(baseToken);
             int  vectorDim      = baseToken.getDimension();
 
-            // Build enriched rows
             List<QueryEvaluationResult> enriched = new ArrayList<>(evals.size());
             for (QueryEvaluationResult r : evals) {
                 int k = r.getTopKRequested();
@@ -634,7 +735,6 @@ public class ForwardSecureANNSystem {
                         ? Double.NaN
                         : ratioGivenDenom(denom, queryVec, retrieved, k, baseReader);
 
-                // optional precision@K
                 if (profiler != null && computePrecision) {
                     Set<String> truthSet = Arrays.stream(truth).mapToObj(String::valueOf).collect(Collectors.toSet());
                     long matches = retrieved.stream().map(QueryResult::getId).filter(truthSet::contains).count();
@@ -660,7 +760,6 @@ public class ForwardSecureANNSystem {
                     qs.getLastCandDecrypted(),
                     qs.getLastReturned());
 
-            // Write per-query table
             rw.writeTable("Query " + (q + 1) + " Results (dim=" + dim + ")",
                     new String[]{"TopK","Retrieved","LiteratureRatio","Precision","TimeMs",
                             "InsertTimeMs","Candidates","TokenSize","VectorDim","TotalFlushed","FlushThreshold"},
@@ -692,7 +791,7 @@ public class ForwardSecureANNSystem {
             }
 
             QueryEvaluationResult atK = enriched.stream()
-                    .filter(e -> e.getTopKRequested() == AUDIT_K)
+                    .filter(e -> e.getTopKRequested() == auditK)
                     .findFirst()
                     .orElseGet(() -> enriched.get(enriched.size() - 1));
 
@@ -700,8 +799,8 @@ public class ForwardSecureANNSystem {
             totalQueryTime += (long)(clientMs * 1_000_000L);
         }
 
-        if (WRITE_GLOBAL_RECALL && computePrecision) {
-            writeGlobalRecallCsv(dim, K_VARIANTS, globalMatches, globalTruth);
+        if (writeGlobalRecallCsv && computePrecision) {
+            writeGlobalRecallCsv(resultsDir, dim, K_VARIANTS, globalMatches, globalTruth);
         }
     }
 
@@ -744,8 +843,8 @@ public class ForwardSecureANNSystem {
         boolean dimsOk  = (baseReader != null) && sampleDimsOk(baseReader);
         boolean sampleOk = (baseReader != null) &&
                 sampleGtMatchesTrueNN(queries, groundtruth, baseReader,
-                        Integer.getInteger("ratio.gtSample", 20),
-                        Double.parseDouble(System.getProperty("ratio.gtMismatchTolerance", "0.02")));
+                        Math.max(0, config.getRatio().gtSample),
+                        Math.max(0.0, Math.min(1.0, config.getRatio().gtMismatchTolerance)));
 
         boolean gtTrusted = (baseReader != null) && idsOk && dimsOk && sampleOk;
         logger.info("Ratio trust gate: gtTrusted={}, idsOk={}, dimsOk={}, sampleOk={}", gtTrusted, idsOk, dimsOk, sampleOk);
@@ -753,20 +852,18 @@ public class ForwardSecureANNSystem {
             logger.warn("No baseReader: ratio computation will be NaN unless you set -Dbase.path");
         }
 
-        ResultWriter rw = new ResultWriter(Paths.get("results", "results_table.txt"));
-        final int baseKForToken = Math.max(AUDIT_K, 100);
-        final RetrievedAudit audit = AUDIT_ENABLE ? new RetrievedAudit(Paths.get("results")) : null;
+        ResultWriter rw = new ResultWriter(resultsDir.resolve("results_table.txt"));
+        final int baseKForToken = Math.max(auditK, 100);
+        final RetrievedAudit audit = auditEnable ? new RetrievedAudit(resultsDir) : null;
         PriorityQueue<Worst> worstPQ = new PriorityQueue<>(Comparator.comparingDouble(Worst::ratio).reversed());
 
-        final int[] K_VARIANTS = new int[]{1, 20, 40, 60, 80, 100};
         Map<Integer, Long> globalMatches = new HashMap<>();
         Map<Integer, Long> globalTruth   = new HashMap<>();
         for (int k : K_VARIANTS) { globalMatches.put(k, 0L); globalTruth.put(k, 0L); }
 
         int indexedNow = indexService.getIndexedVectorCount();
         if (indexedNow <= 0) {
-            logger.warn("No points in memory before querying! " +
-                    "Check indexing/logs or restoreFromDisk. Continuing for diagnostics.");
+            logger.warn("No points in memory before querying! Check indexing/logs or restoreFromDisk. Continuing for diagnostics.");
         }
         int dimCountMem = indexService.getVectorCountForDimension(dim);
         if (dimCountMem <= 0) {
@@ -777,7 +874,6 @@ public class ForwardSecureANNSystem {
             double[] queryVec = queries.get(q);
             QueryToken baseToken = factoryForDim(dim).create(queryVec, baseKForToken);
 
-            // ---- Choose denominator once per query, per mode (auto/gt/base) ----
             double denom = Double.NaN;
             int trueIdx = -1;
             if (baseReader != null) {
@@ -889,7 +985,7 @@ public class ForwardSecureANNSystem {
             }
 
             QueryEvaluationResult atK = enriched.stream()
-                    .filter(e -> e.getTopKRequested() == AUDIT_K)
+                    .filter(e -> e.getTopKRequested() == auditK)
                     .findFirst()
                     .orElseGet(() -> enriched.get(enriched.size() - 1));
 
@@ -897,8 +993,8 @@ public class ForwardSecureANNSystem {
             totalQueryTime += (long)(clientMs * 1_000_000L);
         }
 
-        if (WRITE_GLOBAL_RECALL && computePrecision) {
-            writeGlobalRecallCsv(dim, K_VARIANTS, globalMatches, globalTruth);
+        if (writeGlobalRecallCsv && computePrecision) {
+            writeGlobalRecallCsv(resultsDir, dim, K_VARIANTS, globalMatches, globalTruth);
         }
     }
 
@@ -957,7 +1053,7 @@ public class ForwardSecureANNSystem {
                     .mapToInt(Integer::parseInt)
                     .max();
 
-            return latest.orElse(-1);  // ← instead of .orElseThrow()
+            return latest.orElse(-1);
         }
     }
 
@@ -992,26 +1088,24 @@ public class ForwardSecureANNSystem {
         }
 
         @Override
-       public List<QueryResult> get(Object key) {
+        public List<QueryResult> get(Object key) {
             List<QueryResult> v = super.get(key);
             if (v != null) {
-                // refresh recency on read
                 timestamps.put((QueryToken) key, System.currentTimeMillis());
-                }
+            }
             cleanExpiredEntries();
             return v;
-            }
+        }
 
         private void cleanExpiredEntries() {
             long now = System.currentTimeMillis();
-            // remove from BOTH maps when expired
             timestamps.entrySet().removeIf(e -> {
                 boolean expired = now - e.getValue() > CACHE_EXPIRY_MS;
-                        if (expired) {
-                            super.remove(e.getKey());
-                        }
-                        return expired;
-                        });
+                if (expired) {
+                    super.remove(e.getKey());
+                }
+                return expired;
+            });
         }
 
         private void removeOldestEntry() {
@@ -1069,169 +1163,133 @@ public class ForwardSecureANNSystem {
         public double ratio() { return ratio; }
     }
 
-    private static long dirSize(Path p) {
-        try (var s = Files.walk(p)) {
-            return s.filter(Files::isRegularFile).mapToLong(f -> {
-                try { return Files.size(f); } catch (IOException e) { return 0L; }
-            }).sum();
-        } catch (IOException e) {
-            logger.warn("Failed to compute size for {}", p, e);
-            return 0L;
-        }
-    }
-
-    private void writeStorageMetrics(Path outDir) throws IOException {
-        Files.createDirectories(outDir);
-        long pointsBytes = dirSize(pointsPath);
-        long metaBytes   = dirSize(metaDBPath);
-        long keysBytes   = Files.exists(keyStorePath) ? (Files.isDirectory(keyStorePath) ? dirSize(keyStorePath) : Files.size(keyStorePath)) : 0L;
-        long totalBytes  = pointsBytes + metaBytes + keysBytes;
-        long nVectors    = Math.max(indexService.getIndexedVectorCount(), totalInserted);
-        double bytesPerVector = (nVectors == 0) ? 0.0 : (totalBytes * 1.0) / nVectors;
-
-        Path csv = outDir.resolve("storage_metrics.csv");
-        if (!Files.exists(csv)) {
-            Files.writeString(csv, "points_bytes,metadata_bytes,keystore_bytes,total_bytes,vectors,bytes_per_vector\n");
-        }
-        String line = String.format(Locale.ROOT, "%d,%d,%d,%d,%d,%.6f%n",
-                pointsBytes, metaBytes, keysBytes, totalBytes, nVectors, bytesPerVector);
-        Files.writeString(csv, line, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-
-        logger.info("Storage: points={}B, meta={}B, keys={}B, total={}B, N={}, B/vec={}",
-                pointsBytes, metaBytes, keysBytes, totalBytes, nVectors,
-                String.format(Locale.ROOT, "%.3f", bytesPerVector));
-    }
-
-    //lightweight, zero-copy random-access reader
+    // lightweight, zero-copy random-access reader
     static final class BaseVectorReader implements AutoCloseable {
-       private final FileChannel ch;
-       private final MappedByteBuffer map;
-       private final boolean bvecs;
-       private final int dim;
-       private final int recordBytes;
-       private final boolean streaming;
-       // per-thread direct buffer for streaming mode
-       private final ThreadLocal<ByteBuffer> tlBuf;
-       private final int count; // optional: derived if file size known
+        private final FileChannel ch;
+        private final MappedByteBuffer map;
+        private final boolean bvecs;
+        private final int dim;
+        private final int recordBytes;
+        private final boolean streaming;
+        private final ThreadLocal<ByteBuffer> tlBuf;
+        private final int count;
 
+        static BaseVectorReader open(Path path, int dim, boolean bvecs) throws IOException {
+            FileChannel ch = FileChannel.open(path, StandardOpenOption.READ);
+            long size = ch.size();
+            int rec = 4 + (bvecs ? dim : dim * 4);
+            int cnt = (int) (size / rec);
 
-       static BaseVectorReader open(Path path, int dim, boolean bvecs) throws IOException {
-           FileChannel ch = FileChannel.open(path, StandardOpenOption.READ);
-           long size = ch.size();
-           int rec = 4 + (bvecs ? dim : dim * 4);
-           int cnt = (int) (size / rec);
+            if (size <= (long) Integer.MAX_VALUE) {
+                MappedByteBuffer map = ch.map(FileChannel.MapMode.READ_ONLY, 0, size).load();
+                map.order(ByteOrder.LITTLE_ENDIAN);
+                return new BaseVectorReader(ch, map, bvecs, dim, rec, cnt, false);
+            } else {
+                return new BaseVectorReader(ch, null, bvecs, dim, rec, cnt, true);
+            }
+        }
 
-           if (size <= (long) Integer.MAX_VALUE) {
-               MappedByteBuffer map = ch.map(FileChannel.MapMode.READ_ONLY, 0, size).load();
-               map.order(ByteOrder.LITTLE_ENDIAN);
-               return new BaseVectorReader(ch, map, bvecs, dim, rec, cnt, /*streaming*/ false);
-           } else {
-               // fall back to streaming reads
-               return new BaseVectorReader(ch, null, bvecs, dim, rec, cnt, /*streaming*/ true);
-           }
-       }
+        private BaseVectorReader(FileChannel ch, MappedByteBuffer map, boolean bvecs, int dim,
+                                 int rec, int cnt, boolean streaming) {
+            this.ch = ch;
+            this.map = map;
+            this.bvecs = bvecs;
+            this.dim = dim;
+            this.recordBytes = rec;
+            this.count = cnt;
+            this.streaming = streaming;
+            this.tlBuf = streaming
+                    ? ThreadLocal.withInitial(() -> ByteBuffer.allocateDirect(recordBytes).order(ByteOrder.LITTLE_ENDIAN))
+                    : null;
+        }
 
-       private BaseVectorReader(FileChannel ch, MappedByteBuffer map, boolean bvecs, int dim,
-                                int rec, int cnt, boolean streaming) {
-           this.ch = ch;
-           this.map = map;
-           this.bvecs = bvecs;
-           this.dim = dim;
-           this.recordBytes = rec;
-           this.count = cnt;
-           this.streaming = streaming;
-           this.tlBuf = streaming
-                   ? ThreadLocal.withInitial(() -> ByteBuffer.allocateDirect(recordBytes).order(ByteOrder.LITTLE_ENDIAN))
-                   : null;
-       }
+        double l2(double[] q, int id) {
+            final int skipDimBytes = 4;
+            if (!streaming) {
+                int offset = id * recordBytes;
+                int pos = offset + skipDimBytes;
+                double sum = 0.0;
+                if (bvecs) {
+                    for (int i = 0; i < dim; i++) {
+                        int ui = map.get(pos + i) & 0xFF;
+                        double d = q[i] - ui;
+                        sum += d * d;
+                    }
+                } else {
+                    for (int i = 0; i < dim; i++) {
+                        float v = map.getFloat(pos + i * 4);
+                        double d = q[i] - v;
+                        sum += d * d;
+                    }
+                }
+                return Math.sqrt(sum);
+            } else {
+                try {
+                    long offset = (long) id * (long) recordBytes;
+                    ByteBuffer buf = tlBuf.get();
+                    buf.clear();
+                    int n = ch.read(buf, offset);
+                    if (n < recordBytes) throw new IOException("Short read at id=" + id + " bytes=" + n);
+                    buf.flip();
+                    buf.getInt(); // skip stored dim
+                    double sum = 0.0;
+                    if (bvecs) {
+                        for (int i = 0; i < dim; i++) {
+                            int ui = buf.get() & 0xFF;
+                            double d = q[i] - ui;
+                            sum += d * d;
+                        }
+                    } else {
+                        for (int i = 0; i < dim; i++) {
+                            float v = buf.getFloat();
+                            double d = q[i] - v;
+                            sum += d * d;
+                        }
+                    }
+                    return Math.sqrt(sum);
+                } catch (IOException ioe) {
+                    throw new RuntimeException(ioe);
+                }
+            }
+        }
 
-       double l2(double[] q, int id) {
-           final int skipDimBytes = 4;
-           if (!streaming) {
-               int offset = id * recordBytes;
-               int pos = offset + skipDimBytes;
-               double sum = 0.0;
-               if (bvecs) {
-                   for (int i = 0; i < dim; i++) {
-                       int ui = map.get(pos + i) & 0xFF;
-                       double d = q[i] - ui;
-                       sum += d * d;
-                   }
-               } else {
-                   for (int i = 0; i < dim; i++) {
-                       float v = map.getFloat(pos + i * 4);
-                       double d = q[i] - v;
-                       sum += d * d;
-                   }
-               }
-               return Math.sqrt(sum);
-           } else {
-               try {
-                   long offset = (long) id * (long) recordBytes;
-                   ByteBuffer buf = tlBuf.get();
-                   buf.clear();
-                   // read exactly one record
-                   int n = ch.read(buf, offset);
-                   if (n < recordBytes) throw new IOException("Short read at id=" + id + " bytes=" + n);
-                   buf.flip();
-                   buf.getInt(); // skip stored dim
-                   double sum = 0.0;
-                   if (bvecs) {
-                       for (int i = 0; i < dim; i++) {
-                           int ui = buf.get() & 0xFF;
-                           double d = q[i] - ui;
-                           sum += d * d;
-                       }
-                   } else {
-                       for (int i = 0; i < dim; i++) {
-                           float v = buf.getFloat();
-                           double d = q[i] - v;
-                           sum += d * d;
-                       }
-                   }
-                   return Math.sqrt(sum);
-               } catch (IOException ioe) {
-                   throw new RuntimeException(ioe);
-               }
-           }
-       }
+        int storedDim(int id) {
+            final int off = id * recordBytes;
+            if (!streaming) {
+                return map.getInt(off);
+            } else {
+                try {
+                    ByteBuffer buf = tlBuf.get();
+                    buf.clear();
+                    int n = ch.read(buf, (long) off);
+                    if (n < 4) throw new IOException("Short read (dim) at id=" + id);
+                    buf.flip();
+                    return buf.getInt();
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+        }
 
-       int storedDim(int id) {
-           final int off = id * recordBytes;
-           if (!streaming) {
-               return map.getInt(off); // LITTLE_ENDIAN already set
-           } else {
-               try {
-                   ByteBuffer buf = tlBuf.get();
-                   buf.clear();
-                   int n = ch.read(buf, (long) off);
-                   if (n < 4) throw new IOException("Short read (dim) at id=" + id);
-                   buf.flip();
-                   return buf.getInt();
-               } catch (IOException e) {
-                   throw new RuntimeException(e);
-               }
-           }
-       }
+        boolean storedDimOk(int id) { return storedDim(id) == this.dim; }
 
-       boolean storedDimOk(int id) { return storedDim(id) == this.dim; }
-
-       @Override
-       public void close() throws IOException {
-           ch.close();
-       }
-   }
+        @Override
+        public void close() throws IOException {
+            ch.close();
+        }
+    }
 
     /** Dump profiler CSVs, query list, and copies of keys/metadata/points to outDir. */
     public void exportArtifacts(Path outDir) throws IOException {
         Files.createDirectories(outDir);
 
-        // 1) timers and query rows
-        if (profiler != null && RESULTS_VERBOSE) {
-            profiler.exportToCSV(outDir.resolve("profiler_metrics.csv").toString());
-            if (profiler instanceof MicrometerProfiler mp) {
-                mp.exportQueryMetricsCSV(outDir.resolve("query_metrics.csv").toString());
-                mp.exportMetersCSV(outDir.resolve("micrometer_meters.csv").toString());
+        if (profiler != null) {
+            if (!config.getOutput().suppressLegacyMetrics) {
+                profiler.exportToCSV(outDir.resolve("profiler_metrics.csv").toString());
+                if (profiler instanceof MicrometerProfiler mp) {
+                    mp.exportQueryMetricsCSV(outDir.resolve("query_metrics.csv").toString());
+                    mp.exportMetersCSV(outDir.resolve("micrometer_meters.csv").toString());
+                }
             }
             var client = profiler.getAllClientQueryTimes();
             var server = profiler.getAllServerQueryTimes();
@@ -1244,26 +1302,34 @@ public class ForwardSecureANNSystem {
                     String.format("ART(ms)=%.3f%nAvgRatio=%.6f%n", art, avgRatio));
         }
 
-        // 2) Top-K evaluation (if used)
-        try { topKProfiler.export(outDir.resolve("topk_evaluation.csv").toString()); }
-        catch (Exception ignore) {}
+        try { topKProfiler.export(outDir.resolve("topk_evaluation.csv").toString());
+        } catch (Exception ignore) { /* ok if not used */ }
 
-        // 3) dump recent queries
-        if (RESULTS_VERBOSE && !recentQueries.isEmpty()) { /* keep your existing queries.csv block */ }
-        writeStorageMetrics(outDir);
-
+        if (!recentQueries.isEmpty()) {
+            var p = outDir.resolve("queries.csv");
+            try (var w = Files.newBufferedWriter(p)) {
+                for (double[] q : recentQueries) {
+                    for (int i = 0; i < q.length; i++) {
+                        if (i > 0) w.write(",");
+                        w.write(Double.toString(q[i]));
+                    }
+                    w.write("\n");
+                }
+            }
+        }
     }
 
     /** Append global recall rows to results/global_recall.csv (creates header once). */
     private static void writeGlobalRecallCsv(
+            Path outDir,
             int dim,
             int[] kVariants,
             Map<Integer, Long> globalMatches,
             Map<Integer, Long> globalTruth
     ) {
         try {
-            Files.createDirectories(Paths.get("results"));
-            Path p = Paths.get("results", "global_recall.csv");
+            Files.createDirectories(outDir);
+            Path p = outDir.resolve("global_recall.csv");
             if (!Files.exists(p)) {
                 Files.writeString(p, "dimension,topK,global_recall,matches,truth\n",
                         StandardOpenOption.CREATE, StandardOpenOption.APPEND);
@@ -1287,13 +1353,6 @@ public class ForwardSecureANNSystem {
             logger.warn("Failed to write global_recall.csv", ioe);
         }
     }
-
-    private final RatioSource ratioSource =
-            switch (System.getProperty("ratio.source", "auto").toLowerCase(Locale.ROOT)) {
-                case "gt"   -> RatioSource.GT;
-                case "base" -> RatioSource.BASE;
-                default     -> RatioSource.AUTO;
-            };
 
     private TrueNN computeTrueNNFromBase(double[] q, BaseVectorReader br) {
         double best = Double.POSITIVE_INFINITY;
@@ -1321,7 +1380,6 @@ public class ForwardSecureANNSystem {
         if (!Double.isFinite(num)) return Double.NaN;
 
         double r = num / denom;
-        // If r < 1 with GT or BASE denom, it strongly implies ID/base mismatch; log it.
         if (r + 1e-12 < 1.0) {
             logger.warn("Distance ratio < 1.0 ({}). Denom={}, Num={}, k={}",
                     String.format(Locale.ROOT, "%.6f", r), denom, num, k);
@@ -1332,25 +1390,25 @@ public class ForwardSecureANNSystem {
     public IndexService getIndexService() { return this.indexService; }
     public QueryService getQueryService() { return this.queryService; }
     public Profiler getProfiler() { return this.profiler; }
+
     private static int numTablesFor(EvenLSH lsh, SystemConfig cfg) {
-        // Try LSH.getNumTables()
         try {
             var m = lsh.getClass().getMethod("getNumTables");
             Object v = m.invoke(lsh);
             if (v instanceof Integer n && n > 0) return n;
         } catch (Throwable ignore) {}
 
-        // Try config.getNumTables() if you have it
         try {
             var m = cfg.getClass().getMethod("getNumTables");
             Object v = m.invoke(cfg);
             if (v instanceof Integer n && n > 0) return n;
         } catch (Throwable ignore) {}
 
-        return 4; // last-resort fallback
+        return 4; // fallback
     }
+
     private int shardsToProbe() {
-        if (OVERRIDE_PROBE > 0) return OVERRIDE_PROBE;       // ← respect -Dprobe.shards
+        if (OVERRIDE_PROBE > 0) return OVERRIDE_PROBE;
         try {
             var m = indexService.getClass().getMethod("getNumShards");
             Object v = m.invoke(indexService);
@@ -1396,6 +1454,18 @@ public class ForwardSecureANNSystem {
 
     /** Disable System.exit on shutdown (for tests). */
     public void setExitOnShutdown(boolean exitOnShutdown) { this.exitOnShutdown = exitOnShutdown; }
+
+    private static boolean propOr(boolean defaultVal, String... keys) {
+        for (String k : keys) {
+            String v = System.getProperty(k);
+            if (v != null) {
+                // accept true/false/1/0/yes/no
+                String s = v.trim().toLowerCase(Locale.ROOT);
+                return s.equals("true") || s.equals("1") || s.equals("yes") || s.equals("y");
+            }
+        }
+        return defaultVal;
+    }
 
     // ====== retrieved IDs auditor ======
     private static final class RetrievedAudit {
@@ -1449,7 +1519,6 @@ public class ForwardSecureANNSystem {
                     qIndex, k, ratio, recall, joinIds(retrieved), joinInts(truth));
             Files.writeString(worstCsv, line, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
         }
-
     }
 
     public void flushAll() throws IOException {
@@ -1556,10 +1625,10 @@ public class ForwardSecureANNSystem {
         boolean queryOnly = "POINTS_ONLY".equalsIgnoreCase(dataPath) || Boolean.getBoolean("query.only");
         int restoreVersion = Integer.getInteger("restore.version", -1);
         if (queryOnly && restoreVersion <= 0) {
-            restoreVersion = detectLatestVersion(pointsPath); // unchanged
+            restoreVersion = detectLatestVersion(pointsPath);
         }
 
-        // Load config
+        // Load config once here as well for policy decisions in main
         ApiSystemConfig apiCfg = new ApiSystemConfig(configFile);
         SystemConfig cfg = apiCfg.getConfig();
 
@@ -1596,15 +1665,14 @@ public class ForwardSecureANNSystem {
         if (queryOnly) {
             sys.setQueryOnlyMode(true); // skip writes during shutdown
             int restored = sys.restoreIndexFromDisk(restoreVersion);
-            sys.finalizeForSearch();    // seal/optimize for querying
+            sys.finalizeForSearch();
 
-            // Optional sanity log
             logger.info("Ready to query: restored {} points for dim={} (requested)", restored, dimensions.get(0));
 
             sys.runQueries(queryPath, dimensions.get(0), groundtruthPath);
 
-            if (Boolean.getBoolean("export.artifacts")) {
-                sys.exportArtifacts(Paths.get("results"));
+            if (cfg.getOutput().exportArtifacts) {
+                sys.exportArtifacts(sys.resultsDir);
             }
 
             sys.shutdown();
@@ -1618,8 +1686,8 @@ public class ForwardSecureANNSystem {
         int dim = dimensions.get(0);
         sys.runEndToEnd(dataPath, queryPath, dim, groundtruthPath);
 
-        if (Boolean.getBoolean("export.artifacts")) {
-            sys.exportArtifacts(Paths.get("results"));
+        if (cfg.getOutput().exportArtifacts) {
+            sys.exportArtifacts(sys.resultsDir);
         }
 
         if (sys.getProfiler() != null) {

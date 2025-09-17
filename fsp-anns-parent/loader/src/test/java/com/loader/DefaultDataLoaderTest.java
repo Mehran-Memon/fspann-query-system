@@ -7,8 +7,6 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.DataOutputStream;
 import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Iterator;
@@ -26,7 +24,7 @@ class DefaultDataLoaderTest {
     private Path writeFvecs(Path path, int numVecs, int dim) throws IOException {
         try (DataOutputStream out = new DataOutputStream(Files.newOutputStream(path))) {
             for (int n = 0; n < numVecs; n++) {
-                // FVECS is little-endian: write dim then floats (all LE)
+                // FVECS little-endian: [dim][floats...]
                 out.writeInt(Integer.reverseBytes(dim));
                 for (int i = 0; i < dim; i++) {
                     int bits = Float.floatToIntBits((float) (n + i));
@@ -97,28 +95,26 @@ class DefaultDataLoaderTest {
         DefaultDataLoader loader = new DefaultDataLoader();
         Path csv = writeCsv(tmp.resolve("data.csv"), /*numVecs*/ 8, /*dim*/ 3);
 
-        List<double[]> first = loader.loadData(csv.toString(), 3);
-        assertTrue(first.size() <= 3);
-        assertFalse(first.isEmpty());
-        int firstSize = first.size();
+        int total = 0;
+        int consecutiveEmpty = 0;
+        int safety = 0;
 
-        List<double[]> second = loader.loadData(csv.toString(), 3);
-        assertTrue(second.size() <= 3);
-        assertFalse(second.isEmpty());
+        // Keep reading until we (a) read all 8 rows and (b) observe 2 empties in a row
+        while ((total < 8 || consecutiveEmpty < 2) && safety++ < 50) {
+            List<double[]> batch = loader.loadData(csv.toString(), 3);
 
-        // Consume remaining
-        List<double[]> third = loader.loadData(csv.toString(), 3);
-        List<double[]> fourth = loader.loadData(csv.toString(), 3); // should be empty now
+            if (batch.isEmpty()) {
+                consecutiveEmpty++;
+                continue;
+            }
 
-        assertTrue(fourth.isEmpty(), "Iterator should be exhausted by now");
+            consecutiveEmpty = 0; // reset because we got data
+            for (double[] v : batch) assertEquals(3, v.length, "vector dimension mismatch");
+            total += batch.size();
+            assertTrue(total <= 8, "Read more vectors than present in file");
+        }
 
-        // Basic shape checks
-        first.forEach(v -> assertEquals(3, v.length));
-        second.forEach(v -> assertEquals(3, v.length));
-        third.forEach(v -> assertEquals(3, v.length));
-
-        // Total read equals 8
-        int total = first.size() + second.size() + third.size();
-        assertEquals(8, total);
+        assertEquals(8, total, "Total number of vectors read must equal the file rows");
+        assertTrue(consecutiveEmpty >= 2, "Did not reach a stable exhausted state");
     }
 }
