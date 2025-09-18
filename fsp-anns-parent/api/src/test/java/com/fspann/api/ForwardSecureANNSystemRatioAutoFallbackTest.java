@@ -14,10 +14,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
 import java.nio.file.*;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static java.nio.file.StandardOpenOption.*;
@@ -27,6 +24,9 @@ class ForwardSecureANNSystemRatioAutoFallbackTest {
 
     @TempDir
     Path tmp;
+
+    private static final Pattern CSV_SPLIT =
+            Pattern.compile(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)");
 
     private static Path writeFvecs(Path p, int dim, float[][] rows) throws IOException {
         try (FileChannel ch = FileChannel.open(p, CREATE, TRUNCATE_EXISTING, WRITE)) {
@@ -53,23 +53,29 @@ class ForwardSecureANNSystemRatioAutoFallbackTest {
         return p;
     }
 
-    private static Path writeConfig(Path p) throws IOException {
+    private static Path writeConfig(Path p, String resultsDir) throws IOException {
         String json = """
           {
             "numShards": 32, "numTables": 4,
             "opsThreshold": 100000, "ageThresholdMs": 86400000,
-            "reEncBatchSize": 64
+            "reEncBatchSize": 64,
+            "output": { "resultsDir": "%s" }
           }
-        """;
+        """.formatted(resultsDir.replace("\\", "\\\\"));
         Files.writeString(p, json, CREATE, TRUNCATE_EXISTING);
         return p;
     }
 
+    private static int colIndex(String[] headerCols, String wanted) {
+        for (int i = 0; i < headerCols.length; i++) {
+            String name = headerCols[i].trim().replace("\"", "");
+            if (name.equalsIgnoreCase(wanted)) return i;
+        }
+        return -1;
+    }
+
     @Test
     void autoFallback_usesBaseDenom_whenGtIsWrong() throws Exception {
-        Files.createDirectories(Paths.get("results"));
-        Files.deleteIfExists(Paths.get("results", "results_table.txt"));
-
         int dim = 2;
 
         Path base = writeFvecs(tmp.resolve("base.fvecs"), dim, new float[][]{
@@ -82,16 +88,16 @@ class ForwardSecureANNSystemRatioAutoFallbackTest {
 
         // Wrong GT on purpose: says NN is id=1
         Path gt = writeIvecs(tmp.resolve("gt.ivecs"), new int[]{1});
-        Path conf = writeConfig(tmp.resolve("conf.json"));
+        Path conf = writeConfig(tmp.resolve("conf.json"), tmp.toString());
 
         Path metaDir = tmp.resolve("meta");
         Path pointsDir = tmp.resolve("points");
         Files.createDirectories(metaDir);
         Files.createDirectories(pointsDir);
 
-        // Ensure baseReader is present and AUTO is in effect (default)
+        // Ensure baseReader present
         System.setProperty("base.path", base.toString());
-        // Make trust gate stricter (any mismatch fails)
+        // Make trust gate stricter (any mismatch fails → AUTO uses base)
         System.setProperty("ratio.gtMismatchTolerance", "0.0");
 
         RocksDBMetadataManager mdm =
@@ -117,42 +123,26 @@ class ForwardSecureANNSystemRatioAutoFallbackTest {
         sys.runEndToEnd(base.toString(), query.toString(), dim, gt.toString());
         sys.shutdown();
 
-        // Parse K=1 LiteratureRatio from results_table.txt; with AUTO fallback it should be 1.0
-        Path results = Paths.get("results", "results_table.txt");
-        assertTrue(Files.exists(results), "results_table.txt should exist");
+        // Parse K=1 LiteratureRatio from results_table.csv (in tmp)
+        Path results = tmp.resolve("results_table.csv");
+        assertTrue(Files.exists(results), "results_table.csv should exist");
 
         var lines = Files.readAllLines(results);
-
-        var norm = (java.util.function.Function<String,String>) s -> s
-                .replaceAll("[\\u2500-\\u257F]", " ")
-                .replace('|', ' ')
-                .replace('+', ' ');
+        assertFalse(lines.isEmpty());
+        String[] header = CSV_SPLIT.split(lines.get(0), -1);
+        int idxTopK = colIndex(header, "TopK");
+        int idxRatio = colIndex(header, "LiteratureRatio");
+        assertTrue(idxTopK >= 0 && idxRatio >= 0, "CSV columns not found");
 
         Double ratio = null;
-        Pattern num = Pattern.compile("(NaN|[-+]?\\d+(?:\\.\\d+)?(?:[eE][-+]?\\d+)?)");
-
-        boolean inTable = false;
-        for (String raw : lines) {
-            String s = norm.apply(raw).trim();
-            if (s.isEmpty()) continue;
-            if (!inTable && s.toLowerCase(Locale.ROOT).contains("literatureratio")) {
-                inTable = true; continue;
+        for (int i = 1; i < lines.size(); i++) {
+            String[] cols = CSV_SPLIT.split(lines.get(i), -1);
+            if (cols.length <= Math.max(idxTopK, idxRatio)) continue;
+            if ("1".equals(cols[idxTopK].trim())) {
+                String r = cols[idxRatio].trim();
+                ratio = "NaN".equalsIgnoreCase(r) ? Double.NaN : Double.parseDouble(r);
+                break;
             }
-            if (!inTable) continue;
-            if (s.matches("^[^\\p{Alnum}]+$")) continue;
-
-            List<String> toks = new ArrayList<>();
-            Matcher m = num.matcher(s);
-            while (m.find()) toks.add(m.group(1));
-            if (toks.size() < 3) continue;
-
-            double kVal;
-            try { kVal = Double.parseDouble(toks.get(0)); } catch (NumberFormatException ex) { continue; }
-            if (Math.rint(kVal) != 1.0) continue;
-
-            String ratioStr = toks.get(2);
-            ratio = "NaN".equalsIgnoreCase(ratioStr) ? Double.NaN : Double.parseDouble(ratioStr);
-            break;
         }
 
         assertNotNull(ratio, "Should parse ratio for K=1");

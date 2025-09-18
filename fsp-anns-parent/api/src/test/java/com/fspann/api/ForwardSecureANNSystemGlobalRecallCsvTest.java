@@ -49,25 +49,23 @@ class ForwardSecureANNSystemGlobalRecallCsvTest {
         return p;
     }
 
-    private static Path writeConfig(Path p) throws IOException {
+    private static Path writeConfig(Path p, String resultsDir) throws IOException {
         String json = """
           {
             "numShards": 32, "numTables": 4,
             "opsThreshold": 100000, "ageThresholdMs": 86400000,
             "reEncBatchSize": 64,
-            "profilerEnabled": true
+            "profilerEnabled": true,
+            "eval": { "computePrecision": true, "writeGlobalRecallCsv": true },
+            "output": { "resultsDir": "%s" }
           }
-        """;
+        """.formatted(resultsDir.replace("\\", "\\\\"));
         Files.writeString(p, json, CREATE, TRUNCATE_EXISTING);
         return p;
     }
 
     @Test
     void writesGlobalRecallCsv_andPrecisionIsPresent() throws Exception {
-        Files.createDirectories(Paths.get("results"));
-        Files.deleteIfExists(Paths.get("results", "results_table.txt"));
-        Files.deleteIfExists(Paths.get("results", "global_recall.csv"));
-
         int dim = 2;
 
         Path base = writeFvecs(tmp.resolve("base.fvecs"), dim, new float[][]{
@@ -78,17 +76,15 @@ class ForwardSecureANNSystemGlobalRecallCsvTest {
                 {1.0f, 1.0f}  // NN = id 0
         });
         Path gt    = writeIvecs(tmp.resolve("gt.ivecs"), new int[]{0}); // correct GT
-        Path conf  = writeConfig(tmp.resolve("conf.json"));
+        Path conf  = writeConfig(tmp.resolve("conf.json"), tmp.toString());
 
         Path metaDir   = tmp.resolve("meta");
         Path pointsDir = tmp.resolve("points");
         Files.createDirectories(metaDir);
         Files.createDirectories(pointsDir);
 
-        // Enable ratio, precision and global recall via properties used in the main code
+        // (We also set properties but the config already enables the flags)
         System.setProperty("base.path", base.toString());
-        System.setProperty("eval.computePrecision", "true");
-        System.setProperty("eval.writeGlobalRecall", "true");
 
         RocksDBMetadataManager mdm =
                 RocksDBMetadataManager.create(metaDir.toString(), pointsDir.toString());
@@ -113,17 +109,17 @@ class ForwardSecureANNSystemGlobalRecallCsvTest {
         sys.runEndToEnd(base.toString(), query.toString(), dim, gt.toString());
         sys.shutdown();
 
-        // global_recall.csv should exist and have a header + at least one row
-        Path grecall = Paths.get("results", "global_recall.csv");
+        // global_recall.csv should exist in tmp and have a header + at least one row
+        Path grecall = tmp.resolve("global_recall.csv");
         assertTrue(Files.exists(grecall), "global_recall.csv must be written when enabled");
         var lines = Files.readAllLines(grecall);
         assertFalse(lines.isEmpty(), "global_recall.csv should not be empty");
         assertTrue(lines.get(0).startsWith("dimension,topK,global_recall"), "CSV header present");
 
-        // results_table.txt should exist and include a "Precision" column
-        Path results = Paths.get("results", "results_table.txt");
-        assertTrue(Files.exists(results), "results_table.txt should exist");
-        String whole = Files.readString(results);
-        assertTrue(whole.toLowerCase().contains("precision"), "Precision column should exist in results table");
+        // results_table.csv should exist and include a "Precision" column in the header
+        Path results = tmp.resolve("results_table.csv");
+        assertTrue(Files.exists(results), "results_table.csv should exist");
+        String header = Files.readAllLines(results).get(0);
+        assertTrue(header.toLowerCase().contains("precision"), "Precision column should exist in results table header");
     }
 }

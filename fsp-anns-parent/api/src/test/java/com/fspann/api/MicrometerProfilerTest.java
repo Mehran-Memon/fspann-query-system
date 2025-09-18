@@ -1,5 +1,6 @@
 package com.fspann.api;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micrometer.prometheus.PrometheusConfig;
 import io.micrometer.prometheus.PrometheusMeterRegistry;
 import org.junit.jupiter.api.Test;
@@ -9,6 +10,7 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -49,5 +51,45 @@ class MicrometerProfilerTest {
         } catch (IOException e) {
             fail("Failed to read CSV: " + e.getMessage());
         }
+    }
+
+    @Test
+    void averageRatio_usesOnlyTrueQueryLabels() {
+        MicrometerProfiler p = new MicrometerProfiler(new SimpleMeterRegistry());
+
+        // Non-query label → ignored by TRUE_QUERY ("^Q\\d+$")
+        p.recordQueryMetric("warmup", 0, 0, 9.9);
+
+        // True per-query rows
+        p.recordQueryMetric("Q0", 12, 15, 1.10);
+        p.recordQueryMetric("Q1", 10, 12, 1.30);
+
+        // Cache/cloak style labels should be ignored by the tightened filter
+        p.recordQueryMetric("Q_cache_20", 0, 1, 0.00);
+        p.recordQueryMetric("Q_cloak_10", 0, 1, 0.00);
+
+        List<Double> ratios = p.getAllQueryRatios();
+        assertEquals(2, ratios.size(), "Only Q<digits> should be tracked");
+        assertEquals(1.10, ratios.get(0), 1e-9);
+        assertEquals(1.30, ratios.get(1), 1e-9);
+
+        double avg = ratios.stream().mapToDouble(Double::doubleValue).average().orElse(0.0);
+        assertEquals(1.20, avg, 1e-9);
+    }
+
+    @Test
+    void exportQueryMetricsCSV_includesAllRows_forDiagnostics() throws Exception {
+        var p = new MicrometerProfiler(new SimpleMeterRegistry());
+        p.recordQueryMetric("Q0", 10, 12, 1.1);
+        p.recordQueryMetric("warmup", 1, 1, 9.9);       // will be present in CSV
+        p.recordQueryMetric("Q_cache_20", 0, 1, 0.0);   // present in CSV
+
+        java.nio.file.Path tmp = java.nio.file.Files.createTempFile("qm", ".csv");
+        p.exportQueryMetricsCSV(tmp.toString());
+
+        String csv = java.nio.file.Files.readString(tmp);
+        assertTrue(csv.contains("Q0,10.000,12.000,1.100000"));
+        assertTrue(csv.contains("warmup,1.000,1.000,9.900000"));
+        assertTrue(csv.contains("Q_cache_20,0.000,1.000,0.000000"));
     }
 }
