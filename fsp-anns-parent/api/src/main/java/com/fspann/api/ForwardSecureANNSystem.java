@@ -22,6 +22,8 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.nio.*;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
@@ -225,17 +227,17 @@ public class ForwardSecureANNSystem {
         // Build index service
         this.indexService = SecureLSHIndexService.fromConfig(cryptoService, keyService, metadataManager, config);
 
-        // Optional paper engine (config-driven)
         if (config.getPaper().enabled) {
-            int m        = config.getPaper().m;
-            int lambda   = config.getPaper().lambda;
-            int divisions= config.getPaper().divisions;
-            long seed    = config.getPaper().seed;
+            var pc = config.getPaper();
+            var pe = new com.fspann.index.paper.PartitionedIndexService(pc.m, pc.lambda, pc.divisions, pc.seed);
 
-            com.fspann.index.paper.PartitionedIndexService paperEngine =
-                    new com.fspann.index.paper.PartitionedIndexService(m, lambda, divisions, seed);
-            indexService.setPaperEngine(paperEngine);
-            logger.info("Paper engine enabled (m={}, λ={}, ℓ={}, seed={})", m, lambda, divisions, seed);
+            // apply optional flags if the engine supports them
+            applyPaperFlags(pe, pc);
+
+            indexService.setPaperEngine(pe);
+            logger.info("Paper engine enabled (m={}, λ={}, ℓ={}, seed={}, flags={{maxCand={}, targetMult={}, rMax={}, rHard={}}})",
+                    pc.m, pc.lambda, pc.divisions, pc.seed,
+                    pc.maxCandidates, pc.targetMult, pc.expandRadiusMax, pc.expandRadiusHard);
         }
 
         if (keyService instanceof KeyRotationServiceImpl kr) {
@@ -656,7 +658,7 @@ public class ForwardSecureANNSystem {
         }
 
         // 4) Writer & audit helpers
-        ResultWriter rw = new ResultWriter(resultsDir.resolve("results_table.txt"));
+        ResultWriter rw = new ResultWriter(resultsDir.resolve("results_table.csv"));
         final int baseKForToken = Math.max(auditK, 100);
         final RetrievedAudit audit = auditEnable ? new RetrievedAudit(resultsDir) : null;
         PriorityQueue<Worst> worstPQ = new PriorityQueue<>(Comparator.comparingDouble(Worst::ratio).reversed());
@@ -739,9 +741,7 @@ public class ForwardSecureANNSystem {
                     Set<String> truthSet = Arrays.stream(truth).mapToObj(String::valueOf).collect(Collectors.toSet());
                     long matches = retrieved.stream().map(QueryResult::getId).filter(truthSet::contains).count();
                     double precision = (k == 0) ? Double.NaN : (matches / (double) k);
-                    if (!Double.isNaN(precision)) {
-                        profiler.recordQueryMetric("PrecisionAt" + k, serverMs, clientMs, precision);
-                    }
+
                 }
 
                 enriched.add(new QueryEvaluationResult(
@@ -852,7 +852,7 @@ public class ForwardSecureANNSystem {
             logger.warn("No baseReader: ratio computation will be NaN unless you set -Dbase.path");
         }
 
-        ResultWriter rw = new ResultWriter(resultsDir.resolve("results_table.txt"));
+        ResultWriter rw = new ResultWriter(resultsDir.resolve("results_table.csv"));
         final int baseKForToken = Math.max(auditK, 100);
         final RetrievedAudit audit = auditEnable ? new RetrievedAudit(resultsDir) : null;
         PriorityQueue<Worst> worstPQ = new PriorityQueue<>(Comparator.comparingDouble(Worst::ratio).reversed());
@@ -933,9 +933,6 @@ public class ForwardSecureANNSystem {
                     Set<String> truthSet = Arrays.stream(truth).mapToObj(String::valueOf).collect(Collectors.toSet());
                     long matches = retrieved.stream().map(QueryResult::getId).filter(truthSet::contains).count();
                     double precision = (k == 0) ? Double.NaN : (matches / (double) k);
-                    if (!Double.isNaN(precision)) {
-                        profiler.recordQueryMetric("PrecisionAt" + k, serverMs, clientMs, precision);
-                    }
                 }
 
                 enriched.add(new QueryEvaluationResult(
@@ -1454,6 +1451,88 @@ public class ForwardSecureANNSystem {
 
     /** Disable System.exit on shutdown (for tests). */
     public void setExitOnShutdown(boolean exitOnShutdown) { this.exitOnShutdown = exitOnShutdown; }
+
+    private static void applyPaperFlags(Object pe, SystemConfig.PaperConfig pc) {
+        if (pc.maxCandidates > 0) {
+            if (!tryInvokeInt(pe,
+                    new String[]{"setMaxCandidates","maxCandidates","withMaxCandidates"},
+                    pc.maxCandidates)) {
+                trySetField(pe, new String[]{"maxCandidates","candidateCap"}, pc.maxCandidates);
+            }
+        }
+        if (pc.targetMult > 0) {
+            if (!tryInvokeDouble(pe,
+                    new String[]{"setTargetMultiplier","setTargetMult","withTargetMultiplier","withTargetMult"},
+                    pc.targetMult)) {
+                trySetField(pe, new String[]{"targetMultiplier","targetMult"}, pc.targetMult);
+            }
+        }
+        if (pc.expandRadiusMax > 0) {
+            if (!tryInvokeDouble(pe,
+                    new String[]{"setExpandRadiusMax","setRMax","withExpandRadiusMax"},
+                    pc.expandRadiusMax)) {
+                trySetField(pe, new String[]{"expandRadiusMax","rMax"}, pc.expandRadiusMax);
+            }
+        }
+        if (pc.expandRadiusHard > 0) {
+            if (!tryInvokeDouble(pe,
+                    new String[]{"setExpandRadiusHard","setRHard","withExpandRadiusHard"},
+                    pc.expandRadiusHard)) {
+                trySetField(pe, new String[]{"expandRadiusHard","rHard"}, pc.expandRadiusHard);
+            }
+        }
+    }
+
+    private static boolean tryInvokeInt(Object o, String[] names, int v) {
+        for (String n : names) {
+            try {
+                Method m;
+                try { m = o.getClass().getMethod(n, int.class); }
+                catch (NoSuchMethodException e) { m = o.getClass().getMethod(n, Integer.class); }
+                m.setAccessible(true);
+                m.invoke(o, v);
+                return true;
+            } catch (NoSuchMethodException ignored) {
+            } catch (Exception e) {
+                LoggerFactory.getLogger(ForwardSecureANNSystem.class)
+                        .debug("Paper flag method '{}' exists but failed to apply ({}). Continuing.", n, e.toString());
+                return true; // method existed; don't try other names
+            }
+        }
+        return false;
+    }
+
+    private static boolean tryInvokeDouble(Object o, String[] names, double v) {
+        for (String n : names) {
+            try {
+                Method m;
+                try { m = o.getClass().getMethod(n, double.class); }
+                catch (NoSuchMethodException e) { m = o.getClass().getMethod(n, Double.class); }
+                m.setAccessible(true);
+                m.invoke(o, v);
+                return true;
+            } catch (NoSuchMethodException ignored) {
+            } catch (Exception e) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean trySetField(Object o, String[] fields, Object v) {
+        for (String f : fields) {
+            try {
+                Field fld = o.getClass().getDeclaredField(f);
+                fld.setAccessible(true);
+                fld.set(o, v);
+                return true;
+            } catch (NoSuchFieldException ignored) {
+            } catch (Exception e) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     private static boolean propOr(boolean defaultVal, String... keys) {
         for (String k : keys) {

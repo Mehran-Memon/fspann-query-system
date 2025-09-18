@@ -27,6 +27,7 @@ public class MicrometerProfiler extends Profiler {
     private final DistributionSummary clientSummary;
     private final DistributionSummary serverSummary;
     private final DistributionSummary ratioSummary;
+    private static final java.util.regex.Pattern TRUE_QUERY = java.util.regex.Pattern.compile("^Q\\d+$");
 
     public MicrometerProfiler(MeterRegistry registry) {
         this.registry = Objects.requireNonNull(registry, "MeterRegistry cannot be null");
@@ -50,7 +51,7 @@ public class MicrometerProfiler extends Profiler {
         if (t != null && s != null) t.record(System.nanoTime() - s, TimeUnit.NANOSECONDS);
     }
 
-        public void exportMetersCSV(String path) {
+    public void exportMetersCSV(String path) {
             StringBuilder sb = new StringBuilder("name,tags,count,totalMs,meanMs,maxMs\n");
             for (Meter m : registry.getMeters()) {
                 Meter.Id id = m.getId();
@@ -96,6 +97,7 @@ public class MicrometerProfiler extends Profiler {
             logger.error("Failed to export metrics to CSV: {}", filePath, e);
         }
     }
+
     private static final class QRow {
         final String id; final double server; final double client; final double ratio;
         QRow(String id, double s, double c, double r){ this.id=id; this.server=s; this.client=c; this.ratio=r; }
@@ -105,10 +107,18 @@ public class MicrometerProfiler extends Profiler {
             Collections.synchronizedList(new java.util.ArrayList<>(1024));
 
     @Override
-    public void recordQueryMetric(String queryId, double serverMs, double clientMs, double ratio) {
-        super.recordQueryMetric(queryId, serverMs, clientMs, ratio);
-        queryRows.add(new QRow(queryId, serverMs, clientMs, ratio));
+    public void recordQueryMetric(String label, double serverMs, double clientMs, double ratio) {
+        // Only store true “query” ratios in base lists
+        if (label != null && TRUE_QUERY.matcher(label).matches()) {
+            super.recordQueryMetric(label, serverMs, clientMs, ratio);
+        }
+        // always record to micrometer summaries if you like
+        clientSummary.record(clientMs);
+        serverSummary.record(serverMs);
+        ratioSummary.record(ratio);
+        queryRows.add(new QRow(label, serverMs, clientMs, ratio));
     }
+
 
     public void exportQueryMetricsCSV(String filePath) {
         try (var w = Files.newBufferedWriter(Paths.get(filePath))) {

@@ -118,6 +118,16 @@ public class SystemConfig {
         if (lsh.numTables < 0) lsh.numTables = 0;
         if (lsh.rowsPerBand < 0) lsh.rowsPerBand = 0;
         if (lsh.probeShards < 0) lsh.probeShards = 0;
+
+        if (paper.maxCandidates   < 0) paper.maxCandidates = 0;
+        if (paper.targetMult      < 0) paper.targetMult = 0.0;
+        if (paper.expandRadiusMax < 0) paper.expandRadiusMax = 0.0;
+        if (paper.expandRadiusHard< 0) paper.expandRadiusHard = 0.0;
+        if (paper.expandRadiusHard > 0 && paper.expandRadiusMax > 0
+                && paper.expandRadiusHard < paper.expandRadiusMax) {
+            logger.warn("paper.expandRadiusHard < expandRadiusMax; raising hard to max");
+            paper.expandRadiusHard = paper.expandRadiusMax;
+        }
     }
 
     // ---------------- loading ----------------
@@ -222,6 +232,13 @@ public class SystemConfig {
         @JsonProperty("lambda")    public int     lambda = 6;
         @JsonProperty("divisions") public int     divisions = 8;
         @JsonProperty("seed")      public long    seed = 42L;
+
+        // NEW (optional; <=0 means "unset")
+        @JsonProperty("maxCandidates")   public int    maxCandidates = 0;
+        @JsonProperty("targetMult")      public double targetMult = 0.0;
+        @JsonProperty("expandRadiusMax") public double expandRadiusMax = 0.0;
+        @JsonProperty("expandRadiusHard")public double expandRadiusHard = 0.0;
+
         public PaperConfig() {}
     }
 }
