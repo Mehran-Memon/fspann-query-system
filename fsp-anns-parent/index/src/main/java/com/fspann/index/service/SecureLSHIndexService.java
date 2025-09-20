@@ -36,7 +36,7 @@ public class SecureLSHIndexService implements IndexService {
     // ----------------------------- Modes -----------------------------
     private static final String MODE = System.getProperty("fspann.mode", "partitioned");
     private static boolean isPartitioned() { return "partitioned".equalsIgnoreCase(MODE); }
-    public static String getMode() { return MODE; }
+    private static volatile java.lang.reflect.Field TABLES_F;
 
     // --------------------------- Core deps ---------------------------
     private final CryptoService crypto;
@@ -304,57 +304,95 @@ public class SecureLSHIndexService implements IndexService {
     }
 
     @Override
-    public List<EncryptedPoint> lookup(QueryToken token) {
+    public LookupWithDiagnostics lookupWithDiagnostics(QueryToken token) {
         Objects.requireNonNull(token, "QueryToken cannot be null");
 
         // ---- Partitioned path (paper engine) ----
         if (isPartitioned() && paperEngine != null) {
-            return paperEngine.lookup(token);
+            List<EncryptedPoint> cands = paperEngine.lookup(token);
+            // For now, we don’t have per-division fanout here; use size only.
+            SearchDiagnostics diag = new SearchDiagnostics(
+                    (cands != null) ? cands.size() : 0,
+                    0,
+                    java.util.Map.of()
+            );
+            return new LookupWithDiagnostics((cands != null) ? cands : java.util.List.of(), diag);
         }
 
         // ---- Legacy multiprobe path ----
-        int dim = token.getDimension();
-        DimensionContext ctx = dimensionContexts.get(dim);
-        if (ctx == null) return Collections.emptyList();
-        SecureLSHIndex idx = ctx.getIndex();
+        final int dim = token.getDimension();
+        final DimensionContext ctx = dimensionContexts.get(dim);
+        if (ctx == null) {
+            return new LookupWithDiagnostics(java.util.List.of(), SearchDiagnostics.EMPTY);
+        }
+        final SecureLSHIndex idx = ctx.getIndex();
 
+        // Resolve per-table expansions
         List<List<Integer>> perTable = token.hasPerTable()
                 ? token.getTableBuckets()
-                : PartitioningPolicy.expansionsForQuery(
-                ctx.getLsh(), token.getPlaintextQuery(),
-                idx.getNumHashTables(), token.getTopK());
+                : com.fspann.index.core.PartitioningPolicy.expansionsForQuery(
+                ctx.getLsh(), token.getPlaintextQuery(), idx.getNumHashTables(), token.getTopK());
 
-        // Adaptive fanout clamp: do NOT shrink below K (with a small floor for stability)
-        double target = Double.parseDouble(System.getProperty("fanout.target", "0.12"));
-        int N = Math.max(1, idx.getPointCount());
-
-        // ensure perTable mutable if it came from token
+        // Materialize a mutable copy if needed (token buckets may be unmodifiable)
         if (token.hasPerTable()) {
             List<List<Integer>> cp = new ArrayList<>(perTable.size());
             for (List<Integer> l : perTable) cp.add(new ArrayList<>(l));
             perTable = cp;
         }
 
-        int cand = idx.candidateCount(perTable);
-        final int needAtLeast = Math.max(token.getTopK(), 100);
-        while ((cand / (double) N) > target && cand > needAtLeast && canShrink(perTable)) {
-            shrinkWorstTail(perTable);
-            cand = idx.candidateCount(perTable);
+        // Build union + track diagnostics (fanout per table, probed bucket count)
+        final int tablesToUse = Math.min(token.getNumTables(), idx.getNumHashTables());
+        final Map<Integer, Integer> fanoutPerTable = new LinkedHashMap<>();
+        final Set<String> seen = new LinkedHashSet<>(16_384);
+        final List<EncryptedPoint> ordered = new ArrayList<>();
+        int probedBuckets = 0;
+
+        for (int t = 0; t < tablesToUse; t++) {
+            int contributed = 0;
+
+            for (Integer b : perTable.get(t)) {
+                probedBuckets++;
+                // Access bucket list via a lightweight accessor:
+                // Small inline: mirrored from SecureLSHIndex#queryEncrypted
+                java.util.concurrent.CopyOnWriteArrayList<EncryptedPoint> bucket =
+                        getBucketList(idx, t, b); // helper below
+                if (bucket == null) continue;
+                for (EncryptedPoint pt : bucket) {
+                    if (pt.getId() != null && pt.getId().startsWith("FAKE_")) continue;
+                    if (seen.add(pt.getId())) {
+                        ordered.add(pt);
+                        contributed++;
+                    }
+                }
+            }
+            fanoutPerTable.put(t, contributed);
         }
 
-        QueryToken perTableToken = new QueryToken(
-                perTable,
-                token.getIv(),
-                token.getEncryptedQuery(),
-                token.getPlaintextQuery(),
-                token.getTopK(),
-                idx.getNumHashTables(),
-                token.getEncryptionContext(),
-                token.getDimension(),
-                token.getVersion()
-        );
+        SearchDiagnostics diag = new SearchDiagnostics(seen.size(), probedBuckets, java.util.Map.copyOf(fanoutPerTable));
+        return new LookupWithDiagnostics(ordered, diag);
+    }
 
-        return idx.queryEncrypted(perTableToken);
+    @SuppressWarnings("unchecked")
+    private static java.util.concurrent.CopyOnWriteArrayList<EncryptedPoint> getBucketList(SecureLSHIndex idx, int tableId, int bucketId) {
+        try {
+            java.lang.reflect.Field f = TABLES_F;
+            if (f == null) {
+                f = SecureLSHIndex.class.getDeclaredField("tables");
+                f.setAccessible(true);
+                TABLES_F = f;
+            }
+            var tables = (java.util.List<java.util.Map<Integer, java.util.concurrent.CopyOnWriteArrayList<EncryptedPoint>>>) f.get(idx);
+            if (tableId < 0 || tableId >= tables.size()) return null;
+            return tables.get(tableId).get(bucketId);
+        } catch (Throwable ignore) {
+            return null;
+        }
+    }
+
+
+    @Override
+    public List<EncryptedPoint> lookup(QueryToken token) {
+        return lookupWithDiagnostics(token).candidates();
     }
 
     private static boolean canShrink(List<List<Integer>> perTable) {

@@ -19,7 +19,7 @@ import java.util.List;
 import static java.nio.file.StandardOpenOption.*;
 import static org.junit.jupiter.api.Assertions.*;
 
-class ForwardSecureANNSystemGlobalRecallCsvTest {
+class ForwardSecureANNSystemGlobalPrecisionCsvTest {
 
     @TempDir
     Path tmp;
@@ -56,7 +56,7 @@ class ForwardSecureANNSystemGlobalRecallCsvTest {
             "opsThreshold": 100000, "ageThresholdMs": 86400000,
             "reEncBatchSize": 64,
             "profilerEnabled": true,
-            "eval": { "computePrecision": true, "writeGlobalRecallCsv": true },
+            "eval": { "computePrecision": true, "writeGlobalPrecisionCsv": true },
             "output": { "resultsDir": "%s" }
           }
         """.formatted(resultsDir.replace("\\", "\\\\"));
@@ -65,7 +65,7 @@ class ForwardSecureANNSystemGlobalRecallCsvTest {
     }
 
     @Test
-    void writesGlobalRecallCsv_andPrecisionIsPresent() throws Exception {
+    void writesGlobalPrecisionCsv_andPrecisionIsPresent() throws Exception {
         int dim = 2;
 
         Path base = writeFvecs(tmp.resolve("base.fvecs"), dim, new float[][]{
@@ -83,7 +83,6 @@ class ForwardSecureANNSystemGlobalRecallCsvTest {
         Files.createDirectories(metaDir);
         Files.createDirectories(pointsDir);
 
-        // (We also set properties but the config already enables the flags)
         System.setProperty("base.path", base.toString());
 
         RocksDBMetadataManager mdm =
@@ -109,17 +108,19 @@ class ForwardSecureANNSystemGlobalRecallCsvTest {
         sys.runEndToEnd(base.toString(), query.toString(), dim, gt.toString());
         sys.shutdown();
 
-        // global_recall.csv should exist in tmp and have a header + at least one row
-        Path grecall = tmp.resolve("global_recall.csv");
-        assertTrue(Files.exists(grecall), "global_recall.csv must be written when enabled");
-        var lines = Files.readAllLines(grecall);
-        assertFalse(lines.isEmpty(), "global_recall.csv should not be empty");
-        assertTrue(lines.get(0).startsWith("dimension,topK,global_recall"), "CSV header present");
+        // global_precision.csv should exist and have a precision header
+        Path gprec = tmp.resolve("global_precision.csv");
+        assertTrue(Files.exists(gprec), "global_precision.csv must be written when enabled");
+        var lines = Files.readAllLines(gprec);
+        assertFalse(lines.isEmpty(), "global_precision.csv should not be empty");
+        assertTrue(lines.get(0).startsWith("dimension,topK,global_precision"),
+                "CSV header should start with dimension,topK,global_precision");
 
         // results_table.csv should exist and include a "Precision" column in the header
         Path results = tmp.resolve("results_table.csv");
         assertTrue(Files.exists(results), "results_table.csv should exist");
         String header = Files.readAllLines(results).get(0);
-        assertTrue(header.toLowerCase().contains("precision"), "Precision column should exist in results table header");
+        assertTrue(header.toLowerCase().contains("precision"),
+                "Precision column should exist in results table header");
     }
 }

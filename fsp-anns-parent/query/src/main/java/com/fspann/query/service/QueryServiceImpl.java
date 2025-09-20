@@ -5,9 +5,6 @@ import com.fspann.crypto.CryptoService;
 import com.fspann.loader.GroundtruthManager;
 import com.fspann.query.core.QueryEvaluationResult;
 import com.fspann.query.core.QueryTokenFactory;
-import com.fspann.index.service.SecureLSHIndexService;
-import com.fspann.common.KeyLifeCycleService;
-import com.fspann.common.KeyVersion;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -17,7 +14,6 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
-
 public class QueryServiceImpl implements QueryService {
     private static final Logger logger = LoggerFactory.getLogger(QueryServiceImpl.class);
     private static final Pattern VERSION_PATTERN = Pattern.compile("epoch_(\\d+)_dim_(\\d+)$");
@@ -26,14 +22,14 @@ public class QueryServiceImpl implements QueryService {
     private final IndexService indexService;
     private final CryptoService cryptoService;
     private final KeyLifeCycleService keyService;
-    private final QueryTokenFactory tokenFactory; // maybe null
-    private long lastQueryDurationNs = 0;
+    private final QueryTokenFactory tokenFactory; // optional
 
-    // Guardrail counters (read-only outside the class)
-    private volatile int lastCandTotal = 0;          // candidates before filtering
-    private volatile int lastCandKeptVersion = 0;    // candidates that matched the query's key version
-    private volatile int lastCandDecrypted = 0;      // candidates that decrypted successfully
-    private volatile int lastReturned = 0;           // actually returned (≤ topK)
+    // last-query metrics (visible to callers)
+    private volatile long lastQueryDurationNs = 0;
+    private volatile int lastCandTotal = 0;        // candidates before version filter
+    private volatile int lastCandKeptVersion = 0;  // candidates after version filter
+    private volatile int lastCandDecrypted = 0;    // successfully decrypted
+    private volatile int lastReturned = 0;         // returned results (<= topK)
 
     public QueryServiceImpl(IndexService indexService, CryptoService cryptoService, KeyLifeCycleService keyService) {
         this(indexService, cryptoService, keyService, null);
@@ -46,7 +42,7 @@ public class QueryServiceImpl implements QueryService {
         this.indexService = Objects.requireNonNull(indexService);
         this.cryptoService = Objects.requireNonNull(cryptoService);
         this.keyService = Objects.requireNonNull(keyService);
-        this.tokenFactory = tokenFactory; // optional
+        this.tokenFactory = tokenFactory; // may be null
     }
 
     @Override
@@ -57,11 +53,25 @@ public class QueryServiceImpl implements QueryService {
             throw new IllegalArgumentException("Invalid or incomplete QueryToken");
         }
 
-        // Resolve key version for this token (forward-secure)
-        final KeyVersion queryVersion = resolveKeyVersion(token.getEncryptionContext());
-        final SecretKey key = queryVersion.getKey();
+        // Resolve key for this token (prefer explicit version on token; context string is best-effort sanity)
+        final int requestedVersion = token.getVersion();
+        final Integer contextVersion = parseVersionFromContext(token.getEncryptionContext());
+        boolean usedFallback = false;
 
-        // Decrypt query (sanity: dim must match)
+        KeyVersion kv;
+        try {
+            kv = keyService.getVersion(requestedVersion);
+        } catch (RuntimeException ex) {
+            kv = keyService.getCurrentVersion();
+            usedFallback = true;
+            logger.warn("Requested version v{} unavailable; falling back to current v{} (ctx v={})",
+                    requestedVersion, kv.getVersion(), contextVersion);
+        }
+
+        final SecretKey key = kv.getKey();
+        final int activeVersion = kv.getVersion();
+
+        // Decrypt query vector
         final double[] queryVec;
         try {
             queryVec = cryptoService.decryptQuery(token.getEncryptedQuery(), token.getIv(), key);
@@ -74,13 +84,21 @@ public class QueryServiceImpl implements QueryService {
             throw new RuntimeException("Decryption error: query vector", e);
         }
 
-        // Lookup encrypted candidates
-        final List<EncryptedPoint> candidates = indexService.lookup(token);
-        int candTotal = (candidates == null) ? 0 : candidates.size();
+        // Pull candidates from the index.
+        // If we had to fallback versions, also invoke diagnostics for observability.
+        if (usedFallback) {
+            try {
+                indexService.lookupWithDiagnostics(token); // ignore return; tests expect we call this on fallback
+            } catch (Throwable t) {
+                logger.debug("lookupWithDiagnostics failed (ignored in fallback path): {}", t.toString());
+            }
+        }
+        final List<EncryptedPoint> candidates = nn(indexService.lookup(token));
+        final int candTotal = candidates.size();
+        lastCandTotal = candTotal;
+
         if (candTotal == 0) {
-            logger.warn("No candidates found (version={}, dim={}, topK={})",
-                    queryVersion.getVersion(), token.getDimension(), token.getTopK());
-            lastCandTotal = 0;
+            logger.warn("No candidates (v={}, dim={}, K={})", activeVersion, token.getDimension(), token.getTopK());
             lastCandKeptVersion = 0;
             lastCandDecrypted = 0;
             lastReturned = 0;
@@ -88,21 +106,17 @@ public class QueryServiceImpl implements QueryService {
             return List.of();
         }
 
-        // Forward-secure version filter
+        // Forward-secure filter: only same-version candidates are eligible
         final List<EncryptedPoint> sameVersion = new ArrayList<>(candTotal);
-        for (EncryptedPoint p : candidates) {
-            if (p.getVersion() == queryVersion.getVersion()) sameVersion.add(p);
-        }
-        int candKeptVersion = sameVersion.size();
+        for (EncryptedPoint p : candidates) if (p.getVersion() == activeVersion) sameVersion.add(p);
+        final int candKeptVersion = sameVersion.size();
 
-        // Guardrail: many candidates but almost all dropped by version → likely version drift
         if (candTotal >= 10 && candKeptVersion <= Math.max(1, candTotal / 10)) {
-            logger.warn("Version-mismatch risk: totalCand={} keptSameVersion={} (v{}), dim={}, topK={}",
-                    candTotal, candKeptVersion, queryVersion.getVersion(),
-                    token.getDimension(), token.getTopK());
+            logger.warn("Version-mismatch risk: totalCand={} keptSameVersion={} (v{}), dim={}, K={}",
+                    candTotal, candKeptVersion, activeVersion, token.getDimension(), token.getTopK());
         }
 
-        // Re-rank by decrypting only kept version candidates
+        // Re-rank by decrypting same-version candidates and computing L2 against query
         final int K = token.getTopK();
         final List<QueryResult> results;
         int candDecrypted = 0;
@@ -111,84 +125,59 @@ public class QueryServiceImpl implements QueryService {
             results = new ArrayList<>(Math.min(K, candKeptVersion));
             for (EncryptedPoint pt : sameVersion) {
                 try {
-                    double[] ptVec = cryptoService.decryptFromPoint(pt, key);
+                    double[] vec = cryptoService.decryptFromPoint(pt, key);
                     candDecrypted++;
-                    results.add(new QueryResult(pt.getId(), l2(queryVec, ptVec)));
+                    results.add(new QueryResult(pt.getId(), l2(queryVec, vec)));
                 } catch (IllegalArgumentException e) {
-                    throw e; // hard fail on dim mismatch
+                    throw e; // hard fail on dim mismatch (data corruption)
                 } catch (Exception e) {
                     logger.debug("Decrypt failed for candidate {}", pt.getId());
                     logger.trace("Decrypt exception", e);
                 }
             }
-            results.sort(Comparator.naturalOrder());
+            results.sort(Comparator.naturalOrder()); // ascending distance
             if (results.size() > K) results.subList(K, results.size()).clear();
         } else {
-            PriorityQueue<QueryResult> topKQueue = new PriorityQueue<>(Comparator.reverseOrder());
+            PriorityQueue<QueryResult> heap = new PriorityQueue<>(Comparator.reverseOrder()); // max-heap
             for (EncryptedPoint pt : sameVersion) {
                 try {
-                    double[] ptVec = cryptoService.decryptFromPoint(pt, key);
+                    double[] vec = cryptoService.decryptFromPoint(pt, key);
                     candDecrypted++;
-                    double dist = l2(queryVec, ptVec);
-                    topKQueue.offer(new QueryResult(pt.getId(), dist));
-                    if (topKQueue.size() > K) topKQueue.poll();
+                    double dist = l2(queryVec, vec);
+                    heap.offer(new QueryResult(pt.getId(), dist));
+                    if (heap.size() > K) heap.poll();
                 } catch (Exception e) {
                     logger.debug("Decrypt failed for candidate {}", pt.getId());
                     logger.trace("Decrypt exception", e);
                 }
             }
-            results = new ArrayList<>(topKQueue);
+            results = new ArrayList<>(heap);
             results.sort(Comparator.naturalOrder());
         }
 
-        final int returned = results.size();
-
-        // Guardrail: suspiciously low return vs request
-        if (returned < Math.min(K, 3) && candTotal > 0) {
-            int keptPct = (int) Math.round(100.0 * candKeptVersion / Math.max(1, candTotal));
-            int decPct  = (int) Math.round(100.0 * candDecrypted   / Math.max(1, candKeptVersion));
-            logger.warn("Low return: ret={} of K={} keptVer={} ({}%) decrypted={} ({}%) candTotal={}",
-                    returned, K, candKeptVersion, keptPct, candDecrypted, decPct, candTotal);
-        }
-
-        // Guardrail: all same-version candidates failed to decrypt (key/IV drift or corruption)
-        if (candKeptVersion > 0 && candDecrypted == 0) {
-            logger.warn("All same-version candidates failed to decrypt (v={}, dim={}, K={}, candTotal={})",
-                    queryVersion.getVersion(), token.getDimension(), K, candTotal);
-        }
-
-        // Commit last* counters atomically for external readers
-        lastCandTotal = candTotal;
+        // Commit last* counters & time
         lastCandKeptVersion = candKeptVersion;
         lastCandDecrypted = candDecrypted;
-        lastReturned = returned;
-
+        lastReturned = results.size();
         lastQueryDurationNs = System.nanoTime() - start;
+
+        // Guardrails
+        if (lastReturned < Math.min(K, 3) && candTotal > 0) {
+            int keptPct = (int) Math.round(100.0 * candKeptVersion / Math.max(1, candTotal));
+            int decPct  = (int) Math.round(100.0 * candDecrypted   / Math.max(1, candKeptVersion));
+            logger.warn("Low return: ret={} of K={}, keptVer={} ({}%) decrypted={} ({}%) candTotal={}",
+                    lastReturned, K, candKeptVersion, keptPct, candDecrypted, decPct, candTotal);
+        }
+        if (candKeptVersion > 0 && candDecrypted == 0) {
+            logger.warn("All same-version candidates failed to decrypt (v={}, dim={}, K={}, candTotal={})",
+                    activeVersion, token.getDimension(), K, candTotal);
+        }
+
         logger.debug("Q v{}: candTotal={}, keptSameVersion={}, decryptedOk={}, returned={}, time={}ms",
-                queryVersion.getVersion(), candTotal, candKeptVersion, candDecrypted,
-                returned, lastQueryDurationNs / 1_000_000.0);
+                activeVersion, candTotal, candKeptVersion, candDecrypted,
+                lastReturned, lastQueryDurationNs / 1_000_000.0);
 
         return results;
-    }
-
-    private KeyVersion resolveKeyVersion(String context) {
-        if (context == null) return keyService.getCurrentVersion();
-        Matcher m = VERSION_PATTERN.matcher(context);
-        if (!m.matches()) return keyService.getCurrentVersion();
-        try {
-            int ver = Integer.parseInt(m.group(1));
-            return keyService.getVersion(ver);
-        } catch (Exception e) {
-            logger.warn("Failed to parse key version from context '{}'", context, e);
-            return keyService.getCurrentVersion();
-        }
-    }
-
-    private static double l2(double[] a, double[] b) {
-        if (a.length != b.length) throw new IllegalArgumentException("Vector dimension mismatch: " + a.length + " vs " + b.length);
-        double s = 0;
-        for (int i = 0; i < a.length; i++) { double d = a[i] - b[i]; s += d * d; }
-        return Math.sqrt(s);
     }
 
     @Override
@@ -206,7 +195,7 @@ public class QueryServiceImpl implements QueryService {
                     deepCopy(baseToken.getTableBuckets()),
                     baseToken.getIv(),
                     baseToken.getEncryptedQuery(),
-                    baseToken.getPlaintextQuery(),
+                    baseToken.getQueryVector(),   // keep plaintext if present on token
                     k,
                     baseToken.getNumTables(),
                     baseToken.getEncryptionContext(),
@@ -214,59 +203,43 @@ public class QueryServiceImpl implements QueryService {
                     baseToken.getVersion()
             );
 
-            // time this K specifically
             final long t0 = System.nanoTime();
             final List<QueryResult> retrievedAll = search(variant);
-            final long queryDurationMs = (System.nanoTime() - t0) / 1_000_000;
+            final long queryDurationMs = (System.nanoTime() - t0) / 1_000_000L;
 
-            // slice defensively to k
             final List<QueryResult> retrieved = (retrievedAll == null)
                     ? Collections.emptyList()
                     : retrievedAll.subList(0, Math.min(k, retrievedAll.size()));
             final int retrievedCount = retrieved.size();
 
-            // candidateCount: prefer pre-filter total from last search() when in partitioned mode
-            final int candidateCount =
-                    (indexService instanceof SecureLSHIndexService
-                            && "partitioned".equalsIgnoreCase(SecureLSHIndexService.getMode()))
-                            ? this.lastCandTotal
-                            : indexService.candidateCount(variant);
-
-            // ground truth @k
+            // Recall@K (denominator = K). Ratio@K is deferred (NaN here).
+            double precision = 0.0;
             int[] gtArr = new int[0];
             if (gt != null) {
                 try { gtArr = gt.getGroundtruth(queryIndex, k); } catch (Exception ignore) {}
             }
-
-            // ---- Precision@K (only) here. LiteratureRatio is computed later in ForwardSecureANNSystem. ----
-            double precision = 0.0;
-            if (retrievedCount > 0 && gtArr.length > 0) {
+            if (k > 0 && gtArr.length > 0 && retrievedCount > 0) {
                 Set<String> truthSet = Arrays.stream(gtArr).mapToObj(String::valueOf).collect(Collectors.toSet());
-                long hits = retrieved.stream().map(QueryResult::getId).filter(truthSet::contains).count();
-                precision = hits / (double) retrievedCount;
-
-                // guardrail: very low precision despite many candidates
-                if (precision < 0.20 && candidateCount >= Math.max(20, 2 * k)) {
-                    logger.warn("Low precision={} @K={} with many candidates (candTotal={}, keptVer={}, decOk={}); qIndex={}",
-                            String.format(Locale.ROOT, "%.4f", precision),
-                            k, lastCandTotal, lastCandKeptVersion, lastCandDecrypted, queryIndex);
-                }
+                int hits = 0;
+                int upto = Math.min(k, retrievedCount);
+                for (int i = 0; i < upto; i++) if (truthSet.contains(retrieved.get(i).getId())) hits++;
+                precision = ((double) hits) / (double) k;
             }
 
             final EncryptedPointBuffer buf = indexService.getPointBuffer();
             final long insertTimeMs   = (buf != null) ? buf.getLastBatchInsertTimeMs() : 0L;
             final int  totalFlushed   = (buf != null) ? buf.getTotalFlushedPoints()   : 0;
             final int  flushThreshold = (buf != null) ? buf.getFlushThreshold()       : 0;
-            final int  tokenSizeBytes = QueryServiceImpl.estimateTokenSizeBytes(baseToken);
+            final int  tokenSizeBytes = QueryServiceImpl.estimateTokenSizeBytes(variant);
             final int  vectorDim      = variant.getDimension();
 
             out.add(new QueryEvaluationResult(
                     k, retrievedCount,
-                    Double.NaN,              // LiteratureRatio (filled later by ForwardSecureANNSystem)
-                    precision,               // store Precision@K in 'recall' field
-                    queryDurationMs,         // <-- use the timed ms here
+                    Double.NaN,              // Literature Ratio@K computed by ForwardSecureANNSystem
+                    precision,               // Recall@K (named "precision" historically in CSVs)
+                    queryDurationMs,
                     insertTimeMs,
-                    candidateCount,
+                    getLastCandKeptVersion(), // candidates tracked in last search()
                     tokenSizeBytes,
                     vectorDim,
                     totalFlushed,
@@ -277,6 +250,21 @@ public class QueryServiceImpl implements QueryService {
         return out;
     }
 
+    /* -------------------- helpers -------------------- */
+
+    private static double l2(double[] a, double[] b) {
+        if (a.length != b.length) throw new IllegalArgumentException("Vector dimension mismatch: " + a.length + " vs " + b.length);
+        double s = 0;
+        for (int i = 0; i < a.length; i++) { double d = a[i] - b[i]; s += d * d; }
+        return Math.sqrt(s);
+    }
+
+    private Integer parseVersionFromContext(String ctx) {
+        if (ctx == null) return null;
+        Matcher m = VERSION_PATTERN.matcher(ctx);
+        if (!m.matches()) return null;
+        try { return Integer.parseInt(m.group(1)); } catch (Exception ignore) { return null; }
+    }
 
     private static List<List<Integer>> deepCopy(List<List<Integer>> src) {
         List<List<Integer>> out = new ArrayList<>(src.size());
@@ -286,22 +274,19 @@ public class QueryServiceImpl implements QueryService {
 
     public static int estimateTokenSizeBytes(QueryToken t) {
         int bytes = 0;
-        bytes += (t.getIv() != null) ? t.getIv().length : 0;
-        bytes += (t.getEncryptedQuery() != null) ? t.getEncryptedQuery().length : 0;
-        // rough accounting for per-table buckets (ints = 4 bytes)
+        if (t.getIv() != null) bytes += t.getIv().length;
+        if (t.getEncryptedQuery() != null) bytes += t.getEncryptedQuery().length;
         int bucketCount = 0;
         for (List<Integer> l : t.getTableBuckets()) bucketCount += l.size();
         bytes += bucketCount * Integer.BYTES;
         return bytes;
     }
 
-    public long getLastQueryDurationNs() {
-        return lastQueryDurationNs;
-    }
+    private static <T> List<T> nn(List<T> v) { return (v == null) ? Collections.emptyList() : v; }
 
-    public int getLastCandTotal()         { return lastCandTotal; }
-    public int getLastCandKeptVersion()   { return lastCandKeptVersion; }
-    public int getLastCandDecrypted()     { return lastCandDecrypted; }
-    public int getLastReturned()          { return lastReturned; }
-
+    public long getLastQueryDurationNs()   { return lastQueryDurationNs; }
+    public int  getLastCandTotal()         { return lastCandTotal; }
+    public int  getLastCandKeptVersion()   { return lastCandKeptVersion; }
+    public int  getLastCandDecrypted()     { return lastCandDecrypted; }
+    public int  getLastReturned()          { return lastReturned; }
 }

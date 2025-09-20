@@ -56,6 +56,6 @@ class QueryServiceImplRatioIsDeferredTest {
         // Ratio is computed higher up (ForwardSecureANNSystem) → NaN here
         assertTrue(Double.isNaN(k1.getRatio()));
         // Precision@1 stored in 'recall' is 1.0 (id 0 retrieved among the top1)
-        assertEquals(1.0, k1.getRecall(), 1e-9);
+        assertEquals(1.0, k1.getPrecision(), 1e-9);
     }
 }

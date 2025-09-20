@@ -1,5 +1,6 @@
 # ============================
 # FSP-ANN batch runner (3 configs) — full indexing + querying
+# Updated: precision-first + GT AUTO precompute each run
 # ============================
 
 # ---------- SETTINGS ----------
@@ -37,55 +38,46 @@ $Configs = @(
     ProbePerTable=12; ProbeBitsMax=1; FanoutTarget=0.012;
     PaperM=12; PaperLambda=6; PaperDivisions=10; PaperMaxCandidates=120000 },
 
-    # 🎯 recall-first
+    # 🎯 recall-first (kept label for continuity; system reports precision now)
     @{ Label="recall_first";
     ProbePerTable=28; ProbeBitsMax=3; FanoutTarget=0.035;
     PaperM=14; PaperLambda=8; PaperDivisions=12; PaperMaxCandidates=200000 }
-
 )
 
-# -------------- DATASETS (only include ones you have base+query+GT) --------------
+# -------------- DATASETS (only include ones you have base+query) --------------
 $Datasets = @(
     @{ Name="SIFT1M"; Dim=128;
     Base="E:\Research Work\Datasets\sift_dataset\sift_base.fvecs";
-    Query="E:\Research Work\Datasets\sift_dataset\sift_query.fvecs";
-    GT="E:\Research Work\Datasets\sift_dataset\sift_groundtruth.ivecs" },
+    Query="E:\Research Work\Datasets\sift_dataset\sift_query.fvecs" },
 
     @{ Name="Audio"; Dim=192;
     Base="E:\Research Work\Datasets\audio\audio_base.fvecs";
-    Query="E:\Research Work\Datasets\audio\audio_query.fvecs";
-    GT="E:\Research Work\Datasets\audio\audio_groundtruth.ivecs" },
+    Query="E:\Research Work\Datasets\audio\audio_query.fvecs" },
 
     @{ Name="GloVe100"; Dim=100;
     Base="E:\Research Work\Datasets\glove-100\glove-100_base.fvecs";
-    Query="E:\Research Work\Datasets\glove-100\glove-100_query.fvecs";
-    GT="E:\Research Work\Datasets\glove-100\glove-100_groundtruth.ivecs" },
+    Query="E:\Research Work\Datasets\glove-100\glove-100_query.fvecs" },
 
     @{ Name="Enron"; Dim=1369;
     Base="E:\Research Work\Datasets\Enron\enron_base.fvecs";
-    Query="E:\Research Work\Datasets\Enron\enron_query.fvecs";
-    GT="E:\Research Work\Datasets\Enron\enron_groundtruth.ivecs" },
+    Query="E:\Research Work\Datasets\Enron\enron_query.fvecs" },
 
     # Synthetic datasets
     @{ Name="synthetic_128"; Dim=128;
     Base="E:\Research Work\Datasets\synthetic_data\synthetic_128\base.fvecs";
-    Query="E:\Research Work\Datasets\synthetic_data\synthetic_128\query.fvecs";
-    GT="E:\Research Work\Datasets\synthetic_data\synthetic_128\groundtruth.ivecs" },
+    Query="E:\Research Work\Datasets\synthetic_data\synthetic_128\query.fvecs" },
 
     @{ Name="synthetic_256"; Dim=256;
     Base="E:\Research Work\Datasets\synthetic_data\synthetic_256\base.fvecs";
-    Query="E:\Research Work\Datasets\synthetic_data\synthetic_256\query.fvecs";
-    GT="E:\Research Work\Datasets\synthetic_data\synthetic_256\groundtruth.ivecs" },
+    Query="E:\Research Work\Datasets\synthetic_data\synthetic_256\query.fvecs" },
 
     @{ Name="synthetic_512"; Dim=512;
     Base="E:\Research Work\Datasets\synthetic_data\synthetic_512\base.fvecs";
-    Query="E:\Research Work\Datasets\synthetic_data\synthetic_512\query.fvecs";
-    GT="E:\Research Work\Datasets\synthetic_data\synthetic_512\groundtruth.ivecs" },
+    Query="E:\Research Work\Datasets\synthetic_data\synthetic_512\query.fvecs" },
 
     @{ Name="synthetic_1024"; Dim=1024;
     Base="E:\Research Work\Datasets\synthetic_data\synthetic_1024\base.fvecs";
-    Query="E:\Research Work\Datasets\synthetic_data\synthetic_1024\query.fvecs";
-    GT="E:\Research Work\Datasets\synthetic_data\synthetic_1024\groundtruth.ivecs" }
+    Query="E:\Research Work\Datasets\synthetic_data\synthetic_1024\query.fvecs" }
 )
 
 # ---------- PREP ROOT FOLDERS ----------
@@ -93,18 +85,16 @@ New-Item -ItemType Directory -Force -Path $OutRoot  | Out-Null
 New-Item -ItemType Directory -Force -Path $MetaRoot | Out-Null
 
 # ---------- HELPERS ----------
-function Ensure-Files([string]$base,[string]$query,[string]$gt) {
+function Ensure-Files([string]$base,[string]$query) {
     $ok = $true
     if ([string]::IsNullOrWhiteSpace($base)  -or -not (Test-Path -LiteralPath $base))  { Write-Error "Missing base:  $base";  $ok = $false }
     if ([string]::IsNullOrWhiteSpace($query) -or -not (Test-Path -LiteralPath $query)) { Write-Error "Missing query: $query"; $ok = $false }
-    if ([string]::IsNullOrWhiteSpace($gt)    -or -not (Test-Path -LiteralPath $gt))    { Write-Error "Missing GT:    $gt";    $ok = $false }
     return $ok
 }
 
 function Safe-Resolve([string]$Path, [bool]$AllowMissing = $false) {
     try {
         if ($AllowMissing) {
-            # return original if missing (e.g., keystore file that will be created)
             if (-not (Test-Path -LiteralPath $Path)) { return $Path }
         }
         return (Resolve-Path -LiteralPath $Path).Path
@@ -133,11 +123,11 @@ function Invoke-FastDelete([string]$PathToDelete) {
     }
 }
 
-function Clean-RunMetadata([string]$MetaDir) {
+function Clean-RunMetadata([string]$MetaDir,[string]$RunDir) {
     $paths = @(
         (Join-Path $MetaDir "metadata"),
         (Join-Path $MetaDir "points"),
-        (Join-Path $MetaDir "results")
+        (Join-Path $RunDir  "results")
     )
     foreach ($p in $paths) {
         if (Test-Path -LiteralPath $p) {
@@ -168,19 +158,18 @@ if ($CleanAllNow) {
 }
 
 # ---------- STEP 2: RUN ALL DATASETS x CONFIGS ----------
-$CombinedTopK   = @()
-$CombinedRecall = @()
-$CombinedTopKPath    = Join-Path $OutRoot "all_datasets_topk_eval.csv"
-$CombinedRecallPath  = Join-Path $OutRoot "all_datasets_global_recall.csv"
+$CombinedTopK      = @()
+$CombinedPrecision = @()
+$CombinedTopKPath      = Join-Path $OutRoot "all_datasets_topk_eval.csv"
+$CombinedPrecisionPath = Join-Path $OutRoot "all_datasets_global_precision.csv"
 
 foreach ($ds in $Datasets) {
     $name  = $ds.Name
     $dim   = [string]$ds.Dim
     $base  = $ds.Base
     $query = $ds.Query
-    $gt    = $ds.GT
 
-    if (-not (Ensure-Files $base $query $gt)) { continue }
+    if (-not (Ensure-Files $base $query)) { continue }
 
     foreach ($cfg in $Configs) {
         $label   = $cfg.Label
@@ -191,7 +180,7 @@ foreach ($ds in $Datasets) {
 
         if ($CleanPerRun) {
             Write-Host "Cleaning metadata/points/results for $name ($label) at $metaDir ..."
-            Clean-RunMetadata -MetaDir $metaDir
+            Clean-RunMetadata -MetaDir $metaDir -RunDir $runDir
         }
 
         Push-Location $runDir
@@ -202,7 +191,6 @@ foreach ($ds in $Datasets) {
 
         # Dataset-specific widening for hard cases (e.g., 1024-dim)
         if ($name -eq "synthetic_1024" -and $label -eq "recall_first") {
-            # push width and cap higher for deep partitions
             $cfg.PaperMaxCandidates = [Math]::Max($cfg.PaperMaxCandidates, 200000)
             $cfg.ProbePerTable = [Math]::Max($cfg.ProbePerTable, 32)
             $cfg.ProbeBitsMax  = [Math]::Max($cfg.ProbeBitsMax, 3)
@@ -255,31 +243,34 @@ foreach ($ds in $Datasets) {
             # write-through on so points hit Rocks/points immediately
             "-Dindex.writeThrough=true",
 
-            # full scale (index + query). To run in query-only later:
-            # "-Dquery.only=true","-Drestore.version=<N>"
+            # full scale (index + query)
             "-Dquery.only=false"
         ) + $passFlags + @(
-        # evaluation wiring
-            "-Deval.computePrecision=false",   # enables precision/ratio metrics in app
-            "-Dbase.path=$base",              # for distance-ratio computation
+        # evaluation wiring (precision on; GT will be AUTO)
+            "-Deval.computePrecision=true",
+            "-Deval.writeGlobalPrecisionCsv=true",
+            "-Dbase.path=$base",
             "-Daudit.enable=false",
             "-Dexport.artifacts=true",
             "-Dfile.encoding=UTF-8",
             "-jar", (Resolve-Path $JarPath)
         )
 
-        # Ensure keystore directory exists; don't Resolve-Path the  file itself
+        # Ensure keystore directory exists; don't Resolve-Path the file itself
         $KeysDir = Split-Path -Parent $KeysPath
         New-Item -ItemType Directory -Force -Path $KeysDir | Out-Null
+
+        # ---- FORCE PRECOMPUTE EVERY RUN ----
+        $gtArg = "AUTO"
 
         $app = @(
             (Safe-Resolve $ConfigPath),
             (Safe-Resolve $base),
             (Safe-Resolve $query),
-            (Safe-Resolve $KeysPath $true),  # allow missing
+            (Safe-Resolve $KeysPath $true),  # allow missing (will be created)
             $dim,
             (Safe-Resolve $metaDir),
-            (Safe-Resolve $gt),
+            $gtArg,                          # AUTO => Java will precompute <query>.ivecs and use it
             "100000"
         )
 
@@ -298,7 +289,7 @@ foreach ($ds in $Datasets) {
         # Collect per-run CSVs
         $resultsDir = Join-Path $runDir "results"
         $topkPath   = Join-Path $resultsDir "topk_evaluation.csv"
-        $grecall    = Join-Path $resultsDir "global_recall.csv"
+        $gprec      = Join-Path $resultsDir "global_precision.csv"
 
         if (Test-Path $topkPath) {
             try {
@@ -314,26 +305,26 @@ foreach ($ds in $Datasets) {
             Write-Warning "No topk_evaluation.csv found for $name ($label)"
         }
 
-        if (Test-Path $grecall) {
+        if (Test-Path $gprec) {
             try {
-                $rows2 = Import-Csv $grecall
+                $rows2 = Import-Csv $gprec
                 foreach ($g in $rows2) {
                     $g | Add-Member -NotePropertyName Dataset -NotePropertyValue $name
                     $g | Add-Member -NotePropertyName Config  -NotePropertyValue $label
-                    $CombinedRecall += $g
+                    $CombinedPrecision += $g
                 }
-                Copy-Item $grecall (Join-Path $runDir "global_recall.csv") -Force
-            } catch { Write-Warning "Failed to read $grecall : $_" }
+                Copy-Item $gprec (Join-Path $runDir "global_precision.csv") -Force
+            } catch { Write-Warning "Failed to read $gprec : $_" }
         } else {
-            Write-Warning "No global_recall.csv found for $name ($label)"
+            Write-Warning "No global_precision.csv found for $name ($label)"
         }
 
         try {
             $summary = @()
-            if (Test-Path $grecall) {
-                $last = (Import-Csv $grecall) | Sort-Object {[int]$_.topK} | Select-Object -Last 1
+            if (Test-Path $gprec) {
+                $last = (Import-Csv $gprec) | Sort-Object {[int]$_.topK} | Select-Object -Last 1
                 if ($null -ne $last) {
-                    $summary += "GlobalRecall@K$($last.topK): $([double]::Parse($last.global_recall)) (matches=$($last.matches)/truth=$($last.truth))"
+                    $summary += "GlobalPrecision@K$($last.topK): $([double]::Parse($last.global_precision)) (matches=$($last.matches)/retrieved=$($last.retrieved))"
                 }
             }
             $logTail = (Get-Content $logFile | Select-String -Pattern "Average Client Query Time", "Average Ratio") -join "`n"
@@ -359,11 +350,11 @@ if ($CombinedTopK.Count -gt 0) {
     Write-Warning "No TopK rows collected; check per-dataset outputs."
 }
 
-if ($CombinedRecall.Count -gt 0) {
-    $CombinedRecall | Export-Csv -NoTypeInformation -Path $CombinedRecallPath
-    Write-Host "Combined Global Recall CSV saved to: $CombinedRecallPath"
+if ($CombinedPrecision.Count -gt 0) {
+    $CombinedPrecision | Export-Csv -NoTypeInformation -Path $CombinedPrecisionPath
+    Write-Host "Combined Global Precision CSV saved to: $CombinedPrecisionPath"
 } else {
-    Write-Warning "No Global Recall rows collected; check per-dataset outputs."
+    Write-Warning "No Global Precision rows collected; check per-dataset outputs."
 }
 
 Write-Host "All runs completed."

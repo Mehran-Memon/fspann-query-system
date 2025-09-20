@@ -6,7 +6,7 @@ public class QueryEvaluationResult {
     private final int topKRequested;
     private final int retrieved;
     private final double ratio;
-    private final double recall;
+    private final double precision;
     private final long timeMs;
     private final long insertTimeMs;
     private final int candidateCount;
@@ -18,7 +18,7 @@ public class QueryEvaluationResult {
     public QueryEvaluationResult(int topKRequested,
                                  int retrieved,
                                  double ratio,
-                                 double recall,
+                                 double precision,
                                  long timeMs,
                                  long insertTimeMs,
                                  int candidateCount,
@@ -29,7 +29,7 @@ public class QueryEvaluationResult {
         this.topKRequested  = topKRequested;
         this.retrieved      = retrieved;
         this.ratio          = ratio;
-        this.recall         = recall;
+        this.precision      = precision;
         this.timeMs         = timeMs;
         this.insertTimeMs   = insertTimeMs;
         this.candidateCount = candidateCount;
@@ -41,7 +41,7 @@ public class QueryEvaluationResult {
         if (topKRequested <= 0) throw new IllegalArgumentException("topKRequested must be positive");
         if (retrieved < 0) throw new IllegalArgumentException("retrieved must be non-negative");
         if (ratio < 0) throw new IllegalArgumentException("ratio must be non-negative");
-        if (recall < 0 || recall > 1) throw new IllegalArgumentException("recall must be between 0 and 1");
+        if (precision < 0 || precision > 1) throw new IllegalArgumentException("precision must be between 0 and 1");
         if (timeMs < 0) throw new IllegalArgumentException("timeMs must be non-negative");
         if (insertTimeMs < 0) throw new IllegalArgumentException("insertTimeMs must be non-negative");
         if (candidateCount < 0) throw new IllegalArgumentException("candidateCount must be non-negative");
@@ -54,7 +54,7 @@ public class QueryEvaluationResult {
     public String toString() {
         return String.format(
                 "TopK=%d, Retrieved=%d, Ratio=%.4f, Recall=%.4f, Time=%dms, InsertTime=%dms, Candidates=%d, TokenSize=%d, Dim=%d, Flushed=%d/%d",
-                topKRequested, retrieved, ratio, recall, timeMs, insertTimeMs, candidateCount, tokenSizeBytes, vectorDim,
+                topKRequested, retrieved, ratio, precision, timeMs, insertTimeMs, candidateCount, tokenSizeBytes, vectorDim,
                 totalFlushedPoints, flushThreshold
         );
     }
@@ -62,7 +62,7 @@ public class QueryEvaluationResult {
     public int getTopKRequested() { return topKRequested; }
     public int getRetrieved() { return retrieved; }
     public double getRatio() { return ratio; }
-    public double getRecall() { return recall; }
+    public double getPrecision() { return precision; }
     public long getTimeMs() { return timeMs; }
     public long getInsertTimeMs() { return insertTimeMs; }
     public int getCandidateCount() { return candidateCount; }
@@ -77,7 +77,7 @@ public class QueryEvaluationResult {
         return topKRequested == that.topKRequested
                 && retrieved == that.retrieved
                 && Double.compare(that.ratio, ratio) == 0
-                && Double.compare(that.recall, recall) == 0
+                && Double.compare(that.precision, precision) == 0
                 && timeMs == that.timeMs
                 && insertTimeMs == that.insertTimeMs
                 && candidateCount == that.candidateCount
@@ -87,7 +87,7 @@ public class QueryEvaluationResult {
                 && flushThreshold == that.flushThreshold;
     }
     @Override public int hashCode() {
-        return Objects.hash(topKRequested, retrieved, ratio, recall, timeMs, insertTimeMs,
+        return Objects.hash(topKRequested, retrieved, ratio, precision, timeMs, insertTimeMs,
                 candidateCount, tokenSizeBytes, vectorDim, totalFlushedPoints, flushThreshold);
     }
 }

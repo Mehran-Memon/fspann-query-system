@@ -139,4 +139,18 @@ public class GroundtruthManager {
 
     /** For tests/diagnostics. */
     public boolean wasConvertedFromOneBased() { return convertedFromOneBased; }
+
+    public int[] peekFirstRow(int n) {
+        if (rows.isEmpty()) return new int[0];
+        int[] r = rows.get(0);
+        if (r == null) return new int[0];
+        return java.util.Arrays.copyOf(r, Math.min(n, r.length));
+    }
+
+    public void assertWithin(int datasetSize) {
+        if (!isConsistentWithDatasetSize(datasetSize)) {
+            throw new IllegalStateException("Groundtruth out of range for datasetSize=" + datasetSize);
+        }
+    }
+
 }

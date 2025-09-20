@@ -1,7 +1,9 @@
 # ============================
-# FSP-ANN: SIFT1M × (throughput | balanced | recall_first)
-# PS 5.1 & ConstrainedLanguage safe (no &, no ?., no ternary)
-# Only passes -Dbase.path (everything else comes from config)
+# FSP-ANN (single dataset, multi-profile)
+# PS 5.1 / ConstrainedLanguage safe
+# - Per-run cleanup for metadata/points/results
+# - Precision CSV enabled in config
+# - GT is ALWAYS precomputed each run (passes "AUTO")
 # ============================
 
 # ---- required paths ----
@@ -14,10 +16,14 @@ $Name  = "SIFT1M"
 $Dim   = 128
 $Base  = "E:\Research Work\Datasets\sift_dataset\sift_base.fvecs"
 $Query = "E:\Research Work\Datasets\sift_dataset\sift_query.fvecs"
-$GT    = "E:\Research Work\Datasets\sift_dataset\sift_groundtruth.ivecs"
+$GT    = "E:\Research Work\Datasets\sift_dataset\sift_groundtruth.ivecs"   # ignored; AUTO will be used
 
 # app batch size arg
 $Batch = 100000
+
+# cleanup toggles
+$CleanPerRun = $true
+$CleanAllNow = $false
 
 # ---------- helpers (PS5-safe) ----------
 function To-Hashtable {
@@ -25,13 +31,13 @@ function To-Hashtable {
     if ($null -eq $o) { return $null }
     if ($o -is [hashtable]) { return $o }
     if ($o -is [System.Collections.IDictionary]) {
-        $ht = @{}; foreach ($k in $o.Keys) { $ht[$k] = To-Hashtable $o[$k] }; return $ht
+        $ht=@{}; foreach($k in $o.Keys){ $ht[$k] = To-Hashtable $o[$k] }; return $ht
     }
     if ($o -is [System.Collections.IEnumerable] -and -not ($o -is [string])) {
-        $arr = @(); foreach ($e in $o) { $arr += ,(To-Hashtable $e) }; return $arr
+        $arr=@(); foreach($e in $o){ $arr += ,(To-Hashtable $e) }; return $arr
     }
     if ($o -is [pscustomobject]) {
-        $ht = @{}; foreach ($p in $o.PSObject.Properties) { $ht[$p.Name] = To-Hashtable $p.Value }; return $ht
+        $ht=@{}; foreach($p in $o.PSObject.Properties){ $ht[$p.Name] = To-Hashtable $p.Value }; return $ht
     }
     return $o
 }
@@ -64,15 +70,76 @@ function Apply-Overrides {
     return $result
 }
 
-# ---------- read config (expects: { "base": {...}, "profiles": [ {name, overrides}, ... ] } ) ----------
+function Safe-Resolve([string]$Path, [bool]$AllowMissing = $false) {
+    try {
+        if ($AllowMissing -and -not (Test-Path -LiteralPath $Path)) { return $Path }
+        return (Resolve-Path -LiteralPath $Path).Path
+    } catch {
+        if ($AllowMissing) { return $Path } else { throw }
+    }
+}
+
+function Invoke-FastDelete([string]$PathToDelete) {
+    if (-not (Test-Path -LiteralPath $PathToDelete)) { return }
+    $item = Get-Item -LiteralPath $PathToDelete -ErrorAction SilentlyContinue
+    if ($null -eq $item) { return }
+    if (-not $item.PSIsContainer) {
+        Remove-Item -LiteralPath $PathToDelete -Force -ErrorAction SilentlyContinue
+        return
+    }
+    $empty = New-Item -ItemType Directory -Path (Join-Path $env:TEMP ("empty_" + [guid]::NewGuid())) -Force
+    try {
+        robocopy $empty.FullName $PathToDelete /MIR /NFL /NDL /NJH /NJS /NC /NS /NP | Out-Null
+    } finally {
+        try { Remove-Item -LiteralPath $PathToDelete -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+        try { Remove-Item -LiteralPath $empty.FullName -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+    }
+}
+
+function Clean-RunMetadata([string]$RunDir) {
+    $paths = @(
+        (Join-Path $RunDir "metadata"),
+        (Join-Path $RunDir "points"),
+        (Join-Path $RunDir "results")
+    )
+    foreach ($p in $paths) {
+        if (Test-Path -LiteralPath $p) {
+            Write-Host "Cleaning $p ..."
+            Invoke-FastDelete $p
+        }
+        New-Item -ItemType Directory -Force -Path $p | Out-Null
+    }
+}
+
+function Clean-AllUnderOutRoot([string]$OutRootPath, [string]$DatasetName) {
+    if (-not (Test-Path -LiteralPath $OutRootPath)) { return }
+    $pattern = Join-Path $OutRootPath $DatasetName
+    $nodes = Get-ChildItem -LiteralPath $pattern -Recurse -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -in @('metadata','points','results') }
+    foreach ($n in $nodes) {
+        Write-Host "Wiping $($n.FullName) ..."
+        Invoke-FastDelete $n.FullName
+    }
+}
+
+# ---------- STEP 0: optional global clean and exit ----------
+if ($CleanAllNow) {
+    New-Item -ItemType Directory -Force -Path $OutRoot | Out-Null
+    Clean-AllUnderOutRoot -OutRootPath $OutRoot -DatasetName $Name
+    Write-Host "Global clean completed under $OutRoot\$Name."
+    return
+}
+
+# ---------- read config ----------
 if (-not (Test-Path -LiteralPath $ConfigPath)) { throw "Config not found: $ConfigPath" }
 $cfgObj   = (Get-Content -LiteralPath $ConfigPath -Raw) | ConvertFrom-Json
 $baseObj  = $cfgObj.base
 $profiles = $cfgObj.profiles
 if ($null -eq $baseObj)  { throw "config.json must contain a 'base' object." }
 if ($null -eq $profiles) { throw "config.json must contain a 'profiles' array." }
-
 $baseHT = To-Hashtable $baseObj
+
+New-Item -ItemType Directory -Force -Path $OutRoot | Out-Null
 
 # ---------- run all profiles ----------
 foreach ($p in $profiles) {
@@ -81,34 +148,40 @@ foreach ($p in $profiles) {
     $label = [string]$pHT['name']
     $ovr   = @{}; if ($pHT.ContainsKey('overrides')) { $ovr = $pHT['overrides'] }
 
-    $final = Apply-Overrides -base $baseHT -ovr $ovr
-
     $runDir = Join-Path $OutRoot ("$Name\" + $label)
     New-Item -ItemType Directory -Force -Path $runDir | Out-Null
+    if ($CleanPerRun) { Clean-RunMetadata -RunDir $runDir }
+
+    # merge config & force resultsDir + precision CSV
+    $final = Apply-Overrides -base $baseHT -ovr $ovr
+    if (-not $final.ContainsKey('output')) { $final['output'] = @{} }
+    $final['output']['resultsDir'] = (Join-Path $runDir "results")
+    if (-not $final.ContainsKey('eval')) { $final['eval'] = @{} }
+    $final['eval']['computePrecision'] = $true
+    $final['eval']['writeGlobalPrecisionCsv'] = $true
 
     $tmpConf = Join-Path $runDir "config.json"
     ($final | ConvertTo-Json -Depth 64) | Out-File -FilePath $tmpConf -Encoding utf8
 
     $keysFile = Join-Path $runDir "keystore.blob"
 
+    # ---- FORCE PRECOMPUTE EVERY RUN ----
+    $gtArg = "AUTO"   # Java main will recompute GT to <query>.ivecs and then use it
+
     # Build safe argument string for java (with quoting)
     $args = @(
         "-Dbase.path=$Base",
         "-jar", $JarPath,
-        $tmpConf, $Base, $Query, $keysFile, "$Dim", $runDir, $GT, "$Batch"
+        $tmpConf, $Base, $Query, $keysFile, "$Dim", $runDir, $gtArg, "$Batch"
     )
-
     $quotedArgs = @()
     foreach ($a in $args) {
-        if ($a -match '\s') {
-            $quotedArgs += '"' + ($a -replace '"','\"') + '"'
-        } else {
-            $quotedArgs += $a
-        }
+        if ($a -match '\s') { $quotedArgs += '"' + ($a -replace '"','\"') + '"'
+        } else { $quotedArgs += $a }
     }
     $argLine = [string]::Join(" ", $quotedArgs)
 
-    # Start java without using the & call operator
+    # Launch
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = "java"
     $psi.Arguments = $argLine
@@ -132,4 +205,11 @@ foreach ($p in $profiles) {
     } else {
         Write-Host ("Completed: {0} ({1})" -f $Name, $label)
     }
+
+    # convenience copies
+    $resultsDir = Join-Path $runDir "results"
+    $rt = Join-Path $resultsDir "results_table.csv"
+    $gp = Join-Path $resultsDir "global_precision.csv"
+    if (Test-Path -LiteralPath $rt) { Copy-Item -LiteralPath $rt -Destination (Join-Path $runDir "results_table.csv") -Force }
+    if (Test-Path -LiteralPath $gp) { Copy-Item -LiteralPath $gp -Destination (Join-Path $runDir "global_precision.csv") -Force }
 }

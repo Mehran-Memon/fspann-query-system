@@ -32,8 +32,8 @@ public class TopKProfiler {
                     String.valueOf(r.getRetrieved()),
                     // Literature ratio (paper): stored in r.getRatio()
                     (Double.isNaN(r.getRatio()) ? "NaN" : String.format(Locale.ROOT, "%.4f", r.getRatio())),
-                    // Precision@K: stored in r.getRecall() field by design
-                    (Double.isNaN(r.getRecall()) ? "NaN" : String.format(Locale.ROOT, "%.4f", r.getRecall())),
+                    // Precision@K: stored in r.getPrecision() field by design
+                    (Double.isNaN(r.getPrecision()) ? "NaN" : String.format(Locale.ROOT, "%.4f", r.getPrecision())),
                     String.valueOf(r.getTimeMs()),
                     String.valueOf(r.getInsertTimeMs()),
                     String.valueOf(r.getCandidateCount()),
@@ -63,7 +63,7 @@ public class TopKProfiler {
         try {
             Files.createDirectories(outPath.getParent());
             try (BufferedWriter bw = Files.newBufferedWriter(outPath)) {
-                bw.write("QueryID,TopK,Retrieved,LiteratureRatio,Precision,TimeMs,InsertTimeMs,CandidateCount,TokenSizeBytes,VectorDim,"
+                bw.write("QueryID,TopK,Retrieved,Ratio,Precision,TimeMs,InsertTimeMs,CandidateCount,TokenSizeBytes,VectorDim,"
                         + "CandTotal,CandKeptVersion,CandDecrypted,Returned\n");
                 for (String[] row : rows) {
                     bw.write(String.join(",", row));

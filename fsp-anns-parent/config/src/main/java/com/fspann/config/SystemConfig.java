@@ -181,7 +181,7 @@ public class SystemConfig {
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class EvalConfig {
         @JsonProperty("computePrecision")    public boolean computePrecision = false;
-        @JsonProperty("writeGlobalRecallCsv")public boolean writeGlobalRecallCsv = false;
+        @JsonProperty("writeGlobalPrecisionCsv")public boolean writeGlobalPrecisionCsv = false;
         @JsonProperty("kVariants")           public int[]   kVariants = new int[]{1,20,40,60,80,100};
         public EvalConfig() {}
     }

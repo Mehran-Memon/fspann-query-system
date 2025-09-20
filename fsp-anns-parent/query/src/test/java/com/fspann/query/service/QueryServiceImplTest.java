@@ -118,13 +118,13 @@ class QueryServiceImplTest {
         verify(keyService).getVersion(999);
         verify(keyService, atLeastOnce()).getCurrentVersion();
         verify(cryptoService).decryptQuery(eq(encQuery), eq(iv), eq(fallbackKey));
-        verify(indexService).lookup(any(QueryToken.class));
+        verify(indexService).lookupWithDiagnostics(any(QueryToken.class));
     }
 
     @Test
-    void testRatioAndRecallWhenGroundtruthEmpty() throws Exception {
+    void testRatioAndPrecisionWhenGroundtruthEmpty() throws Exception {
         // In this layer (service), "ratio" is not computed -> NaN.
-        // Precision@K (stored in 'recall' field) should be 0.0 when GT is empty.
+        // Precision@K (stored in 'precision' field) should be 0.0 when GT is empty.
         double[] query = new double[]{0.5, 0.6};
         String ctx = "epoch_1_dim_2";
         QueryToken token = new QueryToken(
@@ -151,7 +151,7 @@ class QueryServiceImplTest {
         QueryEvaluationResult r = results.get(0); // k=1
 
         assertTrue(Double.isNaN(r.getRatio()), "ratio should be NaN in QueryServiceImpl layer");
-        assertEquals(0.0, r.getRecall(), 1e-9);
+        assertEquals(0.0, r.getPrecision(), 1e-9);
     }
 
     @Test
@@ -187,7 +187,7 @@ class QueryServiceImplTest {
                 .findFirst().orElseThrow();
 
         assertTrue(Double.isNaN(top1Result.getRatio()), "ratio is computed in ForwardSecureANNSystem, not here");
-        assertEquals(1.0, top1Result.getRecall(), 1e-6);
+        assertEquals(1.0, top1Result.getPrecision(), 1e-6);
     }
 
     @Test

@@ -131,7 +131,7 @@ class ForwardSecureANNSystemRatioAutoFallbackTest {
         assertFalse(lines.isEmpty());
         String[] header = CSV_SPLIT.split(lines.get(0), -1);
         int idxTopK = colIndex(header, "TopK");
-        int idxRatio = colIndex(header, "LiteratureRatio");
+        int idxRatio = colIndex(header, "Ratio");
         assertTrue(idxTopK >= 0 && idxRatio >= 0, "CSV columns not found");
 
         Double ratio = null;

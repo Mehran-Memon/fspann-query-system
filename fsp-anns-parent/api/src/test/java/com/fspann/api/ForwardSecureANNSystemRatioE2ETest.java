@@ -127,21 +127,20 @@ class ForwardSecureANNSystemRatioE2ETest {
         String[] header = CSV_SPLIT.split(lines.get(0), -1);
         int idxQ = colIndex(header, "qIndex");
         int idxTopK = colIndex(header, "TopK");
-        int idxRatio = colIndex(header, "LiteratureRatio");
+        int idxRatio = colIndex(header, "Ratio");
         assertTrue(idxQ >= 0 && idxTopK >= 0 && idxRatio >= 0, "Expected CSV columns not found");
 
         Double ratio = null;
         for (int i = 1; i < lines.size(); i++) {
             String[] cols = CSV_SPLIT.split(lines.get(i), -1);
-            if (cols.length <= Math.max(idxRatio, Math.max(idxQ, idxTopK))) continue;
-            if ("1".equals(cols[idxQ].trim()) && "1".equals(cols[idxTopK].trim())) {
+            if (cols.length <= Math.max(idxTopK, idxRatio)) continue;
+            if ("1".equals(cols[idxTopK].trim())) {
                 String r = cols[idxRatio].trim();
                 ratio = "NaN".equalsIgnoreCase(r) ? Double.NaN : Double.parseDouble(r);
                 break;
             }
         }
-
-        assertNotNull(ratio, "No row for qIndex=1 & K=1 in results_table.csv");
+        assertNotNull(ratio, "No row for K=1 in results_table.csv");
         assertEquals(1.0, ratio, 1e-6);
     }
 
@@ -197,21 +196,21 @@ class ForwardSecureANNSystemRatioE2ETest {
         assertTrue(Files.exists(csv), "results_table.csv should exist");
         List<String> lines = Files.readAllLines(csv);
         String[] header = CSV_SPLIT.split(lines.get(0), -1);
-        int idxQ = colIndex(header, "qIndex");
         int idxTopK = colIndex(header, "TopK");
-        int idxRatio = colIndex(header, "LiteratureRatio");
+        int idxRatio = colIndex(header, "Ratio");
+        assertTrue(idxTopK >= 0 && idxRatio >= 0, "Expected CSV columns not found");
 
         Double k1Ratio = null;
         for (int i = 1; i < lines.size(); i++) {
             String[] cols = CSV_SPLIT.split(lines.get(i), -1);
-            if (cols.length <= Math.max(idxRatio, Math.max(idxQ, idxTopK))) continue;
-            if ("1".equals(cols[idxQ].trim()) && "1".equals(cols[idxTopK].trim())) {
+            if (cols.length <= Math.max(idxTopK, idxRatio)) continue;
+            if ("1".equals(cols[idxTopK].trim())) {
                 String r = cols[idxRatio].trim();
                 k1Ratio = "NaN".equalsIgnoreCase(r) ? Double.NaN : Double.parseDouble(r);
                 break;
             }
         }
-        assertNotNull(k1Ratio, "Could not find K=1 row for qIndex=1 in CSV");
+        assertNotNull(k1Ratio, "Could not find K=1 row in CSV");
         assertEquals(1.0, k1Ratio, 1e-6);
 
         // metrics_summary.txt AvgRatio == 1.000000

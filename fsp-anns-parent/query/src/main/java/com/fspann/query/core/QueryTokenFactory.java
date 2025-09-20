@@ -62,7 +62,10 @@ public class QueryTokenFactory {
 
         EncryptedPoint ep = cryptoService.encryptToPoint("query", vector, key);
 
-        List<List<Integer>> perTable = lsh.getBucketsForAllTables(vector, topK, numTables);
+        // Heuristic: grow probes with tables; tune later via flags.
+        final int probeHint = Math.min(256, Math.max(32, numTables * 2)); // start point; make configurable
+        List<List<Integer>> perTable = lsh.getBucketsForAllTables(vector, probeHint, numTables);
+
         // deep mutable copy
         List<List<Integer>> copy = new ArrayList<>(numTables);
         if (perTable == null || perTable.size() != numTables) {
@@ -104,7 +107,9 @@ public class QueryTokenFactory {
         KeyVersion kv = keyService.getVersion(version);
         EncryptedPoint ep = cryptoService.encryptToPoint("query", q, kv.getKey());
 
-        List<List<Integer>> perTable = lsh.getBucketsForAllTables(q, newTopK, numTables);
+        // Heuristic: grow probes with tables; tune later via flags.
+        final int probeHint = Math.min(256, Math.max(32, numTables * 2));
+        List<List<Integer>> perTable = lsh.getBucketsForAllTables(q, probeHint, numTables);
         List<List<Integer>> copy = new ArrayList<>(numTables);
         if (perTable == null || perTable.size() != numTables) {
             for (int t = 0; t < numTables; t++) copy.add(new ArrayList<>(lsh.getBuckets(q, newTopK, t)));
