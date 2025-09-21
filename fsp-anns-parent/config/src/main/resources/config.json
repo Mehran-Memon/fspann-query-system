@@ -33,6 +33,13 @@
     }
   },
 
+  "audit": {
+    "enable": true,
+    "k": 100,
+    "sampleEvery": 100,
+    "worstKeep": 25
+  },
+
   "profiles": [
     {
       "name": "SANNp",

@@ -588,9 +588,7 @@ public class ForwardSecureANNSystem {
         groundtruth.load(normalizePath(groundtruthPath));
 
         if (!queries.isEmpty()) {
-            Map<Integer, Double> fanout = indexService.evaluateFanoutRatio(
-                    queries.get(0), K_VARIANTS);
-            logger.info("Candidate fanout ratios for Q0: {}", fanout);
+            computeAndLogFanoutForQ0(queries.get(0), dim, K_VARIANTS);
         }
 
         if (groundtruth.size() != queries.size()) {
@@ -604,11 +602,11 @@ public class ForwardSecureANNSystem {
                 : Math.max(indexService.getIndexedVectorCount(), totalInserted);
 
         groundtruth.normalizeIndexBaseIfNeeded(datasetSize);
-        boolean idsOk   = groundtruth.isConsistentWithDatasetSize(datasetSize);
-        boolean dimsOk  = (baseReader != null) && sampleDimsOk(baseReader);
+        boolean idsOk    = groundtruth.isConsistentWithDatasetSize(datasetSize);
+        boolean dimsOk   = (baseReader != null) && sampleDimsOk(baseReader);
         boolean sampleOk = (baseReader != null) &&
                 sampleGtMatchesTrueNN(queries, groundtruth, baseReader,
-                        Math.max(0, config.getRatio().gtSample),
+                        Math.max(0,    config.getRatio().gtSample),
                         Math.max(0.0, Math.min(1.0, config.getRatio().gtMismatchTolerance)));
 
         boolean gtTrusted = (baseReader != null) && idsOk && dimsOk && sampleOk;
@@ -621,7 +619,16 @@ public class ForwardSecureANNSystem {
         ResultWriter rw = new ResultWriter(resultsDir.resolve("results_table.csv"));
         final int baseKForToken = Math.max(auditK, 100);
         final RetrievedAudit audit = auditEnable ? new RetrievedAudit(resultsDir) : null;
-        PriorityQueue<Worst> worstPQ = new PriorityQueue<>(Comparator.comparingDouble(Worst::ratio).reversed());
+
+        // keep only the largest 'auditWorstKeep' ratios
+        class WorstEntry {
+            final int qIndex, k; final double ratio, precision;
+            final List<QueryResult> retrieved; final int[] truth;
+            WorstEntry(int qIndex, int k, double ratio, double precision, List<QueryResult> retrieved, int[] truth) {
+                this.qIndex=qIndex; this.k=k; this.ratio=ratio; this.precision=precision; this.retrieved=retrieved; this.truth=truth;
+            }
+        }
+        PriorityQueue<WorstEntry> worstPQ = new PriorityQueue<>(Comparator.comparingDouble(w -> w.ratio));
 
         Map<Integer, Long> globalMatches   = new HashMap<>();
         Map<Integer, Long> globalRetrieved = new HashMap<>();
@@ -648,10 +655,7 @@ public class ForwardSecureANNSystem {
                 switch (ratioSource) {
                     case GT -> {
                         int[] gt1 = groundtruth.getGroundtruth(q, 1);
-                        if (gt1.length > 0) {
-                            trueIdx = gt1[0];
-                            denom = baseReader.l2(queryVec, trueIdx);
-                        }
+                        if (gt1.length > 0) { trueIdx = gt1[0]; denom = baseReader.l2(queryVec, trueIdx); }
                     }
                     case BASE -> {
                         TrueNN dn = computeTrueNNFromBase(queryVec, baseReader);
@@ -660,10 +664,7 @@ public class ForwardSecureANNSystem {
                     case AUTO -> {
                         if (gtTrusted) {
                             int[] gt1 = groundtruth.getGroundtruth(q, 1);
-                            if (gt1.length > 0) {
-                                trueIdx = gt1[0];
-                                denom = baseReader.l2(queryVec, trueIdx);
-                            }
+                            if (gt1.length > 0) { trueIdx = gt1[0]; denom = baseReader.l2(queryVec, trueIdx); }
                         } else {
                             TrueNN dn = computeTrueNNFromBase(queryVec, baseReader);
                             denom = dn.d; trueIdx = dn.id;
@@ -673,8 +674,7 @@ public class ForwardSecureANNSystem {
             }
 
             long clientStart = System.nanoTime();
-            List<QueryEvaluationResult> evals =
-                    queryService.searchWithTopKVariants(baseToken, q, groundtruth);
+            List<QueryEvaluationResult> evals = queryService.searchWithTopKVariants(baseToken, q, groundtruth);
             long clientEnd = System.nanoTime();
             double clientMs = (clientEnd - clientStart) / 1_000_000.0;
             double serverMs = ((QueryServiceImpl) queryService).getLastQueryDurationNs() / 1_000_000.0;
@@ -682,37 +682,72 @@ public class ForwardSecureANNSystem {
             EncryptedPointBuffer buf = indexService.getPointBuffer();
             long insertTimeMs   = buf != null ? buf.getLastBatchInsertTimeMs() : 0;
             int  totalFlushed   = buf != null ? buf.getTotalFlushedPoints()   : 0;
-            int  flushThreshold = buf != null ? buf.getFlushThreshold()        : 0;
+            int  flushThreshold = buf != null ? buf.getFlushThreshold()       : 0;
             int  tokenSizeBytes = QueryServiceImpl.estimateTokenSizeBytes(baseToken);
             int  vectorDim      = baseToken.getDimension();
 
+            QueryServiceImpl qs = (QueryServiceImpl) queryService;
+
             List<QueryEvaluationResult> enriched = new ArrayList<>(evals.size());
+            QueryEvaluationResult atKRowForMetric = null;
+
             for (QueryEvaluationResult r : evals) {
                 int k = r.getTopKRequested();
-                QueryToken tk = factoryForDim(dim).derive(baseToken, k);
-                List<QueryResult> retrieved = queryService.search(tk);  // cached by impl
 
-                int[] truth = groundtruth.getGroundtruth(q, k); // for precision only
+                // Per-K search so counters reflect THIS K
+                QueryToken tk = factoryForDim(dim).derive(baseToken, k);
+                List<QueryResult> retrieved = queryService.search(tk);
+
+                // Fanout counters for THIS K
+                int candTotal       = qs.getLastCandTotal();
+                int candKeptVersion = qs.getLastCandKeptVersion();
+                int candDecrypted   = qs.getLastCandDecrypted();
+                int returned        = retrieved.size();
+
+                // Precision@K for THIS K
+                int[] truth = groundtruth.getGroundtruth(q, k);
+                Set<String> truthSet = Arrays.stream(truth).mapToObj(String::valueOf).collect(Collectors.toSet());
+                long matches = retrieved.stream().map(QueryResult::getId).filter(truthSet::contains).count();
+                double precisionAtK = (returned == 0 ? 0.0 : (double) matches / (double) returned);
+
+                // Distance ratio using fixed denominator
                 double distRatio = (baseReader == null)
                         ? Double.NaN
                         : ratioGivenDenom(denom, queryVec, retrieved, k, baseReader);
 
-                enriched.add(new QueryEvaluationResult(
-                        k, r.getRetrieved(),
-                        distRatio,
-                        r.getPrecision(),  // carries precision@K from QueryServiceImpl
-                        r.getTimeMs(), insertTimeMs, r.getCandidateCount(),
+                // Build row with real candidateCount (candTotal)
+                QueryEvaluationResult row = new QueryEvaluationResult(
+                        k, returned, distRatio, precisionAtK,
+                        r.getTimeMs(), insertTimeMs, candTotal,
                         tokenSizeBytes, vectorDim, totalFlushed, flushThreshold
-                ));
+                );
+                enriched.add(row);
+
+                // Per-K profiler row
+                topKProfiler.record("Q" + q,
+                        Collections.singletonList(row),
+                        candTotal, candKeptVersion, candDecrypted, returned);
+
+                // Global precision accumulation
+                if (computePrecision) {
+                    globalMatches.put(k,   globalMatches.get(k)   + matches);
+                    globalRetrieved.put(k, globalRetrieved.get(k) + returned);
+                }
+
+                // Audit: sample & worst@K
+                if (audit != null && k == auditK) {
+                    if (auditSampleEvery <= 1 || (q % auditSampleEvery == 0)) {
+                        audit.appendSample(q, k, distRatio, precisionAtK, retrieved, truth);
+                    }
+                    worstPQ.offer(new WorstEntry(q, k, distRatio, precisionAtK,
+                            new ArrayList<>(retrieved),
+                            Arrays.copyOf(truth, truth.length)));
+                    if (worstPQ.size() > auditWorstKeep) worstPQ.poll(); // drop smallest ratio -> keep largest ratios
+                    atKRowForMetric = row;
+                }
             }
 
-            QueryServiceImpl qs = (QueryServiceImpl) queryService;
-            topKProfiler.record("Q" + q, enriched,
-                    qs.getLastCandTotal(),
-                    qs.getLastCandKeptVersion(),
-                    qs.getLastCandDecrypted(),
-                    qs.getLastReturned());
-
+            // Write per-query table
             rw.writeTable("Query " + (q + 1) + " Results (dim=" + dim + ")",
                     new String[]{"TopK","Retrieved","Ratio","Precision","TimeMs",
                             "InsertTimeMs","Candidates","TokenSize","VectorDim","TotalFlushed","FlushThreshold"},
@@ -731,25 +766,24 @@ public class ForwardSecureANNSystem {
                     }).collect(Collectors.toList())
             );
 
-            if (computePrecision) {
-                for (int k : K_VARIANTS) {
-                    QueryToken tk = factoryForDim(dim).derive(baseToken, k);
-                    List<QueryResult> retrieved = queryService.search(tk);
-                    int[] truth = groundtruth.getGroundtruth(q, k);
-                    Set<String> truthSet = Arrays.stream(truth).mapToObj(String::valueOf).collect(Collectors.toSet());
-                    long matches = retrieved.stream().map(QueryResult::getId).filter(truthSet::contains).count();
-                    globalMatches.put(k, globalMatches.get(k) + matches);
-                    globalRetrieved.put(k,   globalRetrieved.get(k)   + retrieved.size());
-                }
+            // Record summary metric at auditK (or last K if not present)
+            QueryEvaluationResult atK = atKRowForMetric != null
+                    ? atKRowForMetric
+                    : (enriched.isEmpty() ? null : enriched.get(enriched.size() - 1));
+
+            if (profiler != null && atK != null) {
+                profiler.recordQueryMetric("Q" + q, serverMs, clientMs, atK.getRatio());
             }
+            totalQueryTime += (long) (clientMs * 1_000_000L);
+        }
 
-            QueryEvaluationResult atK = enriched.stream()
-                    .filter(e -> e.getTopKRequested() == auditK)
-                    .findFirst()
-                    .orElseGet(() -> enriched.get(enriched.size() - 1));
-
-            if (profiler != null) profiler.recordQueryMetric("Q" + q, serverMs, clientMs, atK.getRatio());
-            totalQueryTime += (long)(clientMs * 1_000_000L);
+        // Flush worst cases to CSV (descending by ratio)
+        if (auditEnable && !worstPQ.isEmpty()) {
+            List<WorstEntry> worst = new ArrayList<>(worstPQ);
+            worst.sort((a, b) -> Double.compare(b.ratio, a.ratio));
+            for (WorstEntry w : worst) {
+                audit.appendWorst(w.qIndex, w.k, w.ratio, w.precision, w.retrieved, w.truth);
+            }
         }
 
         if (writeGlobalPrecisionCsv && computePrecision) {
@@ -787,16 +821,20 @@ public class ForwardSecureANNSystem {
                     groundtruth.size(), queries.size());
         }
 
+        if (!queries.isEmpty()) {
+            computeAndLogFanoutForQ0(queries.get(0), dim, K_VARIANTS);
+        }
+
         int datasetSize = (baseReader != null)
                 ? baseReader.count
                 : Math.max(indexService.getIndexedVectorCount(), totalInserted);
 
         groundtruth.normalizeIndexBaseIfNeeded(datasetSize);
-        boolean idsOk   = groundtruth.isConsistentWithDatasetSize(datasetSize);
-        boolean dimsOk  = (baseReader != null) && sampleDimsOk(baseReader);
+        boolean idsOk    = groundtruth.isConsistentWithDatasetSize(datasetSize);
+        boolean dimsOk   = (baseReader != null) && sampleDimsOk(baseReader);
         boolean sampleOk = (baseReader != null) &&
                 sampleGtMatchesTrueNN(queries, groundtruth, baseReader,
-                        Math.max(0, config.getRatio().gtSample),
+                        Math.max(0,    config.getRatio().gtSample),
                         Math.max(0.0, Math.min(1.0, config.getRatio().gtMismatchTolerance)));
 
         boolean gtTrusted = (baseReader != null) && idsOk && dimsOk && sampleOk;
@@ -808,7 +846,15 @@ public class ForwardSecureANNSystem {
         ResultWriter rw = new ResultWriter(resultsDir.resolve("results_table.csv"));
         final int baseKForToken = Math.max(auditK, 100);
         final RetrievedAudit audit = auditEnable ? new RetrievedAudit(resultsDir) : null;
-        PriorityQueue<Worst> worstPQ = new PriorityQueue<>(Comparator.comparingDouble(Worst::ratio).reversed());
+
+        class WorstEntry {
+            final int qIndex, k; final double ratio, precision;
+            final List<QueryResult> retrieved; final int[] truth;
+            WorstEntry(int qIndex, int k, double ratio, double precision, List<QueryResult> retrieved, int[] truth) {
+                this.qIndex=qIndex; this.k=k; this.ratio=ratio; this.precision=precision; this.retrieved=retrieved; this.truth=truth;
+            }
+        }
+        PriorityQueue<WorstEntry> worstPQ = new PriorityQueue<>(Comparator.comparingDouble(w -> w.ratio));
 
         Map<Integer, Long> globalMatches   = new HashMap<>();
         Map<Integer, Long> globalRetrieved = new HashMap<>();
@@ -833,10 +879,7 @@ public class ForwardSecureANNSystem {
                 switch (ratioSource) {
                     case GT -> {
                         int[] gt1 = groundtruth.getGroundtruth(q, 1);
-                        if (gt1.length > 0) {
-                            trueIdx = gt1[0];
-                            denom = baseReader.l2(queryVec, trueIdx);
-                        }
+                        if (gt1.length > 0) { trueIdx = gt1[0]; denom = baseReader.l2(queryVec, trueIdx); }
                     }
                     case BASE -> {
                         TrueNN dn = computeTrueNNFromBase(queryVec, baseReader);
@@ -845,10 +888,7 @@ public class ForwardSecureANNSystem {
                     case AUTO -> {
                         if (gtTrusted) {
                             int[] gt1 = groundtruth.getGroundtruth(q, 1);
-                            if (gt1.length > 0) {
-                                trueIdx = gt1[0];
-                                denom = baseReader.l2(queryVec, trueIdx);
-                            }
+                            if (gt1.length > 0) { trueIdx = gt1[0]; denom = baseReader.l2(queryVec, trueIdx); }
                         } else {
                             TrueNN dn = computeTrueNNFromBase(queryVec, baseReader);
                             denom = dn.d; trueIdx = dn.id;
@@ -858,8 +898,7 @@ public class ForwardSecureANNSystem {
             }
 
             long clientStart = System.nanoTime();
-            List<QueryEvaluationResult> evals =
-                    queryService.searchWithTopKVariants(baseToken, q, groundtruth);
+            List<QueryEvaluationResult> evals = queryService.searchWithTopKVariants(baseToken, q, groundtruth);
             long clientEnd = System.nanoTime();
             double clientMs = (clientEnd - clientStart) / 1_000_000.0;
             double serverMs = ((QueryServiceImpl) queryService).getLastQueryDurationNs() / 1_000_000.0;
@@ -867,36 +906,62 @@ public class ForwardSecureANNSystem {
             EncryptedPointBuffer buf = indexService.getPointBuffer();
             long insertTimeMs   = buf != null ? buf.getLastBatchInsertTimeMs() : 0;
             int  totalFlushed   = buf != null ? buf.getTotalFlushedPoints()   : 0;
-            int  flushThreshold = buf != null ? buf.getFlushThreshold()        : 0;
+            int  flushThreshold = buf != null ? buf.getFlushThreshold()       : 0;
             int  tokenSizeBytes = QueryServiceImpl.estimateTokenSizeBytes(baseToken);
             int  vectorDim      = baseToken.getDimension();
 
+            QueryServiceImpl qs = (QueryServiceImpl) queryService;
+
             List<QueryEvaluationResult> enriched = new ArrayList<>(evals.size());
+            QueryEvaluationResult atKRowForMetric = null;
+
             for (QueryEvaluationResult r : evals) {
                 int k = r.getTopKRequested();
+
                 QueryToken tk = factoryForDim(dim).derive(baseToken, k);
                 List<QueryResult> retrieved = queryService.search(tk);
 
-                int[] truth = groundtruth.getGroundtruth(q, k); // for precision only
+                int candTotal       = qs.getLastCandTotal();
+                int candKeptVersion = qs.getLastCandKeptVersion();
+                int candDecrypted   = qs.getLastCandDecrypted();
+                int returned        = retrieved.size();
+
+                int[] truth = groundtruth.getGroundtruth(q, k);
+                Set<String> truthSet = Arrays.stream(truth).mapToObj(String::valueOf).collect(Collectors.toSet());
+                long matches = retrieved.stream().map(QueryResult::getId).filter(truthSet::contains).count();
+                double precisionAtK = (returned == 0 ? 0.0 : (double) matches / (double) returned);
+
                 double distRatio = (baseReader == null)
                         ? Double.NaN
                         : ratioGivenDenom(denom, queryVec, retrieved, k, baseReader);
 
-                enriched.add(new QueryEvaluationResult(
-                        k, r.getRetrieved(),
-                        distRatio,
-                        r.getPrecision(),
-                        r.getTimeMs(), insertTimeMs, r.getCandidateCount(),
+                QueryEvaluationResult row = new QueryEvaluationResult(
+                        k, returned, distRatio, precisionAtK,
+                        r.getTimeMs(), insertTimeMs, candTotal,
                         tokenSizeBytes, vectorDim, totalFlushed, flushThreshold
-                ));
-            }
+                );
+                enriched.add(row);
 
-            QueryServiceImpl qs = (QueryServiceImpl) queryService;
-            topKProfiler.record("Q" + q, enriched,
-                    qs.getLastCandTotal(),
-                    qs.getLastCandKeptVersion(),
-                    qs.getLastCandDecrypted(),
-                    qs.getLastReturned());
+                topKProfiler.record("Q" + q,
+                        Collections.singletonList(row),
+                        candTotal, candKeptVersion, candDecrypted, returned);
+
+                if (computePrecision) {
+                    globalMatches.put(k,   globalMatches.get(k)   + matches);
+                    globalRetrieved.put(k, globalRetrieved.get(k) + returned);
+                }
+
+                if (audit != null && k == auditK) {
+                    if (auditSampleEvery <= 1 || (q % auditSampleEvery == 0)) {
+                        audit.appendSample(q, k, distRatio, precisionAtK, retrieved, truth);
+                    }
+                    worstPQ.offer(new WorstEntry(q, k, distRatio, precisionAtK,
+                            new ArrayList<>(retrieved),
+                            Arrays.copyOf(truth, truth.length)));
+                    if (worstPQ.size() > auditWorstKeep) worstPQ.poll();
+                    atKRowForMetric = row;
+                }
+            }
 
             rw.writeTable("Query " + (q + 1) + " Results (dim=" + dim + ")",
                     new String[]{"TopK","Retrieved","Ratio","Precision","TimeMs",
@@ -916,25 +981,22 @@ public class ForwardSecureANNSystem {
                     }).collect(Collectors.toList())
             );
 
-            if (computePrecision) {
-                for (int k : K_VARIANTS) {
-                    QueryToken tk = factoryForDim(dim).derive(baseToken, k);
-                    List<QueryResult> retrieved = queryService.search(tk);
-                    int[] truth = groundtruth.getGroundtruth(q, k);
-                    Set<String> truthSet = Arrays.stream(truth).mapToObj(String::valueOf).collect(Collectors.toSet());
-                    long matches = retrieved.stream().map(QueryResult::getId).filter(truthSet::contains).count();
-                    globalMatches.put(k, globalMatches.get(k) + matches);
-                    globalRetrieved.put(k,   globalRetrieved.get(k)   + retrieved.size());
-                }
+            QueryEvaluationResult atK = atKRowForMetric != null
+                    ? atKRowForMetric
+                    : (enriched.isEmpty() ? null : enriched.get(enriched.size() - 1));
+
+            if (profiler != null && atK != null) {
+                profiler.recordQueryMetric("Q" + q, serverMs, clientMs, atK.getRatio());
             }
+            totalQueryTime += (long) (clientMs * 1_000_000L);
+        }
 
-            QueryEvaluationResult atK = enriched.stream()
-                    .filter(e -> e.getTopKRequested() == auditK)
-                    .findFirst()
-                    .orElseGet(() -> enriched.get(enriched.size() - 1));
-
-            if (profiler != null) profiler.recordQueryMetric("Q" + q, serverMs, clientMs, atK.getRatio());
-            totalQueryTime += (long)(clientMs * 1_000_000L);
+        if (auditEnable && !worstPQ.isEmpty()) {
+            List<WorstEntry> worst = new ArrayList<>(worstPQ);
+            worst.sort((a, b) -> Double.compare(b.ratio, a.ratio));
+            for (WorstEntry w : worst) {
+                audit.appendWorst(w.qIndex, w.k, w.ratio, w.precision, w.retrieved, w.truth);
+            }
         }
 
         if (writeGlobalPrecisionCsv && computePrecision) {
@@ -1090,17 +1152,56 @@ public class ForwardSecureANNSystem {
         }
     }
 
-    public static final class Worst {
-        private final int qIndex;
-        private final double ratio;
+    /** Empirically compute candidate fanout ratios for a single query vector.
+     *  Fanout@K = (candTotal processed for this K) / (returned size at K).
+     */
+    private Map<Integer, Double> computeAndLogFanoutForQ0(double[] q0, int dim, int[] kVariants) {
+        Map<Integer, Double> fanout = new LinkedHashMap<>();
+        if (q0 == null || kVariants == null || kVariants.length == 0) return fanout;
 
-        public Worst(int qIndex, double ratio) {
-            this.qIndex = qIndex;
-            this.ratio = ratio;
+        // one big token then derive per-K (matches your query flow)
+        int baseK = Math.max(100, Arrays.stream(kVariants).max().orElse(100));
+        QueryToken baseToken = factoryForDim(dim).create(q0, baseK);
+        QueryServiceImpl qs = (QueryServiceImpl) queryService;
+
+        for (int k : kVariants) {
+            QueryToken tk = factoryForDim(dim).derive(baseToken, k);
+            List<QueryResult> r = queryService.search(tk);
+
+            int candTotal = qs.getLastCandTotal();   // total candidates touched for THIS K
+            int returned  = (r != null ? r.size() : 0);
+
+            double ratio = (returned == 0) ? Double.NaN : ((double) candTotal / (double) returned);
+            fanout.put(k, ratio);
         }
 
+        logger.info("Candidate fanout ratios for Q0: {}", fanout);
+        return fanout;
+    }
+
+    public static final class Worst {
+        private final int qIndex;
+        private final int k;
+        private final double ratio;
+        private final double precision;
+        private final List<QueryResult> retrieved;
+        private final int[] truth;
+
+        public Worst(int qIndex, int k, double ratio, double precision,
+                     List<QueryResult> retrieved, int[] truth) {
+            this.qIndex = qIndex;
+            this.k = k;
+            this.ratio = ratio;
+            this.precision = precision;
+            this.retrieved = retrieved;
+            this.truth = truth;
+        }
         public int qIndex() { return qIndex; }
+        public int k() { return k; }
         public double ratio() { return ratio; }
+        public double precision() { return precision; }
+        public List<QueryResult> retrieved() { return retrieved; }
+        public int[] truth() { return truth; }
     }
 
     // lightweight, zero-copy random-access reader
