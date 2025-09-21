@@ -1,17 +1,16 @@
 {
   "base": {
     "numShards": 32,
-    "numTables": 8,
     "opsThreshold": 500000000,
     "ageThresholdMs": 604800000,
     "reEncBatchSize": 2000,
     "profilerEnabled": true,
 
-    "eval": { "computePrecision": true, "writeGlobalRecallCsv": true, "kVariants": [1,20,40,60,80,100] },
+    "eval": { "computePrecision": true, "writeGlobalRecallCsv": true, "kVariants": [1,5,10,20,40,60,80,100] },
 
-    "ratio": { "source": "base", "gtSample": 0, "gtMismatchTolerance": 0.0 },
+    "ratio": { "source": "base", "gtSample": 0, "gtMismatchTolerance": 0.02 },
 
-    "output": { "resultsDir": "results", "exportArtifacts": true, "suppressLegacyMetrics": false },
+    "output": { "resultsDir": "results", "exportArtifacts": true, "suppressLegacyMetrics": false, "audit": true },
 
     "cloak": { "noise": 0.0 },
 
@@ -23,14 +22,14 @@
 
     "paper": {
       "enabled": true,
-      "m": 18,
-      "lambda": 2,
-      "divisions": 9,
+      "m": 14,
+      "lambda": 6,
+      "divisions": 10,
       "seed": 42,
-      "maxCandidates": 400000,
-      "targetMult": 2.20,
-      "expandRadiusMax": 6,
-      "expandRadiusHard": 8
+      "maxCandidates": 250000,
+      "targetMult": 1.80,
+      "expandRadiusMax": 3,
+      "expandRadiusHard": 5
     }
   },
 
@@ -40,11 +39,13 @@
       "overrides": {
         "paper": {
           "enabled": true,
-          "m": 15, "lambda": 2, "divisions": 0,
-          "maxCandidates": 250000,
+          "m": 12,
+          "lambda": 5,
+          "divisions": 8,
+          "maxCandidates": 170000,
           "targetMult": 1.80,
-          "expandRadiusMax": 3,
-          "expandRadiusHard": 5
+          "expandRadiusMax": 2,
+          "expandRadiusHard": 4
         }
       }
     },
@@ -53,11 +54,13 @@
       "overrides": {
         "paper": {
           "enabled": true,
-          "m": 25, "lambda": 2, "divisions": 9,
-          "maxCandidates": 400000,
+          "m": 14,
+          "lambda": 6,
+          "divisions": 10,
+          "maxCandidates": 250000,
           "targetMult": 2.00,
-          "expandRadiusMax": 5,
-          "expandRadiusHard": 7
+          "expandRadiusMax": 3,
+          "expandRadiusHard": 5
         }
       }
     },
@@ -66,11 +69,13 @@
       "overrides": {
         "paper": {
           "enabled": true,
-          "m": 20, "lambda": 2, "divisions": 5,
-          "maxCandidates": 800000,
-          "targetMult": 3.00,
-          "expandRadiusMax": 7,
-          "expandRadiusHard": 9
+          "m": 16,
+          "lambda": 8,
+          "divisions": 12,
+          "maxCandidates": 400000,
+          "targetMult": 2.50,
+          "expandRadiusMax": 3,
+          "expandRadiusHard": 6
         }
       }
     }

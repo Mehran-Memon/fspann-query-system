@@ -2,7 +2,7 @@
 # FSP-ANN (single dataset, multi-profile)
 # PS 5.1 / ConstrainedLanguage safe
 # - Per-run cleanup for metadata/points/results
-# - Precision CSV enabled in config
+# - Precision & Recall CSV enabled in config (belt & suspenders)
 # - GT is ALWAYS precomputed each run (passes "AUTO")
 # ============================
 
@@ -21,9 +21,24 @@ $GT    = "E:\Research Work\Datasets\sift_dataset\sift_groundtruth.ivecs"   # ign
 # app batch size arg
 $Batch = 100000
 
+# run only one profile (choose: SANNp | mSANNp | recall_first)
+$OnlyProfile = "recall_first"
+
+
 # cleanup toggles
 $CleanPerRun = $true
 $CleanAllNow = $false
+
+# JVM/system flags
+$JvmArgs = @(
+    "-XX:+UseG1GC","-XX:MaxGCPauseMillis=200","-XX:+AlwaysPreTouch",
+    "-Ddisable.exit=true",
+    "-Dpaper.mode=true",
+    "-Daudit.enable=true",           # <- turn audit on
+    "-Dexport.artifacts=true",       # <- allow writing artifacts
+    "-Dfile.encoding=UTF-8"
+)
+
 
 # ---------- helpers (PS5-safe) ----------
 function To-Hashtable {
@@ -70,6 +85,13 @@ function Apply-Overrides {
     return $result
 }
 
+function Ensure-Files([string]$base,[string]$query) {
+    $ok = $true
+    if ([string]::IsNullOrWhiteSpace($base)  -or -not (Test-Path -LiteralPath $base))  { Write-Error "Missing base:  $base";  $ok = $false }
+    if ([string]::IsNullOrWhiteSpace($query) -or -not (Test-Path -LiteralPath $query)) { Write-Error "Missing query: $query"; $ok = $false }
+    return $ok
+}
+
 function Safe-Resolve([string]$Path, [bool]$AllowMissing = $false) {
     try {
         if ($AllowMissing -and -not (Test-Path -LiteralPath $Path)) { return $Path }
@@ -113,9 +135,11 @@ function Clean-RunMetadata([string]$RunDir) {
 
 function Clean-AllUnderOutRoot([string]$OutRootPath, [string]$DatasetName) {
     if (-not (Test-Path -LiteralPath $OutRootPath)) { return }
-    $pattern = Join-Path $OutRootPath $DatasetName
-    $nodes = Get-ChildItem -LiteralPath $pattern -Recurse -Directory -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -in @('metadata','points','results') }
+    $datasetRoot = Join-Path $OutRootPath $DatasetName
+    if (-not (Test-Path -LiteralPath $datasetRoot)) { return }
+    $targets = @("metadata","points","results")
+    $nodes = Get-ChildItem -LiteralPath $datasetRoot -Recurse -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $targets -contains $_.Name }
     foreach ($n in $nodes) {
         Write-Host "Wiping $($n.FullName) ..."
         Invoke-FastDelete $n.FullName
@@ -132,6 +156,8 @@ if ($CleanAllNow) {
 
 # ---------- read config ----------
 if (-not (Test-Path -LiteralPath $ConfigPath)) { throw "Config not found: $ConfigPath" }
+if (-not (Ensure-Files $Base $Query)) { throw "Abort: dataset files missing." }
+
 $cfgObj   = (Get-Content -LiteralPath $ConfigPath -Raw) | ConvertFrom-Json
 $baseObj  = $cfgObj.base
 $profiles = $cfgObj.profiles
@@ -140,6 +166,11 @@ if ($null -eq $profiles) { throw "config.json must contain a 'profiles' array." 
 $baseHT = To-Hashtable $baseObj
 
 New-Item -ItemType Directory -Force -Path $OutRoot | Out-Null
+
+if ($OnlyProfile -and $OnlyProfile.Trim().Length -gt 0) {
+    $profiles = @($profiles | Where-Object { $_.name -eq $OnlyProfile })
+    if ($profiles.Count -eq 0) { throw "Profile '$OnlyProfile' not found in config.json" }
+}
 
 # ---------- run all profiles ----------
 foreach ($p in $profiles) {
@@ -152,13 +183,14 @@ foreach ($p in $profiles) {
     New-Item -ItemType Directory -Force -Path $runDir | Out-Null
     if ($CleanPerRun) { Clean-RunMetadata -RunDir $runDir }
 
-    # merge config & force resultsDir + precision CSV
+    # merge config & force resultsDir + CSV toggles
     $final = Apply-Overrides -base $baseHT -ovr $ovr
     if (-not $final.ContainsKey('output')) { $final['output'] = @{} }
     $final['output']['resultsDir'] = (Join-Path $runDir "results")
     if (-not $final.ContainsKey('eval')) { $final['eval'] = @{} }
     $final['eval']['computePrecision'] = $true
     $final['eval']['writeGlobalPrecisionCsv'] = $true
+    $final['eval']['writeGlobalRecallCsv']    = $true   # keep both paths enabled
 
     $tmpConf = Join-Path $runDir "config.json"
     ($final | ConvertTo-Json -Depth 64) | Out-File -FilePath $tmpConf -Encoding utf8
@@ -166,20 +198,25 @@ foreach ($p in $profiles) {
     $keysFile = Join-Path $runDir "keystore.blob"
 
     # ---- FORCE PRECOMPUTE EVERY RUN ----
-    $gtArg = "AUTO"   # Java main will recompute GT to <query>.ivecs and then use it
+    $gtArg = "AUTO"
 
-    # Build safe argument string for java (with quoting)
-    $args = @(
-        "-Dbase.path=$Base",
-        "-jar", $JarPath,
-        $tmpConf, $Base, $Query, $keysFile, "$Dim", $runDir, $gtArg, "$Batch"
-    )
-    $quotedArgs = @()
-    foreach ($a in $args) {
-        if ($a -match '\s') { $quotedArgs += '"' + ($a -replace '"','\"') + '"'
-        } else { $quotedArgs += $a }
+    # Build FLAT argument list
+    $argList = @()
+    $argList += $JvmArgs
+    $argList += "-Dbase.path=$Base"
+    $argList += "-jar";           $argList += $JarPath
+    $argList += $tmpConf;         $argList += $Base
+    $argList += $Query;           $argList += $keysFile
+    $argList += "$Dim";           $argList += $runDir
+    $argList += $gtArg;           $argList += "$Batch"
+
+    # Quote anything with spaces
+    $quotedArgs = foreach ($a in $argList) {
+        $s = [string]$a
+        if ($s -match '\s') { '"' + ($s -replace '"','\"') + '"' } else { $s }
     }
     $argLine = [string]::Join(" ", $quotedArgs)
+    $argLine | Out-File -FilePath (Join-Path $runDir "cmdline.txt") -Encoding utf8  # debug
 
     # Launch
     $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -190,15 +227,18 @@ foreach ($p in $profiles) {
     $psi.RedirectStandardError  = $true
     $psi.UseShellExecute = $false
 
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $pobj = New-Object System.Diagnostics.Process
     $pobj.StartInfo = $psi
     [void]$pobj.Start()
     $out = $pobj.StandardOutput.ReadToEnd()
     $err = $pobj.StandardError.ReadToEnd()
     $pobj.WaitForExit()
+    $sw.Stop()
 
     $out | Out-File -FilePath (Join-Path $runDir "run.out.log") -Encoding utf8
     $err | Out-File -FilePath (Join-Path $runDir "run.err.log") -Encoding utf8
+    ("ElapsedSec={0:N1}" -f $sw.Elapsed.TotalSeconds) | Out-File -FilePath (Join-Path $runDir "elapsed.txt") -Encoding utf8
 
     if ($pobj.ExitCode -ne 0) {
         Write-Warning ("Run failed for profile {0} (exit={1}). See logs." -f $label, $pobj.ExitCode)
@@ -208,8 +248,17 @@ foreach ($p in $profiles) {
 
     # convenience copies
     $resultsDir = Join-Path $runDir "results"
-    $rt = Join-Path $resultsDir "results_table.csv"
-    $gp = Join-Path $resultsDir "global_precision.csv"
-    if (Test-Path -LiteralPath $rt) { Copy-Item -LiteralPath $rt -Destination (Join-Path $runDir "results_table.csv") -Force }
-    if (Test-Path -LiteralPath $gp) { Copy-Item -LiteralPath $gp -Destination (Join-Path $runDir "global_precision.csv") -Force }
+    $filesToCopy = @(
+        "results_table.csv",
+        "global_precision.csv",
+        "global_recall.csv",
+        "storage_summary.csv",
+        "storage_breakdown.txt"
+    )
+    foreach ($fn in $filesToCopy) {
+        $src = Join-Path $resultsDir $fn
+        if (Test-Path -LiteralPath $src) {
+            Copy-Item -LiteralPath $src -Destination (Join-Path $runDir $fn) -Force
+        }
+    }
 }

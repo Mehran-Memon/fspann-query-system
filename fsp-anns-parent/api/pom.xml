@@ -145,6 +145,7 @@
                         <rocksdb.stats>true</rocksdb.stats>
                     </systemPropertyVariables>
                     <skipAfterFailureCount>1</skipAfterFailureCount>
+                        <argLine>-XX:+EnableDynamicAgentLoading</argLine>
                 </configuration>
 
             </plugin>
