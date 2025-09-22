@@ -185,6 +185,7 @@ foreach ($p in $profiles) {
 
     # merge config & force resultsDir + CSV toggles
     $final = Apply-Overrides -base $baseHT -ovr $ovr
+    if ($cfgObj.audit) { $final['audit'] = To-Hashtable $cfgObj.audit }
     if (-not $final.ContainsKey('output')) { $final['output'] = @{} }
     $final['output']['resultsDir'] = (Join-Path $runDir "results")
     if (-not $final.ContainsKey('eval')) { $final['eval'] = @{} }
@@ -241,20 +242,11 @@ foreach ($p in $profiles) {
     ("ElapsedSec={0:N1}" -f $sw.Elapsed.TotalSeconds) | Out-File -FilePath (Join-Path $runDir "elapsed.txt") -Encoding utf8
 
     if ($pobj.ExitCode -ne 0) {
-        Write-Warning ("Run failed for profile {0} (exit={1}). See logs." -f $label, $pobj.ExitCode)
+        Write-Warning ("Run failed for profile {0} (exit={1})." -f $label, $pobj.ExitCode)
     } else {
         Write-Host ("Completed: {0} ({1})" -f $Name, $label)
     }
 
-    # convenience copies
-    $resultsDir = Join-Path $runDir "results"
-    $filesToCopy = @(
-        "results_table.csv",
-        "global_precision.csv",
-        "global_recall.csv",
-        "storage_summary.csv",
-        "storage_breakdown.txt"
-    )
     foreach ($fn in $filesToCopy) {
         $src = Join-Path $resultsDir $fn
         if (Test-Path -LiteralPath $src) {

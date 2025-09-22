@@ -14,10 +14,15 @@ public class TopKProfiler {
     private static final Logger logger = LoggerFactory.getLogger(TopKProfiler.class);
     private final List<String[]> rows = new ArrayList<>();
     private final String baseDir;
+    // New: used to compute SF (scanned fraction)
+    private volatile long datasetSize = -1L;
 
     public TopKProfiler(String baseDir) {
         this.baseDir = Objects.requireNonNull(baseDir, "Base directory cannot be null");
     }
+
+    /** New: let the exporter compute SF = candidates / N. Safe to skip; SF becomes NaN. */
+    public void setDatasetSize(long n) { this.datasetSize = n; }
 
     public void record(String queryId,
                        List<QueryEvaluationResult> results,
@@ -30,12 +35,11 @@ public class TopKProfiler {
                     queryId,
                     String.valueOf(r.getTopKRequested()),
                     String.valueOf(r.getRetrieved()),
-                    // Literature ratio (paper): stored in r.getRatio()
                     (Double.isNaN(r.getRatio()) ? "NaN" : String.format(Locale.ROOT, "%.4f", r.getRatio())),
-                    // Precision@K: stored in r.getPrecision() field by design
                     (Double.isNaN(r.getPrecision()) ? "NaN" : String.format(Locale.ROOT, "%.4f", r.getPrecision())),
                     String.valueOf(r.getTimeMs()),
                     String.valueOf(r.getInsertTimeMs()),
+                    // CandidateCount must be the per-K unique fully-evaluated count (caller sets it)
                     String.valueOf(r.getCandidateCount()),
                     String.valueOf(r.getTokenSizeBytes()),
                     String.valueOf(r.getVectorDim()),
@@ -63,10 +67,29 @@ public class TopKProfiler {
         try {
             Files.createDirectories(outPath.getParent());
             try (BufferedWriter bw = Files.newBufferedWriter(outPath)) {
-                bw.write("QueryID,TopK,Retrieved,Ratio,Precision,TimeMs,InsertTimeMs,CandidateCount,TokenSizeBytes,VectorDim,"
-                        + "CandTotal,CandKeptVersion,CandDecrypted,Returned\n");
+                // Added fanout columns: CF_req, CF_ret, SF
+                bw.write(
+                        "QueryID,TopK,Retrieved,Ratio,Precision,TimeMs,InsertTimeMs,CandidateCount,TokenSizeBytes,VectorDim," +
+                                "CandTotal,CandKeptVersion,CandDecrypted,Returned,CF_req,CF_ret,SF\n"
+                );
+
                 for (String[] row : rows) {
+                    int topK      = parseIntSafe(row[1], 0);
+                    int retrieved = parseIntSafe(row[2], 0);
+                    int candCount = parseIntSafe(row[7], 0);
+
+                    String cfReq = (topK > 0 && candCount >= 0)
+                            ? fmtDouble((double)candCount / (double)topK) : "NaN";
+                    String cfRet = (retrieved > 0 && candCount >= 0)
+                            ? fmtDouble((double)candCount / (double)retrieved) : "NaN";
+                    String sf    = (datasetSize > 0 && candCount >= 0)
+                            ? fmtDouble((double)candCount / (double)datasetSize) : "NaN";
+
                     bw.write(String.join(",", row));
+                    bw.write(",");
+                    bw.write(cfReq); bw.write(",");
+                    bw.write(cfRet); bw.write(",");
+                    bw.write(sf);
                     bw.write("\n");
                 }
             }
@@ -75,5 +98,10 @@ public class TopKProfiler {
             logger.error("Failed to write top-K evaluation CSV to {}", outPath, ex);
             throw new RuntimeException("Failed to write CSV: " + outPath, ex);
         }
+    }
+
+    private static String fmtDouble(double v) { return String.format(Locale.ROOT, "%.6f", v); }
+    private static int parseIntSafe(String s, int def) {
+        try { return Integer.parseInt(s); } catch (Exception ignore) { return def; }
     }
 }
