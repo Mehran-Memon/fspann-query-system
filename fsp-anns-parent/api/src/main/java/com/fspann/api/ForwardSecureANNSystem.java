@@ -62,6 +62,7 @@ public class ForwardSecureANNSystem {
     private final int auditWorstKeep;
     private final Path resultsDir;
     private final double configuredNoiseScale;
+    private final RetrievedAudit retrievedAudit;
 
     enum RatioSource { AUTO, GT, BASE }
     private final RatioSource ratioSource;
@@ -153,10 +154,7 @@ public class ForwardSecureANNSystem {
                 if (ac.worstKeep > 0) aWorst = ac.worstKeep;
             }
         } catch (Throwable ignore) { /* fall back below */ }
-        try {
-            // legacy: output.audit boolean
-            if (config.getOutput() != null) enableAudit = enableAudit || config.getOutput().audit;
-        } catch (Throwable ignore) {}
+        enableAudit = enableAudit || propOr(true, "output.audit", "audit");
         this.auditEnable      = enableAudit;
         this.auditK           = aK;
         this.auditSampleEvery = aEvery;
@@ -189,6 +187,14 @@ public class ForwardSecureANNSystem {
         try { Files.createDirectories(resultsDir); } catch (IOException ioe) {
             logger.warn("Could not create resultsDir {}; falling back to CWD", resultsDir, ioe);
         }
+
+        // Initialize audit writer once (if enabled)
+        RetrievedAudit ra = null;
+        if (auditEnable) {
+            try { ra = new RetrievedAudit(this.resultsDir); }
+            catch (IOException ioe) { logger.warn("Audit writer init failed; audit disabled", ioe); }
+            }
+        this.retrievedAudit = ra;
 
         // ---- Centralize paths via FsPaths, but keep test-time @TempDir compatibility ----
         this.prevBaseProp   = System.getProperty(FsPaths.BASE_DIR_PROP);
@@ -537,6 +543,7 @@ public class ForwardSecureANNSystem {
     }
 
     /** Literature ratio@K = best(returned K) / trueNN(base). Does not rely on GT. */
+    /** Ununsed - kept for future debugging if needed**/
     private double distanceRatioFromBase(double[] q, List<QueryResult> retrievedTopK, int k) {
         if (baseReader == null || q == null || retrievedTopK == null || retrievedTopK.isEmpty() || k <= 0) {
             return Double.NaN;
@@ -622,8 +629,7 @@ public class ForwardSecureANNSystem {
         ResultWriter rw = new ResultWriter(resultsDir.resolve("results_table.csv"));
         try { topKProfiler.setDatasetSize(datasetSize); } catch (Throwable ignore) {}
 
-        final boolean doAudit = auditEnable;
-        final RetrievedAudit audit = doAudit ? new RetrievedAudit(resultsDir) : null;
+        final boolean doAudit = auditEnable && (retrievedAudit != null);
         final int baseKForToken = Math.max(auditK, 100);
 
         final int keepWorst = Math.max(0, auditWorstKeep);
@@ -701,8 +707,8 @@ public class ForwardSecureANNSystem {
                 long matches = prefix.stream().map(QueryResult::getId).filter(truthSet::contains).count();
                 double precAtK = (k > 0 ? (double) matches / (double) k : 0.0);
 
-                if (doAudit && audit != null && auditSampleEvery > 0 && (q % auditSampleEvery == 0) && k == Math.max(auditK, 1)) {
-                    try { audit.appendSample(q, k, distRatio, precAtK, prefix, truth); }
+                if (doAudit && auditSampleEvery > 0 && (q % auditSampleEvery == 0) && k == Math.max(auditK, 1)) {
+                    try { retrievedAudit.appendSample(q, k, distRatio, precAtK, prefix, truth); }
                     catch (IOException ioe) { logger.warn("Audit sample write failed q={},k={}", q, k, ioe); }
                 }
                 if (doAudit && k == Math.max(auditK, 1) && keepWorst > 0 && Double.isFinite(distRatio)) {
@@ -761,7 +767,7 @@ public class ForwardSecureANNSystem {
         }
 
         // Worst@K audit
-        if (doAudit && audit != null && !worstPQ.isEmpty()) {
+        if (doAudit && !worstPQ.isEmpty()) {
             List<WorstRec> worst = new ArrayList<>(worstPQ);
             worst.sort(Comparator.comparingDouble((WorstRec w) -> w.ratio).reversed());
             for (WorstRec w : worst) {
@@ -781,7 +787,7 @@ public class ForwardSecureANNSystem {
                     }
                 }
                 double ratio = (baseReader == null) ? Double.NaN : ratioGivenDenom(denom, qv, ret, w.k, baseReader);
-                try { audit.appendWorst(w.qIndex, w.k, ratio, w.precision, ret, truth); }
+                try { retrievedAudit.appendWorst(w.qIndex, w.k, ratio, w.precision, ret, truth); }
                 catch (IOException ioe) { logger.warn("Audit worst write failed q={},k={}", w.qIndex, w.k, ioe); }
             }
         }
@@ -837,8 +843,7 @@ public class ForwardSecureANNSystem {
         try { topKProfiler.setDatasetSize(datasetSize); } catch (Throwable ignore) {}
 
         // Audit wiring
-        final boolean doAudit = auditEnable;
-        final RetrievedAudit audit = doAudit ? new RetrievedAudit(resultsDir) : null;
+        final boolean doAudit = auditEnable && (retrievedAudit != null);
         final int baseKForToken = Math.max(auditK, 100);
 
         // Keep worst@K by ratio
@@ -937,8 +942,8 @@ public class ForwardSecureANNSystem {
                 double precAtK = (k > 0 ? (double) matches / (double) k : 0.0);
 
                 // periodic audit sample @auditK
-                if (doAudit && audit != null && auditSampleEvery > 0 && (q % auditSampleEvery == 0) && k == Math.max(auditK, 1)) {
-                    try { audit.appendSample(q, k, distRatio, precAtK, prefix, truth); }
+                if (doAudit && auditSampleEvery > 0 && (q % auditSampleEvery == 0) && k == Math.max(auditK, 1)) {
+                    try { retrievedAudit.appendSample(q, k, distRatio, precAtK, prefix, truth); }
                     catch (IOException ioe) { logger.warn("Audit sample write failed for q={},k={}", q, k, ioe); }
                 }
                 // track worst@auditK
@@ -998,7 +1003,7 @@ public class ForwardSecureANNSystem {
         }
 
         // End-of-run: write worst@K
-        if (doAudit && audit != null && !worstPQ.isEmpty()) {
+        if (doAudit && !worstPQ.isEmpty()) {
             List<WorstRec> worst = new ArrayList<>(worstPQ);
             worst.sort(Comparator.comparingDouble((WorstRec w) -> w.ratio).reversed()); // largest ratio first
             for (WorstRec w : worst) {
@@ -1017,7 +1022,7 @@ public class ForwardSecureANNSystem {
                     }
                 }
                 double ratio = (baseReader == null) ? Double.NaN : ratioGivenDenom(denom, qv, ret, w.k, baseReader);
-                try { audit.appendWorst(w.qIndex, w.k, ratio, w.precision, ret, truth); }
+                try { retrievedAudit.appendWorst(w.qIndex, w.k, ratio, w.precision, ret, truth); }
                 catch (IOException ioe) { logger.warn("Audit worst write failed for q={},k={}", w.qIndex, w.k, ioe); }
             }
         }
@@ -1201,9 +1206,6 @@ public class ForwardSecureANNSystem {
 
         logger.info("Candidate fanout ratios for Q0: {}", fanout);
         return fanout;
-    }
-
-    public record Worst(int qIndex, int k, double ratio, double precision, List<QueryResult> retrieved, int[] truth) {
     }
 
     // lightweight, zero-copy random-access reader
