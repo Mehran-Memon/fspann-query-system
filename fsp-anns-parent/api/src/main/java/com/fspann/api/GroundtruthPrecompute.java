@@ -171,7 +171,7 @@ public final class GroundtruthPrecompute {
         String name = queryPath.getFileName().toString();
         int dot = name.lastIndexOf('.');
         String base = (dot >= 0 ? name.substring(0, dot) : name);
-        return queryPath.getParent().resolve(base + ".ivecs");
+        return queryPath.getParent().resolve(base + "_groundtruth.ivecs");
     }
 
     private static void writeIvecs(Path out, int[][] rows) throws IOException {

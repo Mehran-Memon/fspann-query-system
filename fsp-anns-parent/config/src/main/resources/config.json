@@ -27,7 +27,7 @@
       "divisions": 10,
       "seed": 42,
       "maxCandidates": 250000,
-      "targetMult": 1.80,
+      "targetMult": 2.00,
       "expandRadiusMax": 3,
       "expandRadiusHard": 5
     }
@@ -42,28 +42,28 @@
 
   "profiles": [
     {
-      "name": "SANNp",
+      "name": "ratio_first",
       "overrides": {
         "paper": {
           "enabled": true,
           "m": 12,
           "lambda": 5,
           "divisions": 8,
-          "maxCandidates": 170000,
-          "targetMult": 1.80,
+          "maxCandidates": 150000,
+          "targetMult": 1.60,
           "expandRadiusMax": 2,
           "expandRadiusHard": 4
         }
       }
     },
     {
-      "name": "mSANNp",
+      "name": "balanced",
       "overrides": {
         "paper": {
           "enabled": true,
-          "m": 14,
-          "lambda": 6,
-          "divisions": 10,
+          "m": 15,
+          "lambda": 2,
+          "divisions": 9,
           "maxCandidates": 250000,
           "targetMult": 2.00,
           "expandRadiusMax": 3,

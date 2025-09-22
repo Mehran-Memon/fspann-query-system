@@ -22,7 +22,9 @@ public class QueryServiceImpl implements QueryService {
     private final IndexService indexService;
     private final CryptoService cryptoService;
     private final KeyLifeCycleService keyService;
-    private final QueryTokenFactory tokenFactory; // optional
+    private final QueryTokenFactory tokenFactory;
+    private final double targetMult;   // e.g. 1.8–2.5 (from config.paper.targetMult)
+    private final int    maxCandidates; // e.g. 250_000 (from config.paper.maxCandidates)
 
     // last-query metrics (visible to callers)
     private volatile long lastQueryDurationNs = 0;
@@ -44,6 +46,21 @@ public class QueryServiceImpl implements QueryService {
         this.keyService = Objects.requireNonNull(keyService);
         this.tokenFactory = tokenFactory; // may be null
     }
+
+    public QueryServiceImpl(IndexService indexService,
+                            CryptoService cryptoService,
+                            KeyLifeCycleService keyService,
+                            QueryTokenFactory tokenFactory,
+                            double targetMult,
+                            int maxCandidates) {
+        this.indexService   = Objects.requireNonNull(indexService);
+        this.cryptoService  = Objects.requireNonNull(cryptoService);
+        this.keyService     = Objects.requireNonNull(keyService);
+        this.tokenFactory   = tokenFactory;           // may be null
+        this.targetMult     = Math.max(1.0, targetMult);
+        this.maxCandidates  = Math.max(0, maxCandidates);
+    }
+
 
     @Override
     public List<QueryResult> search(QueryToken token) {
@@ -84,16 +101,39 @@ public class QueryServiceImpl implements QueryService {
             throw new RuntimeException("Decryption error: query vector", e);
         }
 
-        // Pull candidates from the index.
-        // If we had to fallback versions, also invoke diagnostics for observability.
-        if (usedFallback) {
-            try {
-                indexService.lookupWithDiagnostics(token); // ignore return; tests expect we call this on fallback
-            } catch (Throwable t) {
-                logger.debug("lookupWithDiagnostics failed (ignored in fallback path): {}", t.toString());
+        // --- decide candidate budget > K (before indexService.lookup) ---
+        final int K = token.getTopK();
+        int candBudget = K;
+        if (targetMult > 1.0 || maxCandidates > 0) {
+            long byMult = (long) Math.ceil(targetMult * K);
+            candBudget = (int) Math.min(Integer.MAX_VALUE, byMult);
+            if (maxCandidates > 0) candBudget = Math.min(candBudget, maxCandidates);
+            candBudget = Math.max(candBudget, K);
+        }
+
+        // derive a lookup token with the larger topK
+        QueryToken lookupToken = token;
+        if (candBudget != K) {
+            if (tokenFactory != null) {
+                lookupToken = tokenFactory.derive(token, candBudget);
+            } else {
+                // manual copy; identical to your other deep-copy usage
+                lookupToken = new QueryToken(
+                        deepCopy(token.getTableBuckets()),
+                        token.getIv(),
+                        token.getEncryptedQuery(),
+                        token.getQueryVector(),
+                        candBudget,
+                        token.getNumTables(),
+                        token.getEncryptionContext(),
+                        token.getDimension(),
+                        token.getVersion()
+                );
             }
         }
-        final List<EncryptedPoint> candidates = nn(indexService.lookup(token));
+
+        // Pull candidates with boosted budget
+        final List<EncryptedPoint> candidates = nn(indexService.lookup(lookupToken));
         final int candTotal = candidates.size();
         lastCandTotal = candTotal;
 
@@ -185,61 +225,54 @@ public class QueryServiceImpl implements QueryService {
                                                               int queryIndex,
                                                               GroundtruthManager gt) {
         Objects.requireNonNull(baseToken, "baseToken");
-        final List<Integer> topKVariants = List.of(1, 20, 40, 60, 80, 100);
+
+        // Keep these aligned with your config defaults; hard-coded here for compatibility
+        final List<Integer> topKVariants = List.of(1, 5, 10, 20, 40, 60, 80, 100);
+
+        // Single actual search — results will cover the max K we can return (prefix is used per K)
+        final long t0 = System.nanoTime();
+        final List<QueryResult> baseResults = nn(search(baseToken)); // also populates last* counters
+        final long queryDurationMs = Math.round((System.nanoTime() - t0) / 1_000_000.0);
+
+        // Pull last* counters from the one search above
+        final int candTotal       = getLastCandTotal();
+        final int candKeptVersion = getLastCandKeptVersion();
+        final int candDecrypted   = getLastCandDecrypted(); // candidates actually scored
+        final int returned        = getLastReturned();
+
+        // Static token/index metrics (identical for all K rows)
+        final EncryptedPointBuffer buf = indexService.getPointBuffer();
+        final long insertTimeMs   = (buf != null) ? buf.getLastBatchInsertTimeMs() : 0L;
+        final int  totalFlushed   = (buf != null) ? buf.getTotalFlushedPoints()   : 0;
+        final int  flushThreshold = (buf != null) ? buf.getFlushThreshold()       : 0;
+        final int  tokenSizeBytes = QueryServiceImpl.estimateTokenSizeBytes(baseToken);
+        final int  vectorDim      = baseToken.getDimension();
+
         final List<QueryEvaluationResult> out = new ArrayList<>(topKVariants.size());
 
         for (int k : topKVariants) {
-            final QueryToken variant = (tokenFactory != null)
-                    ? tokenFactory.derive(baseToken, k)
-                    : new QueryToken(
-                    deepCopy(baseToken.getTableBuckets()),
-                    baseToken.getIv(),
-                    baseToken.getEncryptedQuery(),
-                    baseToken.getQueryVector(),   // keep plaintext if present on token
-                    k,
-                    baseToken.getNumTables(),
-                    baseToken.getEncryptionContext(),
-                    baseToken.getDimension(),
-                    baseToken.getVersion()
-            );
+            final int upto = Math.min(k, baseResults.size());
+            final List<QueryResult> prefix = baseResults.subList(0, upto);
 
-            final long t0 = System.nanoTime();
-            final List<QueryResult> retrievedAll = search(variant);
-            final long queryDurationMs = (System.nanoTime() - t0) / 1_000_000L;
-
-            final List<QueryResult> retrieved = (retrievedAll == null)
-                    ? Collections.emptyList()
-                    : retrievedAll.subList(0, Math.min(k, retrievedAll.size()));
-            final int retrievedCount = retrieved.size();
-
-            // Recall@K (denominator = K). Ratio@K is deferred (NaN here).
+            // Precision@K (a.k.a. recall@K)
             double precision = 0.0;
-            int[] gtArr = new int[0];
-            if (gt != null) {
-                try { gtArr = gt.getGroundtruth(queryIndex, k); } catch (Exception ignore) {}
-            }
-            if (k > 0 && gtArr.length > 0 && retrievedCount > 0) {
-                Set<String> truthSet = Arrays.stream(gtArr).mapToObj(String::valueOf).collect(Collectors.toSet());
+            int[] gtArr = (gt != null) ? nn(gt.getGroundtruth(queryIndex, k)) : new int[0];
+            if (k > 0 && gtArr.length > 0 && upto > 0) {
+                final Set<String> truthSet = Arrays.stream(gtArr).mapToObj(String::valueOf).collect(Collectors.toSet());
                 int hits = 0;
-                int upto = Math.min(k, retrievedCount);
-                for (int i = 0; i < upto; i++) if (truthSet.contains(retrieved.get(i).getId())) hits++;
+                for (int i = 0; i < upto; i++) if (truthSet.contains(prefix.get(i).getId())) hits++;
                 precision = ((double) hits) / (double) k;
             }
 
-            final EncryptedPointBuffer buf = indexService.getPointBuffer();
-            final long insertTimeMs   = (buf != null) ? buf.getLastBatchInsertTimeMs() : 0L;
-            final int  totalFlushed   = (buf != null) ? buf.getTotalFlushedPoints()   : 0;
-            final int  flushThreshold = (buf != null) ? buf.getFlushThreshold()       : 0;
-            final int  tokenSizeBytes = QueryServiceImpl.estimateTokenSizeBytes(variant);
-            final int  vectorDim      = variant.getDimension();
-
+            // Ratio@K is computed at the system layer (depends on base vectors), so leave NaN here
             out.add(new QueryEvaluationResult(
-                    k, retrievedCount,
-                    Double.NaN,              // Literature Ratio@K computed by ForwardSecureANNSystem
-                    precision,               // Recall@K (named "precision" historically in CSVs)
+                    k,
+                    upto,
+                    Double.NaN,           // ratio computed by ForwardSecureANNSystem
+                    precision,            // precision@K (recall@K)
                     queryDurationMs,
                     insertTimeMs,
-                    getLastCandKeptVersion(), // candidates tracked in last search()
+                    candDecrypted,        // <-- true "fetched" (actually decrypted/scored) candidates
                     tokenSizeBytes,
                     vectorDim,
                     totalFlushed,
@@ -247,10 +280,17 @@ public class QueryServiceImpl implements QueryService {
             ));
         }
 
+        // Helpful debug (optional)
+        logger.debug("TopK variants summary: candTotal={}, keptVer={}, decrypted={}, returned={}",
+                candTotal, candKeptVersion, candDecrypted, returned);
+
         return out;
     }
 
     /* -------------------- helpers -------------------- */
+
+    // tiny helper to avoid null checks everywhere
+    private static <T> T nn(T v) { return v == null ? (T) Collections.emptyList() : v; }
 
     private static double l2(double[] a, double[] b) {
         if (a.length != b.length) throw new IllegalArgumentException("Vector dimension mismatch: " + a.length + " vs " + b.length);

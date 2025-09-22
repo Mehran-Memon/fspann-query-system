@@ -24,7 +24,6 @@ $Batch = 100000
 # run only one profile (choose: SANNp | mSANNp | recall_first)
 $OnlyProfile = "recall_first"
 
-
 # cleanup toggles
 $CleanPerRun = $true
 $CleanAllNow = $false
@@ -38,7 +37,6 @@ $JvmArgs = @(
     "-Dexport.artifacts=true",       # <- allow writing artifacts
     "-Dfile.encoding=UTF-8"
 )
-
 
 # ---------- helpers (PS5-safe) ----------
 function To-Hashtable {
@@ -167,6 +165,7 @@ $baseHT = To-Hashtable $baseObj
 
 New-Item -ItemType Directory -Force -Path $OutRoot | Out-Null
 
+# ---------- run one profile ----------
 if ($OnlyProfile -and $OnlyProfile.Trim().Length -gt 0) {
     $profiles = @($profiles | Where-Object { $_.name -eq $OnlyProfile })
     if ($profiles.Count -eq 0) { throw "Profile '$OnlyProfile' not found in config.json" }
