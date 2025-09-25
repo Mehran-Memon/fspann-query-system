@@ -20,15 +20,19 @@ import java.util.concurrent.ConcurrentHashMap;
  * SecureLSHIndexService
  * -----------------------------------------------------------------------------
  * Unified entry point for indexing and lookup with two modes:
-
+ *
  *  1) partitioned (DEFAULT, paper-aligned):
  *     - Routes to a PaperSearchEngine (Coding → GreedyPartition → TagQuery).
- *     - Client-side kNN over small subset(s), forward-secure (re-encrypt only).
+ *     - Client-side kNN over subset union, forward-secure (re-encrypt only).
+ *
  *  2) multiprobe (legacy):
- *     - EvenLSH + SecureLSHIndex with per-table multi-probe bucket unions.
- *     - Retained for A/B tests and backwards compatibility.
+ *     - EvenLSH + SecureLSHIndex with per-table bucket unions.
+ *     - UPDATED: no dependence on K/topK for fetch size. If the token does not
+ *       carry per-table buckets, we compute exactly one bucket per table using
+ *       LSH over the plaintext query (no fanout), then return the FULL union.
+ *
  * Configure with: -Dfspann.mode=partitioned | multiprobe
-  * Storage/crypto/lifecycle (RocksDB/AES-GCM/KeyService) are shared across modes.
+ * Storage/crypto/lifecycle (RocksDB/AES-GCM/KeyService) are shared across modes.
  */
 public class SecureLSHIndexService implements IndexService {
     private static final Logger logger = LoggerFactory.getLogger(SecureLSHIndexService.class);
@@ -310,7 +314,7 @@ public class SecureLSHIndexService implements IndexService {
         // ---- Partitioned path (paper engine) ----
         if (isPartitioned() && paperEngine != null) {
             List<EncryptedPoint> cands = paperEngine.lookup(token);
-            // For now, we don’t have per-division fanout here; use size only.
+            // Diagnostics (subset size only for now in paper mode)
             SearchDiagnostics diag = new SearchDiagnostics(
                     (cands != null) ? cands.size() : 0,
                     0,
@@ -319,7 +323,7 @@ public class SecureLSHIndexService implements IndexService {
             return new LookupWithDiagnostics((cands != null) ? cands : java.util.List.of(), diag);
         }
 
-        // ---- Legacy multiprobe path ----
+        // ---- Legacy multiprobe path (no dependence on K) ----
         final int dim = token.getDimension();
         final DimensionContext ctx = dimensionContexts.get(dim);
         if (ctx == null) {
@@ -327,20 +331,22 @@ public class SecureLSHIndexService implements IndexService {
         }
         final SecureLSHIndex idx = ctx.getIndex();
 
-        // Resolve per-table expansions
-        List<List<Integer>> perTable = token.hasPerTable()
-                ? token.getTableBuckets()
-                : com.fspann.index.core.PartitioningPolicy.expansionsForQuery(
-                ctx.getLsh(), token.getPlaintextQuery(), idx.getNumHashTables(), token.getTopK());
-
-        // Materialize a mutable copy if needed (token buckets may be unmodifiable)
+        // Derive per-table buckets from the token if present,
+        // otherwise compute ONE bucket per table from the plaintext query.
+        List<List<Integer>> perTable;
         if (token.hasPerTable()) {
-            List<List<Integer>> cp = new ArrayList<>(perTable.size());
-            for (List<Integer> l : perTable) cp.add(new ArrayList<>(l));
-            perTable = cp;
+            perTable = new ArrayList<>(token.getTableBuckets().size());
+            for (List<Integer> l : token.getTableBuckets()) perTable.add(new ArrayList<>(l));
+        } else {
+            perTable = new ArrayList<>(idx.getNumHashTables());
+            double[] q = token.getPlaintextQuery();
+            for (int t = 0; t < idx.getNumHashTables(); t++) {
+                int b = ctx.getLsh().getBucketId(q, t);
+                perTable.add(new ArrayList<>(java.util.List.of(b)));
+            }
         }
 
-        // Build union + track diagnostics (fanout per table, probed bucket count)
+        // Build union + diagnostics (fanout per table, probed bucket count)
         final int tablesToUse = Math.min(token.getNumTables(), idx.getNumHashTables());
         final Map<Integer, Integer> fanoutPerTable = new LinkedHashMap<>();
         final Set<String> seen = new LinkedHashSet<>(16_384);
@@ -352,10 +358,8 @@ public class SecureLSHIndexService implements IndexService {
 
             for (Integer b : perTable.get(t)) {
                 probedBuckets++;
-                // Access bucket list via a lightweight accessor:
-                // Small inline: mirrored from SecureLSHIndex#queryEncrypted
                 java.util.concurrent.CopyOnWriteArrayList<EncryptedPoint> bucket =
-                        getBucketList(idx, t, b); // helper below
+                        getBucketList(idx, t, b);
                 if (bucket == null) continue;
                 for (EncryptedPoint pt : bucket) {
                     if (pt.getId() != null && pt.getId().startsWith("FAKE_")) continue;
@@ -389,22 +393,9 @@ public class SecureLSHIndexService implements IndexService {
         }
     }
 
-
     @Override
     public List<EncryptedPoint> lookup(QueryToken token) {
         return lookupWithDiagnostics(token).candidates();
-    }
-
-    private static boolean canShrink(List<List<Integer>> perTable) {
-        for (List<Integer> t : perTable) if (t.size() > 1) return true;
-        return false;
-    }
-
-    private static void shrinkWorstTail(List<List<Integer>> perTable) {
-        for (List<Integer> t : perTable) {
-            int n = t.size();
-            if (n > 1) t.remove(n - 1);
-        }
     }
 
     @Override
@@ -478,7 +469,8 @@ public class SecureLSHIndexService implements IndexService {
         logger.info("Cleared {} cached points", size);
     }
 
-    // Legacy eval helper (multiprobe only). In paper mode, prefer recall@k vs exact-k baselines.
+    // ---------------------- Legacy-only eval helpers ----------------------
+    // NOTE: kept for A/B/diagnostics; not used in runtime lookup paths.
     public Map<Integer, Double> evaluateFanoutRatio(double[] query) {
         return evaluateFanoutRatio(query, new int[]{1, 20, 40, 60, 80, 100});
     }
@@ -500,6 +492,7 @@ public class SecureLSHIndexService implements IndexService {
         }
         return out;
     }
+    // ---------------------------------------------------------------------
 
     public void addToIndexOnly(String id, double[] vec) {
         boolean prev = writeThrough;
@@ -519,25 +512,27 @@ public class SecureLSHIndexService implements IndexService {
         Objects.requireNonNull(token, "QueryToken cannot be null");
 
         if (isPartitioned() && paperEngine != null) {
-            // Paper engines may override with more precise accounting
             List<EncryptedPoint> cands = paperEngine.lookup(token);
             return (cands != null) ? cands.size() : 0;
         }
 
-        // Legacy multiprobe path
+        // Legacy multiprobe: count using ONE bucket per table when token lacks per-table spec.
         int dim = token.getDimension();
         DimensionContext ctx = dimensionContexts.get(dim);
         if (ctx == null) return 0;
         SecureLSHIndex idx = ctx.getIndex();
 
-        List<List<Integer>> perTable = token.hasPerTable()
-                ? token.getTableBuckets()
-                : PartitioningPolicy.expansionsForQuery(
-                ctx.getLsh(),
-                token.getPlaintextQuery(),
-                idx.getNumHashTables(),
-                token.getTopK());
-
+        List<List<Integer>> perTable;
+        if (token.hasPerTable()) {
+            perTable = token.getTableBuckets();
+        } else {
+            perTable = new ArrayList<>(idx.getNumHashTables());
+            double[] q = token.getPlaintextQuery();
+            for (int t = 0; t < idx.getNumHashTables(); t++) {
+                int b = ctx.getLsh().getBucketId(q, t);
+                perTable.add(java.util.List.of(b));
+            }
+        }
         return idx.candidateCount(perTable);
     }
 
@@ -560,7 +555,7 @@ public class SecureLSHIndexService implements IndexService {
     public interface PaperSearchEngine {
         void insert(EncryptedPoint pt);                       // encrypted only
         void insert(EncryptedPoint pt, double[] plaintextVector); // with vector for coding
-        List<EncryptedPoint> lookup(QueryToken token);        // returns encrypted candidates (re-rank inside engine)
+        List<EncryptedPoint> lookup(QueryToken token);        // returns encrypted candidates (subset union)
         void delete(String id);
         int getVectorCountForDimension(int dimension);
     }

@@ -12,6 +12,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import com.fspann.common.StorageSizer;
 
 /**
  * KeyRotationServiceImpl
@@ -188,4 +189,102 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
         logger.info("Cleared forced key version; auto-rotation re-enabled");
     }
 
+    // -------------------------------------------------------------------------
+    // NEW: Selective re-encryption for "touched" points only (post-query).
+    // -------------------------------------------------------------------------
+    /**
+     * Re-encrypt only the touched IDs under the target version.
+     * - Loads each point via metadata manager.
+     * - If the stored version is older than targetVersion, decrypts with its source key and re-encrypts
+     *   under the target key, then saves and updates the index cache. Tag/placement remain unchanged.
+     * - Measures wall-clock ms and storage delta/after via the provided StorageSizer.
+     *
+     * @param touchedIds    unique IDs touched during the query (subset union). Duplicates are ignored.
+     * @param targetVersion key version to re-encrypt to (typically current).
+     * @param sizer         storage sizer for bytes delta; may be null to skip byte metrics.
+     * @return              ReencryptReport with counts, time, bytes delta/after.
+     */
+    public ReencryptReport reencryptTouched(Collection<String> touchedIds, int targetVersion, StorageSizer sizer) {
+        if (touchedIds == null || touchedIds.isEmpty()) {
+            long after = (sizer != null ? sizer.bytesOnDisk() : 0L);
+            return new ReencryptReport(0, 0, 0L, 0L, after);
+        }
+        if (cryptoService == null || metadataManager == null || indexService == null) {
+            logger.warn("Selective re-encryption skipped: services not initialized");
+            long after = (sizer != null ? sizer.bytesOnDisk() : 0L);
+            return new ReencryptReport(touchedIds.size(), 0, 0L, 0L, after);
+        }
+
+        long t0 = System.nanoTime();
+        long before = (sizer != null ? sizer.bytesOnDisk() : 0L);
+
+        // Defensive: ensure uniqueness and deterministic processing order
+        LinkedHashSet<String> ids = new LinkedHashSet<>(touchedIds);
+        int reenc = 0;
+
+        // Resolve target key once (and verify it exists)
+        SecretKey targetKey;
+        try {
+            targetKey = getVersion(targetVersion).getKey();
+        } catch (Exception e) {
+            logger.error("Target key version {} not available; aborting selective re-encryption", targetVersion);
+            long after = (sizer != null ? sizer.bytesOnDisk() : before);
+            long dtMs = Math.round((System.nanoTime() - t0) / 1_000_000.0);
+            return new ReencryptReport(ids.size(), 0, dtMs, Math.max(0L, after - before), after);
+        }
+
+        for (String id : ids) {
+            if (id == null) continue;
+
+            EncryptedPoint ep;
+            try {
+                ep = metadataManager.loadEncryptedPoint(id);
+            } catch (IOException | ClassNotFoundException e) {
+                // unreadable point → skip
+                continue;
+            }
+            if (ep == null) continue;
+
+            // Skip if already up-to-date
+            if (ep.getVersion() >= targetVersion) continue;
+
+            try {
+                // Decrypt under its own stored version key
+                SecretKey srcKey = getVersion(ep.getVersion()).getKey();
+                double[] vec = cryptoService.decryptFromPoint(ep, srcKey);
+
+                // Re-encrypt under target key. If encrypt() uses "current" implicitly,
+                // we re-stamp to the targetVersion below to be explicit.
+                EncryptedPoint ep2 = cryptoService.encrypt(id, vec);
+                if (ep2.getVersion() != targetVersion) {
+                    ep2 = new EncryptedPoint(
+                            ep2.getId(),
+                            ep2.getShardId(),
+                            ep2.getIv(),
+                            ep2.getCiphertext(),
+                            targetVersion,
+                            ep2.getVectorLength(),
+                            ep2.getBuckets()
+                    );
+                }
+
+                // Persist & update cache; do NOT change index placement or tags here.
+                metadataManager.saveEncryptedPoint(ep2);
+                indexService.updateCachedPoint(ep2);
+
+                reenc++;
+            } catch (Exception e) {
+                // best-effort: skip bad points
+                logger.debug("Selective re-encryption failed for id={}", id, e);
+            }
+        }
+
+        long after = (sizer != null ? sizer.bytesOnDisk() : before);
+        long dtMs = Math.round((System.nanoTime() - t0) / 1_000_000.0);
+
+        logger.info("Selective re-encryption: touched={}, re-encrypted={}, time={}ms, delta={}B, after={}B",
+                ids.size(), reenc, dtMs, Math.max(0L, after - before), after);
+
+        return new ReencryptReport(ids.size(), reenc, dtMs, Math.max(0L, after - before), after);
+    }
 }

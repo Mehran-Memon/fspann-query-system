@@ -26,41 +26,30 @@ public class QueryServiceImpl implements QueryService {
 
     // last-query metrics (visible to callers)
     private volatile long lastQueryDurationNs = 0;
-    private volatile int lastCandTotal = 0;        // candidates before version filter
-    private volatile int lastCandKeptVersion = 0;  // candidates after version filter
+    private volatile int lastCandTotal = 0;        // candidates before version filter (subset union size)
+    private volatile int lastCandKeptVersion = 0;  // candidates after forward-secure version filter
     private volatile int lastCandDecrypted = 0;    // successfully decrypted
     private volatile int lastReturned = 0;         // returned results (<= topK)
 
-    // over-fetch knobs (now properly initialized in all ctors)
-    private final double targetMult;   // e.g. 1.8–2.5
-    private final int    maxCandidates; // e.g. 250_000
+    // unfiltered candidate IDs (subset union, pre-version filter)
+    private volatile List<String> lastCandIds = java.util.Collections.emptyList();
+    public List<String> getLastCandidateIds() { return lastCandIds; }
 
     // ---- CTORS ----
     public QueryServiceImpl(IndexService indexService,
                             CryptoService cryptoService,
                             KeyLifeCycleService keyService) {
-        this(indexService, cryptoService, keyService, null, 1.0, 0);
+        this(indexService, cryptoService, keyService, null);
     }
 
     public QueryServiceImpl(IndexService indexService,
                             CryptoService cryptoService,
                             KeyLifeCycleService keyService,
                             QueryTokenFactory tokenFactory) {
-        this(indexService, cryptoService, keyService, tokenFactory, 1.0, 0);
-    }
-
-    public QueryServiceImpl(IndexService indexService,
-                            CryptoService cryptoService,
-                            KeyLifeCycleService keyService,
-                            QueryTokenFactory tokenFactory,
-                            double targetMult,
-                            int maxCandidates) {
         this.indexService   = Objects.requireNonNull(indexService);
         this.cryptoService  = Objects.requireNonNull(cryptoService);
         this.keyService     = Objects.requireNonNull(keyService);
-        this.tokenFactory   = tokenFactory;                 // may be null
-        this.targetMult     = Math.max(1.0, targetMult);    // defaults chain here
-        this.maxCandidates  = Math.max(0, maxCandidates);
+        this.tokenFactory   = tokenFactory; // may be null
     }
 
     @Override
@@ -102,57 +91,44 @@ public class QueryServiceImpl implements QueryService {
             throw new RuntimeException("Decryption error: query vector", e);
         }
 
-        // Decide candidate budget > K (over-fetch)
-        final int K = token.getTopK(); // <-- declare K once
-        int candBudget = K;
-        if (targetMult > 1.0 || maxCandidates > 0) {
-            long byMult = (long) Math.ceil(targetMult * K);
-            candBudget = (int) Math.min(Integer.MAX_VALUE, byMult);
-            if (maxCandidates > 0) candBudget = Math.min(candBudget, maxCandidates);
-            candBudget = Math.max(candBudget, K);
-        }
+        final int K = token.getTopK();
 
-        // Diagnostics if we fell back on key version
+        // Optional diagnostics if we fell back on key version
         if (usedFallback) {
             try { indexService.lookupWithDiagnostics(token); }
             catch (Throwable t) { logger.debug("lookupWithDiagnostics failed (ignored): {}", t.toString()); }
         }
 
-        // Derive a lookup token with the larger K
-        QueryToken lookupToken = token;
-        if (candBudget != K) {
-            if (tokenFactory != null) {
-                lookupToken = tokenFactory.derive(token, candBudget);
-            } else {
-                lookupToken = new QueryToken(
-                        deepCopy(token.getTableBuckets()),
-                        token.getIv(),
-                        token.getEncryptedQuery(),
-                        token.getQueryVector(),
-                        candBudget,
-                        token.getNumTables(),
-                        token.getEncryptionContext(),
-                        token.getDimension(),
-                        token.getVersion()
-                );
-            }
-        }
-
-        // Lookup
-        final List<EncryptedPoint> candidates = nn(indexService.lookup(lookupToken));
+        // --------------------------
+        // FETCH POLICY (paper-aligned)
+        // --------------------------
+        // Fetch the FULL subset-union determined by the token (m, λ, ℓ) — no pre-sizing/fanout.
+        final List<EncryptedPoint> candidates = nn(indexService.lookup(token));
         final int candTotal = candidates.size();
         lastCandTotal = candTotal;
 
+        // capture touched IDs (pre-version filter)
+        if (candTotal > 0) {
+            List<String> ids = new ArrayList<>(candTotal);
+            for (EncryptedPoint p : candidates) ids.add(p.getId());
+            lastCandIds = java.util.Collections.unmodifiableList(ids);
+            logger.debug("Touched (subset union) count = {}", ids.size());
+        } else {
+            lastCandIds = java.util.Collections.emptyList();
+        }
+
         if (candTotal == 0) {
+            lastCandIds = java.util.Collections.emptyList(); // ensure cleared
             logger.warn("No candidates (v={}, dim={}, K={})", activeVersion, token.getDimension(), token.getTopK());
             lastCandKeptVersion = 0;
             lastCandDecrypted = 0;
             lastReturned = 0;
             lastQueryDurationNs = System.nanoTime() - start;
-            return List.of();
+            return java.util.List.of();
         }
 
-        // Forward-secure filter
+
+        // Forward-secure filter (version match)
         final List<EncryptedPoint> sameVersion = new ArrayList<>(candTotal);
         for (EncryptedPoint p : candidates) if (p.getVersion() == activeVersion) sameVersion.add(p);
         final int candKeptVersion = sameVersion.size();
@@ -256,7 +232,7 @@ public class QueryServiceImpl implements QueryService {
             final int upto = Math.min(k, baseResults.size());
             final List<QueryResult> prefix = baseResults.subList(0, upto);
 
-            // Precision@K (recall@K)
+            // Precision@K
             int[] gtArr = (gt != null) ? safeGt(gt.getGroundtruth(queryIndex, k)) : new int[0];
             double precision = 0.0;
             if (k > 0 && gtArr.length > 0 && upto > 0) {
@@ -269,7 +245,7 @@ public class QueryServiceImpl implements QueryService {
             out.add(new QueryEvaluationResult(
                     k,
                     upto,
-                    Double.NaN,           // ratio computed by ForwardSecureANNSystem
+                    Double.NaN,           // ratio computed by ForwardSecureANNSystem facade
                     precision,
                     queryDurationMs,
                     insertTimeMs,
