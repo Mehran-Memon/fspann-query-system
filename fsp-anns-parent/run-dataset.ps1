@@ -22,7 +22,7 @@ $GT    = "E:\Research Work\Datasets\sift_dataset\sift_groundtruth.ivecs"   # ign
 $Batch = 100000
 
 # run only one profile (choose: SANNp | mSANNp | recall_first)
-$OnlyProfile = "recall_first"
+$OnlyProfile = " "
 
 # cleanup toggles
 $CleanPerRun = $true
