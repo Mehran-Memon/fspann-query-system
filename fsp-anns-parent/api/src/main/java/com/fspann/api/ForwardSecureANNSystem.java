@@ -8,6 +8,7 @@ import com.fspann.index.service.SecureLSHIndexService;
 import com.fspann.key.KeyManager;
 import com.fspann.key.KeyRotationPolicy;
 import com.fspann.key.KeyRotationServiceImpl;
+import com.fspann.key.ReencryptReport;
 import com.fspann.loader.DefaultDataLoader;
 import com.fspann.loader.FormatLoader;
 import com.fspann.loader.GroundtruthManager;
@@ -63,11 +64,21 @@ public class ForwardSecureANNSystem {
     private final Path resultsDir;
     private final double configuredNoiseScale;
     private final RetrievedAudit retrievedAudit;
+    private Path reencCsv;
 
-    enum RatioSource { AUTO, GT, BASE }
+    enum RatioSource {AUTO, GT, BASE}
+
     private final RatioSource ratioSource;
 
-    static final class TrueNN { final int id; final double d; TrueNN(int id, double d){this.id=id; this.d=d;} }
+    static final class TrueNN {
+        final int id;
+        final double d;
+
+        TrueNN(int id, double d) {
+            this.id = id;
+            this.d = d;
+        }
+    }
 
     private final int BATCH_SIZE;
     private long totalIndexingTime = 0;
@@ -90,6 +101,7 @@ public class ForwardSecureANNSystem {
 
     private final ExecutorService executor;
     private boolean exitOnShutdown = false;
+    private final boolean reencEnabled;
 
     // remember previous FsPaths props to restore on shutdown
     private final String prevBaseProp;
@@ -130,7 +142,7 @@ public class ForwardSecureANNSystem {
         }
         this.config = cfg;
 
-// ---- Materialize commonly used settings from config ----
+        // ---- Materialize commonly used settings from config ----
         this.computePrecision = propOr(
                 config.getEval().computePrecision,
                 "eval.computePrecision", "computePrecision");
@@ -141,10 +153,18 @@ public class ForwardSecureANNSystem {
 
         this.K_VARIANTS = (config.getEval().kVariants != null && config.getEval().kVariants.length > 0)
                 ? config.getEval().kVariants.clone()
-                : new int[]{1,5,10,20,40,60,80,100};
+                : new int[]{1, 5, 10, 20, 40, 60, 80, 100};
 
-// ---- AUDIT (robust to missing top-level "audit")
-        boolean enableAudit = false; int aK = 100; int aEvery = 100; int aWorst = 25;
+        this.reencEnabled = propOr(
+                (config != null ? config.isReencryptionGloballyEnabled() : true),
+                "reenc.enabled", "reencryption.enabled", "reencrypt.enabled"
+        );
+
+        // ---- AUDIT (robust to missing top-level "audit")
+        boolean enableAudit = false;
+        int aK = 100;
+        int aEvery = 100;
+        int aWorst = 25;
         try {
             var ac = config.getAudit();
             if (ac != null) {
@@ -155,22 +175,33 @@ public class ForwardSecureANNSystem {
             }
         } catch (Throwable ignore) { /* fall back below */ }
         enableAudit = enableAudit || propOr(true, "output.audit", "audit");
-        this.auditEnable      = enableAudit;
-        this.auditK           = aK;
+        this.auditEnable = enableAudit;
+        this.auditK = aK;
         this.auditSampleEvery = aEvery;
-        this.auditWorstKeep   = aWorst;
+        this.auditWorstKeep = aWorst;
 
+        // results directory
         String resultsDirStr = (config.getOutput() != null && config.getOutput().resultsDir != null && !config.getOutput().resultsDir.isBlank())
                 ? config.getOutput().resultsDir : System.getProperty("results.dir", "results");
         this.resultsDir = Paths.get(resultsDirStr);
+        try {
+            Files.createDirectories(resultsDir);
+        } catch (IOException ioe) {
+            logger.warn("Could not create resultsDir {}; falling back to CWD", resultsDir, ioe);
+        }
+        this.topKProfiler = new TopKProfiler(resultsDir.toString());
         this.configuredNoiseScale = Math.max(0.0, config.getCloak().noise);
+
+        // init per-query re-encryption CSV *after* resultsDir exists
+        this.reencCsv = resultsDir.resolve("reencrypt_metrics.csv");
+        initReencCsvIfNeeded(this.reencCsv);
 
         // ratio source
         String rs = (config.getRatio().source == null ? "auto" : config.getRatio().source).toLowerCase(Locale.ROOT);
         this.ratioSource = switch (rs) {
-            case "gt"   -> RatioSource.GT;
+            case "gt" -> RatioSource.GT;
             case "base" -> RatioSource.BASE;
-            default     -> RatioSource.AUTO;
+            default -> RatioSource.AUTO;
         };
 
         // legacy override hooks (fallback if config.lsh not set)
@@ -184,25 +215,24 @@ public class ForwardSecureANNSystem {
                 ? config.getLsh().probeShards
                 : Integer.getInteger("probe.shards", -1);
 
-        try { Files.createDirectories(resultsDir); } catch (IOException ioe) {
-            logger.warn("Could not create resultsDir {}; falling back to CWD", resultsDir, ioe);
-        }
-
         // Initialize audit writer once (if enabled)
         RetrievedAudit ra = null;
         if (auditEnable) {
-            try { ra = new RetrievedAudit(this.resultsDir); }
-            catch (IOException ioe) { logger.warn("Audit writer init failed; audit disabled", ioe); }
+            try {
+                ra = new RetrievedAudit(this.resultsDir);
+            } catch (IOException ioe) {
+                logger.warn("Audit writer init failed; audit disabled", ioe);
             }
+        }
         this.retrievedAudit = ra;
 
-        // ---- Centralize paths via FsPaths, but keep test-time @TempDir compatibility ----
-        this.prevBaseProp   = System.getProperty(FsPaths.BASE_DIR_PROP);
-        this.prevMetaProp   = System.getProperty(FsPaths.METADB_PROP);
+        // ---- Centralize paths via FsPaths ----
+        this.prevBaseProp = System.getProperty(FsPaths.BASE_DIR_PROP);
+        this.prevMetaProp = System.getProperty(FsPaths.METADB_PROP);
         this.prevPointsProp = System.getProperty(FsPaths.POINTS_PROP);
-        System.setProperty(FsPaths.BASE_DIR_PROP,  metadataPath.toString());
-        System.setProperty(FsPaths.METADB_PROP,    metadataPath.resolve("metadata").toString());
-        System.setProperty(FsPaths.POINTS_PROP,    metadataPath.resolve("points").toString());
+        System.setProperty(FsPaths.BASE_DIR_PROP, metadataPath.toString());
+        System.setProperty(FsPaths.METADB_PROP, metadataPath.resolve("metadata").toString());
+        System.setProperty(FsPaths.POINTS_PROP, metadataPath.resolve("points").toString());
 
         this.pointsPath = FsPaths.pointsDir();
         this.metaDBPath = FsPaths.metadataDb();
@@ -211,7 +241,7 @@ public class ForwardSecureANNSystem {
 
         // Injected core services
         this.metadataManager = Objects.requireNonNull(metadataManager, "MetadataManager cannot be null");
-        this.cryptoService   = Objects.requireNonNull(cryptoService, "CryptoService cannot be null");
+        this.cryptoService = Objects.requireNonNull(cryptoService, "CryptoService cannot be null");
 
         // Key service (also align FsPaths KEYSTORE_PROP)
         Path derivedKeyRoot = resolveKeyStorePath(keysFilePath, metadataPath);
@@ -243,7 +273,8 @@ public class ForwardSecureANNSystem {
                     if (p != null && !p.isBlank()) ksp = Paths.get(p);
                 } catch (Throwable ignore) { /* fallback remains derivedKeyRoot */ }
             }
-        } catch (Throwable ignore) {}
+        } catch (Throwable ignore) {
+        }
         this.keyStorePath = ksp;
 
         // Build index service
@@ -252,14 +283,10 @@ public class ForwardSecureANNSystem {
         if (config.getPaper().enabled) {
             var pc = config.getPaper();
             var pe = new com.fspann.index.paper.PartitionedIndexService(pc.m, pc.lambda, pc.divisions, pc.seed);
-
-            // apply optional flags if the engine supports them
-            applyPaperFlags(pe, pc);
-
+            // No optional flags anymore.
+            applyPaperFlags(pe, pc); // currently a no-op to keep compatibility
             indexService.setPaperEngine(pe);
-            logger.info("Paper engine enabled (m={}, λ={}, ℓ={}, seed={}, flags={{maxCand={}, targetMult={}, rMax={}, rHard={}}})",
-                    pc.m, pc.lambda, pc.divisions, pc.seed,
-                    pc.maxCandidates, pc.targetMult, pc.expandRadiusMax, pc.expandRadiusHard);
+            logger.info("Paper engine enabled (m={}, λ={}, ℓ={}, seed={})", pc.m, pc.lambda, pc.divisions, pc.seed);
         }
 
         if (keyService instanceof KeyRotationServiceImpl kr) {
@@ -297,17 +324,12 @@ public class ForwardSecureANNSystem {
                     dim, tables, shards, (OVERRIDE_ROWS > 0 ? OVERRIDE_ROWS : "default"));
         }
 
-        // pick a primary dim (you run one-dim SIFT1M)
+        // Primary dim
         int primaryDim = dimensions.get(0);
         QueryTokenFactory qtf = tokenFactories.getOrDefault(primaryDim, null);
 
-        double tm = (config.getPaper() != null && config.getPaper().targetMult > 0) ? config.getPaper().targetMult : 1.0;
-        int    mc = (config.getPaper() != null && config.getPaper().maxCandidates   > 0) ? config.getPaper().maxCandidates   : 0;
-
-        this.queryService = new QueryServiceImpl(indexService, cryptoService, keyService, qtf, tm, mc);
-
-        String resultsRoot = resultsDir.toString();
-        this.topKProfiler = new TopKProfiler(resultsRoot);
+        // Query service (no tunable flags anymore)
+        this.queryService = new QueryServiceImpl(indexService, cryptoService, keyService, qtf);
 
         String basePathProp = System.getProperty("base.path", "").trim();
         if (!basePathProp.isEmpty()) {
@@ -375,7 +397,7 @@ public class ForwardSecureANNSystem {
 
             // Keep mapping from ORIGINAL RECORD INDEX → vector (skip invalid but never re-pack ordinals)
             List<double[]> valid = new ArrayList<>(slice.size());
-            List<String>   ids   = new ArrayList<>(slice.size());
+            List<String> ids = new ArrayList<>(slice.size());
 
             for (int j = 0; j < slice.size(); j++) {
                 double[] v = slice.get(j);
@@ -543,7 +565,9 @@ public class ForwardSecureANNSystem {
     }
 
     /** Literature ratio@K = best(returned K) / trueNN(base). Does not rely on GT. */
-    /** Ununsed - kept for future debugging if needed**/
+    /**
+     * Ununsed - kept for future debugging if needed
+     **/
     private double distanceRatioFromBase(double[] q, List<QueryResult> retrievedTopK, int k) {
         if (baseReader == null || q == null || retrievedTopK == null || retrievedTopK.isEmpty() || k <= 0) {
             return Double.NaN;
@@ -552,7 +576,7 @@ public class ForwardSecureANNSystem {
         final double eps = 1e-12;
 
         double denom = Double.POSITIVE_INFINITY;
-        int    trueIdx = -1;
+        int trueIdx = -1;
         final int N = baseReader.count;
         for (int i = 0; i < N; i++) {
             double d = baseReader.l2(q, i);
@@ -570,9 +594,16 @@ public class ForwardSecureANNSystem {
         for (int i = 0; i < upto; i++) {
             String id = retrievedTopK.get(i).getId();
             int baseIdx;
-            try { baseIdx = Integer.parseInt(id); } catch (NumberFormatException nfe) { continue; }
+            try {
+                baseIdx = Integer.parseInt(id);
+            } catch (NumberFormatException nfe) {
+                continue;
+            }
             double d = baseReader.l2(q, baseIdx);
-            if (!Double.isNaN(d) && d < num) { num = d; bestId = id; }
+            if (!Double.isNaN(d) && d < num) {
+                num = d;
+                bestId = id;
+            }
         }
         if (!Double.isFinite(num)) return Double.NaN;
 
@@ -595,8 +626,12 @@ public class ForwardSecureANNSystem {
 
         // 1) Index + seal
         indexStream(dataPath, dim);
-        try { indexService.flushBuffers(); finalizeForSearch(); }
-        catch (Exception e) { logger.warn("Pre-query flush/optimize failed; continuing", e); }
+        try {
+            indexService.flushBuffers();
+            finalizeForSearch();
+        } catch (Exception e) {
+            logger.warn("Pre-query flush/optimize failed; continuing", e);
+        }
 
         // 2) Load queries + GT
         DefaultDataLoader loader = new DefaultDataLoader();
@@ -615,9 +650,9 @@ public class ForwardSecureANNSystem {
                 : Math.max(indexService.getIndexedVectorCount(), totalInserted);
         groundtruth.normalizeIndexBaseIfNeeded(datasetSize);
 
-        boolean idsOk   = groundtruth.isConsistentWithDatasetSize(datasetSize);
-        boolean dimsOk  = (baseReader != null) && sampleDimsOk(baseReader);
-        boolean sampleOk= (baseReader != null) && sampleGtMatchesTrueNN(
+        boolean idsOk = groundtruth.isConsistentWithDatasetSize(datasetSize);
+        boolean dimsOk = (baseReader != null) && sampleDimsOk(baseReader);
+        boolean sampleOk = (baseReader != null) && sampleGtMatchesTrueNN(
                 queries, groundtruth, baseReader,
                 Math.max(0, config.getRatio().gtSample),
                 Math.max(0.0, Math.min(1.0, config.getRatio().gtMismatchTolerance)));
@@ -627,32 +662,31 @@ public class ForwardSecureANNSystem {
 
         // 3) Writers / audit
         ResultWriter rw = new ResultWriter(resultsDir.resolve("results_table.csv"));
-        try { topKProfiler.setDatasetSize(datasetSize); } catch (Throwable ignore) {}
+        try {
+            topKProfiler.setDatasetSize(datasetSize);
+        } catch (Throwable ignore) { }
 
         final boolean doAudit = auditEnable && (retrievedAudit != null);
         final int baseKForToken = Math.max(auditK, 100);
 
         final int keepWorst = Math.max(0, auditWorstKeep);
-        class WorstRec { final int qIndex,k; final double ratio,precision; WorstRec(int q,int k,double r,double p){qIndex=q;this.k=k;ratio=r;precision=p;} }
+        class WorstRec {
+            final int qIndex, k;
+            final double ratio, precision;
+            WorstRec(int q, int k, double r, double p) { qIndex = q; this.k = k; ratio = r; precision = p; }
+        }
         PriorityQueue<WorstRec> worstPQ = new PriorityQueue<>(Comparator.comparingDouble(w -> w.ratio)); // min-heap
 
         Map<Integer, Long> globalMatches = new HashMap<>();
         Map<Integer, Long> globalRetrieved = new HashMap<>();
-        for (int k : K_VARIANTS) { globalMatches.put(k, 0L); globalRetrieved.put(k, 0L); }
+        for (int k : K_VARIANTS) {
+            globalMatches.put(k, 0L);
+            globalRetrieved.put(k, 0L);
+        }
 
-        // Quick fanout probe on Q0
+        // Quick fanout probe on Q0 (per-K true fanout)
         if (!queries.isEmpty()) {
-            double[] q0 = queries.get(0);
-            QueryToken probe = factoryForDim(dim).create(q0, baseKForToken);
-            queryService.search(probe);
-            QueryServiceImpl qs = (QueryServiceImpl) queryService;
-            Map<Integer, Double> fanout = new LinkedHashMap<>();
-            for (int k : K_VARIANTS) {
-                double c = Math.max(1, qs.getLastCandDecrypted() > 0 ? qs.getLastCandDecrypted()
-                        : Math.max(qs.getLastCandKeptVersion(), qs.getLastCandTotal()));
-                fanout.put(k, c / Math.max(1, k));
-            }
-            logger.info("Candidate fanout ratios for Q0 (CF_req=candidates/k): {}", fanout);
+            computeAndLogFanoutForQ0(queries.get(0), dim, K_VARIANTS);
         }
 
         // 4) Query loop — ONE real search per query
@@ -660,7 +694,7 @@ public class ForwardSecureANNSystem {
             double[] queryVec = queries.get(q);
             QueryToken baseToken = factoryForDim(dim).create(queryVec, baseKForToken);
 
-            // denom once per query
+            // Denominator once per query
             double denom = Double.NaN;
             if (baseReader != null) {
                 switch (ratioSource) {
@@ -668,11 +702,18 @@ public class ForwardSecureANNSystem {
                         int[] gt1 = groundtruth.getGroundtruth(q, 1);
                         if (gt1.length > 0) denom = baseReader.l2(queryVec, gt1[0]);
                     }
-                    case BASE -> { TrueNN dn = computeTrueNNFromBase(queryVec, baseReader); denom = dn.d; }
+                    case BASE -> {
+                        TrueNN dn = computeTrueNNFromBase(queryVec, baseReader);
+                        denom = dn.d;
+                    }
                     case AUTO -> {
-                        if (gtTrusted) { int[] gt1 = groundtruth.getGroundtruth(q, 1);
-                            if (gt1.length > 0) denom = baseReader.l2(queryVec, gt1[0]); }
-                        else           { TrueNN dn = computeTrueNNFromBase(queryVec, baseReader); denom = dn.d; }
+                        if (gtTrusted) {
+                            int[] gt1 = groundtruth.getGroundtruth(q, 1);
+                            if (gt1.length > 0) denom = baseReader.l2(queryVec, gt1[0]);
+                        } else {
+                            TrueNN dn = computeTrueNNFromBase(queryVec, baseReader);
+                            denom = dn.d;
+                        }
                     }
                 }
             }
@@ -680,21 +721,26 @@ public class ForwardSecureANNSystem {
             long clientStart = System.nanoTime();
             List<QueryResult> baseReturned = queryService.search(baseToken);
             long clientEnd = System.nanoTime();
+
             QueryServiceImpl qs = (QueryServiceImpl) queryService;
             double clientMs = (clientEnd - clientStart) / 1_000_000.0;
             double serverMs = qs.getLastQueryDurationNs() / 1_000_000.0;
 
-            EncryptedPointBuffer buf = indexService.getPointBuffer();
-            long insertTimeMs   = buf != null ? buf.getLastBatchInsertTimeMs() : 0;
-            int  totalFlushed   = buf != null ? buf.getTotalFlushedPoints()   : 0;
-            int  flushThreshold = buf != null ? buf.getFlushThreshold()        : 0;
-            int  tokenSizeBytes = QueryServiceImpl.estimateTokenSizeBytes(baseToken);
-            int  vectorDim      = baseToken.getDimension();
+            // selective re-encryption of touched points (subset union) and per-query CSV row
+            ReencryptReport rep = maybeReencryptTouched("Q" + q, qs);
+            int touchedCount = (qs.getLastCandidateIds() != null) ? qs.getLastCandidateIds().size() : 0;
 
-            int candTotal       = qs.getLastCandTotal();
+            EncryptedPointBuffer buf = indexService.getPointBuffer();
+            long insertTimeMs = buf != null ? buf.getLastBatchInsertTimeMs() : 0;
+            int totalFlushed = buf != null ? buf.getTotalFlushedPoints() : 0;
+            int flushThreshold = buf != null ? buf.getFlushThreshold() : 0;
+            int tokenSizeBytes = QueryServiceImpl.estimateTokenSizeBytes(baseToken);
+            int vectorDim = baseToken.getDimension();
+
+            int candTotal = qs.getLastCandTotal();
             int candKeptVersion = qs.getLastCandKeptVersion();
-            int candDecrypted   = qs.getLastCandDecrypted();
-            int returned        = qs.getLastReturned();
+            int candDecrypted = qs.getLastCandDecrypted();
+            int returned = qs.getLastReturned();
 
             List<QueryEvaluationResult> enriched = new ArrayList<>(K_VARIANTS.length);
             for (int k : K_VARIANTS) {
@@ -722,15 +768,20 @@ public class ForwardSecureANNSystem {
                 enriched.add(new QueryEvaluationResult(
                         k, upto, distRatio, precAtK,
                         Math.round(serverMs), insertTimeMs, candDecrypted,
-                        tokenSizeBytes, vectorDim, totalFlushed, flushThreshold
+                        tokenSizeBytes, vectorDim, totalFlushed, flushThreshold,
+                        /* touchedCount        */ touchedCount,
+                        /* reencryptedCount    */ rep.reencryptedCount,
+                        /* reencTimeMs         */ rep.timeMs,
+                        /* reencBytesDelta     */ rep.bytesDelta,
+                        /* reencBytesAfter     */ rep.bytesAfter
                 ));
             }
 
             topKProfiler.record("Q" + q, enriched, candTotal, candKeptVersion, candDecrypted, returned);
 
             rw.writeTable("Query " + (q + 1) + " Results (dim=" + dim + ")",
-                    new String[]{"TopK","Retrieved","Ratio","Precision","TimeMs",
-                            "InsertTimeMs","Candidates","TokenSize","VectorDim","TotalFlushed","FlushThreshold"},
+                    new String[]{"TopK", "Retrieved", "Ratio", "Precision", "TimeMs",
+                            "InsertTimeMs", "Candidates", "TokenSize", "VectorDim", "TotalFlushed", "FlushThreshold"},
                     enriched.stream().map(er -> new String[]{
                             String.valueOf(er.getTopKRequested()),
                             String.valueOf(er.getRetrieved()),
@@ -751,19 +802,22 @@ public class ForwardSecureANNSystem {
                     .findFirst().orElseGet(() -> enriched.get(enriched.size() - 1));
 
             if (profiler != null) profiler.recordQueryMetric("Q" + q, serverMs, clientMs, atK.getRatio());
-            totalQueryTime += (long)(clientMs * 1_000_000L);
+            totalQueryTime += (long) (clientMs * 1_000_000L);
 
             if (q < 3 && !baseReturned.isEmpty() && baseReader != null) {
                 int topId = -1;
-                try { topId = Integer.parseInt(baseReturned.get(0).getId()); } catch (Exception ignore) {}
+                try { topId = Integer.parseInt(baseReturned.get(0).getId()); } catch (Exception ignore) { }
                 int gt1 = -1;
                 int[] row = groundtruth.getGroundtruth(q, 1);
                 if (row.length > 0) gt1 = row[0];
                 double dTop = (topId >= 0) ? baseReader.l2(queryVec, topId) : Double.NaN;
-                double dGt1 = (gt1  >= 0) ? baseReader.l2(queryVec, gt1)  : Double.NaN;
+                double dGt1 = (gt1 >= 0) ? baseReader.l2(queryVec, gt1) : Double.NaN;
                 logger.info("Sanity q{}: topId={} dTop={}; gt1={} dGt1={}", q, topId, dTop, gt1, dGt1);
             }
+        }
 
+        if (writeGlobalPrecisionCsv && computePrecision) {
+            writeGlobalPrecisionCsv(resultsDir, dim, K_VARIANTS, globalMatches, globalRetrieved);
         }
 
         // Worst@K audit
@@ -776,24 +830,21 @@ public class ForwardSecureANNSystem {
                 List<QueryResult> ret = queryService.search(tk);
                 int[] truth = groundtruth.getGroundtruth(w.qIndex, w.k);
 
-                double denom = Double.NaN;
+                double denomWorst = Double.NaN;
                 if (baseReader != null) {
                     if (ratioSource == RatioSource.GT || (ratioSource == RatioSource.AUTO && gtTrusted)) {
                         int[] gt1 = groundtruth.getGroundtruth(w.qIndex, 1);
-                        if (gt1.length > 0) denom = baseReader.l2(qv, gt1[0]);
+                        if (gt1.length > 0) denomWorst = baseReader.l2(qv, gt1[0]);
                     } else {
                         TrueNN dn = computeTrueNNFromBase(qv, baseReader);
-                        denom = dn.d;
+                        denomWorst = dn.d;
                     }
                 }
-                double ratio = (baseReader == null) ? Double.NaN : ratioGivenDenom(denom, qv, ret, w.k, baseReader);
+                double ratio = (baseReader == null) ? Double.NaN : ratioGivenDenom(denomWorst, qv, ret, w.k, baseReader);
+
                 try { retrievedAudit.appendWorst(w.qIndex, w.k, ratio, w.precision, ret, truth); }
                 catch (IOException ioe) { logger.warn("Audit worst write failed q={},k={}", w.qIndex, w.k, ioe); }
             }
-        }
-
-        if (writeGlobalPrecisionCsv && computePrecision) {
-            writeGlobalPrecisionCsv(resultsDir, dim, K_VARIANTS, globalMatches, globalRetrieved);
         }
     }
 
@@ -803,8 +854,12 @@ public class ForwardSecureANNSystem {
         if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
 
         // Ensure search-ready
-        try { indexService.flushBuffers(); finalizeForSearch(); }
-        catch (Exception e) { logger.warn("Pre-query flush/optimize failed; continuing", e); }
+        try {
+            indexService.flushBuffers();
+            finalizeForSearch();
+        } catch (Exception e) {
+            logger.warn("Pre-query flush/optimize failed; continuing", e);
+        }
 
         // Load queries
         DefaultDataLoader loader = new DefaultDataLoader();
@@ -825,8 +880,8 @@ public class ForwardSecureANNSystem {
                 : Math.max(indexService.getIndexedVectorCount(), totalInserted);
 
         groundtruth.normalizeIndexBaseIfNeeded(datasetSize);
-        boolean idsOk   = groundtruth.isConsistentWithDatasetSize(datasetSize);
-        boolean dimsOk  = (baseReader != null) && sampleDimsOk(baseReader);
+        boolean idsOk = groundtruth.isConsistentWithDatasetSize(datasetSize);
+        boolean dimsOk = (baseReader != null) && sampleDimsOk(baseReader);
         boolean sampleOk = (baseReader != null) &&
                 sampleGtMatchesTrueNN(queries, groundtruth, baseReader,
                         Math.max(0, config.getRatio().gtSample),
@@ -840,7 +895,9 @@ public class ForwardSecureANNSystem {
 
         // Writers / profiler
         ResultWriter rw = new ResultWriter(resultsDir.resolve("results_table.csv"));
-        try { topKProfiler.setDatasetSize(datasetSize); } catch (Throwable ignore) {}
+        try {
+            topKProfiler.setDatasetSize(datasetSize);
+        } catch (Throwable ignore) { }
 
         // Audit wiring
         final boolean doAudit = auditEnable && (retrievedAudit != null);
@@ -848,14 +905,16 @@ public class ForwardSecureANNSystem {
 
         // Keep worst@K by ratio
         final int keepWorst = Math.max(0, auditWorstKeep);
-        record WorstRec(int qIndex, int k, double ratio, double precision) {
-        }
+        record WorstRec(int qIndex, int k, double ratio, double precision) { }
         PriorityQueue<WorstRec> worstPQ = new PriorityQueue<>(Comparator.comparingDouble(w -> w.ratio)); // min-heap
 
         // Global precision accumulators
-        Map<Integer, Long> globalMatches   = new HashMap<>();
+        Map<Integer, Long> globalMatches = new HashMap<>();
         Map<Integer, Long> globalRetrieved = new HashMap<>();
-        for (int k : K_VARIANTS) { globalMatches.put(k, 0L); globalRetrieved.put(k, 0L); }
+        for (int k : K_VARIANTS) {
+            globalMatches.put(k, 0L);
+            globalRetrieved.put(k, 0L);
+        }
 
         int indexedNow = indexService.getIndexedVectorCount();
         if (indexedNow <= 0) {
@@ -866,19 +925,9 @@ public class ForwardSecureANNSystem {
             logger.warn("No points registered for dim={} before querying. Continuing anyway.", dim);
         }
 
-        // fanout snapshot on Q0
+        // Fanout snapshot on Q0 (per-K true fanout)
         if (!queries.isEmpty()) {
-            double[] q0 = queries.get(0);
-            QueryToken probe = factoryForDim(dim).create(q0, baseKForToken);
-            queryService.search(probe);
-            QueryServiceImpl qs0 = (QueryServiceImpl) queryService;
-            Map<Integer, Double> fanout = new LinkedHashMap<>();
-            int baseCand = qs0.getLastCandDecrypted() > 0 ? qs0.getLastCandDecrypted()
-                    : Math.max(qs0.getLastCandKeptVersion(), qs0.getLastCandTotal());
-            for (int k : K_VARIANTS) {
-                fanout.put(k, (k > 0) ? (baseCand * 1.0 / k) : Double.NaN);
-            }
-            logger.info("Candidate fanout ratios for Q0 (CF_req=candidates/k): {}", fanout);
+            computeAndLogFanoutForQ0(queries.get(0), dim, K_VARIANTS);
         }
 
         // === One real search per query; evaluate all K from its prefix ===
@@ -894,13 +943,17 @@ public class ForwardSecureANNSystem {
                         int[] gt1 = groundtruth.getGroundtruth(q, 1);
                         if (gt1.length > 0) denom = baseReader.l2(queryVec, gt1[0]);
                     }
-                    case BASE -> { TrueNN dn = computeTrueNNFromBase(queryVec, baseReader); denom = dn.d; }
+                    case BASE -> {
+                        TrueNN dn = computeTrueNNFromBase(queryVec, baseReader);
+                        denom = dn.d;
+                    }
                     case AUTO -> {
                         if (gtTrusted) {
                             int[] gt1 = groundtruth.getGroundtruth(q, 1);
                             if (gt1.length > 0) denom = baseReader.l2(queryVec, gt1[0]);
                         } else {
-                            TrueNN dn = computeTrueNNFromBase(queryVec, baseReader); denom = dn.d;
+                            TrueNN dn = computeTrueNNFromBase(queryVec, baseReader);
+                            denom = dn.d;
                         }
                     }
                 }
@@ -914,18 +967,22 @@ public class ForwardSecureANNSystem {
             double clientMs = (clientEnd - clientStart) / 1_000_000.0;
             double serverMs = qs.getLastQueryDurationNs() / 1_000_000.0;
 
+            // selective re-encryption of touched points (subset union) and per-query CSV row
+            ReencryptReport rep = maybeReencryptTouched("Q" + q, qs);
+            int touchedCount = (qs.getLastCandidateIds() != null) ? qs.getLastCandidateIds().size() : 0;
+
             EncryptedPointBuffer buf = indexService.getPointBuffer();
-            long insertTimeMs   = buf != null ? buf.getLastBatchInsertTimeMs() : 0;
-            int  totalFlushed   = buf != null ? buf.getTotalFlushedPoints()   : 0;
-            int  flushThreshold = buf != null ? buf.getFlushThreshold()        : 0;
-            int  tokenSizeBytes = QueryServiceImpl.estimateTokenSizeBytes(baseToken);
-            int  vectorDim      = baseToken.getDimension();
+            long insertTimeMs = buf != null ? buf.getLastBatchInsertTimeMs() : 0;
+            int totalFlushed = buf != null ? buf.getTotalFlushedPoints() : 0;
+            int flushThreshold = buf != null ? buf.getFlushThreshold() : 0;
+            int tokenSizeBytes = QueryServiceImpl.estimateTokenSizeBytes(baseToken);
+            int vectorDim = baseToken.getDimension();
 
             // True candidate counters from the search path
-            int candTotal       = qs.getLastCandTotal();
+            int candTotal = qs.getLastCandTotal();
             int candKeptVersion = qs.getLastCandKeptVersion();
-            int candDecrypted   = qs.getLastCandDecrypted();
-            int returned        = qs.getLastReturned();
+            int candDecrypted = qs.getLastCandDecrypted();
+            int returned = qs.getLastReturned();
 
             List<QueryEvaluationResult> enriched = new ArrayList<>(K_VARIANTS.length);
             for (int k : K_VARIANTS) {
@@ -957,8 +1014,13 @@ public class ForwardSecureANNSystem {
 
                 enriched.add(new QueryEvaluationResult(
                         k, upto, distRatio, precAtK,
-                        (long) Math.round(serverMs), insertTimeMs, candDecrypted,
-                        tokenSizeBytes, vectorDim, totalFlushed, flushThreshold
+                        Math.round(serverMs), insertTimeMs, candDecrypted,
+                        tokenSizeBytes, vectorDim, totalFlushed, flushThreshold,
+                        /* touchedCount        */ touchedCount,
+                        /* reencryptedCount    */ rep.reencryptedCount,
+                        /* reencTimeMs         */ rep.timeMs,
+                        /* reencBytesDelta     */ rep.bytesDelta,
+                        /* reencBytesAfter     */ rep.bytesAfter
                 ));
             }
 
@@ -966,9 +1028,9 @@ public class ForwardSecureANNSystem {
             topKProfiler.record("Q" + q, enriched, candTotal, candKeptVersion, candDecrypted, returned);
 
             rw.writeTable("Query " + (q + 1) + " Results (dim=" + dim + ")",
-                    new String[]{"TopK","Retrieved","Ratio","Precision","TimeMs",
-                            "InsertTimeMs","Candidates","TokenSize","VectorDim","TotalFlushed","FlushThreshold"},
-                    enriched.stream().map(er -> new String[] {
+                    new String[]{"TopK", "Retrieved", "Ratio", "Precision", "TimeMs",
+                            "InsertTimeMs", "Candidates", "TokenSize", "VectorDim", "TotalFlushed", "FlushThreshold"},
+                    enriched.stream().map(er -> new String[]{
                             String.valueOf(er.getTopKRequested()),
                             String.valueOf(er.getRetrieved()),
                             (Double.isNaN(er.getRatio()) ? "NaN" : String.format(Locale.ROOT, "%.4f", er.getRatio())),
@@ -988,18 +1050,23 @@ public class ForwardSecureANNSystem {
                     .findFirst().orElseGet(() -> enriched.get(enriched.size() - 1));
 
             if (profiler != null) profiler.recordQueryMetric("Q" + q, serverMs, clientMs, atK.getRatio());
-            totalQueryTime += (long)(clientMs * 1_000_000L);
+            totalQueryTime += (long) (clientMs * 1_000_000L);
 
             if (q < 3 && !baseReturned.isEmpty() && baseReader != null) {
                 int topId = -1;
-                try { topId = Integer.parseInt(baseReturned.get(0).getId()); } catch (Exception ignore) {}
+                try { topId = Integer.parseInt(baseReturned.get(0).getId()); } catch (Exception ignore) { }
                 int gt1 = -1;
                 int[] row = groundtruth.getGroundtruth(q, 1);
                 if (row.length > 0) gt1 = row[0];
                 double dTop = (topId >= 0) ? baseReader.l2(queryVec, topId) : Double.NaN;
-                double dGt1 = (gt1  >= 0) ? baseReader.l2(queryVec, gt1)  : Double.NaN;
+                double dGt1 = (gt1 >= 0) ? baseReader.l2(queryVec, gt1) : Double.NaN;
                 logger.info("Sanity q{}: topId={} dTop={}; gt1={} dGt1={}", q, topId, dTop, gt1, dGt1);
             }
+        }
+
+        // Global precision CSV (moved outside the loop, gated like runEndToEnd)
+        if (writeGlobalPrecisionCsv && computePrecision) {
+            writeGlobalPrecisionCsv(resultsDir, dim, K_VARIANTS, globalMatches, globalRetrieved);
         }
 
         // End-of-run: write worst@K
@@ -1012,24 +1079,20 @@ public class ForwardSecureANNSystem {
                 List<QueryResult> ret = queryService.search(tk);
                 int[] truth = groundtruth.getGroundtruth(w.qIndex, w.k);
 
-                double denom = Double.NaN;
+                double denomWorst = Double.NaN;
                 if (baseReader != null) {
                     if (ratioSource == RatioSource.GT || (ratioSource == RatioSource.AUTO && gtTrusted)) {
                         int[] gt1 = groundtruth.getGroundtruth(w.qIndex, 1);
-                        if (gt1.length > 0) denom = baseReader.l2(qv, gt1[0]);
+                        if (gt1.length > 0) denomWorst = baseReader.l2(qv, gt1[0]);
                     } else {
-                        TrueNN dn = computeTrueNNFromBase(qv, baseReader); denom = dn.d;
+                        TrueNN dn = computeTrueNNFromBase(qv, baseReader);
+                        denomWorst = dn.d;
                     }
                 }
-                double ratio = (baseReader == null) ? Double.NaN : ratioGivenDenom(denom, qv, ret, w.k, baseReader);
+                double ratio = (baseReader == null) ? Double.NaN : ratioGivenDenom(denomWorst, qv, ret, w.k, baseReader);
                 try { retrievedAudit.appendWorst(w.qIndex, w.k, ratio, w.precision, ret, truth); }
                 catch (IOException ioe) { logger.warn("Audit worst write failed for q={},k={}", w.qIndex, w.k, ioe); }
             }
-        }
-
-        // Global precision CSV
-        if (writeGlobalPrecisionCsv) {
-            writeGlobalPrecisionCsv(resultsDir, dim, K_VARIANTS, globalMatches, globalRetrieved);
         }
     }
 
@@ -1595,10 +1658,6 @@ public class ForwardSecureANNSystem {
         return r;
     }
 
-    public IndexService getIndexService() { return this.indexService; }
-    public QueryService getQueryService() { return this.queryService; }
-    public Profiler getProfiler() { return this.profiler; }
-
     private static int numTablesFor(EvenLSH lsh, SystemConfig cfg) {
         try {
             var m = lsh.getClass().getMethod("getNumTables");
@@ -1663,35 +1722,9 @@ public class ForwardSecureANNSystem {
     /** Disable System exit on shutdown (for tests). */
     public void setExitOnShutdown(boolean exitOnShutdown) { this.exitOnShutdown = exitOnShutdown; }
 
+    // No optional flags anymore; keep method to avoid rippling deletes.
     private static void applyPaperFlags(Object pe, SystemConfig.PaperConfig pc) {
-        if (pc.maxCandidates > 0) {
-            if (!tryInvokeInt(pe,
-                    new String[]{"setMaxCandidates","maxCandidates","withMaxCandidates"},
-                    pc.maxCandidates)) {
-                trySetField(pe, new String[]{"maxCandidates","candidateCap"}, pc.maxCandidates);
-            }
-        }
-        if (pc.targetMult > 0) {
-            if (!tryInvokeDouble(pe,
-                    new String[]{"setTargetMultiplier","setTargetMult","withTargetMultiplier","withTargetMult"},
-                    pc.targetMult)) {
-                trySetField(pe, new String[]{"targetMultiplier","targetMult"}, pc.targetMult);
-            }
-        }
-        if (pc.expandRadiusMax > 0) {
-            if (!tryInvokeDouble(pe,
-                    new String[]{"setExpandRadiusMax","setRMax","withExpandRadiusMax"},
-                    pc.expandRadiusMax)) {
-                trySetField(pe, new String[]{"expandRadiusMax","rMax"}, pc.expandRadiusMax);
-            }
-        }
-        if (pc.expandRadiusHard > 0) {
-            if (!tryInvokeDouble(pe,
-                    new String[]{"setExpandRadiusHard","setRHard","withExpandRadiusHard"},
-                    pc.expandRadiusHard)) {
-                trySetField(pe, new String[]{"expandRadiusHard","rHard"}, pc.expandRadiusHard);
-            }
-        }
+        // intentionally no-op
     }
 
     private static boolean tryInvokeInt(Object o, String[] names, int v) {
@@ -1782,6 +1815,64 @@ public class ForwardSecureANNSystem {
             return 0L;
         }
     }
+
+    // one-liner wrapper invoked after each real search
+    private ReencryptReport maybeReencryptTouched(String queryId, QueryServiceImpl qs) {
+        // Config gate — support both legacy top-level and nested reencryption.enabled
+        boolean enabled = reencEnabled; // use the cached value
+        try {
+            var rc = config.getReencryption();
+            if (rc != null) enabled = enabled && rc.enabled;
+        } catch (Throwable ignore) { /* old configs may not have nested */ }
+
+        if (!enabled) return new ReencryptReport(0, 0, 0L, 0L, 0L);
+
+        if (!(keyService instanceof KeyRotationServiceImpl kr)) return new ReencryptReport(0, 0, 0L, 0L, 0L);
+        List<String> touched = qs.getLastCandidateIds();
+        if (touched == null || touched.isEmpty()) return new ReencryptReport(0, 0, 0L, 0L, 0L);
+
+        int targetVer = keyService.getCurrentVersion().getVersion();
+
+        // StorageSizer using current points directory (all versions)
+        StorageSizer sizer = () -> dirSize(pointsPath);
+
+        ReencryptReport rep = kr.reencryptTouched(touched, targetVer, sizer);
+
+        // Persist a per-query row (keep your CSV too)
+        appendReencCsv(reencCsv, queryId, targetVer, rep);
+
+        return rep;
+    }
+
+    // CSV helpers
+    private static void initReencCsvIfNeeded(Path p) {
+        try {
+            Files.createDirectories(p.getParent());
+            if (!Files.exists(p)) {
+                Files.writeString(p,
+                        "QueryID,TargetVersion,Touched,Reencrypted,TimeMs,BytesDelta,BytesAfter\n",
+                        StandardOpenOption.CREATE_NEW);
+            }
+        } catch (IOException e) {
+            LoggerFactory.getLogger(ForwardSecureANNSystem.class)
+                    .warn("Failed to init re-encryption CSV at {}", p, e);
+        }
+    }
+
+    private static void appendReencCsv(Path p, String qid, int ver, ReencryptReport r) {
+        try {
+            String line = String.format(Locale.ROOT, "%s,%d,%d,%d,%d,%d,%d%n",
+                    qid, ver, r.touchedCount, r.reencryptedCount, r.timeMs, r.bytesDelta, r.bytesAfter);
+            Files.writeString(p, line, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+        } catch (IOException e) {
+            LoggerFactory.getLogger(ForwardSecureANNSystem.class)
+                    .warn("Failed to append re-encryption CSV for {}", qid, e);
+        }
+    }
+
+    public IndexService getIndexService() { return this.indexService; }
+    public QueryService getQueryService() { return this.queryService; }
+    public Profiler getProfiler() { return this.profiler; }
 
     // ====== retrieved IDs auditor ======
     private static final class RetrievedAudit {
