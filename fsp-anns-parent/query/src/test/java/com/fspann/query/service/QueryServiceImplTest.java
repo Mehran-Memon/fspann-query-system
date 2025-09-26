@@ -110,6 +110,8 @@ class QueryServiceImplTest {
         when(cryptoService.decryptQuery(eq(encQuery), eq(iv), eq(fallbackKey))).thenReturn(query);
 
         EncryptedPoint p = new EncryptedPoint("id", 0, iv, encQuery, 1, 2, List.of(1));
+
+        // Stub BOTH lookup variants
         when(indexService.lookup(any(QueryToken.class))).thenReturn(List.of(p));
         when(cryptoService.decryptFromPoint(eq(p), eq(fallbackKey))).thenReturn(new double[]{1.0, 2.0});
 
@@ -139,12 +141,13 @@ class QueryServiceImplTest {
         when(keyService.getCurrentVersion()).thenReturn(version);
         when(cryptoService.decryptQuery(any(), any(), eq(key))).thenReturn(query);
 
-        when(indexService.lookup(any(QueryToken.class))).thenReturn(Arrays.asList(
+        List<EncryptedPoint> ret = Arrays.asList(
                 new EncryptedPoint("id1", 0, new byte[12], new byte[32], 1, 2, List.of(5)),
                 new EncryptedPoint("id2", 0, new byte[12], new byte[32], 1, 2, List.of(5))
-        ));
-        when(cryptoService.decryptFromPoint(any(), eq(key))).thenReturn(new double[]{0.5, 0.6});
+        );
+        when(indexService.lookup(any(QueryToken.class))).thenReturn(ret);
 
+        when(cryptoService.decryptFromPoint(any(), eq(key))).thenReturn(new double[]{0.5, 0.6});
         when(groundtruthManager.getGroundtruth(eq(1), anyInt())).thenReturn(new int[]{}); // empty GT
 
         List<QueryEvaluationResult> results = service.searchWithTopKVariants(token, 1, groundtruthManager);
@@ -176,9 +179,9 @@ class QueryServiceImplTest {
         when(cryptoService.decryptQuery(eq(encQuery), eq(iv), eq(key))).thenReturn(queryVec);
 
         EncryptedPoint top1 = new EncryptedPoint("42", 0, iv, encQuery, 1, 2, List.of(5));
+
         when(indexService.lookup(any())).thenReturn(List.of(top1));
         when(cryptoService.decryptFromPoint(eq(top1), eq(key))).thenReturn(new double[]{0.0, 0.0});
-
         when(groundtruthManager.getGroundtruth(eq(0), anyInt())).thenReturn(new int[]{42});
 
         List<QueryEvaluationResult> results = service.searchWithTopKVariants(token, 0, groundtruthManager);
@@ -211,8 +214,8 @@ class QueryServiceImplTest {
         // One matching version (2), one mismatched (1)
         EncryptedPoint v2 = new EncryptedPoint("ok",   0, iv, encQuery, 2, 2, List.of(1));
         EncryptedPoint v1 = new EncryptedPoint("skip", 0, iv, encQuery, 1, 2, List.of(1));
-        when(indexService.lookup(token)).thenReturn(List.of(v2, v1));
 
+        when(indexService.lookup(token)).thenReturn(List.of(v2, v1));
         when(cryptoService.decryptFromPoint(eq(v2), eq(k2))).thenReturn(new double[]{0.0, 0.0});
 
         List<QueryResult> results = service.search(token);

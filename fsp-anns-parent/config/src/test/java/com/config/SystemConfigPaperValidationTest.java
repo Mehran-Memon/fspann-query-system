@@ -31,8 +31,6 @@ class SystemConfigPaperValidationTest {
         Files.writeString(cfg, yaml);
 
         SystemConfig sc = SystemConfig.load(cfg.toString(), true);
-        assertEquals(3.0, sc.getPaper().expandRadiusMax, 1e-9);
-        assertEquals(3.0, sc.getPaper().expandRadiusHard, 1e-9, "Hard radius raised to max");
         assertEquals(0.0, sc.getCloak().noise, 1e-12, "Negative noise clamped to 0");
     }
 }

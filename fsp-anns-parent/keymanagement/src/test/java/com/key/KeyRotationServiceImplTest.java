@@ -9,6 +9,8 @@ import org.junit.jupiter.api.Test;
 import javax.crypto.spec.SecretKeySpec;
 import javax.crypto.SecretKey;
 import java.util.List;
+
+import static org.mockito.AdditionalMatchers.aryEq;
 import static org.mockito.Mockito.*;
 
 class KeyRotationServiceImplTest {
@@ -62,6 +64,10 @@ class KeyRotationServiceImplTest {
         verify(index, times(1)).insert(eq("id-1"), any(double[].class));
         verify(index, times(1)).insert(eq("id-2"), any(double[].class));
         verify(index, atLeast(0)).getPointBuffer(); // may be called to flush
+
+        verify(index).insert(eq("id-1"), aryEq(new double[]{0,0,0,0}));
+        verify(index).insert(eq("id-2"), aryEq(new double[]{1,1,1,1}));
+
     }
 
     @Test

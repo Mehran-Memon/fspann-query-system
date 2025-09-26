@@ -28,6 +28,8 @@ public class MicrometerProfiler extends Profiler {
     private final DistributionSummary serverSummary;
     private final DistributionSummary ratioSummary;
     private static final java.util.regex.Pattern TRUE_QUERY = java.util.regex.Pattern.compile("^Q\\d+$");
+    private final java.util.List<QRow> queryRows =
+            Collections.synchronizedList(new java.util.ArrayList<>(1024));
 
     public MicrometerProfiler(MeterRegistry registry) {
         this.registry = Objects.requireNonNull(registry, "MeterRegistry cannot be null");
@@ -102,9 +104,6 @@ public class MicrometerProfiler extends Profiler {
         final String id; final double server; final double client; final double ratio;
         QRow(String id, double s, double c, double r){ this.id=id; this.server=s; this.client=c; this.ratio=r; }
     }
-
-    private final java.util.List<QRow> queryRows =
-            Collections.synchronizedList(new java.util.ArrayList<>(1024));
 
     @Override
     public void recordQueryMetric(String label, double serverMs, double clientMs, double ratio) {

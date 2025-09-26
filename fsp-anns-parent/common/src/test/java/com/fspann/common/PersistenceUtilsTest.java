@@ -43,6 +43,7 @@ class PersistenceUtilsTest {
         List<EncryptedPoint> original = new ArrayList<>(Arrays.asList(point1, point2));
 
         PersistenceUtils.saveObject((Serializable) original, file.toString(), tempDir.toString());
+        @SuppressWarnings("unchecked")
         List<EncryptedPoint> loaded = PersistenceUtils.loadObject(file.toString(), tempDir.toString(), ArrayList.class);
         assertNotNull(loaded, "Loaded list should not be null");
         assertEquals(2, loaded.size(), "Expected 2 points in loaded list");

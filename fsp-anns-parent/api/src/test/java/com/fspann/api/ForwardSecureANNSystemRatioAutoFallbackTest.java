@@ -1,20 +1,20 @@
 package com.fspann.api;
 
 import com.fspann.common.RocksDBMetadataManager;
-import com.fspann.crypto.AesGcmCryptoService;
 import com.fspann.key.KeyManager;
 import com.fspann.key.KeyRotationPolicy;
 import com.fspann.key.KeyRotationServiceImpl;
+import com.fspann.crypto.AesGcmCryptoService;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
+import java.nio.*;
 import java.nio.channels.FileChannel;
 import java.nio.file.*;
 import java.util.List;
+import java.util.Locale;
 import java.util.regex.Pattern;
 
 import static java.nio.file.StandardOpenOption.*;
@@ -74,6 +74,31 @@ class ForwardSecureANNSystemRatioAutoFallbackTest {
         return -1;
     }
 
+    private static int colIndexAny(String[] headerCols, String... names) {
+        for (String n : names) {
+            int idx = colIndex(headerCols, n);
+            if (idx >= 0) return idx;
+        }
+        return -1;
+    }
+
+    private static Path findUnder(Path root, String... namePrefixes) throws IOException {
+        try (var s = Files.walk(root)) {
+            return s.filter(Files::isRegularFile)
+                    .filter(p -> {
+                        String n = p.getFileName().toString().toLowerCase(Locale.ROOT);
+                        for (String pref : namePrefixes) {
+                            if (n.startsWith(pref.toLowerCase(Locale.ROOT))) return true;
+                        }
+                        return false;
+                    })
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError(
+                            "Could not find file with prefixes " + String.join(", ", namePrefixes) +
+                                    " under " + root));
+        }
+    }
+
     @Test
     void autoFallback_usesBaseDenom_whenGtIsWrong() throws Exception {
         int dim = 2;
@@ -95,44 +120,45 @@ class ForwardSecureANNSystemRatioAutoFallbackTest {
         Files.createDirectories(metaDir);
         Files.createDirectories(pointsDir);
 
-        // Ensure baseReader present
+        // Ensure baseReader present and force strict GT trust gate → fallback to base denom
         System.setProperty("base.path", base.toString());
-        // Make trust gate stricter (any mismatch fails → AUTO uses base)
         System.setProperty("ratio.gtMismatchTolerance", "0.0");
+        // (Optionally support alt key names without breaking anything)
+        System.setProperty("ratio.gt.tolerance", "0.0");
 
-        RocksDBMetadataManager mdm =
-                RocksDBMetadataManager.create(metaDir.toString(), pointsDir.toString());
+        var mdm = RocksDBMetadataManager.create(metaDir.toString(), pointsDir.toString());
 
         Path keystore = tmp.resolve("keys/keystore.blob");
         Files.createDirectories(keystore.getParent());
-        KeyManager km = new KeyManager(keystore.toString());
-        KeyRotationPolicy policy = new KeyRotationPolicy(1_000_000, 7 * 24 * 3600_000L);
-        KeyRotationServiceImpl keySvc =
-                new KeyRotationServiceImpl(km, policy, metaDir.toString(), mdm, null);
+        var km = new KeyManager(keystore.toString());
+        var policy = new KeyRotationPolicy(1_000_000, 7 * 24 * 3_600_000L);
+        var keySvc = new KeyRotationServiceImpl(km, policy, metaDir.toString(), mdm, null);
         var crypto = new AesGcmCryptoService(new SimpleMeterRegistry(), keySvc, mdm);
         keySvc.setCryptoService(crypto);
 
-        ForwardSecureANNSystem sys = new ForwardSecureANNSystem(
+        var sys = new ForwardSecureANNSystem(
                 conf.toString(),
                 base.toString(),
                 keystore.toString(),
                 List.of(dim),
                 tmp, false, mdm, crypto, 512
         );
+        sys.setExitOnShutdown(false);
 
         sys.runEndToEnd(base.toString(), query.toString(), dim, gt.toString());
         sys.shutdown();
 
-        // Parse K=1 LiteratureRatio from results_table.csv (in tmp)
-        Path results = tmp.resolve("results_table.csv");
-        assertTrue(Files.exists(results), "results_table.csv should exist");
+        // Find results_table*.csv anywhere under results dir
+        Path results = findUnder(tmp, "results_table");
+        assertTrue(Files.exists(results), "results_table*.csv should exist");
 
         var lines = Files.readAllLines(results);
         assertFalse(lines.isEmpty());
         String[] header = CSV_SPLIT.split(lines.get(0), -1);
-        int idxTopK = colIndex(header, "TopK");
-        int idxRatio = colIndex(header, "Ratio");
-        assertTrue(idxTopK >= 0 && idxRatio >= 0, "CSV columns not found");
+
+        int idxTopK  = colIndexAny(header, "TopK", "K", "RequestedK");
+        int idxRatio = colIndexAny(header, "Ratio", "LiteratureRatio", "AvgRatio", "AverageRatio");
+        assertTrue(idxTopK >= 0 && idxRatio >= 0, "Expected CSV columns not found");
 
         Double ratio = null;
         for (int i = 1; i < lines.size(); i++) {

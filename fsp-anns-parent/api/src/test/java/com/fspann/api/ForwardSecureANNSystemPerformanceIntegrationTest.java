@@ -34,6 +34,7 @@ public class ForwardSecureANNSystemPerformanceIntegrationTest {
 
     @BeforeAll
     public void setup(@TempDir Path baseDir) throws Exception {
+        // Config
         Path configPath = baseDir.resolve("config.json");
         Files.writeString(configPath, """
             {"numShards":4, "profilerEnabled":true, "opsThreshold":1000000, "ageThresholdMs":604800000}
@@ -43,20 +44,22 @@ public class ForwardSecureANNSystemPerformanceIntegrationTest {
         Path seed = baseDir.resolve("seed.csv");
         Files.writeString(seed, "0\n");
 
-        // metadata & keys
+        // metadata & points
         Path metadataDir = baseDir.resolve("metadata");
         Path pointsDir   = baseDir.resolve("points");
         Files.createDirectories(metadataDir);
         Files.createDirectories(pointsDir);
         metadataManager = RocksDBMetadataManager.create(metadataDir.toString(), pointsDir.toString());
 
-        Path keysDir = baseDir.resolve("keys");
-        Files.createDirectories(keysDir);
+        // Use a concrete keystore FILE (newer KeyManager expects a file path)
+        Path keystore = baseDir.resolve("keys/keystore.blob");
+        Files.createDirectories(keystore.getParent());
 
-        KeyManager keyManager = new KeyManager(keysDir.toString());
+        KeyManager keyManager = new KeyManager(keystore.toString());
         KeyRotationPolicy policy = new KeyRotationPolicy(1_000_000, 1_000_000);
         KeyRotationServiceImpl keyService =
                 new KeyRotationServiceImpl(keyManager, policy, metadataDir.toString(), metadataManager, null);
+
         CryptoService cryptoService =
                 new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
         keyService.setCryptoService(cryptoService);
@@ -64,7 +67,7 @@ public class ForwardSecureANNSystemPerformanceIntegrationTest {
         sys = new ForwardSecureANNSystem(
                 configPath.toString(),
                 seed.toString(),
-                keysDir.toString(),
+                keystore.toString(),      // pass keystore FILE path
                 List.of(DIMS),
                 baseDir,
                 false,
@@ -81,7 +84,7 @@ public class ForwardSecureANNSystemPerformanceIntegrationTest {
         for (int i = 0; i < VECTOR_COUNT; i++) {
             double[] vec = rnd.doubles(DIMS).toArray();
             dataset.add(vec);
-            // Just to keep a dataset file around if you want to eyeball it later
+            // just to keep a dataset file around for eyeballing
             for (int j = 0; j < DIMS; j++) {
                 sb.append(vec[j]);
                 if (j < DIMS - 1) sb.append(',');

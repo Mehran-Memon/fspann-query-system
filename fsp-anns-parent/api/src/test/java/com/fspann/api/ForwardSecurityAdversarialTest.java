@@ -66,7 +66,11 @@ public class ForwardSecurityAdversarialTest {
             Path data  = runDir.resolve("dummy.csv");
             Files.writeString(data, minimalDummyData(dim));
 
-            KeyManager keyManager = new KeyManager(keysDir.toString());
+            // Use a concrete keystore file (newer KeyManager expects a file path)
+            Path keystore = keysDir.resolve("keystore.blob");
+            Files.createDirectories(keystore.getParent());
+
+            KeyManager keyManager = new KeyManager(keystore.toString());
             KeyRotationPolicy policy = new KeyRotationPolicy(999999, 999999);
             KeyRotationServiceImpl keyService =
                     new KeyRotationServiceImpl(keyManager, policy, metadataDir.toString(), metadata, null);
@@ -75,7 +79,7 @@ public class ForwardSecurityAdversarialTest {
             keyService.setCryptoService(cryptoService);
 
             ForwardSecureANNSystem system = new ForwardSecureANNSystem(
-                    cfg.toString(), data.toString(), keysDir.toString(),
+                    cfg.toString(), data.toString(), keystore.toString(),
                     Collections.singletonList(dim), runDir, true, metadata, cryptoService, 128
             );
             system.setExitOnShutdown(false);
@@ -105,6 +109,7 @@ public class ForwardSecurityAdversarialTest {
                 // one manual rotation
                 keyService.rotateKey();
                 ((SecureLSHIndexService) system.getIndexService()).clearCache();
+                system.flushAll(); // ensure persisted after rotation
 
                 // insert one more after rotation
                 system.insert(UUID.randomUUID().toString(), r.doubles(dim).toArray(), dim);
@@ -117,13 +122,13 @@ public class ForwardSecurityAdversarialTest {
                     EncryptedPoint p = system.getIndexService().getEncryptedPoint(id);
                     assertEquals(expectedVersion, p.getVersion(), "Version mismatch for dim=" + dim);
 
-                    // Old key MUST NOT decrypt (using key-only helper is fine for this negative check)
+                    // Old key MUST NOT decrypt (key-only helper -> negative check)
                     assertTrue(
                             KeyUtils.tryDecryptWithKeyOnly(p, compromisedKey).isEmpty(),
                             "Old key should not decrypt"
                     );
 
-                    // New key SHOULD decrypt — must use the CryptoService (includes AAD/encryption context)
+                    // New key SHOULD decrypt — use CryptoService (AAD/context aware)
                     SecretKey currentKey = keyService.getVersion(p.getVersion()).getKey();
                     double[] plaintext = assertDoesNotThrow(
                             () -> cryptoService.decryptFromPoint(p, currentKey),
@@ -132,14 +137,14 @@ public class ForwardSecurityAdversarialTest {
                     assertNotNull(plaintext, "Decryption returned null plaintext with current key");
                 }
 
-                // sanity query; prefer non-empty, but don't fail the whole test-suite if empty
+                // sanity query; prefer non-empty, but don't fail if LSH misses
                 List<QueryResult> results = system.query(vecs.get(0), TOP_K, dim);
                 assertNotNull(results, "Query results must not be null");
                 if (results.isEmpty()) {
                     System.err.println("[WARN] Adversarial query returned empty results for dim=" + dim);
                 }
 
-                // rotate again and ensure cache cleared works; encrypted points should update
+                // rotate again and ensure cache cleared; encrypted points should update
                 keyService.rotateKey();
                 ((SecureLSHIndexService) system.getIndexService()).clearCache();
                 system.flushAll();
@@ -182,7 +187,11 @@ public class ForwardSecurityAdversarialTest {
         Path data = runDir.resolve("dummy.csv");
         Files.writeString(data, minimalDummyData(dim));
 
-        KeyManager keyManager = new KeyManager(keysDir.toString());
+        // Use a concrete keystore file
+        Path keystore = keysDir.resolve("keystore.blob");
+        Files.createDirectories(keystore.getParent());
+
+        KeyManager keyManager = new KeyManager(keystore.toString());
         KeyRotationPolicy policy = new KeyRotationPolicy(999999, 999999);
         KeyRotationServiceImpl keyService =
                 new KeyRotationServiceImpl(keyManager, policy, metadataDir.toString(), metadata, null);
@@ -191,7 +200,7 @@ public class ForwardSecurityAdversarialTest {
         keyService.setCryptoService(cryptoService);
 
         ForwardSecureANNSystem system = new ForwardSecureANNSystem(
-                cfg.toString(), data.toString(), keysDir.toString(),
+                cfg.toString(), data.toString(), keystore.toString(),
                 List.of(dim), runDir, true, metadata, cryptoService, 64
         );
         system.setExitOnShutdown(false);
@@ -220,6 +229,7 @@ public class ForwardSecurityAdversarialTest {
             // rotate & clear cache; a second query should still be okay
             keyService.rotateKey();
             ((SecureLSHIndexService) system.getIndexService()).clearCache();
+            system.flushAll();
 
             List<QueryResult> results2 = system.query(rawVectors.get(0), TOP_K, dim);
             assertNotNull(results2, "Second query results must not be null");

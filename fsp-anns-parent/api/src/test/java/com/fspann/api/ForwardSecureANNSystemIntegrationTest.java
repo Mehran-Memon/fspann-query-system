@@ -7,7 +7,6 @@ import com.fspann.crypto.CryptoService;
 import com.fspann.key.KeyManager;
 import com.fspann.key.KeyRotationPolicy;
 import com.fspann.key.KeyRotationServiceImpl;
-import com.fspann.query.service.QueryServiceImpl;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
@@ -31,7 +30,7 @@ class ForwardSecureANNSystemIntegrationTest {
 
     @BeforeEach
     void setup(@TempDir Path tempDir) throws Exception {
-        // Minimal seed files for ctor symmetry
+        // Minimal seed file (ctor symmetry)
         Path dataFile = tempDir.resolve("seed.csv");
         Files.writeString(dataFile, "0.0,0.0\n");
 
@@ -45,17 +44,18 @@ class ForwardSecureANNSystemIntegrationTest {
             }
         """);
 
-        Path keysDir = tempDir.resolve("keys");
-        Files.createDirectories(keysDir);
-
         Path metadataDir = tempDir.resolve("metadata");
-        Path pointsDir = tempDir.resolve("points");
+        Path pointsDir   = tempDir.resolve("points");
         Files.createDirectories(metadataDir);
         Files.createDirectories(pointsDir);
 
         metadataManager = RocksDBMetadataManager.create(metadataDir.toString(), pointsDir.toString());
 
-        KeyManager keyManager = new KeyManager(keysDir.toString());
+        // Use a concrete keystore file (newer KeyManager impls expect a file path)
+        Path keystore = tempDir.resolve("keys/keystore.blob");
+        Files.createDirectories(keystore.getParent());
+
+        KeyManager keyManager = new KeyManager(keystore.toString());
         KeyRotationPolicy policy = new KeyRotationPolicy(1_000_000, 1_000_000);
         KeyRotationServiceImpl keyService =
                 new KeyRotationServiceImpl(keyManager, policy, metadataDir.toString(), metadataManager, null);
@@ -66,9 +66,9 @@ class ForwardSecureANNSystemIntegrationTest {
 
         system = new ForwardSecureANNSystem(
                 config.toString(),
-                dataFile.toString(),      // not used for indexing
-                keysDir.toString(),
-                List.of(2),               // we test dim=2
+                dataFile.toString(),  // not used for indexing in this test
+                keystore.toString(),  // pass keystore file path
+                List.of(2),           // dim=2
                 tempDir,
                 true,
                 metadataManager,
@@ -77,11 +77,11 @@ class ForwardSecureANNSystemIntegrationTest {
         );
         system.setExitOnShutdown(false);
 
-        // Explicitly index a tiny dataset; include the exact query vector to avoid LSH miss
+        // Index a tiny dataset; include the exact query vector for stability
         system.batchInsert(List.of(
                 new double[]{0.0, 0.0},
                 new double[]{0.1, 0.1},
-                new double[]{0.05, 0.05},  // <- exact query for stability
+                new double[]{0.05, 0.05},  // exact query
                 new double[]{0.9, 0.9}
         ), 2);
         system.flushAll();
@@ -100,15 +100,15 @@ class ForwardSecureANNSystemIntegrationTest {
 
     @Test
     void queryLatencyShouldBeBelow1s() {
+        long t0 = System.nanoTime();
         List<QueryResult> results = system.query(new double[]{0.05, 0.05}, 3, 2);
-        assertNotNull(results, "Results list should not be null");
+        long durationNs = System.nanoTime() - t0;
 
-        // It *should* find neighbors; if not, don’t fail the whole build—warn instead.
+        assertNotNull(results, "Results list should not be null");
         if (results.isEmpty()) {
             System.err.println("[WARN] query() returned empty results in integration test.");
         }
 
-        long durationNs = ((QueryServiceImpl) system.getQueryService()).getLastQueryDurationNs();
         assertTrue(durationNs < 1_000_000_000L, "Query latency exceeded 1 second");
     }
 
@@ -116,8 +116,6 @@ class ForwardSecureANNSystemIntegrationTest {
     void cloakedQueryShouldReturnResults() {
         List<QueryResult> results = system.queryWithCloak(new double[]{0.05, 0.05}, 3, 2);
         assertNotNull(results, "Results list should not be null");
-
-        // Prefer non-empty, but allow empty to avoid flakiness when noise moves buckets
         if (results.isEmpty()) {
             System.err.println("[WARN] queryWithCloak() returned empty results in integration test.");
         }

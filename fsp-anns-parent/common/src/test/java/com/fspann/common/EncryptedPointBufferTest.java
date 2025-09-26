@@ -81,4 +81,20 @@ public class EncryptedPointBufferTest {
 
         assertEquals(0, buffer.getBufferSize(), "Expected buffer to be empty after flush");
     }
+
+    @Test
+    void testBufferFlushWritesFiles() throws Exception {
+        List<Integer> buckets = Arrays.asList(1, 2, 3);
+        EncryptedPoint p1 = new EncryptedPoint("vec1", 1, new byte[]{0, 1}, new byte[]{2, 3}, 1, 128, buckets);
+
+        buffer.add(p1);
+        buffer.flush(1);
+
+        // If your buffer writes to points/v1/... adjust path pattern to your implementation
+        try (var s = Files.walk(pointsPath)) {
+            long files = s.filter(Files::isRegularFile).count();
+            assertEquals(1, files, "Expected one flushed file under points/");
+        }
+    }
+
 }

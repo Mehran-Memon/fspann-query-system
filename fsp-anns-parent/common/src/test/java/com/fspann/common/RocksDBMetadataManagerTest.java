@@ -113,6 +113,7 @@ public class RocksDBMetadataManagerTest {
     @Test
     void testCloseIdempotent() throws IOException {
         metadataManager.close();
+        try { Thread.sleep(50); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
         assertDoesNotThrow(() -> metadataManager.close());
     }
 }
