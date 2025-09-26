@@ -45,9 +45,9 @@ public class SystemConfig {
     @JsonProperty("ageThresholdMs")   private long ageThresholdMs  = 7L * 24 * 60 * 60 * 1000; // 7d
     @JsonProperty("reEncBatchSize")   private int  reEncBatchSize  = 2_000;
     @JsonProperty("profilerEnabled")  private boolean profilerEnabled = true;
-    @JsonProperty("reencryption")  private ReencryptionConfig reencryption = new ReencryptionConfig();
     @JsonProperty("reencryptionEnabled") private boolean reencryptionEnabled = true;
-
+    @JsonProperty("reencryption")  private ReencryptionConfig reencryption = new ReencryptionConfig();
+    @JsonProperty("reencryptionGloballyEnabled") private Boolean reencryptionGloballyEnabled;
     // --- nested sections ---
     @JsonProperty("eval")    private EvalConfig   eval   = new EvalConfig();
     @JsonProperty("ratio")   private RatioConfig  ratio  = new RatioConfig();
@@ -67,7 +67,9 @@ public class SystemConfig {
     public int getReEncBatchSize() { return reEncBatchSize; }
     public boolean isProfilerEnabled() { return profilerEnabled; }
     public boolean isReencryptionGloballyEnabled() {
-        return (reencryption != null) ? reencryption.enabled : reencryptionEnabled;
+        return (reencryptionGloballyEnabled != null)
+                ? reencryptionGloballyEnabled
+                : reencryptionEnabled;
     }
     public ReencryptionConfig getReencryption() { return reencryption; }
 

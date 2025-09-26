@@ -56,8 +56,9 @@ public class QueryToken implements Serializable {
         this.candidateBuckets = List.of();
         this.shardId = 0;
 
-        if (this.tableBuckets.size() != this.numTables) {
-            throw new IllegalArgumentException("tableBuckets.size() must equal numTables");
+        if (iv.length != 12) throw new IllegalArgumentException("iv must be 12 bytes for AES-GCM");
+        if (this.tableBuckets.stream().anyMatch(List::isEmpty)) {
+            throw new IllegalArgumentException("Each table must have at least one bucket");
         }
     }
 
@@ -113,7 +114,9 @@ public class QueryToken implements Serializable {
 
     private static List<List<Integer>> deepUnmodifiableBuckets(List<List<Integer>> src) {
         List<List<Integer>> out = new ArrayList<>(src.size());
-        for (List<Integer> l : src) out.add(List.copyOf(l));
+        for (List<Integer> l : src) {
+            out.add(List.copyOf(Objects.requireNonNull(l, "table bucket list must not be null")));
+        }
         return Collections.unmodifiableList(out);
     }
 
@@ -149,6 +152,7 @@ public class QueryToken implements Serializable {
 
     @Deprecated
     public int getShardId() { return shardId; }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
@@ -173,6 +177,12 @@ public class QueryToken implements Serializable {
         );
         result = 31 * result + Arrays.hashCode(queryVector);
         return result;
+    }
+
+    @Override public String toString() {
+        return "QueryToken{topK=" + topK + ", numTables=" + numTables +
+                ", dim=" + dimension + ", version=" + version +
+                ", perTable=" + (hasPerTable() ? tableBuckets.size() : 0) + "}";
     }
 
 }
