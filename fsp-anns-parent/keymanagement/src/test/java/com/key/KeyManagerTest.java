@@ -69,7 +69,7 @@ class KeyManagerTest {
         try {
             Files.deleteIfExists(badFile);
         } catch (IOException e) {
-            System.err.println("❌ Cleanup failed: " + e.getMessage());
+            System.err.println("Cleanup failed: " + e.getMessage());
         }
     }
 
@@ -117,22 +117,25 @@ class KeyManagerTest {
 
     @Test
     void testMultipleRotationsProduceDifferentKeys() {
-        SecretKey k1 = keyManager.getCurrentVersion().getKey();
-        SecretKey k2 = keyManager.rotateKey().getKey();
-        SecretKey k3 = keyManager.rotateKey().getKey();
+        byte[] k1 = keyManager.getCurrentVersion().getKey().getEncoded();
+        byte[] k2 = keyManager.rotateKey().getKey().getEncoded();
+        byte[] k3 = keyManager.rotateKey().getKey().getEncoded();
 
-        assertNotEquals(new String(k1.getEncoded()), new String(k2.getEncoded()));
-        assertNotEquals(new String(k2.getEncoded()), new String(k3.getEncoded()));
-        assertNotEquals(new String(k1.getEncoded()), new String(k3.getEncoded()));
+        assertFalse(Arrays.equals(k1, k2));
+        assertFalse(Arrays.equals(k2, k3));
+        assertFalse(Arrays.equals(k1, k3));
     }
 
     @Test
     void testConcurrentKeyRotation() throws InterruptedException {
-        ExecutorService executor = Executors.newFixedThreadPool(4);
-        IntStream.range(0, 100).forEach(i -> executor.submit(() -> keyManager.rotateKey()));
-        executor.shutdown();
-        executor.awaitTermination(5, TimeUnit.SECONDS);
-        assertEquals(101, keyManager.getCurrentVersion().getVersion());
+        int start = keyManager.getCurrentVersion().getVersion();
+
+        ExecutorService ex = Executors.newFixedThreadPool(4);
+        IntStream.range(0, 100).forEach(i -> ex.submit(() -> keyManager.rotateKey()));
+        ex.shutdown();
+        assertTrue(ex.awaitTermination(5, TimeUnit.SECONDS));
+
+        assertEquals(start + 100, keyManager.getCurrentVersion().getVersion());
     }
 
     @Test
@@ -152,10 +155,36 @@ class KeyManagerTest {
         System.setProperty(FsPaths.BASE_DIR_PROP, tempDir.toString());
         try {
             KeyManager km = new KeyManager("   ");
-            assertTrue(Files.exists(FsPaths.keyStoreFile()));
-            assertNotNull(km.getCurrentVersion());
+            Path ks = FsPaths.keyStoreFile();
+            assertTrue(Files.exists(ks));
+            int v0 = km.getCurrentVersion().getVersion();
+            km.rotateKey();
+            assertTrue(Files.size(ks) > 0);
+            assertEquals(v0 + 1, km.getCurrentVersion().getVersion());
         } finally {
             System.clearProperty(FsPaths.BASE_DIR_PROP);
+        }
+    }
+
+    @Test
+    void testLoadInvalidKeyStore_allowsStrictOrRecovery() throws Exception {
+        Path badFile = Files.createTempFile("bad_keys", ".ser");
+        Files.writeString(badFile, "corrupted-content", StandardCharsets.UTF_8);
+
+        try {
+            // Either throws (strict) or recovers by creating a fresh store (lenient)
+            try {
+                new KeyManager(badFile.toString());
+                // lenient path: just ensure it now has a usable version
+                KeyManager km = new KeyManager(badFile.toString());
+                assertNotNull(km.getCurrentVersion());
+            } catch (IOException expected) {
+                // strict path: OK as well
+            }
+        } finally {
+            System.gc();
+            Thread.sleep(150);
+            Files.deleteIfExists(badFile);
         }
     }
 }

@@ -40,4 +40,13 @@ class EncryptedPointTest {
         assertThrows(NullPointerException.class, () -> new EncryptedPoint("vec1", 1, new byte[]{0, 1, 2}, null, 1, 128, null));
         assertThrows(NullPointerException.class, () -> new EncryptedPoint(null, 1, new byte[]{0, 1, 2}, new byte[]{3, 4, 5}, 1, 128, null));
     }
+
+    @Test
+    void invalidVersionOrDimThrows() {
+        assertThrows(IllegalArgumentException.class, () ->
+                new EncryptedPoint("id", 0, new byte[]{1}, new byte[]{2}, -1, 128, null));
+        assertThrows(IllegalArgumentException.class, () ->
+                new EncryptedPoint("id", 0, new byte[]{1}, new byte[]{2}, 1, 0, null));
+    }
+
 }
