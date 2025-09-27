@@ -12,18 +12,16 @@ import static org.junit.jupiter.api.Assertions.*;
 class KeyVersionTest {
     @Test
     void gettersReturnCorrectValues() throws NoSuchAlgorithmException {
-        // Generate AES key
         KeyGenerator kg = KeyGenerator.getInstance("AES");
         kg.init(128);
         SecretKey key = kg.generateKey();
 
-        // Create KeyVersion with the current constructor
         KeyVersion kv = new KeyVersion(7, key);
 
-        // Assertions
         assertEquals(7, kv.getVersion());
-        assertNotNull(kv.getKey()); // Ensure getKey() returns a non-null value
-        assertArrayEquals(key.getEncoded(), ((SecretKeySpec) kv.getKey()).getEncoded(),
-                "Reconstructed key should match the original encoded key");
+        assertNotNull(kv.getKey());
+        assertArrayEquals(key.getEncoded(), kv.getKey().getEncoded(),
+                "Returned key material should match the original");
     }
+
 }

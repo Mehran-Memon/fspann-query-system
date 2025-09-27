@@ -42,8 +42,10 @@ class QueryTokenFactoryTest {
                         Arrays.asList(7, 8, 9)
                 ));
 
+        // Legacy/multiprobe path safeguard
         lenient().when(lsh.getBuckets(any(double[].class), anyInt(), anyInt()))
                 .thenReturn(List.of(1, 2, 3));
+
         factory = new QueryTokenFactory(cryptoService, keyService, lsh, 2, 3);
     }
 
@@ -90,7 +92,6 @@ class QueryTokenFactoryTest {
     void testNullVectorThrowsException() {
         var npe = assertThrows(NullPointerException.class, () -> factory.create(null, 5));
         assertEquals("vector", npe.getMessage());
-
     }
 
     @Test
@@ -116,13 +117,16 @@ class QueryTokenFactoryTest {
 
     @Test
     void testInvalidConstructorThrowsException() {
+        // numTables <= 0
         assertThrows(IllegalArgumentException.class, () ->
-                new QueryTokenFactory(cryptoService, keyService, lsh, 0));
+                new QueryTokenFactory(cryptoService, keyService, lsh, 2, 0));
+
+        // null deps
         assertThrows(NullPointerException.class, () ->
-                new QueryTokenFactory(null, keyService, lsh, 3));
+                new QueryTokenFactory(null, keyService, lsh, 2, 3));
         assertThrows(NullPointerException.class, () ->
-                new QueryTokenFactory(cryptoService, null, lsh, 3));
+                new QueryTokenFactory(cryptoService, null, lsh, 2, 3));
         assertThrows(NullPointerException.class, () ->
-                new QueryTokenFactory(cryptoService, keyService, null, 3));
+                new QueryTokenFactory(cryptoService, keyService, null, 2, 3));
     }
 }

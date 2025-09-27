@@ -17,6 +17,14 @@ import java.util.concurrent.ConcurrentMap;
 /**
  * Application configuration loaded from a JSON or YAML file.
  * Backward compatible top-level knobs + structured nested sections.
+ *
+ * This version removes pre-sizing / biasing knobs from paper mode:
+ * - targetMult (fanout)
+ * - expandRadiusMax / expandRadiusHard
+ * - fixed maxCandidates budgeting
+ *
+ * Fetch size is now an outcome of (m, lambda, divisions) and index distribution.
+ * An optional safetyMaxCandidates exists purely as an OOM guard (disabled by default).
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class SystemConfig {
@@ -37,8 +45,10 @@ public class SystemConfig {
     @JsonProperty("ageThresholdMs")   private long ageThresholdMs  = 7L * 24 * 60 * 60 * 1000; // 7d
     @JsonProperty("reEncBatchSize")   private int  reEncBatchSize  = 2_000;
     @JsonProperty("profilerEnabled")  private boolean profilerEnabled = true;
-
-    // --- new nested sections ---
+    @JsonProperty("reencryptionEnabled") private boolean reencryptionEnabled = true;
+    @JsonProperty("reencryption")  private ReencryptionConfig reencryption = new ReencryptionConfig();
+    @JsonProperty("reencryptionGloballyEnabled") private Boolean reencryptionGloballyEnabled;
+    // --- nested sections ---
     @JsonProperty("eval")    private EvalConfig   eval   = new EvalConfig();
     @JsonProperty("ratio")   private RatioConfig  ratio  = new RatioConfig();
     @JsonProperty("audit")   private AuditConfig  audit  = new AuditConfig();
@@ -56,6 +66,12 @@ public class SystemConfig {
     public long getAgeThresholdMs() { return ageThresholdMs; }
     public int getReEncBatchSize() { return reEncBatchSize; }
     public boolean isProfilerEnabled() { return profilerEnabled; }
+    public boolean isReencryptionGloballyEnabled() {
+        return (reencryptionGloballyEnabled != null)
+                ? reencryptionGloballyEnabled
+                : reencryptionEnabled;
+    }
+    public ReencryptionConfig getReencryption() { return reencryption; }
 
     // ---------------- getters (nested) ----------------
     public EvalConfig getEval() { return eval; }
@@ -89,6 +105,7 @@ public class SystemConfig {
             logger.warn("reEncBatchSize {} exceeds maximum {}, capping", reEncBatchSize, MAX_REENC_BATCH_SIZE);
             reEncBatchSize = MAX_REENC_BATCH_SIZE;
         }
+        if (reencryption == null) reencryption = new ReencryptionConfig();
 
         // nested sections sanity
         if (eval == null)   eval   = new EvalConfig();
@@ -119,14 +136,13 @@ public class SystemConfig {
         if (lsh.rowsPerBand < 0) lsh.rowsPerBand = 0;
         if (lsh.probeShards < 0) lsh.probeShards = 0;
 
-        if (paper.maxCandidates   < 0) paper.maxCandidates = 0;
-        if (paper.targetMult      < 0) paper.targetMult = 0.0;
-        if (paper.expandRadiusMax < 0) paper.expandRadiusMax = 0.0;
-        if (paper.expandRadiusHard< 0) paper.expandRadiusHard = 0.0;
-        if (paper.expandRadiusHard > 0 && paper.expandRadiusMax > 0
-                && paper.expandRadiusHard < paper.expandRadiusMax) {
-            logger.warn("paper.expandRadiusHard < expandRadiusMax; raising hard to max");
-            paper.expandRadiusHard = paper.expandRadiusMax;
+        // paper-mode: enforce positivity and disable safety cap if invalid
+        if (paper.m <= 0) throw new ConfigLoadException("paper.m must be positive", null);
+        if (paper.lambda <= 0) throw new ConfigLoadException("paper.lambda must be positive", null);
+        if (paper.divisions <= 0) throw new ConfigLoadException("paper.divisions must be positive", null);
+        if (paper.safetyMaxCandidates < 0) {
+            logger.warn("paper.safetyMaxCandidates < 0; disabling safety cap");
+            paper.safetyMaxCandidates = 0;
         }
     }
 
@@ -180,9 +196,9 @@ public class SystemConfig {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class EvalConfig {
-        @JsonProperty("computePrecision")    public boolean computePrecision = false;
-        @JsonProperty("writeGlobalPrecisionCsv")public boolean writeGlobalPrecisionCsv = false;
-        @JsonProperty("kVariants")           public int[]   kVariants = new int[]{1,20,40,60,80,100};
+        @JsonProperty("computePrecision")         public boolean computePrecision = false;
+        @JsonProperty("writeGlobalPrecisionCsv")  public boolean writeGlobalPrecisionCsv = false;
+        @JsonProperty("kVariants")                public int[]   kVariants = new int[]{1,20,40,60,80,100};
         public EvalConfig() {}
     }
 
@@ -219,12 +235,23 @@ public class SystemConfig {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class LshConfig {
-        @JsonProperty("numTables")   public int numTables = 0;    // 0 means "no override"
-        @JsonProperty("rowsPerBand") public int rowsPerBand = 0;  // 0 means "no override"
-        @JsonProperty("probeShards") public int probeShards = 0;  // 0 means "no override"
+        @JsonProperty("numTables")   public int numTables = 0;   // 0 means "no override"
+        @JsonProperty("rowsPerBand") public int rowsPerBand = 0; // 0 means "no override"
+        @JsonProperty("probeShards") public int probeShards = 0; // 0 means "no override"
         public LshConfig() {}
     }
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class ReencryptionConfig {
+        @JsonProperty("enabled") public boolean enabled = true; // default on; set false to disable
+        public ReencryptionConfig() {}
+    }
+
+    /**
+     * Paper-aligned ANN configuration:
+     * - Fetch size is emergent from (m, lambda, divisions), NOT pre-sized.
+     * - Optional safetyMaxCandidates is an OOM guard (disabled by default).
+     */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class PaperConfig {
         @JsonProperty("enabled")   public boolean enabled = false;
@@ -233,11 +260,8 @@ public class SystemConfig {
         @JsonProperty("divisions") public int     divisions = 8;
         @JsonProperty("seed")      public long    seed = 42L;
 
-        // NEW (optional; <=0 means "unset")
-        @JsonProperty("maxCandidates")   public int    maxCandidates = 0;
-        @JsonProperty("targetMult")      public double targetMult = 0.0;
-        @JsonProperty("expandRadiusMax") public double expandRadiusMax = 0.0;
-        @JsonProperty("expandRadiusHard")public double expandRadiusHard = 0.0;
+        // Optional: OOM safety only. <=0 disables (default).
+        @JsonProperty("safetyMaxCandidates") public int safetyMaxCandidates = 0;
 
         public PaperConfig() {}
     }

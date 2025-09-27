@@ -72,7 +72,7 @@
       }
     },
     {
-      "name": "recall_first",
+      "name": "precision_first",
       "overrides": {
         "paper": {
           "enabled": true,
@@ -80,7 +80,7 @@
           "lambda": 8,
           "divisions": 12,
           "maxCandidates": 400000,
-          "targetMult": 2.50,
+          "targetMult": 3.50,
           "expandRadiusMax": 3,
           "expandRadiusHard": 6
         }
