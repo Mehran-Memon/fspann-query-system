@@ -1,36 +1,44 @@
 {
-  "base": {
-    "numShards": 32,
-    "opsThreshold": 500000000,
-    "ageThresholdMs": 604800000,
-    "reEncBatchSize": 2000,
-    "profilerEnabled": true,
+  "numShards": 32,
+  "opsThreshold": 500000000,
+  "ageThresholdMs": 604800000,
+  "reEncBatchSize": 2000,
+  "profilerEnabled": true,
 
-    "eval": { "computePrecision": true, "writeGlobalRecallCsv": true, "kVariants": [1,5,10,20,40,60,80,100] },
+  "reencryption": { "enabled": true },
 
-    "ratio": { "source": "base", "gtSample": 0, "gtMismatchTolerance": 0.02 },
+  "eval": {
+    "computePrecision": true,
+    "writeGlobalPrecisionCsv": true,
+    "kVariants": [1, 20, 40, 60, 80, 100]
+  },
 
-    "output": { "resultsDir": "results", "exportArtifacts": true, "suppressLegacyMetrics": false, "audit": true },
+  "ratio": {
+    "source": "base",
+    "gtSample": 0,
+    "gtMismatchTolerance": 0.02
+  },
 
-    "cloak": { "noise": 0.0 },
+  "output": {
+    "resultsDir": "results",
+    "exportArtifacts": true,
+    "suppressLegacyMetrics": false
+  },
 
-    "lsh": {
-      "numTables": 16,
-      "rowsPerBand": 12,
-      "probeShards": 32
-    },
+  "cloak": { "noise": 0.0 },
 
-    "paper": {
-      "enabled": true,
-      "m": 14,
-      "lambda": 6,
-      "divisions": 10,
-      "seed": 42,
-      "maxCandidates": 250000,
-      "targetMult": 2.00,
-      "expandRadiusMax": 3,
-      "expandRadiusHard": 5
-    }
+  "lsh": {
+    "numTables": 24,
+    "rowsPerBand": 12,
+    "probeShards": 32
+  },
+
+  "paper": {
+    "enabled": true,
+    "m": 14,
+    "lambda": 6,
+    "divisions": 10,
+    "seed": 42
   },
 
   "audit": {
@@ -44,46 +52,78 @@
     {
       "name": "ratio_first",
       "overrides": {
-        "paper": {
-          "enabled": true,
-          "m": 12,
-          "lambda": 5,
-          "divisions": 8,
-          "maxCandidates": 150000,
-          "targetMult": 1.60,
-          "expandRadiusMax": 2,
-          "expandRadiusHard": 4
-        }
+        "paper": { "enabled": true, "m": 12, "lambda": 5, "divisions": 8 },
+        "lsh":   { "numTables": 20, "rowsPerBand": 11 }
       }
     },
     {
       "name": "balanced",
       "overrides": {
-        "paper": {
-          "enabled": true,
-          "m": 15,
-          "lambda": 2,
-          "divisions": 9,
-          "maxCandidates": 250000,
-          "targetMult": 2.00,
-          "expandRadiusMax": 3,
-          "expandRadiusHard": 5
-        }
+        "paper": { "enabled": true, "m": 14, "lambda": 6, "divisions": 10 },
+        "lsh":   { "numTables": 24, "rowsPerBand": 12 }
       }
     },
     {
       "name": "precision_first",
       "overrides": {
-        "paper": {
-          "enabled": true,
-          "m": 16,
-          "lambda": 8,
-          "divisions": 12,
-          "maxCandidates": 400000,
-          "targetMult": 3.50,
-          "expandRadiusMax": 3,
-          "expandRadiusHard": 6
-        }
+        "paper": { "enabled": true, "m": 16, "lambda": 7, "divisions": 12 },
+        "lsh":   { "numTables": 28, "rowsPerBand": 13 }
+      }
+    },
+    {
+      "name": "server_light_ratio_lean",
+      "overrides": {
+        "paper": { "enabled": true, "m": 18, "lambda": 7, "divisions": 14 },
+        "lsh":   { "numTables": 30, "rowsPerBand": 14, "probeShards": 32 }
+      }
+    },
+    {
+      "name": "latency_first",
+      "overrides": {
+        "paper": { "enabled": true, "m": 11, "lambda": 5, "divisions": 7 },
+        "lsh":   { "numTables": 18, "rowsPerBand": 10, "probeShards": 32 }
+      }
+    },
+    {
+      "name": "client_heavy_server_light",
+      "overrides": {
+        "paper": { "enabled": true, "m": 16, "lambda": 6, "divisions": 14 },
+        "lsh":   { "numTables": 26, "rowsPerBand": 12, "probeShards": 32 }
+      }
+    },
+    {
+      "name": "low_token_footprint",
+      "overrides": {
+        "paper": { "enabled": true, "m": 9, "lambda": 4, "divisions": 6 },
+        "lsh":   { "numTables": 16, "rowsPerBand": 10, "probeShards": 32 }
+      }
+    },
+    {
+      "name": "high_dim_precision",
+      "overrides": {
+        "paper": { "enabled": true, "m": 20, "lambda": 8, "divisions": 16 },
+        "lsh":   { "numTables": 32, "rowsPerBand": 15, "probeShards": 32 }
+      }
+    },
+    {
+      "name": "recall_max",
+      "overrides": {
+        "paper": { "enabled": true, "m": 22, "lambda": 9, "divisions": 18 },
+        "lsh":   { "numTables": 36, "rowsPerBand": 16, "probeShards": 32 }
+      }
+    },
+    {
+      "name": "coldstart_smallN",
+      "overrides": {
+        "paper": { "enabled": true, "m": 8, "lambda": 4, "divisions": 8 },
+        "lsh":   { "numTables": 16, "rowsPerBand": 9, "probeShards": 32 }
+      }
+    },
+    {
+      "name": "probe_heavy_fallback",
+      "overrides": {
+        "paper": { "enabled": true, "m": 14, "lambda": 6, "divisions": 10 },
+        "lsh":   { "numTables": 24, "rowsPerBand": 12, "probeShards": 64 }
       }
     }
   ]

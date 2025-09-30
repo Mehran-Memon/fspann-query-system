@@ -103,12 +103,13 @@ public class QueryToken implements Serializable {
         return tableBuckets == null ? List.of() : tableBuckets;
     }
 
-    /** If legacy token, replicate candidateBuckets across tables. */
-    public List<List<Integer>> getTableBucketsOrLegacy(int tables) {
+    /** No-arg compatibility: use stored numTables for legacy tokens. */
+    public List<List<Integer>> getTableBucketsOrLegacy() {
         if (hasPerTable()) return tableBuckets;
-        int t = (tables <= 0) ? this.numTables : tables;
-        List<List<Integer>> out = new ArrayList<>(t);
-        for (int i = 0; i < t; i++) out.add(List.copyOf(candidateBuckets)); // copy per table
+        List<List<Integer>> out = new ArrayList<>(this.numTables);
+        for (int i = 0; i < this.numTables; i++) {
+            out.add(List.copyOf(candidateBuckets));
+        }
         return out;
     }
 

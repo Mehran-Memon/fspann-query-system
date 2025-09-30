@@ -5,9 +5,9 @@ import com.fspann.crypto.CryptoService;
 import com.fspann.loader.GroundtruthManager;
 import com.fspann.query.core.QueryEvaluationResult;
 import com.fspann.query.core.QueryTokenFactory;
+import com.fspann.index.service.SecureLSHIndexService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import javax.crypto.SecretKey;
 import java.util.*;
 import java.util.regex.Matcher;
@@ -34,6 +34,17 @@ public class QueryServiceImpl implements QueryService {
     // unfiltered candidate IDs (subset union, pre-version filter)
     private volatile List<String> lastCandIds = java.util.Collections.emptyList();
     public List<String> getLastCandidateIds() { return lastCandIds; }
+
+    /** If ever need true L2 in the returned results, flip RETURN_SQRT to true. */
+    private static final boolean RETURN_SQRT = false; // keep false to minimize server time
+
+    // ---- NEW: global de-dup tracking for touched IDs across the run ----
+    private static final Set<String> GLOBAL_TOUCHED =
+            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+    private volatile int lastTouchedUniqueSoFar = 0;
+    private volatile int lastTouchedCumulativeUnique = 0;
+    public int getLastTouchedUniqueSoFar() { return lastTouchedUniqueSoFar; }
+    public int getLastTouchedCumulativeUnique() { return lastTouchedCumulativeUnique; }
 
     // ---- CTORS ----
     public QueryServiceImpl(IndexService indexService,
@@ -94,8 +105,8 @@ public class QueryServiceImpl implements QueryService {
         final int K = token.getTopK();
 
         // Optional diagnostics if we fell back on key version
-        if (usedFallback) {
-            try { indexService.lookupWithDiagnostics(token); }
+        if (usedFallback && indexService instanceof SecureLSHIndexService svc) {
+            try { svc.lookupWithDiagnostics(token); }
             catch (Throwable t) { logger.debug("lookupWithDiagnostics failed (ignored): {}", t.toString()); }
         }
 
@@ -113,8 +124,15 @@ public class QueryServiceImpl implements QueryService {
             for (EncryptedPoint p : candidates) ids.add(p.getId());
             lastCandIds = java.util.Collections.unmodifiableList(ids);
             logger.debug("Touched (subset union) count = {}", ids.size());
+            // update global unique counters
+            int before = GLOBAL_TOUCHED.size();
+            for (String id : ids) GLOBAL_TOUCHED.add(id);
+            lastTouchedUniqueSoFar = GLOBAL_TOUCHED.size() - before;
+            lastTouchedCumulativeUnique = GLOBAL_TOUCHED.size();
         } else {
             lastCandIds = java.util.Collections.emptyList();
+            lastTouchedUniqueSoFar = 0;
+            lastTouchedCumulativeUnique = GLOBAL_TOUCHED.size();
         }
 
         if (candTotal == 0) {
@@ -148,7 +166,7 @@ public class QueryServiceImpl implements QueryService {
                 try {
                     double[] vec = cryptoService.decryptFromPoint(pt, key);
                     candDecrypted++;
-                    results.add(new QueryResult(pt.getId(), l2(queryVec, vec)));
+                    results.add(new QueryResult(pt.getId(), l2sq(queryVec, vec)));
                 } catch (IllegalArgumentException e) {
                     throw e; // hard fail on dim mismatch
                 } catch (Exception e) {
@@ -158,13 +176,14 @@ public class QueryServiceImpl implements QueryService {
             }
             results.sort(Comparator.naturalOrder());
             if (results.size() > K) results.subList(K, results.size()).clear();
+            sqrtInPlace(results);
         } else {
             PriorityQueue<QueryResult> heap = new PriorityQueue<>(Comparator.reverseOrder()); // max-heap
             for (EncryptedPoint pt : sameVersion) {
                 try {
                     double[] vec = cryptoService.decryptFromPoint(pt, key);
                     candDecrypted++;
-                    double dist = l2(queryVec, vec);
+                    double dist = l2sq(queryVec, vec);
                     heap.offer(new QueryResult(pt.getId(), dist));
                     if (heap.size() > K) heap.poll();
                 } catch (Exception e) {
@@ -174,6 +193,7 @@ public class QueryServiceImpl implements QueryService {
             }
             results = new ArrayList<>(heap);
             results.sort(Comparator.naturalOrder());
+            sqrtInPlace(results);
         }
 
         // Commit last* counters & time
@@ -245,15 +265,26 @@ public class QueryServiceImpl implements QueryService {
             out.add(new QueryEvaluationResult(
                     k,
                     upto,
-                    Double.NaN,           // ratio computed by ForwardSecureANNSystem facade
+                    Double.NaN,           // ratio computed upstream
                     precision,
-                    queryDurationMs,
+                    queryDurationMs,      // ServerTimeMs
                     insertTimeMs,
                     candDecrypted,        // actually decrypted/scored
                     tokenSizeBytes,
                     vectorDim,
                     totalFlushed,
-                    flushThreshold
+                    flushThreshold,
+                    /*touchedCount*/ 0,
+                    /*reencryptedCount*/ 0,
+                    /*reencTimeMs*/ 0L,
+                    /*reencBytesDelta*/ 0L,
+                    /*reencBytesAfter*/ 0L,
+                    /*ratioDenomSource*/ "none",      // <-- moved above
+                    /*clientTimeMs*/     -1L,         // <-- moved below
+                    /*tokenK*/           baseToken.getTopK(),
+                    /*tokenKBase*/       baseToken.getTopK(),
+                    /*qIndexZeroBased*/  queryIndex,
+                    /*candMetricsMode*/  "full"
             ));
         }
 
@@ -268,11 +299,23 @@ public class QueryServiceImpl implements QueryService {
     private static <T> List<T> nn(List<T> v) { return (v == null) ? Collections.emptyList() : v; }
     private static int[] safeGt(int[] a)     { return (a == null) ? new int[0] : a; }
 
-    private static double l2(double[] a, double[] b) {
+    private static double l2sq(double[] a, double[] b) {
         if (a.length != b.length) throw new IllegalArgumentException("Vector dimension mismatch: " + a.length + " vs " + b.length);
         double s = 0;
-        for (int i = 0; i < a.length; i++) { double d = a[i] - b[i]; s += d * d; }
-        return Math.sqrt(s);
+        for (int i = 0; i < a.length; i++) {
+            double d = a[i] - b[i];
+            s += d * d;
+        }
+        return s; // squared L2, no sqrt
+    }
+
+    private static void sqrtInPlace(List<QueryResult> results) {
+        if (!RETURN_SQRT) return;
+        for (int i = 0; i < results.size(); i++) {
+            QueryResult r = results.get(i);
+            // Re-wrap with sqrt distance; assumes QueryResult(id, distance)
+            results.set(i, new QueryResult(r.getId(), Math.sqrt(r.getDistance())));
+        }
     }
 
     private Integer parseVersionFromContext(String ctx) {
@@ -303,4 +346,5 @@ public class QueryServiceImpl implements QueryService {
     public int  getLastCandKeptVersion()   { return lastCandKeptVersion; }
     public int  getLastCandDecrypted()     { return lastCandDecrypted; }
     public int  getLastReturned()          { return lastReturned; }
+    public static int getGlobalTouchedUniqueCount() { return GLOBAL_TOUCHED.size(); }
 }

@@ -32,6 +32,7 @@ public class SystemConfig {
 
     // --- caps / guards ---
     private static final int  MAX_SHARDS            = 8192;
+    private static final int  MAX_TABLES            = 1024;
     private static final long MAX_OPS_THRESHOLD     = 1_000_000_000L;
     private static final long MAX_AGE_THRESHOLD_MS  = 30L * 24 * 60 * 60 * 1000; // 30d
     private static final int  MAX_REENC_BATCH_SIZE  = 10_000;
@@ -89,6 +90,11 @@ public class SystemConfig {
         if (numShards > MAX_SHARDS) {
             logger.warn("numShards {} exceeds maximum {}, capping", numShards, MAX_SHARDS);
             numShards = MAX_SHARDS;
+        }
+        if (numTables <= 0) throw new ConfigLoadException("numTables must be positive", null);
+        if (numTables > MAX_TABLES) {
+            logger.warn("numTables {} exceeds maximum {}, capping", numTables, MAX_TABLES);
+            numTables = MAX_TABLES;
         }
         if (opsThreshold <= 0) throw new ConfigLoadException("opsThreshold must be positive", null);
         if (opsThreshold > MAX_OPS_THRESHOLD) {
@@ -154,7 +160,13 @@ public class SystemConfig {
     public static SystemConfig load(String filePath, boolean refresh) throws ConfigLoadException {
         Objects.requireNonNull(filePath, "Config file path cannot be null");
         Path path = Paths.get(filePath).toAbsolutePath().normalize();
-        String cacheKey = path.toString();
+        try {
+            // Resolve symlinks to stabilize the cache key across different references
+            path = path.toRealPath(LinkOption.NOFOLLOW_LINKS);
+        } catch (IOException e) {
+            // Best-effort: keep normalized absolute path if realPath fails
+            logger.debug("toRealPath failed for {} (continuing with normalized path): {}", path, e.toString());
+        }        String cacheKey = path.toString();
 
         if (!Files.isReadable(path)) {
             logger.error("Config file is not readable: {}", path);

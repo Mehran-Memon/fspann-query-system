@@ -46,6 +46,7 @@ public final class EvenLSH {
 
     // ---- Tuning constants ----------------------------------------------------
     private static final int UNROLL_THRESHOLD = 256; // loop unrolling pivot
+    private volatile int overrideHashFuncsPerTable = -1;
 
     // ----------------------------------------------------------------------------
     // Construction
@@ -122,6 +123,15 @@ public final class EvenLSH {
     // Public API (legacy multiprobe)
     // ----------------------------------------------------------------------------
 
+    /** Compatibility: legacy code may reflect this as "m (rows/hash-funcs per table)". */
+    public int getNumHashFuncsPerTable() { return (overrideHashFuncsPerTable > 0) ? overrideHashFuncsPerTable : bitWidth; }
+   /** Compatibility alias used by some callers. */
+   public int getRowsPerBand() { return getNumHashFuncsPerTable(); }
+    /** Allow overriding "m" without rebuilding LSH; affects signature slice size and expansions. */
+    public void setNumHashFuncsPerTable(int m) { if (m > 0) this.overrideHashFuncsPerTable = m; }
+    /** Compatibility alias used by some callers. */
+    public void setRowsPerBand(int m) { setNumHashFuncsPerTable(m); }
+
     /** Project onto the tableIndex-th (wrapped) projection vector. */
     public double project(double[] vector, int tableIndex) {
         validateVector(vector);
@@ -156,8 +166,8 @@ public final class EvenLSH {
 
         final int limit   = Integer.getInteger("probe.perTable", 32); // total probes per table
         final int maxFlip = Integer.getInteger("probe.bits.max", 2);  // 1–2 good; 3 is expensive
-
-        double[] margins = new double[bitWidth];
+        final int bw = getNumHashFuncsPerTable();
+        double[] margins = new double[bw];
         int sig = signature(vector, tableIndex, margins);
 
         List<Integer> expanded = expandByHamming(sig, margins, maxFlip, limit);
@@ -196,40 +206,41 @@ public final class EvenLSH {
      */
     private int signature(double[] v, int tableIndex, double[] marginsOut) {
         int s = 0;
-        int base = Math.floorMod(tableIndex * bitWidth, numProjections);
-        for (int j = 0; j < bitWidth; j++) {
-            double pj = dot(v, projectionVectors[(base + j) % numProjections]);
-            if (marginsOut != null) marginsOut[j] = Math.abs(pj);
-            if (pj >= 0) s |= (1 << j);
+        final int bw = getNumHashFuncsPerTable();
+        int base = Math.floorMod(tableIndex * bw, numProjections);
+        for (int j = 0; j < bw; j++) {
+                double pj = dot(v, projectionVectors[(base + j) % numProjections]);
+                if (marginsOut != null) marginsOut[j] = Math.abs(pj);
+                if (pj >= 0) s |= (1 << j);
+            }
+            return s;
         }
-        return s;
-    }
 
     /** Expand by flipping the lowest-margin bits, up to maxBitsToFlip and global probe limit. */
     private List<Integer> expandByHamming(int sig, double[] margins, int maxBitsToFlip, int limit) {
-        Integer[] order = new Integer[bitWidth];
-        for (int i = 0; i < bitWidth; i++) order[i] = i;
+        final int bw = margins.length;
+        Integer[] order = new Integer[bw];
+        for (int i = 0; i < bw; i++) order[i] = i;
         Arrays.sort(order, Comparator.comparingDouble(i -> margins[i]));
-
-        List<Integer> out = new ArrayList<>(Math.min(limit, 1 + bitWidth + bitWidth * (bitWidth - 1) / 2));
-        out.add(sig); // primary first
+        List<Integer> out = new ArrayList<>(Math.min(limit, 1 + bw + bw * (bw - 1) / 2));
+            out.add(sig); // primary first
 
         // 1-bit flips
-        for (int i = 0; i < bitWidth && out.size() < limit; i++) {
-            out.add(sig ^ (1 << order[i]));
-        }
+        for (int i = 0; i < bw && out.size() < limit; i++) {
+                    out.add(sig ^ (1 << order[i]));
+                }
         if (out.size() >= limit || maxBitsToFlip < 2) return foldBuckets(out);
 
         // 2-bit flips
         outer:
-        for (int i = 0; i < bitWidth; i++) {
-            for (int j = i + 1; j < bitWidth; j++) {
+        for (int i = 0; i < bw; i++) {
+            for (int j = i + 1; j < bw; j++) {
                 out.add(sig ^ (1 << order[i]) ^ (1 << order[j]));
                 if (out.size() >= limit) break outer;
-            }
-        }
-        return foldBuckets(out);
-    }
+                            }
+                        }
+                        return foldBuckets(out);
+                    }
 
     /** Fold arbitrary signature integers into [0, numBuckets-1]. */
     private List<Integer> foldBuckets(List<Integer> sigs) {

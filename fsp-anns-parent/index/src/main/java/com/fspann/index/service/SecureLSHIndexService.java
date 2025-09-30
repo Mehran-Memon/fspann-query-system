@@ -8,6 +8,7 @@ import com.fspann.index.core.DimensionContext;
 import com.fspann.index.core.EvenLSH;
 import com.fspann.index.core.PartitioningPolicy;
 import com.fspann.index.core.SecureLSHIndex;
+import com.fspann.index.paper.PartitionedIndexService;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -54,6 +55,8 @@ public class SecureLSHIndexService implements IndexService {
     // Paper-aligned (partitioned) engine (inject your implementation; can be null)
     private volatile PaperSearchEngine paperEngine;
     public void setPaperEngine(PaperSearchEngine eng) { this.paperEngine = eng; }
+    public static String getMode() { return isPartitioned() ? "partitioned" : "multiprobe"; }
+    private static final java.util.concurrent.atomic.AtomicBoolean FANOUT_LOGGED = new java.util.concurrent.atomic.AtomicBoolean(false);
 
     // Write buffer (shared across modes)
     private final EncryptedPointBuffer buffer;
@@ -107,6 +110,15 @@ public class SecureLSHIndexService implements IndexService {
         this.defaultNumBuckets = Math.max(1, defaultNumBuckets);
         this.defaultNumTables  = Math.max(1, defaultNumTables);
         logger.info("SecureLSHIndexService initialized in '{}' mode", MODE);
+        // Disambiguated parameter log on init
+        if (isPartitioned() && paperEngine instanceof com.fspann.index.paper.PartitionedIndexService pes) {
+            // paper m = projections/division
+            logger.info("Paper parameters: m (projections/division)={}, lambda={}, divisions (ℓ)={}",
+                    pes.getM(), pes.getLambda(), pes.getDivisions());
+        } else {
+            // multiprobe: report L and buckets; m(rows/table) may come from config elsewhere
+            logger.info("Multiprobe parameters: L (tables)={}, buckets={} (legacy LSH), m(rows/LSH table)=unreported");
+        }
     }
 
     /** Legacy-compatible convenience constructor (no paper engine → multiprobe). */
@@ -130,7 +142,19 @@ public class SecureLSHIndexService implements IndexService {
         int numBuckets  = Math.max(1, cfg.getNumShards());
         int numTables   = Math.max(1, cfg.getNumTables());
         EncryptedPointBuffer buf = createBufferFromManager(metadata);
-        return new SecureLSHIndexService(crypto, keyService, metadata, null, null, null, buf, numBuckets, numTables);
+        SecureLSHIndexService svc =
+                new SecureLSHIndexService(crypto, keyService, metadata, null, null, null, buf, numBuckets, numTables);
+        // If paper mode is enabled in config, wire the paper engine here.
+        try {
+            var pc = cfg.getPaper();
+            if (pc != null && pc.enabled) {
+                PartitionedIndexService pe = new PartitionedIndexService(pc.m, pc.lambda, pc.divisions, pc.seed);
+                svc.setPaperEngine(pe);
+                logger.info("Paper engine enabled via config (m={}, λ={}, ℓ={}, seed={})",
+                        pc.m, pc.lambda, pc.divisions, pc.seed);
+            }
+        } catch (Throwable ignore) { /* fall back to multiprobe if anything goes wrong */ }
+        return svc;
     }
 
     private static EncryptedPointBuffer createBufferFromManager(RocksDBMetadataManager manager) {
@@ -310,6 +334,8 @@ public class SecureLSHIndexService implements IndexService {
     @Override
     public LookupWithDiagnostics lookupWithDiagnostics(QueryToken token) {
         Objects.requireNonNull(token, "QueryToken cannot be null");
+        // One-shot fanout snapshot label (first diagnostic call)
+        fanoutLogOnce();
 
         // ---- Partitioned path (paper engine) ----
         if (isPartitioned() && paperEngine != null) {
@@ -534,6 +560,17 @@ public class SecureLSHIndexService implements IndexService {
             }
         }
         return idx.candidateCount(perTable);
+    }
+
+    private void fanoutLogOnce() {
+        if (!FANOUT_LOGGED.compareAndSet(false, true)) return;
+        if (isPartitioned() && paperEngine instanceof com.fspann.index.paper.PartitionedIndexService pes) {
+            logger.info("Fanout snapshot label: mode=partitioned, paper(m={}, λ={}, ℓ={})",
+                    pes.getM(), pes.getLambda(), pes.getDivisions());
+        } else {
+            logger.info("Fanout snapshot label: mode=multiprobe, multiprobe(L={}, buckets={})",
+                    defaultNumTables, defaultNumBuckets);
+        }
     }
 
     public void shutdown() { buffer.shutdown(); }

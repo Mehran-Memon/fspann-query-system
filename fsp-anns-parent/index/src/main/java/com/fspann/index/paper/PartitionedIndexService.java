@@ -2,7 +2,6 @@ package com.fspann.index.paper;
 
 import com.fspann.common.EncryptedPoint;
 import com.fspann.common.QueryToken;
-import com.fspann.index.service.SecureLSHIndexService;
 import com.fspann.index.service.SecureLSHIndexService.PaperSearchEngine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,7 +37,7 @@ public class PartitionedIndexService implements PaperSearchEngine {
     public PartitionedIndexService(int m, int lambda, int divisions, long seedBase) {
         this(m, lambda, divisions, seedBase,
                 Integer.getInteger("paper.buildThreshold", 2_000),
-                Integer.getInteger("paper.maxCandidates", 50_000));
+                Integer.getInteger("paper.maxCandidates", -1)); // <= 0 means disabled
     }
 
     public PartitionedIndexService(int m, int lambda, int divisions, long seedBase, int buildThreshold, int maxCandidates) {
@@ -58,7 +57,7 @@ public class PartitionedIndexService implements PaperSearchEngine {
     private static final class DivisionState {
         final Coding.GFunction G;
         List<GreedyPartitioner.SubsetBounds> I = Collections.emptyList(); // sorted
-        Map<String, List<EncryptedPoint>> tagToSubset = new HashMap<>();
+        Map<String, List<EncryptedPoint>> tagToSubset = new ConcurrentHashMap<>();
         int w = 0;
         DivisionState(Coding.GFunction g) { this.G = g; }
     }
@@ -114,7 +113,9 @@ public class PartitionedIndexService implements PaperSearchEngine {
                     if (hits.isEmpty()) continue;
                     for (int idx : hits) {
                         GreedyPartitioner.SubsetBounds sb = div.I.get(idx);
-                        div.tagToSubset.computeIfAbsent(sb.tag, k -> new ArrayList<>()).add(pt);
+                        div.tagToSubset
+                                .computeIfAbsent(sb.tag, k -> new java.util.concurrent.CopyOnWriteArrayList<>())
+                                .add(pt);
                     }
                 }
             } else {
@@ -137,13 +138,21 @@ public class PartitionedIndexService implements PaperSearchEngine {
 
         // ---- Tunables (via JVM props) ----
         final int K = Math.max(1, token.getTopK());
-        final double targetMult = Double.parseDouble(System.getProperty("paper.target.mult", "1.6"));
         final int maxRadius = Integer.getInteger("paper.expand.radius.max", 2);
         final int maxRadiusHard = Integer.getInteger("paper.expand.radius.hard", Math.max(3, maxRadius + 1));
 
-        // modest overfetch per division; scale with ℓ and K
-        final int perDivTarget = Math.max(2, (int) Math.ceil(targetMult * K / Math.max(1, divisions)));
-        final int perDivTarget2 = Math.max(perDivTarget, (int) Math.ceil(2.0 * K / Math.max(1, divisions))); // for 2nd pass
+        /*
+         * Per-division gather budget is a FUNCTION OF THE ALGORITHM, not K and not a fixed target.
+         * Intuition:
+         *   - m = projections per division → more projections allow finer bucket discrimination,
+         *   - λ = bits per projection,
+         *   - ℓ = number of divisions (hash tables).
+         * We gather proportional to m per division, with a small constant slack.
+         * You can refine this later with a closed-form from your paper; the key is: no dependence on K.
+         */
+        final int algSlack = 2; // tiny constant; does NOT cap globally
+        final int perDivTarget = Math.max(2, m + algSlack);
+        final int perDivTarget2 = Math.max(perDivTarget, m + (algSlack << 1)); // second pass slightly wider
 
         final Set<String> seen = new LinkedHashSet<>();
         final List<EncryptedPoint> cands = new ArrayList<>();
@@ -171,9 +180,10 @@ public class PartitionedIndexService implements PaperSearchEngine {
                             if (seen.add(p.getId())) {
                                 cands.add(p);
                                 gatheredThisDiv++;
-                                if (cands.size() >= maxCandidates) return cands;
-                                if (cands.size() >= K) return cands; // early stop as soon as we have ≥K globally
-                                if (gatheredThisDiv >= perDivTarget) break;
+                                // Optional safety cap ONLY if explicitly positive; otherwise disabled
+                                if (maxCandidates > 0 && cands.size() >= maxCandidates) return cands;
+                                if (gatheredThisDiv >= perDivTarget) break; // stop ONLY per-division; never globally by K
+
                             }
                         }
                     }
@@ -212,7 +222,7 @@ public class PartitionedIndexService implements PaperSearchEngine {
                                 if (seen.add(p.getId())) {
                                     cands.add(p);
                                     gatheredThisDiv++;
-                                    if (cands.size() >= maxCandidates) return cands;
+                                    if (maxCandidates > 0 && cands.size() >= maxCandidates) return cands;
                                     if (cands.size() >= K) return cands; // stop as soon as we hit K
                                 }
                             }
@@ -299,7 +309,10 @@ public class PartitionedIndexService implements PaperSearchEngine {
     }
 
     private void ensureBuilt(DimensionState S) {
-        if (!isBuilt(S)) buildAllDivisions(S);
+        if (isBuilt(S)) return;
+        synchronized (S) {
+            if (!isBuilt(S)) buildAllDivisions(S);
+        }
     }
 
     private boolean isBuilt(DimensionState S) {
@@ -341,9 +354,13 @@ public class PartitionedIndexService implements PaperSearchEngine {
             // Build partitions (Algorithm-2)
             GreedyPartitioner.BuildResult br = GreedyPartitioner.build(items, G.codeBits(), seed ^ 0x9E3779B97F4A7C15L);
             D.I = br.indexI;
-            D.tagToSubset = br.tagToSubset;
+            // Wrap with thread-safe collections for concurrent reads/writes
+            Map<String, List<EncryptedPoint>> safe = new ConcurrentHashMap<>();
+            for (var e : br.tagToSubset.entrySet()) {
+                safe.put(e.getKey(), new java.util.concurrent.CopyOnWriteArrayList<>(e.getValue()));
+            }
+            D.tagToSubset = safe;
             D.w = br.w;
-
             S.divisions.add(D);
         }
 
@@ -363,4 +380,10 @@ public class PartitionedIndexService implements PaperSearchEngine {
         x ^= (x >>> 33);
         return x;
     }
+
+    // Expose paper params for logging/artifacts
+    public int getM() { return m; }
+    public int getLambda() { return lambda; }
+    public int getDivisions() { return divisions; }
+    public long getSeedBase() { return seedBase; }
 }
