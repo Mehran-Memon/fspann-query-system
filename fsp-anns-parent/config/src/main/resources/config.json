@@ -16,7 +16,7 @@
   "ratio": {
     "source": "base",
     "gtSample": 0,
-    "gtMismatchTolerance": 0.02
+    "gtMismatchTolerance": 0.0
   },
 
   "output": {
@@ -123,7 +123,7 @@
       "name": "probe_heavy_fallback",
       "overrides": {
         "paper": { "enabled": true, "m": 14, "lambda": 6, "divisions": 10 },
-        "lsh":   { "numTables": 24, "rowsPerBand": 12, "probeShards": 64 }
+        "lsh":   { "numTables": 24, "rowsPerBand": 12, "probeShards": 32 }
       }
     }
   ]

@@ -173,5 +173,16 @@ class ForwardSecureANNSystemRatioAutoFallbackTest {
 
         assertNotNull(ratio, "Should parse ratio for K=1");
         assertEquals(1.0, ratio, 1e-6, "AUTO should ignore bad GT and use base-scan denominator");
+
+        int idxSrc = colIndexAny(header, "RatioDenomSource", "DenominatorSource");
+        assertTrue(idxSrc >= 0, "RatioDenomSource column missing");
+        String anyRow = lines.size() > 1 ? lines.get(1) : null;
+        assertNotNull(anyRow);
+        String[] rc = CSV_SPLIT.split(anyRow, -1);
+        String label = rc[idxSrc].trim().toLowerCase(Locale.ROOT);
+        // Depending on which writer branch you kept, label may be "base" or "base(auto)"
+        assertTrue(label.equals("base") || label.equals("base(auto)"),
+                "Expected base denominator under AUTO fallback, got: " + label);
+
     }
 }

@@ -105,6 +105,7 @@ public class ForwardSecureANNSystem {
     private final ExecutorService executor;
     private boolean exitOnShutdown = false;
     private final boolean reencEnabled;
+    private static final double RATIO_EPS = 1e-24;
 
     // remember previous FsPaths props to restore on shutdown
     private final String prevBaseProp;
@@ -1954,36 +1955,40 @@ public class ForwardSecureANNSystem {
     // Paper-accurate ratio@K (average over ranks 1..K): (1/K) Σ_i d(q, r_i) / d(q, o_i)
     // Uses squared distances but takes sqrt per-pair to preserve true ratio semantics.
     private static double ratioAvgOverRanks(double[] q,
-                                            List<QueryResult> retrievedPrefix, // size ≤ K
+                                            List<QueryResult> retrievedPrefix,  // size ≤ K
                                             int[] truthTopK,                    // length ≥ size
                                             BaseVectorReader br) {
         if (q == null || br == null || retrievedPrefix == null || truthTopK == null) return Double.NaN;
-        int upto = Math.min(retrievedPrefix.size(), truthTopK.length);
+        final int upto = Math.min(retrievedPrefix.size(), truthTopK.length);
         if (upto <= 0) return Double.NaN;
 
-        final double eps = 1e-24;
         double sum = 0.0;
         int terms = 0;
 
         for (int i = 0; i < upto; i++) {
-            String rid = retrievedPrefix.get(i).getId();
+            QueryResult qr = retrievedPrefix.get(i);
             int rIdx;
-            try { rIdx = Integer.parseInt(rid); } catch (NumberFormatException nfe) { continue; }
+            try { rIdx = Integer.parseInt(qr.getId()); } catch (NumberFormatException ignored) { continue; }
 
             int oIdx = truthTopK[i];
 
+            // Exact same vector at this rank → ratio == 1.0
+            if (rIdx == oIdx) { sum += 1.0; terms++; continue; }
+
             double numSq = br.l2sq(q, rIdx);
             double denSq = br.l2sq(q, oIdx);
-            if (!Double.isFinite(numSq) || !Double.isFinite(denSq)) continue;
-            if (denSq <= eps) { // identical vector at truth rank i
-                sum += (numSq <= eps) ? 1.0 : Double.POSITIVE_INFINITY;
+            if (!(Double.isFinite(numSq) && Double.isFinite(denSq))) continue;
+
+            if (denSq <= RATIO_EPS) {
+                // Match semantics with the in-loop metric: treat near-zero denom as a 1.0 contribution
+                sum += 1.0;
             } else {
+                if (numSq < 0) numSq = 0.0; // paranoia guard against FP jitter
                 sum += Math.sqrt(numSq / denSq);
             }
             terms++;
         }
-        if (terms == 0) return Double.NaN;
-        return sum / terms;
+        return (terms == 0) ? Double.NaN : (sum / terms);
     }
 
 
@@ -2243,7 +2248,7 @@ public class ForwardSecureANNSystem {
             Files.createDirectories(p.getParent());
             if (!Files.exists(p)) {
                 Files.writeString(p,
-                        "QueryID,TargetVersion,Mode,Touched,TouchedUniqueSoFar,TouchedCumulativeUnique," +
+                        "QueryID,TargetVersion,Mode,Touched,NewUnique,CumulativeUnique," +
                                 "Reencrypted,AlreadyCurrent,Retried,TimeMs,BytesDelta,BytesAfter\n",
                         StandardOpenOption.CREATE_NEW);
             }

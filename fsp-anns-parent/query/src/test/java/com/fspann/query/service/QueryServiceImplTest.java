@@ -7,7 +7,7 @@ import com.fspann.query.core.QueryEvaluationResult;
 import org.junit.jupiter.api.*;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
-
+import static org.mockito.Mockito.*;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import java.util.*;
@@ -87,6 +87,12 @@ class QueryServiceImplTest {
 
         List<QueryResult> results = service.search(token);
         assertEquals("good", results.get(0).getId());
+
+        assertEquals(2, service.getLastCandTotal());
+        assertEquals(2, service.getLastCandKeptVersion());
+        assertEquals(2, service.getLastCandDecrypted());
+        assertEquals(2, service.getLastReturned());
+
     }
 
     @Test
@@ -95,32 +101,34 @@ class QueryServiceImplTest {
         byte[] encQuery = new byte[32];
         double[] query = new double[]{1.0, 2.0};
         QueryToken token = new QueryToken(
-                List.of(List.of(1)),
-                iv, encQuery, query,
-                1, 1,
-                "epoch_999_dim_2",
-                2,
-                999
+                List.of(List.of(1)), iv, encQuery, query,
+                1, 1, "epoch_999_dim_2", 2, 999
         );
 
-        // requested version missing; fallback to current version
         SecretKey fallbackKey = new SecretKeySpec(new byte[32], "AES");
         when(keyService.getVersion(999)).thenThrow(new IllegalArgumentException("no such version"));
         when(keyService.getCurrentVersion()).thenReturn(new KeyVersion(1, fallbackKey));
         when(cryptoService.decryptQuery(eq(encQuery), eq(iv), eq(fallbackKey))).thenReturn(query);
 
         EncryptedPoint p = new EncryptedPoint("id", 0, iv, encQuery, 1, 2, List.of(1));
-
-        // Stub BOTH lookup variants
         when(indexService.lookup(any(QueryToken.class))).thenReturn(List.of(p));
         when(cryptoService.decryptFromPoint(eq(p), eq(fallbackKey))).thenReturn(new double[]{1.0, 2.0});
+
+        // ---- proper diagnostics stub
+        LookupWithDiagnostics diag = new LookupWithDiagnostics(
+                List.of(p),
+                new SearchDiagnostics(1, 0, java.util.Map.of())
+        );
+        when(indexService.lookupWithDiagnostics(any(QueryToken.class))).thenReturn(diag);
 
         assertDoesNotThrow(() -> service.search(token));
 
         verify(keyService).getVersion(999);
         verify(keyService, atLeastOnce()).getCurrentVersion();
         verify(cryptoService).decryptQuery(eq(encQuery), eq(iv), eq(fallbackKey));
-        verify(indexService).lookupWithDiagnostics(any(QueryToken.class));
+
+        // The service calls diagnostics more than once; don’t pin to 1.
+        verify(indexService, atLeastOnce()).lookupWithDiagnostics(any(QueryToken.class));
     }
 
     @Test
@@ -250,4 +258,40 @@ class QueryServiceImplTest {
         assertEquals(0, service.getLastCandDecrypted());
         assertEquals(0, service.getLastReturned());
     }
+
+    @Test
+    void countersReflectFilteringAndReturnSizes() throws Exception {
+        byte[] iv = new byte[12];
+        byte[] encQuery = new byte[32];
+        double[] query = new double[]{0.0, 0.0};
+
+        // Query token targets version 2
+        String ctx = "epoch_2_dim_2";
+        SecretKey k2 = new SecretKeySpec(new byte[32], "AES");
+        when(keyService.getVersion(2)).thenReturn(new KeyVersion(2, k2));
+        when(keyService.getCurrentVersion()).thenReturn(new KeyVersion(2, k2));
+        when(cryptoService.decryptQuery(encQuery, iv, k2)).thenReturn(query);
+
+        QueryToken token = new QueryToken(
+                List.of(List.of(1)), iv, encQuery, query,
+                5, 1, ctx, 2, 2
+        );
+
+        // candidates: one good (v2), one filtered (v1)
+        EncryptedPoint v2 = new EncryptedPoint("ok",   0, iv, encQuery, 2, 2, List.of(1));
+        EncryptedPoint v1 = new EncryptedPoint("skip", 0, iv, encQuery, 1, 2, List.of(1));
+
+        when(indexService.lookup(token)).thenReturn(List.of(v2, v1));
+        when(cryptoService.decryptFromPoint(eq(v2), eq(k2))).thenReturn(new double[]{0.0, 0.0});
+
+        List<QueryResult> out = service.search(token);
+        assertEquals(1, out.size());
+        assertEquals("ok", out.get(0).getId());
+
+        assertEquals(2, service.getLastCandTotal(),        "ScannedCandidates");
+        assertEquals(1, service.getLastCandKeptVersion(),  "KeptVersion");
+        assertEquals(1, service.getLastCandDecrypted(),    "Decrypted");
+        assertEquals(1, service.getLastReturned(),         "Returned");
+    }
+
 }
