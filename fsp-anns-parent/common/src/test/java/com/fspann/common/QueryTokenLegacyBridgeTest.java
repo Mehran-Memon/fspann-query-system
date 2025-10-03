@@ -15,8 +15,9 @@ class QueryTokenLegacyBridgeTest {
                 5, 3, "ctx", 32, 0, 1
         );
         assertFalse(legacy.hasPerTable());
-        var per = legacy.getTableBucketsOrLegacy(3);
-        assertEquals(3, per.size());
+
+        var per = legacy.getTableBucketsOrLegacy(); // <-- no arg now
+        assertEquals(3, per.size());               // expects the token to carry L=3
         assertEquals(List.of(7,11), per.get(0));
         assertEquals(List.of(7,11), per.get(1));
         assertEquals(List.of(7,11), per.get(2));

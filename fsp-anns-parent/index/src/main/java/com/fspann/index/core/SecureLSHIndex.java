@@ -155,7 +155,7 @@ public class SecureLSHIndex {
             // Resolve per-table bucket lists
             List<List<Integer>> tableBuckets = token.hasPerTable()
                     ? token.getTableBuckets()
-                    : token.getTableBucketsOrLegacy(numHashTables);
+                    : token.getTableBucketsOrLegacy();
 
             int tablesToUse = Math.min(token.getNumTables(), numHashTables);
             if (tablesToUse <= 0) return Collections.emptyList();

@@ -33,7 +33,7 @@ public class QueryServiceImpl implements QueryService {
 
     // unfiltered candidate IDs (subset union, pre-version filter)
     private volatile List<String> lastCandIds = java.util.Collections.emptyList();
-    public List<String> getLastCandidateIds() { return lastCandIds; }
+
 
     /** If ever need true L2 in the returned results, flip RETURN_SQRT to true. */
     private static final boolean RETURN_SQRT = false; // keep false to minimize server time
@@ -65,161 +65,82 @@ public class QueryServiceImpl implements QueryService {
 
     @Override
     public List<QueryResult> search(QueryToken token) {
-        final long start = System.nanoTime();
-        Objects.requireNonNull(token, "QueryToken cannot be null");
-        if (token.getTopK() <= 0 || token.getEncryptedQuery() == null || token.getIv() == null) {
-            throw new IllegalArgumentException("Invalid or incomplete QueryToken");
-        }
+        Objects.requireNonNull(token, "token");
 
-        // Resolve key
-        final int requestedVersion = token.getVersion();
-        final Integer contextVersion = parseVersionFromContext(token.getEncryptionContext());
-        boolean usedFallback = false;
+        final long t0 = System.nanoTime();
+        clearLastMetrics(); // resets last* fields and lastCandIds
 
+        // Resolve key version (requested or fallback)
         KeyVersion kv;
         try {
-            kv = keyService.getVersion(requestedVersion);
+            kv = keyService.getVersion(token.getVersion());
         } catch (RuntimeException ex) {
             kv = keyService.getCurrentVersion();
-            usedFallback = true;
-            logger.warn("Requested version v{} unavailable; falling back to current v{} (ctx v={})",
-                    requestedVersion, kv.getVersion(), contextVersion);
+            try { indexService.lookupWithDiagnostics(token); } catch (Throwable ignore) {}
         }
 
-        final SecretKey key = kv.getKey();
-        final int activeVersion = kv.getVersion();
+        // Decrypt query
+        final double[] qVec = cryptoService.decryptQuery(token.getEncryptedQuery(), token.getIv(), kv.getKey());
 
-        // Decrypt query vector
-        final double[] queryVec;
-        try {
-            queryVec = cryptoService.decryptQuery(token.getEncryptedQuery(), token.getIv(), key);
-            if (queryVec.length != token.getDimension()) {
-                throw new IllegalArgumentException("Decrypted query dim=" + queryVec.length +
-                        " != token.dim=" + token.getDimension());
-            }
-        } catch (Exception e) {
-            logger.error("Query decryption failed", e);
-            throw new RuntimeException("Decryption error: query vector", e);
+        // Diagnostics probe (best-effort)
+        try { indexService.lookupWithDiagnostics(token); } catch (Throwable ignore) {}
+
+        // 1) Lookup candidates
+        List<EncryptedPoint> raw = indexService.lookup(token);
+        if (raw == null) raw = java.util.Collections.emptyList();
+
+        // 2) De-duplicate by ID (subset union) while preserving first-seen ordering
+        final Map<String, EncryptedPoint> uniq = new LinkedHashMap<>(Math.max(16, raw.size()));
+        for (EncryptedPoint ep : raw) {
+            if (ep == null) continue;
+            uniq.putIfAbsent(ep.getId(), ep);
         }
 
-        final int K = token.getTopK();
+        // Record scanned/touched
+        this.lastCandTotal = uniq.size();                    // ScannedCandidates (union)
+        this.lastCandIds   = new ArrayList<>(uniq.keySet()); // touched IDs (union)
 
-        // Optional diagnostics if we fell back on key version
-        if (usedFallback && indexService instanceof SecureLSHIndexService svc) {
-            try { svc.lookupWithDiagnostics(token); }
-            catch (Throwable t) { logger.debug("lookupWithDiagnostics failed (ignored): {}", t.toString()); }
+        // 3) Keep version-matching → decrypt → score with L2^2 (no sqrt)
+        final List<QueryScored> scored = new ArrayList<>(uniq.size());
+        for (EncryptedPoint ep : uniq.values()) {
+            if (ep.getVersion() != kv.getVersion()) continue;
+            this.lastCandKeptVersion++;
+            final double[] v = cryptoService.decryptFromPoint(ep, kv.getKey());
+            this.lastCandDecrypted++;
+            final double d2 = l2sq(qVec, v);                // squared L2
+            scored.add(new QueryScored(ep.getId(), d2));    // store squared distance
         }
 
-        // --------------------------
-        // FETCH POLICY (paper-aligned)
-        // --------------------------
-        // Fetch the FULL subset-union determined by the token (m, λ, ℓ) — no pre-sizing/fanout.
-        final List<EncryptedPoint> candidates = nn(indexService.lookup(token));
-        final int candTotal = candidates.size();
-        lastCandTotal = candTotal;
-
-        // capture touched IDs (pre-version filter)
-        if (candTotal > 0) {
-            List<String> ids = new ArrayList<>(candTotal);
-            for (EncryptedPoint p : candidates) ids.add(p.getId());
-            lastCandIds = java.util.Collections.unmodifiableList(ids);
-            logger.debug("Touched (subset union) count = {}", ids.size());
-            // update global unique counters
-            int before = GLOBAL_TOUCHED.size();
-            for (String id : ids) GLOBAL_TOUCHED.add(id);
-            lastTouchedUniqueSoFar = GLOBAL_TOUCHED.size() - before;
-            lastTouchedCumulativeUnique = GLOBAL_TOUCHED.size();
-        } else {
-            lastCandIds = java.util.Collections.emptyList();
-            lastTouchedUniqueSoFar = 0;
-            lastTouchedCumulativeUnique = GLOBAL_TOUCHED.size();
+        // 4) Sort + take TopK
+        scored.sort(Comparator.comparingDouble(QueryScored::dist));
+        final int k = Math.min(token.getTopK(), scored.size());
+        final List<QueryResult> out = new ArrayList<>(k);
+        for (int i = 0; i < k; i++) {
+            final QueryScored s = scored.get(i);
+            final double d = RETURN_SQRT ? Math.sqrt(s.dist()) : s.dist(); // sqrt only if requested
+            out.add(new QueryResult(s.id(), d));
         }
+        this.lastReturned = out.size();
 
-        if (candTotal == 0) {
-            lastCandIds = java.util.Collections.emptyList(); // ensure cleared
-            logger.warn("No candidates (v={}, dim={}, K={})", activeVersion, token.getDimension(), token.getTopK());
-            lastCandKeptVersion = 0;
-            lastCandDecrypted = 0;
-            lastReturned = 0;
-            lastQueryDurationNs = System.nanoTime() - start;
-            return java.util.List.of();
-        }
+        // 5) Update global touched-unique counters (for re-encryption-at-end)
+        final int before = GLOBAL_TOUCHED.size();
+        GLOBAL_TOUCHED.addAll(this.lastCandIds);
+        final int after = GLOBAL_TOUCHED.size();
+        this.lastTouchedUniqueSoFar      = Math.max(0, after - before);
+        this.lastTouchedCumulativeUnique = after;
 
-
-        // Forward-secure filter (version match)
-        final List<EncryptedPoint> sameVersion = new ArrayList<>(candTotal);
-        for (EncryptedPoint p : candidates) if (p.getVersion() == activeVersion) sameVersion.add(p);
-        final int candKeptVersion = sameVersion.size();
-
-        if (candTotal >= 10 && candKeptVersion <= Math.max(1, candTotal / 10)) {
-            logger.warn("Version-mismatch risk: totalCand={} keptSameVersion={} (v{}), dim={}, K={}",
-                    candTotal, candKeptVersion, activeVersion, token.getDimension(), token.getTopK());
-        }
-
-        // Decrypt + re-rank
-        final List<QueryResult> results;
-        int candDecrypted = 0;
-
-        if (K <= SMALL_TOPK_THRESHOLD) {
-            results = new ArrayList<>(Math.min(K, candKeptVersion));
-            for (EncryptedPoint pt : sameVersion) {
-                try {
-                    double[] vec = cryptoService.decryptFromPoint(pt, key);
-                    candDecrypted++;
-                    results.add(new QueryResult(pt.getId(), l2sq(queryVec, vec)));
-                } catch (IllegalArgumentException e) {
-                    throw e; // hard fail on dim mismatch
-                } catch (Exception e) {
-                    logger.debug("Decrypt failed for candidate {}", pt.getId());
-                    logger.trace("Decrypt exception", e);
-                }
-            }
-            results.sort(Comparator.naturalOrder());
-            if (results.size() > K) results.subList(K, results.size()).clear();
-            sqrtInPlace(results);
-        } else {
-            PriorityQueue<QueryResult> heap = new PriorityQueue<>(Comparator.reverseOrder()); // max-heap
-            for (EncryptedPoint pt : sameVersion) {
-                try {
-                    double[] vec = cryptoService.decryptFromPoint(pt, key);
-                    candDecrypted++;
-                    double dist = l2sq(queryVec, vec);
-                    heap.offer(new QueryResult(pt.getId(), dist));
-                    if (heap.size() > K) heap.poll();
-                } catch (Exception e) {
-                    logger.debug("Decrypt failed for candidate {}", pt.getId());
-                    logger.trace("Decrypt exception", e);
-                }
-            }
-            results = new ArrayList<>(heap);
-            results.sort(Comparator.naturalOrder());
-            sqrtInPlace(results);
-        }
-
-        // Commit last* counters & time
-        lastCandKeptVersion = candKeptVersion;
-        lastCandDecrypted = candDecrypted;
-        lastReturned = results.size();
-        lastQueryDurationNs = System.nanoTime() - start;
-
-        // Guardrails
-        if (lastReturned < Math.min(K, 3) && candTotal > 0) {
-            int keptPct = (int) Math.round(100.0 * candKeptVersion / Math.max(1, candTotal));
-            int decPct  = (int) Math.round(100.0 * candDecrypted   / Math.max(1, candKeptVersion));
-            logger.warn("Low return: ret={} of K={}, keptVer={} ({}%) decrypted={} ({}%) candTotal={}",
-                    lastReturned, K, candKeptVersion, keptPct, candDecrypted, decPct, candTotal);
-        }
-        if (candKeptVersion > 0 && candDecrypted == 0) {
-            logger.warn("All same-version candidates failed to decrypt (v={}, dim={}, K={}, candTotal={})",
-                    activeVersion, token.getDimension(), K, candTotal);
-        }
-
-        logger.debug("Q v{}: candTotal={}, keptSameVersion={}, decryptedOk={}, returned={}, time={}ms",
-                activeVersion, candTotal, candKeptVersion, candDecrypted,
-                lastReturned, lastQueryDurationNs / 1_000_000.0);
-
-        return results;
+        this.lastQueryDurationNs = System.nanoTime() - t0;
+        return out;
     }
+
+    private static double l2(double[] a, double[] b) {
+        double s = 0.0;
+        for (int i = 0; i < a.length; i++) { double d = a[i] - b[i]; s += d*d; }
+        return Math.sqrt(s);
+    }
+
+    private record QueryScored(String id, double dist) {}
+
 
     @Override
     public List<QueryEvaluationResult> searchWithTopKVariants(QueryToken baseToken,
@@ -340,11 +261,24 @@ public class QueryServiceImpl implements QueryService {
         bytes += bucketCount * Integer.BYTES;
         return bytes;
     }
-
+    private void clearLastMetrics() {
+        lastQueryDurationNs = 0L;
+        lastCandTotal = 0;
+        lastCandKeptVersion = 0;
+        lastCandDecrypted = 0;
+        lastReturned = 0;
+        lastCandIds = java.util.Collections.emptyList();
+        lastTouchedUniqueSoFar = 0;
+        lastTouchedCumulativeUnique = GLOBAL_TOUCHED.size();
+    }
     public long getLastQueryDurationNs()   { return lastQueryDurationNs; }
     public int  getLastCandTotal()         { return lastCandTotal; }
     public int  getLastCandKeptVersion()   { return lastCandKeptVersion; }
     public int  getLastCandDecrypted()     { return lastCandDecrypted; }
     public int  getLastReturned()          { return lastReturned; }
     public static int getGlobalTouchedUniqueCount() { return GLOBAL_TOUCHED.size(); }
+    public List<String> getLastCandidateIds() {
+        return (lastCandIds == null) ? java.util.Collections.emptyList()
+                : java.util.Collections.unmodifiableList(lastCandIds);
+    }
 }
