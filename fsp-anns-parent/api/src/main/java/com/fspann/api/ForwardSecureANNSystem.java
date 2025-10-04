@@ -3,6 +3,7 @@ package com.fspann.api;
 import com.fspann.common.*;
 import com.fspann.config.SystemConfig;
 import com.fspann.crypto.CryptoService;
+import com.fspann.crypto.ReencryptionTracker;
 import com.fspann.index.core.EvenLSH;
 import com.fspann.index.service.SecureLSHIndexService;
 import com.fspann.key.KeyManager;
@@ -19,10 +20,11 @@ import com.fspann.query.core.TopKProfiler;
 import com.fspann.query.service.QueryService;
 import com.fspann.query.service.QueryServiceImpl;
 import com.fspann.common.KeyLifeCycleService;
+import com.fspann.crypto.SelectiveReencCoordinator;
+import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.*;
@@ -55,6 +57,8 @@ public class ForwardSecureANNSystem {
     private volatile boolean queryOnlyMode = false;
     private BaseVectorReader baseReader = null;
     private static final java.security.SecureRandom SECURE_RNG = new java.security.SecureRandom();
+    private final ReencryptionTracker reencTracker;
+    private final SelectiveReencCoordinator reencCoordinator;
 
     // Config-driven toggles (replacing scattered -D flags)
     private final boolean computePrecision;
@@ -127,6 +131,7 @@ public class ForwardSecureANNSystem {
     */
     private final String reencMode = System.getProperty("reenc.mode", "end");
     private static final Object REENC_CSV_LOCK = new Object();
+    private final java.util.concurrent.atomic.AtomicBoolean reencRan = new java.util.concurrent.atomic.AtomicBoolean(false);
 
     public ForwardSecureANNSystem(
             String configPath,
@@ -268,6 +273,12 @@ public class ForwardSecureANNSystem {
         this.prevKeyStoreProp = System.getProperty(FsPaths.KEYSTORE_PROP);
         System.setProperty(FsPaths.KEYSTORE_PROP, derivedKeyRoot.toString());
 
+        MeterRegistry meterRegistry = null;
+        try {
+            // reuse one if you already keep it somewhere, else fall back
+            meterRegistry = new SimpleMeterRegistry();
+        } catch (Throwable ignore) { /* allow null */ }
+
         KeyLifeCycleService ks = cryptoService.getKeyService();
         if (ks == null) {
             Files.createDirectories(derivedKeyRoot.getParent());
@@ -369,6 +380,15 @@ public class ForwardSecureANNSystem {
 
         // Query service (no tunable flags anymore)
         this.queryService = new QueryServiceImpl(indexService, cryptoService, keyService, qtf);
+
+        this.reencTracker = new ReencryptionTracker();
+        this.reencCoordinator = new SelectiveReencCoordinator(
+                this.indexService, this.cryptoService, ks, this.reencTracker, meterRegistry);
+
+        // Let the query layer mark touches (non-breaking: via setter)
+        if (this.queryService instanceof QueryServiceImpl qs) {
+            qs.setReencryptionTracker(this.reencTracker);
+        }
 
         String basePathProp = System.getProperty("base.path", "").trim();
         if (!basePathProp.isEmpty()) {
@@ -947,7 +967,9 @@ public class ForwardSecureANNSystem {
             }
         }
         // End-only re-encryption summary
-        if ("end".equalsIgnoreCase(reencMode)) finalizeReencryptionAtEnd();
+        if ("end".equalsIgnoreCase(System.getProperty("reenc.mode", "end"))) {
+            reencCoordinator.runOnceIfNeeded();
+        }
     }
 
     public void runQueries(String queryPath, int dim, String groundtruthPath) throws IOException {
@@ -1236,7 +1258,9 @@ public class ForwardSecureANNSystem {
                 catch (IOException ioe) { logger.warn("Audit worst write failed q={},k={}", w.qIndex, w.k, ioe); }
             }
         }
-        if ("end".equalsIgnoreCase(reencMode)) finalizeReencryptionAtEnd();
+        if ("end".equalsIgnoreCase(System.getProperty("reenc.mode", "end"))) {
+            reencCoordinator.runOnceIfNeeded();
+        }
     }
 
     /* ---------------------- Utilities & Lifecycle ---------------------- */
@@ -2176,70 +2200,25 @@ public class ForwardSecureANNSystem {
         }
     }
 
-    // Lightweight wrapper for per-query re-encryption bookkeeping
-    private static final class ReencOutcome {
-        final ReencryptReport rep;
-        final int touchedCount;
-        final int newUnique;
-        final int cumulativeUnique;
-        ReencOutcome(ReencryptReport rep, int touchedCount, int newUnique, int cumulativeUnique) {
-            this.rep = rep; this.touchedCount = touchedCount; this.newUnique = newUnique; this.cumulativeUnique = cumulativeUnique;
-        }
-    }
-
     // Per-query hook: accumulate touched IDs; optionally do "immediate" re-encryption if requested.
-    private ReencOutcome maybeReencryptTouched(String queryId, QueryServiceImpl qs) {
-        // 1) Feature gate via config
-        boolean enabled = reencEnabled;
-        try {
-            var rc = config.getReencryption();
-            if (rc != null) enabled = enabled && rc.enabled;
-        } catch (Throwable ignore) { /* ok */ }
-        String modeStr = "immediate".equalsIgnoreCase(reencMode) ? "immediate" : "end";
+    private ReencOutcome maybeReencryptTouched(String label, QueryServiceImpl qs) {
+        boolean live = "live".equalsIgnoreCase(System.getProperty("reenc.mode", "end"));
+        int touchedUnique = reencTracker.uniqueCount();
+        ReencReport rep = ReencReport.empty();
 
-        List<String> touched = qs.getLastCandidateIds();
-        int touchedCount = (touched == null) ? 0 : touched.size();
+        if (live && !reencRan.get()
+                && touchedUnique >= Integer.getInteger("reenc.minTouched", 10_000)) {
 
-        // unique accounting
-        int prevSize = touchedGlobal.size();
-        if (touched != null && !touched.isEmpty()) {
-            for (String id : touched) {
-                touchedGlobal.add(id);
-            }
-        }
-        int afterSize = touchedGlobal.size();
-        int newUnique = Math.max(0, afterSize - prevSize);
-        int cumulativeUnique = afterSize;
+            long t0 = System.nanoTime();
+            reencCoordinator.runOnceIfNeeded();    // drains tracker; meters record counts
+            long ms = (System.nanoTime() - t0) / 1_000_000L;
 
-        if (!enabled) {
-            ReencryptReport rep = new ReencryptReport(0, 0, 0L, 0L, 0L);
-            appendReencCsv(reencCsv, queryId, keyService.getCurrentVersion().getVersion(), modeStr,
-                    touchedCount, newUnique, cumulativeUnique, rep);
-            return new ReencOutcome(rep, touchedCount, newUnique, cumulativeUnique);
+            // If you later make the coordinator return counts/bytes, populate them here.
+            reencRan.set(true);
+            rep = rep.withTimeMs(ms);
         }
 
-        final int targetVer = keyService.getCurrentVersion().getVersion();
-
-        // Default mode: "end" → do NOT re-encrypt now; write a lightweight CSV row only
-        if (!"immediate".equalsIgnoreCase(reencMode)) {
-            ReencryptReport rep = new ReencryptReport(touchedCount, 0, 0L, 0L, 0L);
-            appendReencCsv(reencCsv, queryId, targetVer, modeStr,
-                    touchedCount, newUnique, cumulativeUnique, rep);
-            return new ReencOutcome(rep, touchedCount, newUnique, cumulativeUnique);
-        }
-
-        // 4) Immediate mode (legacy behavior): re-encrypt per query
-        if (!(keyService instanceof KeyRotationServiceImpl kr) || touched == null || touched.isEmpty()) {
-            ReencryptReport rep = new ReencryptReport(touchedCount, 0, 0L, 0L, 0L);
-            appendReencCsv(reencCsv, queryId, targetVer, modeStr,
-                    touchedCount, newUnique, cumulativeUnique, rep);
-            return new ReencOutcome(rep, touchedCount, newUnique, cumulativeUnique);
-        }
-        StorageSizer sizer = null; // avoid dir walk per query
-        ReencryptReport rep = kr.reencryptTouched(touched, targetVer, sizer);
-        appendReencCsv(reencCsv, queryId, targetVer, modeStr,
-                touchedCount, newUnique, cumulativeUnique, rep);
-        return new ReencOutcome(rep, touchedCount, newUnique, cumulativeUnique);
+        return new ReencOutcome(touchedUnique, rep);
     }
 
     // CSV helpers
@@ -2382,6 +2361,35 @@ public class ForwardSecureANNSystem {
             case AUTO -> (gtTrusted ? "gt(auto)" : "base(auto)");
         };
     }
+    private static final class ReencReport {
+        final int  reencryptedCount;  // how many IDs actually re-encrypted
+        final long timeMs;            // stopwatch time for the run
+        final long bytesDelta;        // optional: size change (can be 0 if unknown)
+        final long bytesAfter;        // optional: new size after reenc (can be 0 if unknown)
+
+        ReencReport(int reencryptedCount, long timeMs, long bytesDelta, long bytesAfter) {
+            this.reencryptedCount = reencryptedCount;
+            this.timeMs = timeMs;
+            this.bytesDelta = bytesDelta;
+            this.bytesAfter = bytesAfter;
+        }
+
+        static ReencReport empty() { return new ReencReport(0, 0L, 0L, 0L); }
+
+        ReencReport withTimeMs(long ms) {
+            return new ReencReport(this.reencryptedCount, ms, this.bytesDelta, this.bytesAfter);
+        }
+    }
+
+    private static final class ReencOutcome {
+        final int          cumulativeUnique; // how many unique IDs touched so far (system-wide)
+        final ReencReport  rep;              // details of the last run (or empty if none)
+
+        ReencOutcome(int cumulativeUnique, ReencReport rep) {
+            this.cumulativeUnique = cumulativeUnique;
+            this.rep = rep;
+        }
+    }
 
     // ====== retrieved IDs auditor ======
     private static final class RetrievedAudit {
@@ -2460,6 +2468,14 @@ public class ForwardSecureANNSystem {
 //            logger.info("Shutdown sequence started");
 //            logger.info("Performing final flushAll()");
             flushAll();
+
+            if ("end".equalsIgnoreCase(System.getProperty("reenc.mode", "end"))) {
+                try {
+                    finalizeReencryptionAtEnd();
+                } catch (Exception e) {
+                    logger.warn("finalizeReencryptionAtEnd failed", e);
+                }
+            }
 
             if (indexService != null) {
 //                logger.info("Flushing indexService buffers...");

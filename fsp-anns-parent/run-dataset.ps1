@@ -41,7 +41,9 @@ $JvmArgs = @(
     "-XX:+UseG1GC","-XX:MaxGCPauseMillis=200","-XX:+AlwaysPreTouch",
     "-Ddisable.exit=true",
     "-Dfile.encoding=UTF-8",
-    "-Dreenc.mode=end"       # accumulate touched IDs, re-encrypt once at end
+    "-Dreenc.mode=end",      # accumulate touched IDs, re-encrypt once at end
+    "-Dreenc.minTouched=5000", # gate the end-of-run job
+    "-Dreenc.batchSize=2000"    # IO-friendly batches
 )
 
 # ---------- helpers (PS5-safe) ----------

@@ -2,6 +2,7 @@ package com.fspann.query.service;
 
 import com.fspann.common.*;
 import com.fspann.crypto.CryptoService;
+import com.fspann.crypto.ReencryptionTracker;
 import com.fspann.loader.GroundtruthManager;
 import com.fspann.query.core.QueryEvaluationResult;
 import com.fspann.query.core.QueryTokenFactory;
@@ -30,6 +31,7 @@ public class QueryServiceImpl implements QueryService {
     private volatile int lastCandKeptVersion = 0;  // candidates after forward-secure version filter
     private volatile int lastCandDecrypted = 0;    // successfully decrypted
     private volatile int lastReturned = 0;         // returned results (<= topK)
+    private volatile ReencryptionTracker reencTracker;
 
     // unfiltered candidate IDs (subset union, pre-version filter)
     private volatile List<String> lastCandIds = java.util.Collections.emptyList();
@@ -45,7 +47,9 @@ public class QueryServiceImpl implements QueryService {
     private volatile int lastTouchedCumulativeUnique = 0;
     public int getLastTouchedUniqueSoFar() { return lastTouchedUniqueSoFar; }
     public int getLastTouchedCumulativeUnique() { return lastTouchedCumulativeUnique; }
-
+    public void setReencryptionTracker(ReencryptionTracker tracker) {
+        this.reencTracker = tracker;
+    }
     // ---- CTORS ----
     public QueryServiceImpl(IndexService indexService,
                             CryptoService cryptoService,
@@ -68,9 +72,9 @@ public class QueryServiceImpl implements QueryService {
         Objects.requireNonNull(token, "token");
 
         final long t0 = System.nanoTime();
-        clearLastMetrics(); // resets last* fields and lastCandIds
+        clearLastMetrics();
 
-        // Resolve key version (requested or fallback)
+        // Resolve key version
         KeyVersion kv;
         try {
             kv = keyService.getVersion(token.getVersion());
@@ -89,26 +93,24 @@ public class QueryServiceImpl implements QueryService {
         List<EncryptedPoint> raw = indexService.lookup(token);
         if (raw == null) raw = java.util.Collections.emptyList();
 
-        // 2) De-duplicate by ID (subset union) while preserving first-seen ordering
+        // 2) De-duplicate by ID (subset union, stable order)
         final Map<String, EncryptedPoint> uniq = new LinkedHashMap<>(Math.max(16, raw.size()));
         for (EncryptedPoint ep : raw) {
-            if (ep == null) continue;
-            uniq.putIfAbsent(ep.getId(), ep);
+            if (ep != null) uniq.putIfAbsent(ep.getId(), ep);
         }
+        this.lastCandTotal = uniq.size();                     // ScannedCandidates (union size)
+        this.lastCandIds   = new ArrayList<>(uniq.keySet());  // touched IDs (union)
 
-        // Record scanned/touched
-        this.lastCandTotal = uniq.size();                    // ScannedCandidates (union)
-        this.lastCandIds   = new ArrayList<>(uniq.keySet()); // touched IDs (union)
-
-        // 3) Keep version-matching → decrypt → score with L2^2 (no sqrt)
+        // 3) Version filter → decrypt → score (squared L2)
         final List<QueryScored> scored = new ArrayList<>(uniq.size());
         for (EncryptedPoint ep : uniq.values()) {
             if (ep.getVersion() != kv.getVersion()) continue;
             this.lastCandKeptVersion++;
             final double[] v = cryptoService.decryptFromPoint(ep, kv.getKey());
             this.lastCandDecrypted++;
-            final double d2 = l2sq(qVec, v);                // squared L2
-            scored.add(new QueryScored(ep.getId(), d2));    // store squared distance
+            if (reencTracker != null) reencTracker.touch(ep.getId());
+            final double d2 = l2sq(qVec, v);
+            scored.add(new QueryScored(ep.getId(), d2));
         }
 
         // 4) Sort + take TopK
@@ -117,12 +119,12 @@ public class QueryServiceImpl implements QueryService {
         final List<QueryResult> out = new ArrayList<>(k);
         for (int i = 0; i < k; i++) {
             final QueryScored s = scored.get(i);
-            final double d = RETURN_SQRT ? Math.sqrt(s.dist()) : s.dist(); // sqrt only if requested
+            final double d = RETURN_SQRT ? Math.sqrt(s.dist()) : s.dist();
             out.add(new QueryResult(s.id(), d));
         }
         this.lastReturned = out.size();
 
-        // 5) Update global touched-unique counters (for re-encryption-at-end)
+        // 5) Update global touched-unique counters
         final int before = GLOBAL_TOUCHED.size();
         GLOBAL_TOUCHED.addAll(this.lastCandIds);
         final int after = GLOBAL_TOUCHED.size();
