@@ -9,7 +9,6 @@ import com.fspann.index.service.SecureLSHIndexService;
 import com.fspann.key.KeyManager;
 import com.fspann.key.KeyRotationPolicy;
 import com.fspann.key.KeyRotationServiceImpl;
-import com.fspann.key.ReencryptReport;
 import com.fspann.loader.DefaultDataLoader;
 import com.fspann.loader.FormatLoader;
 import com.fspann.loader.GroundtruthManager;
@@ -383,7 +382,14 @@ public class ForwardSecureANNSystem {
 
         this.reencTracker = new ReencryptionTracker();
         this.reencCoordinator = new SelectiveReencCoordinator(
-                this.indexService, this.cryptoService, ks, this.reencTracker, meterRegistry);
+                this.indexService,
+                this.cryptoService,
+                ks,
+                this.reencTracker,
+                meterRegistry,
+                this.resultsDir,
+                () -> dirSize(this.pointsPath)   // StorageSizer: bytes on disk for points
+        );
 
         // Let the query layer mark touches (non-breaking: via setter)
         if (this.queryService instanceof QueryServiceImpl qs) {
@@ -504,13 +510,7 @@ public class ForwardSecureANNSystem {
 
         if (profiler != null) profiler.start("insert");
         try {
-            if (keyService instanceof KeyRotationServiceImpl) {
-                List<EncryptedPoint> updated = ((KeyRotationServiceImpl) keyService).rotateIfNeededAndReturnUpdated();
-                for (EncryptedPoint pt : updated) indexService.updateCachedPoint(pt);
-            } else {
-                keyService.rotateIfNeeded();
-            }
-
+            keyService.rotateIfNeeded();
             indexService.insert(id, vector); // index layer will increment ops
             indexedCount.incrementAndGet();
         } finally {
@@ -688,13 +688,19 @@ public class ForwardSecureANNSystem {
         Objects.requireNonNull(groundtruthPath, "Groundtruth path cannot be null");
         if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
 
+        // Freeze rotation while indexing
+        if (keyService instanceof KeyRotationServiceImpl kr) kr.freezeRotation(true);
+
         // 1) Index + seal
         indexStream(dataPath, dim);
-        try {
-            indexService.flushBuffers();
-            finalizeForSearch();
-        } catch (Exception e) {
-            logger.warn("Pre-query flush/optimize failed; continuing", e);
+        indexService.flushBuffers();
+        finalizeForSearch();
+
+        // Unfreeze and bump once so current key is vN+1
+        if (keyService instanceof KeyRotationServiceImpl kr) {
+            kr.freezeRotation(false);
+            kr.forceRotateNow(); // one-shot bump; no re-encryption
+            logger.info("Activated new key version at query start: v{}", keyService.getCurrentVersion().getVersion());
         }
 
         // 2) Load queries + GT
@@ -977,11 +983,18 @@ public class ForwardSecureANNSystem {
         Objects.requireNonNull(groundtruthPath, "Groundtruth path cannot be null");
         if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
 
-        try {
-            indexService.flushBuffers();
-            finalizeForSearch();
-        } catch (Exception e) {
-            logger.warn("Pre-query flush/optimize failed; continuing", e);
+        // Freeze rotation while indexing
+        if (keyService instanceof KeyRotationServiceImpl kr) kr.freezeRotation(true);
+
+        // 1) Index + seal
+        indexService.flushBuffers();
+        finalizeForSearch();
+
+        // Unfreeze and bump once so current key is vN+1
+        if (keyService instanceof KeyRotationServiceImpl kr) {
+            kr.freezeRotation(false);
+            kr.forceRotateNow(); // one-shot bump; no re-encryption
+            logger.info("Activated new key version at query start: v{}", keyService.getCurrentVersion().getVersion());
         }
 
         // Load queries
@@ -2222,6 +2235,7 @@ public class ForwardSecureANNSystem {
     }
 
     // CSV helpers
+
     private static void initReencCsvIfNeeded(Path p) {
         try {
             Files.createDirectories(p.getParent());
@@ -2271,9 +2285,9 @@ public class ForwardSecureANNSystem {
         // Consistency check (task #16)
         boolean ok = true;
         long measuredBytesAfter = dirSize(pointsPath);
-        if (rep.reencryptedCount < 0) ok = false;
-        if (rep.bytesAfter != measuredBytesAfter) ok = false;
-        if (rep.touchedCount != uniqueCount) ok = false;
+        if (rep.reencryptedCount() < 0) ok = false;
+        if (rep.bytesAfter() != measuredBytesAfter) ok = false;
+        if (rep.touchedCount() != uniqueCount) ok = false;
 
         if (!ok) {
             // append a SUMMARY_CHECK row with observed numbers
@@ -2283,10 +2297,11 @@ public class ForwardSecureANNSystem {
                             "SUMMARY_CHECK,%d,%s,%d,%d,%d,%d,%d,%d,%d,%d,%d%n",
                             targetVer, reencMode,
                             uniqueCount, 0, uniqueCount,                       // touched, newUnique, cumulative
-                            rep.reencryptedCount,
+                            rep.reencryptedCount(),
                             tryGetLong(rep, "alreadyCurrentCount"),            // may be 0 if not available
                             tryGetLong(rep, "retriedCount"),
-                            rep.timeMs, rep.bytesDelta, measuredBytesAfter);
+                            rep.timeMs(), rep.bytesDelta(), measuredBytesAfter
+                    );
                     Files.writeString(reencCsv, line, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
                 }
             } catch (IOException e) {
@@ -2305,7 +2320,7 @@ public class ForwardSecureANNSystem {
                 String line = String.format(Locale.ROOT,
                         "%s,%d,%s,%d,%d,%d,%d,%d,%d,%d,%d,%d%n",
                         qid, ver, modeStr, touched, newUnique, cumulativeUnique,
-                        r.reencryptedCount, alreadyCur, retried, r.timeMs, r.bytesDelta, r.bytesAfter);
+                        r.reencryptedCount(), alreadyCur, retried, r.timeMs(), r.bytesDelta(), r.bytesAfter());
                 Files.writeString(p, line, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
             }
         } catch (IOException e) {
@@ -2380,7 +2395,6 @@ public class ForwardSecureANNSystem {
             return new ReencReport(this.reencryptedCount, ms, this.bytesDelta, this.bytesAfter);
         }
     }
-
     private static final class ReencOutcome {
         final int          cumulativeUnique; // how many unique IDs touched so far (system-wide)
         final ReencReport  rep;              // details of the last run (or empty if none)

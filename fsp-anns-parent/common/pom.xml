@@ -49,6 +49,10 @@
             <artifactId>rocksdbjni</artifactId>
             <version>9.7.2</version> <!-- Latest as of mid-2025 -->
         </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+        </dependency>
     </dependencies>
 
     <build>

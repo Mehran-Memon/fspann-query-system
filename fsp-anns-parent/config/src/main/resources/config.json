@@ -1,22 +1,17 @@
 {
   "numShards": 32,
-  "opsThreshold": 500000,
-  "ageThresholdMs": 3600000,
-  "reEncBatchSize": 2000,
+  "opsThreshold": 1000000000,
+  "ageThresholdMs": 31536000000,
   "profilerEnabled": true,
 
-  "reencryption": { "enabled": true },
+  "reencryption": { "enabled": false },
+
+  "ratio": {"source": "base"  },
 
   "eval": {
     "computePrecision": true,
     "writeGlobalPrecisionCsv": true,
     "kVariants": [1, 20, 40, 60, 80, 100]
-  },
-
-  "ratio": {
-    "source": "base",
-    "gtSample": 0,
-    "gtMismatchTolerance": 0.0
   },
 
   "output": {
@@ -37,7 +32,8 @@
     "enabled": true,
     "m": 18,
     "lambda": 2,
-    "divisions": 14
+    "divisions": 14,
+    "seed": 42
   },
 
   "audit": {
@@ -51,77 +47,77 @@
     {
       "name": "ratio_first",
       "overrides": {
-        "paper": { "enabled": true, "m": 12, "lambda": 2, "divisions": 8 },
+        "paper": { "enabled": true, "m": 12, "lambda": 2, "divisions": 8, "seed": 42 },
         "lsh":   { "numTables": 20, "rowsPerBand": 11 }
       }
     },
     {
       "name": "balanced",
       "overrides": {
-        "paper": { "enabled": true, "m": 14, "lambda": 2, "divisions": 10 },
+        "paper": { "enabled": true, "m": 14, "lambda": 2, "divisions": 10, "seed": 42 },
         "lsh":   { "numTables": 24, "rowsPerBand": 12 }
       }
     },
     {
       "name": "precision_first",
       "overrides": {
-        "paper": { "enabled": true, "m": 16, "lambda": 2, "divisions": 12 },
+        "paper": { "enabled": true, "m": 16, "lambda": 2, "divisions": 12, "seed": 42 },
         "lsh":   { "numTables": 28, "rowsPerBand": 13 }
       }
     },
     {
       "name": "server_light_ratio_lean",
       "overrides": {
-        "paper": { "enabled": true, "m": 18, "lambda": 2, "divisions": 14 },
+        "paper": { "enabled": true, "m": 18, "lambda": 2, "divisions": 14, "seed": 42 },
         "lsh":   { "numTables": 30, "rowsPerBand": 14, "probeShards": 32 }
       }
     },
     {
       "name": "latency_first",
       "overrides": {
-        "paper": { "enabled": true, "m": 11, "lambda": 2, "divisions": 7 },
+        "paper": { "enabled": true, "m": 11, "lambda": 2, "divisions": 7, "seed": 42 },
         "lsh":   { "numTables": 18, "rowsPerBand": 10, "probeShards": 32 }
       }
     },
     {
       "name": "client_heavy_server_light",
       "overrides": {
-        "paper": { "enabled": true, "m": 16, "lambda": 2, "divisions": 14 },
+        "paper": { "enabled": true, "m": 16, "lambda": 2, "divisions": 14, "seed": 42 },
         "lsh":   { "numTables": 26, "rowsPerBand": 12, "probeShards": 32 }
       }
     },
     {
       "name": "low_token_footprint",
       "overrides": {
-        "paper": { "enabled": true, "m": 9, "lambda": 2, "divisions": 6 },
+        "paper": { "enabled": true, "m": 9, "lambda": 2, "divisions": 6, "seed": 42 },
         "lsh":   { "numTables": 16, "rowsPerBand": 10, "probeShards": 32 }
       }
     },
     {
       "name": "high_dim_precision",
       "overrides": {
-        "paper": { "enabled": true, "m": 20, "lambda": 2, "divisions": 16 },
+        "paper": { "enabled": true, "m": 20, "lambda": 2, "divisions": 16, "seed": 42 },
         "lsh":   { "numTables": 32, "rowsPerBand": 15, "probeShards": 32 }
       }
     },
     {
       "name": "recall_max",
       "overrides": {
-        "paper": { "enabled": true, "m": 22, "lambda": 2, "divisions": 18 },
+        "paper": { "enabled": true, "m": 22, "lambda": 2, "divisions": 18, "seed": 42 },
         "lsh":   { "numTables": 36, "rowsPerBand": 16, "probeShards": 32 }
       }
     },
     {
       "name": "coldstart_smallN",
       "overrides": {
-        "paper": { "enabled": true, "m": 8, "lambda": 2, "divisions": 8 },
+        "paper": { "enabled": true, "m": 8, "lambda": 2, "divisions": 8, "seed": 42 },
         "lsh":   { "numTables": 16, "rowsPerBand": 9, "probeShards": 32 }
       }
     },
     {
       "name": "probe_heavy_fallback",
       "overrides": {
-        "paper": { "enabled": true, "m": 14, "lambda": 2, "divisions": 10 },
+        "paper": { "enabled": true, "m": 14, "lambda": 2, "divisions": 10, "seed": 42 },
         "lsh":   { "numTables": 24, "rowsPerBand": 12, "probeShards": 32 }
       }
     }

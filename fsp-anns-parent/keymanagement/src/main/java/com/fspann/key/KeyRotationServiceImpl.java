@@ -4,10 +4,8 @@ import com.fspann.common.*;
 import com.fspann.crypto.CryptoService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import javax.crypto.SecretKey;
 import java.io.IOException;
-import java.nio.file.Paths;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
@@ -26,7 +24,7 @@ import com.fspann.common.StorageSizer;
  *  - When a version is "forced" (pinned), auto-rotation is disabled.
  *  - Re-encryption enumerates points via metadata manager; falls back gracefully if unsupported.
  */
-public class KeyRotationServiceImpl implements KeyLifeCycleService {
+public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveReencryptor {
     private static final Logger logger = LoggerFactory.getLogger(KeyRotationServiceImpl.class);
 
     private final KeyManager keyManager;
@@ -41,6 +39,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
 
     private volatile Instant lastRotation = Instant.now();
     private final AtomicInteger operationCount = new AtomicInteger(0);
+    private volatile boolean frozen = false;
 
     public KeyRotationServiceImpl(KeyManager keyManager,
                                   KeyRotationPolicy policy,
@@ -62,9 +61,12 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
 
     @Override
     public void rotateIfNeeded() {
-        if (forcedVersion != null) return;               // pinned → never rotate
-        if (Boolean.getBoolean("skip.rotation")) return; // runtime flag
-        rotateIfNeededAndReturnUpdated();
+        if (forcedVersion != null || frozen || Boolean.getBoolean("skip.rotation")) return;
+        boolean opsExceeded  = operationCount.get() >= policy.getMaxOperations();
+        boolean timeExceeded = Duration.between(lastRotation, Instant.now()).toMillis() >= policy.getMaxIntervalMillis();
+        if (!(opsExceeded || timeExceeded)) return;
+        logger.info("Initiating key rotation (no re-encryption)...");
+        rotateKeyOnly(); // << no reEncryptAll here
     }
 
     @Override
@@ -119,26 +121,8 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
 
     /** Internal helper used by scheduled/automatic rotation. Returns updated points if you later want to stream events. */
     public synchronized List<EncryptedPoint> rotateIfNeededAndReturnUpdated() {
-        if (forcedVersion != null) return Collections.emptyList();
-        boolean opsExceeded  = operationCount.get() >= policy.getMaxOperations();
-        boolean timeExceeded = Duration.between(lastRotation, Instant.now()).toMillis() >= policy.getMaxIntervalMillis();
-        if (!(opsExceeded || timeExceeded)) return Collections.emptyList();
-
-        logger.info("Initiating key rotation...");
-        KeyVersion newVer = keyManager.rotateKey();
-        operationCount.set(0);
-        lastRotation = Instant.now();
-
-        try {
-            String fileName = Paths.get(rotationMetaDir, "rotation_" + newVer.getVersion() + ".meta").toString();
-            PersistenceUtils.saveObject(newVer, fileName, rotationMetaDir);
-        } catch (IOException e) {
-            logger.error("Failed to persist new key version", e);
-            throw new RuntimeException(e);
-        }
-
-        reEncryptAll(); // forward security: old keys can be discarded after this
-        return Collections.emptyList();
+        rotateIfNeeded();
+        return Collections.emptyList(); // no proactive migration
     }
 
     /** Manual rotation endpoint. */
@@ -161,6 +145,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
     public void setIndexService(IndexService indexService) { this.indexService = indexService; }
     public void incrementOperation() { operationCount.incrementAndGet(); }
     public void setLastRotationTime(long timestamp) { this.lastRotation = Instant.ofEpochMilli(timestamp); }
+    public void freezeRotation(boolean freeze) { this.frozen = freeze; }
 
     /** Pin the active key version; disables auto-rotation until cleared. */
     public synchronized boolean activateVersion(int version) {
@@ -287,4 +272,20 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService {
 
         return new ReencryptReport(ids.size(), reenc, dtMs, Math.max(0L, after - before), after);
     }
+
+    /** Rotate key with NO re-encryption (used by auto & one-shot bump). */
+    public synchronized KeyVersion rotateKeyOnly() {
+        KeyVersion newVersion = keyManager.rotateKey();
+        lastRotation = Instant.now();
+        operationCount.set(0);
+        logger.info("Key rotation complete (no re-encryption): v{}", newVersion.getVersion());
+        return newVersion;
+    }
+
+    /** Force a single bump now (no re-encryption). Returns true if rotated. */
+    public synchronized boolean forceRotateNow() {
+        rotateKeyOnly();
+        return true;
+    }
+
 }

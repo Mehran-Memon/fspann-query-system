@@ -55,13 +55,22 @@ class ForwardSecureANNSystemRatioAutoFallbackTest {
 
     private static Path writeConfig(Path p, String resultsDir) throws IOException {
         String json = """
-          {
-            "numShards": 32, "numTables": 4,
-            "opsThreshold": 100000, "ageThresholdMs": 86400000,
-            "reEncBatchSize": 64,
-            "output": { "resultsDir": "%s" }
-          }
-        """.formatted(resultsDir.replace("\\", "\\\\"));
+      {
+        "numShards": 32,
+        "opsThreshold": 100000,
+        "ageThresholdMs": 86400000,
+
+        "output": { "resultsDir": "%s", "exportArtifacts": false, "suppressLegacyMetrics": true },
+
+        "eval":   { "computePrecision": false, "writeGlobalPrecisionCsv": false, "kVariants": [1,5] },
+
+        "ratio":  { "source": "auto", "gtSample": 1, "gtMismatchTolerance": 0.0 },
+
+        "lsh":    { "numTables": 8, "rowsPerBand": 1, "probeShards": 32 },
+
+        "paper":  { "enabled": false }
+      }
+    """.formatted(resultsDir.replace("\\", "\\\\"));
         Files.writeString(p, json, CREATE, TRUNCATE_EXISTING);
         return p;
     }
@@ -135,6 +144,8 @@ class ForwardSecureANNSystemRatioAutoFallbackTest {
         var keySvc = new KeyRotationServiceImpl(km, policy, metaDir.toString(), mdm, null);
         var crypto = new AesGcmCryptoService(new SimpleMeterRegistry(), keySvc, mdm);
         keySvc.setCryptoService(crypto);
+
+        keySvc.activateVersion(keySvc.getCurrentVersion().getVersion());
 
         var sys = new ForwardSecureANNSystem(
                 conf.toString(),

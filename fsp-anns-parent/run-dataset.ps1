@@ -217,8 +217,7 @@ foreach ($p in $profiles) {
     if (-not $final.ContainsKey('eval')) { $final['eval'] = @{} }
     $final['eval']['computePrecision'] = $true
     $final['eval']['writeGlobalPrecisionCsv'] = $true
-    if (-not $final.ContainsKey('reencryption')) { $final['reencryption'] = @{} }
-    $final['reencryption']['enabled'] = $true
+
     # hard-pin noise=0 (no extra cloak noise)
     if (-not $final.ContainsKey('cloak')) { $final['cloak'] = @{} }
     $final['cloak']['noise'] = 0.0

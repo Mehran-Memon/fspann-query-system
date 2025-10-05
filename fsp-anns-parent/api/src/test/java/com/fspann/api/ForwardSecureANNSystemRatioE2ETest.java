@@ -54,23 +54,25 @@ class ForwardSecureANNSystemRatioE2ETest {
     }
 
     private static Path writeConfig(Path p, String resultsDir) throws IOException {
-        // Include minimal fields your system reads, plus LSH block for safety
         String json = """
-              {
-                "numShards": 8,
-                "opsThreshold": 100000,
-                "ageThresholdMs": 86400000,
-                "reEncBatchSize": 64,
-                "output": { "resultsDir": "%s", "exportArtifacts": true, "suppressLegacyMetrics": false },
-                "eval":   { "computePrecision": true, "writeGlobalPrecisionCsv": true, "kVariants": [1,5,10] },
-                "ratio":  { "source": "auto", "gtSample": 0, "gtMismatchTolerance": 0.02 },
-                "cloak":  { "noise": 0.0 },
-                "lsh":    { "numTables": 4, "rowsPerBand": 2, "probeShards": 8 },
-                "paper":  { "enabled": false, "m": 14, "lambda": 6, "divisions": 10, "seed": 42 },
-                "reencryption": { "enabled": true },
-                "audit":  { "enable": true, "k": 5, "sampleEvery": 1, "worstKeep": 3 }
-              }
-            """.formatted(resultsDir.replace("\\", "\\\\"));
+          {
+            "numShards": 8,
+            "opsThreshold": 100000,
+            "ageThresholdMs": 86400000,
+
+            "output": { "resultsDir": "%s", "exportArtifacts": true, "suppressLegacyMetrics": false },
+
+            "eval":   { "computePrecision": true, "writeGlobalPrecisionCsv": true, "kVariants": [1,5,10] },
+
+            "ratio":  { "source": "base", "gtSample": 0, "gtMismatchTolerance": 0.0 },
+
+            "lsh":    { "numTables": 8, "rowsPerBand": 1, "probeShards": 32 },
+
+            "paper":  { "enabled": false },
+            "reencryption": { "enabled": true },
+            "audit":  { "enable": true, "k": 5, "sampleEvery": 1, "worstKeep": 3 }
+          }
+        """.formatted(resultsDir.replace("\\", "\\\\"));
         Files.writeString(p, json, CREATE, TRUNCATE_EXISTING);
         return p;
     }
@@ -131,6 +133,8 @@ class ForwardSecureANNSystemRatioE2ETest {
         var keySvc = new KeyRotationServiceImpl(km, policy, metaDir.toString(), mdm, null);
         var crypto = new AesGcmCryptoService(new SimpleMeterRegistry(), keySvc, mdm);
         keySvc.setCryptoService(crypto);
+
+        keySvc.activateVersion(keySvc.getCurrentVersion().getVersion());
 
         var sys = new ForwardSecureANNSystem(
                 conf.toString(),
@@ -197,6 +201,8 @@ class ForwardSecureANNSystemRatioE2ETest {
         var keySvc = new KeyRotationServiceImpl(km, policy, metaDir.toString(), mdm, null);
         var crypto = new AesGcmCryptoService(new SimpleMeterRegistry(), keySvc, mdm);
         keySvc.setCryptoService(crypto);
+
+        keySvc.activateVersion(keySvc.getCurrentVersion().getVersion());
 
         var sys = new ForwardSecureANNSystem(
                 conf.toString(), base.toString(), keystore.toString(),
