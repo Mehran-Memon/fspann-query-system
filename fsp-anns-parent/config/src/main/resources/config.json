@@ -4,9 +4,9 @@
   "ageThresholdMs": 31536000000,
   "profilerEnabled": true,
 
-  "reencryption": { "enabled": false },
+  "reencryption": { "enabled": true },
 
-  "ratio": {"source": "base"  },
+  "ratio": {"source": "gt"  },
 
   "eval": {
     "computePrecision": true,

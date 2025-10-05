@@ -264,6 +264,12 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
             }
         }
 
+        // Ensure newly written points are durably persisted
+        try {
+            EncryptedPointBuffer buf = indexService.getPointBuffer();
+            if (buf != null) buf.flushAll();
+        } catch (Exception ignore) {}
+
         long after = (sizer != null ? sizer.bytesOnDisk() : before);
         long dtMs = Math.round((System.nanoTime() - t0) / 1_000_000.0);
 

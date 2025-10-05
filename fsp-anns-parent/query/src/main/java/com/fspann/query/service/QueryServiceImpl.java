@@ -101,6 +101,11 @@ public class QueryServiceImpl implements QueryService {
         this.lastCandTotal = uniq.size();                     // ScannedCandidates (union size)
         this.lastCandIds   = new ArrayList<>(uniq.keySet());  // touched IDs (union)
 
+        // Mark all touched IDs (pre-version-filter) so selective re-encryption can upgrade older versions
+        if (reencTracker != null && !lastCandIds.isEmpty()) {
+            for (String id : lastCandIds) reencTracker.touch(id);
+        }
+
         // 3) Version filter → decrypt → score (squared L2)
         final List<QueryScored> scored = new ArrayList<>(uniq.size());
         for (EncryptedPoint ep : uniq.values()) {

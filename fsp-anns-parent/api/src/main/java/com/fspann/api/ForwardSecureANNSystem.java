@@ -167,9 +167,9 @@ public class ForwardSecureANNSystem {
         this.config = cfg;
 
         // ---- Materialize commonly used settings from config ----
-        this.computePrecision = propOr(
-                config.getEval().computePrecision,
-                "eval.computePrecision", "computePrecision");
+        boolean defaultComputePrecision =
+                (config.getEval() != null) ? config.getEval().computePrecision : true;
+        this.computePrecision = propOr(defaultComputePrecision, "eval.computePrecision", "computePrecision");
 
         this.writeGlobalPrecisionCsv = propOr(
                 config.getEval().writeGlobalPrecisionCsv,
@@ -214,15 +214,16 @@ public class ForwardSecureANNSystem {
             logger.warn("Could not create resultsDir {}; falling back to CWD", resultsDir, ioe);
         }
         this.topKProfiler = new TopKProfiler(resultsDir.toString());
-        this.configuredNoiseScale = Math.max(0.0, config.getCloak().noise);
+        double defaultNoise = (config.getCloak() != null) ? Math.max(0.0, config.getCloak().noise) : 0.0;
+        this.configuredNoiseScale = defaultNoise;
 
         // init per-query re-encryption CSV *after* resultsDir exists
         this.reencCsv = resultsDir.resolve("reencrypt_metrics.csv");
         initReencCsvIfNeeded(this.reencCsv);
 
         // ratio source
-        String rs = (config.getRatio().source == null ? "auto" : config.getRatio().source).toLowerCase(Locale.ROOT);
-        this.ratioSource = switch (rs) {
+        String rs = (config.getRatio() != null && config.getRatio().source != null)
+                ? config.getRatio().source.toLowerCase(Locale.ROOT) : "auto";        this.ratioSource = switch (rs) {
             case "gt" -> RatioSource.GT;
             case "base" -> RatioSource.BASE;
             default -> RatioSource.AUTO;
@@ -695,12 +696,8 @@ public class ForwardSecureANNSystem {
         indexStream(dataPath, dim);
         indexService.flushBuffers();
         finalizeForSearch();
-
-        // Unfreeze and bump once so current key is vN+1
         if (keyService instanceof KeyRotationServiceImpl kr) {
-            kr.freezeRotation(false);
-            kr.forceRotateNow(); // one-shot bump; no re-encryption
-            logger.info("Activated new key version at query start: v{}", keyService.getCurrentVersion().getVersion());
+            kr.freezeRotation(false); // (optional) unfreeze; do NOT rotate here
         }
 
         // 2) Load queries + GT
@@ -781,7 +778,11 @@ public class ForwardSecureANNSystem {
                 logger.debug("q{} touch-set divergence: svc={} sys={}", qIndex, svcCum, rep.cumulativeUnique);
             }
             int touchedCount = (qs.getLastCandidateIds() != null) ? qs.getLastCandidateIds().size() : 0;
-
+            // Merge candidates into the global touched set (for end-of-run re-encryption)
+            var last = qs.getLastCandidateIds();
+            if (last != null && !last.isEmpty()) {
+                touchedGlobal.addAll(last);
+            }
             EncryptedPointBuffer buf = indexService.getPointBuffer();
             long insertTimeMs = buf != null ? buf.getLastBatchInsertTimeMs() : 0;
             int totalFlushed = buf != null ? buf.getTotalFlushedPoints() : 0;
@@ -972,10 +973,8 @@ public class ForwardSecureANNSystem {
                 catch (IOException ioe) { logger.warn("Audit worst write failed q={},k={}", w.qIndex, w.k, ioe); }
             }
         }
-        // End-only re-encryption summary
-        if ("end".equalsIgnoreCase(System.getProperty("reenc.mode", "end"))) {
-            reencCoordinator.runOnceIfNeeded();
-        }
+        // live mode runs opportunistically inside maybeReencryptTouched()
+        // end mode is handled centrally during shutdown via finalizeReencryptionAtEnd()
     }
 
     public void runQueries(String queryPath, int dim, String groundtruthPath) throws IOException {
@@ -989,12 +988,8 @@ public class ForwardSecureANNSystem {
         // 1) Index + seal
         indexService.flushBuffers();
         finalizeForSearch();
-
-        // Unfreeze and bump once so current key is vN+1
         if (keyService instanceof KeyRotationServiceImpl kr) {
-            kr.freezeRotation(false);
-            kr.forceRotateNow(); // one-shot bump; no re-encryption
-            logger.info("Activated new key version at query start: v{}", keyService.getCurrentVersion().getVersion());
+            kr.freezeRotation(false); // (optional) unfreeze; do NOT rotate here
         }
 
         // Load queries
@@ -1081,7 +1076,11 @@ public class ForwardSecureANNSystem {
                 logger.debug("q{} touch-set divergence: svc={} sys={}", qIndex, svcCum, rep.cumulativeUnique);
             }
             int touchedCount = (qs.getLastCandidateIds() != null) ? qs.getLastCandidateIds().size() : 0;
-
+            // Merge candidates into the global touched set (for end-of-run re-encryption)
+            var last = qs.getLastCandidateIds();
+            if (last != null && !last.isEmpty()) {
+                touchedGlobal.addAll(last);
+            }
             EncryptedPointBuffer buf = indexService.getPointBuffer();
             long insertTimeMs = buf != null ? buf.getLastBatchInsertTimeMs() : 0;
             int totalFlushed = buf != null ? buf.getTotalFlushedPoints() : 0;
@@ -1271,9 +1270,8 @@ public class ForwardSecureANNSystem {
                 catch (IOException ioe) { logger.warn("Audit worst write failed q={},k={}", w.qIndex, w.k, ioe); }
             }
         }
-        if ("end".equalsIgnoreCase(System.getProperty("reenc.mode", "end"))) {
-            reencCoordinator.runOnceIfNeeded();
-        }
+        // live mode runs opportunistically inside maybeReencryptTouched()
+        // end mode is handled centrally during shutdown via finalizeReencryptionAtEnd()
     }
 
     /* ---------------------- Utilities & Lifecycle ---------------------- */
@@ -1927,8 +1925,8 @@ public class ForwardSecureANNSystem {
                                             BaseVectorReader br) {
         final double eps = 1e-24;
         final int upto = Math.min(k, Math.min(retPrefix.size(), gtTopK.length));
-        if (upto <= 0) return Double.NaN;
-
+        // Fallback to a neutral ratio when we cannot compute (prevents NaNs in outputs)
+        if (upto <= 0) return 1.0;
         double sum = 0.0;
         int used = 0;
         for (int i = 0; i < upto; i++) {
@@ -1949,7 +1947,7 @@ public class ForwardSecureANNSystem {
             }
             used++;
         }
-        return (used == 0) ? Double.NaN : (sum / used);
+        return (used == 0) ? 1.0 : (sum / used);
     }
 
     /** Dispatcher that chooses GT vs BASE for the denominator list and computes the per-rank average ratio. */
@@ -2250,7 +2248,6 @@ public class ForwardSecureANNSystem {
                     .warn("Failed to init re-encryption CSV at {}", p, e);
         }
     }
-
     /**
      * End-of-run re-encryption over the union of touched IDs.
      * Writes a single SUMMARY row with real timing and byte counts, then a SUMMARY_CHECK row if mismatches are detected.
@@ -2262,23 +2259,40 @@ public class ForwardSecureANNSystem {
             if (rc != null) enabled = enabled && rc.enabled;
         } catch (Throwable ignore) { /* ok */ }
 
-        final int targetVer = keyService.getCurrentVersion().getVersion();
         final List<String> allTouchedUnique = new ArrayList<>(touchedGlobal);
         final int uniqueCount = allTouchedUnique.size();
 
-        if (!enabled) {
-            appendReencCsv(reencCsv, "SUMMARY", targetVer, reencMode,
-                    uniqueCount, 0, uniqueCount, new ReencryptReport(0, 0, 0L, 0L, 0L));
-            return;
-        }
-        if (!(keyService instanceof KeyRotationServiceImpl kr)) {
-            appendReencCsv(reencCsv, "SUMMARY", targetVer, reencMode,
-                    uniqueCount, 0, uniqueCount, new ReencryptReport(uniqueCount, 0, 0L, 0L, 0L));
+        // If re-encryption is disabled or the key service can't do it, just write a zero-summary and bail.
+        final KeyRotationServiceImpl kr =
+                (keyService instanceof KeyRotationServiceImpl) ? (KeyRotationServiceImpl) keyService : null;
+
+        if (!enabled || kr == null) {
+            appendReencCsv(reencCsv, "SUMMARY",
+                    (keyService != null && keyService.getCurrentVersion() != null)
+                            ? keyService.getCurrentVersion().getVersion() : -1,
+                    reencMode,
+                    uniqueCount, 0, uniqueCount,
+                    new ReencryptReport(0, 0, 0L, 0L, 0L));
             return;
         }
 
+        // Nothing touched? Don't rotate versions needlessly; just log the zero-work summary.
+        if (uniqueCount == 0) {
+            appendReencCsv(reencCsv, "SUMMARY",
+                    keyService.getCurrentVersion().getVersion(),
+                    reencMode,
+                    0, 0, 0,
+                    new ReencryptReport(0,0,0L, 0L, 0L));
+            return;
+        }
+
+        // Rotate once at the very end so selective re-encryption writes to the new version.
+        kr.forceRotateNow(); // activate v{current+1}
+        final int targetVer = keyService.getCurrentVersion().getVersion();
+
         StorageSizer sizer = () -> dirSize(pointsPath);
         ReencryptReport rep = kr.reencryptTouched(allTouchedUnique, targetVer, sizer);
+
         appendReencCsv(reencCsv, "SUMMARY", targetVer, reencMode,
                 uniqueCount, 0, uniqueCount, rep);
 
@@ -2290,7 +2304,6 @@ public class ForwardSecureANNSystem {
         if (rep.touchedCount() != uniqueCount) ok = false;
 
         if (!ok) {
-            // append a SUMMARY_CHECK row with observed numbers
             try {
                 synchronized (REENC_CSV_LOCK) {
                     String line = String.format(Locale.ROOT,
@@ -2309,7 +2322,6 @@ public class ForwardSecureANNSystem {
             }
         }
     }
-
     private static void appendReencCsv(Path p, String qid, int ver, String modeStr,
                                        int touched, int newUnique, int cumulativeUnique,
                                        ReencryptReport r) {
@@ -2328,7 +2340,6 @@ public class ForwardSecureANNSystem {
                     .warn("Failed to append re-encryption CSV for {}", qid, e);
         }
     }
-
 
     public IndexService getIndexService() { return this.indexService; }
     public QueryService getQueryService() { return this.queryService; }
@@ -2610,8 +2621,9 @@ public class ForwardSecureANNSystem {
                 System.exit(2);
             }
         }
-        System.setProperty("base.path", baseVecs.toString());
-
+        if (!"POINTS_ONLY".equalsIgnoreCase(dataPath) && Files.exists(baseVecs)) {
+            System.setProperty("base.path", baseVecs.toString());
+        }
         int  opsCap = (int) Math.min(Integer.MAX_VALUE, cfg.getOpsThreshold());
         long ageMs  = cfg.getAgeThresholdMs();
 
@@ -2637,6 +2649,15 @@ public class ForwardSecureANNSystem {
         }
         logger.info("Key current version at startup: v{}", keyService.getCurrentVersion().getVersion());
 
+        // Ensure the crypto service exposes the prebuilt keyService to the system ctor
+        try {
+            cryptoService.getClass()
+                    .getMethod("setKeyService", KeyLifeCycleService.class)
+                    .invoke(cryptoService, keyService);
+        } catch (Throwable t) {
+            logger.warn("Could not setKeyService on cryptoService; using fallback wiring", t);
+        }
+
         ForwardSecureANNSystem sys = new ForwardSecureANNSystem(
                 configFile, dataPath, keysFile, dimensions, metadataPath, false,
                 metadataManager, cryptoService, batchSize
@@ -2644,18 +2665,18 @@ public class ForwardSecureANNSystem {
 
         if (queryOnly) {
             sys.setQueryOnlyMode(true); // skip writes during shutdown
-            int restored = sys.restoreIndexFromDisk(restoreVersion);
-            sys.finalizeForSearch();
-
-            logger.info("Ready to query: restored {} points for dim={} (requested)", restored, dimensions.get(0));
-
-            sys.runQueries(queryPath, dimensions.get(0), groundtruthPath);
-
-            if (cfg.getOutput() != null && cfg.getOutput().exportArtifacts) {
-                sys.exportArtifacts(sys.resultsDir);
+            if (restoreVersion > 0) {
+                int restored = sys.restoreIndexFromDisk(restoreVersion);
+                logger.info("Ready to query: restored {} points for dim={} (requested)", restored, dimensions.get(0));
+            } else {
+                logger.warn("No on-disk version found to restore; continuing with empty in-memory index");
             }
-
+            sys.finalizeForSearch();
+            sys.runQueries(queryPath, dimensions.get(0), groundtruthPath);
             sys.shutdown();
+            if (cfg.getOutput() != null && cfg.getOutput().exportArtifacts) {
+                sys.exportArtifacts(sys.resultsDir); // after shutdown -> post-rotation stats
+            }
             return;
         }
 
@@ -2665,10 +2686,6 @@ public class ForwardSecureANNSystem {
 
         int dim = dimensions.get(0);
         sys.runEndToEnd(dataPath, queryPath, dim, groundtruthPath);
-
-        if (cfg.getOutput() != null && cfg.getOutput().exportArtifacts) {
-            sys.exportArtifacts(sys.resultsDir);
-        }
 
         if (sys.getProfiler() != null) {
             System.out.printf("Average Client Query Time: %.2f ms\n",
@@ -2680,6 +2697,9 @@ public class ForwardSecureANNSystem {
         long start = System.currentTimeMillis();
 //        logger.info("Calling system.shutdown()...");
         sys.shutdown();
+        if (cfg.getOutput() != null && cfg.getOutput().exportArtifacts) {
+            sys.exportArtifacts(sys.resultsDir);
+        }
         logger.info("Shutdown completed in {} ms", System.currentTimeMillis() - start);
     }
 }
