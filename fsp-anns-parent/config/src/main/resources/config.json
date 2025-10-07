@@ -45,80 +45,45 @@
 
   "profiles": [
     {
-      "name": "ratio_first",
+      "name": "ratio_ultra",
       "overrides": {
-        "paper": { "enabled": true, "m": 12, "lambda": 2, "divisions": 8, "seed": 42 },
-        "lsh":   { "numTables": 20, "rowsPerBand": 11 }
+        "paper": { "enabled": true, "m": 26, "lambda": 2, "divisions": 24, "seed": 42 },
+        "lsh":   { "numTables": 64, "rowsPerBand": 8, "probeShards": 32 }
       }
     },
     {
-      "name": "balanced",
+      "name": "ratio_max",
       "overrides": {
-        "paper": { "enabled": true, "m": 14, "lambda": 2, "divisions": 10, "seed": 42 },
-        "lsh":   { "numTables": 24, "rowsPerBand": 12 }
+        "paper": { "enabled": true, "m": 24, "lambda": 2, "divisions": 22, "seed": 42 },
+        "lsh":   { "numTables": 56, "rowsPerBand": 9, "probeShards": 32 }
       }
     },
     {
-      "name": "precision_first",
+      "name": "ratio_plus",
       "overrides": {
-        "paper": { "enabled": true, "m": 16, "lambda": 2, "divisions": 12, "seed": 42 },
-        "lsh":   { "numTables": 28, "rowsPerBand": 13 }
+        "paper": { "enabled": true, "m": 22, "lambda": 2, "divisions": 20, "seed": 42 },
+        "lsh":   { "numTables": 48, "rowsPerBand": 10, "probeShards": 32 }
       }
     },
     {
-      "name": "server_light_ratio_lean",
+      "name": "ratio_mid",
       "overrides": {
-        "paper": { "enabled": true, "m": 18, "lambda": 2, "divisions": 14, "seed": 42 },
-        "lsh":   { "numTables": 30, "rowsPerBand": 14, "probeShards": 32 }
+        "paper": { "enabled": true, "m": 20, "lambda": 2, "divisions": 18, "seed": 42 },
+        "lsh":   { "numTables": 40, "rowsPerBand": 10, "probeShards": 32 }
       }
     },
     {
-      "name": "latency_first",
+      "name": "ratio_fast",
       "overrides": {
-        "paper": { "enabled": true, "m": 11, "lambda": 2, "divisions": 7, "seed": 42 },
-        "lsh":   { "numTables": 18, "rowsPerBand": 10, "probeShards": 32 }
+        "paper": { "enabled": true, "m": 18, "lambda": 2, "divisions": 16, "seed": 42 },
+        "lsh":   { "numTables": 36, "rowsPerBand": 11, "probeShards": 32 }
       }
     },
     {
-      "name": "client_heavy_server_light",
+      "name": "ratio_fallback",
       "overrides": {
         "paper": { "enabled": true, "m": 16, "lambda": 2, "divisions": 14, "seed": 42 },
-        "lsh":   { "numTables": 26, "rowsPerBand": 12, "probeShards": 32 }
-      }
-    },
-    {
-      "name": "low_token_footprint",
-      "overrides": {
-        "paper": { "enabled": true, "m": 9, "lambda": 2, "divisions": 6, "seed": 42 },
-        "lsh":   { "numTables": 16, "rowsPerBand": 10, "probeShards": 32 }
-      }
-    },
-    {
-      "name": "high_dim_precision",
-      "overrides": {
-        "paper": { "enabled": true, "m": 20, "lambda": 2, "divisions": 16, "seed": 42 },
-        "lsh":   { "numTables": 32, "rowsPerBand": 15, "probeShards": 32 }
-      }
-    },
-    {
-      "name": "recall_max",
-      "overrides": {
-        "paper": { "enabled": true, "m": 22, "lambda": 2, "divisions": 18, "seed": 42 },
-        "lsh":   { "numTables": 36, "rowsPerBand": 16, "probeShards": 32 }
-      }
-    },
-    {
-      "name": "coldstart_smallN",
-      "overrides": {
-        "paper": { "enabled": true, "m": 8, "lambda": 2, "divisions": 8, "seed": 42 },
-        "lsh":   { "numTables": 16, "rowsPerBand": 9, "probeShards": 32 }
-      }
-    },
-    {
-      "name": "probe_heavy_fallback",
-      "overrides": {
-        "paper": { "enabled": true, "m": 14, "lambda": 2, "divisions": 10, "seed": 42 },
-        "lsh":   { "numTables": 24, "rowsPerBand": 12, "probeShards": 32 }
+        "lsh":   { "numTables": 32, "rowsPerBand": 12, "probeShards": 32 }
       }
     }
   ]
