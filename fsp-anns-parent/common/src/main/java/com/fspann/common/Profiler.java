@@ -89,13 +89,13 @@ public class Profiler {
 
     public void exportQueryMetrics(String filePath) {
         try (FileWriter fw = new FileWriter(filePath)) {
-            fw.write("Query,ServerART(ms),ClientART(ms),Ratio\n");
+            fw.write("Query,ServerEndToEnd(ms),ClientWall(ms),Overhead(ms),Ratio\n");
             for (int i = 0; i < clientQueryTimes.size(); i++) {
-                fw.write(String.format("Q%d,%.4f,%.4f,%.4f\n",
-                        i + 1,
-                        serverQueryTimes.get(i),
-                        clientQueryTimes.get(i),
-                        queryRatios.get(i)));
+                double s = serverQueryTimes.get(i);
+                double c = clientQueryTimes.get(i);
+                double overhead = Math.max(0.0, c - s);
+                fw.write(String.format("Q%d,%.4f,%.4f,%.4f,%.4f\n",
+                        i + 1, s, c, overhead, queryRatios.get(i)));
             }
             System.out.println("📤 Query metrics written to " + filePath);
         } catch (IOException ex) {

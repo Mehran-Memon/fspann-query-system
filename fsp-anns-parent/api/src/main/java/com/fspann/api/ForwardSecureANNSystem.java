@@ -900,7 +900,7 @@ public class ForwardSecureANNSystem {
             rw.writeTable("Query " + (q + 1) + " Results (dim=" + dim + ")",
                     new String[]{
                             "QIndex0","TopK","Returned","Ratio","Precision","RatioDenomSource",
-                            "ServerTimeMs","ClientTimeMs","InsertTimeMs",
+                            "ServerTimeMs","ClientTimeMs","OverheadMs","InsertTimeMs",
                             "ScannedCandidates","CandKeptVersion","CandDecrypted","ReturnedAgain",
                             "TokenSize","TokenK","VectorDim","TotalFlushed","FlushThreshold",
                             "CandMetricsMode","TokenKBase"
@@ -915,6 +915,7 @@ public class ForwardSecureANNSystem {
                             (gtTrusted ? "gt" : "base"),
                             String.valueOf(er.getTimeMs()),
                             String.valueOf(er.getClientTimeMs()),
+                            String.valueOf(Math.max(0, er.getClientTimeMs() - er.getTimeMs())),
                             String.valueOf(er.getInsertTimeMs()),
                             String.valueOf(candTotal),                             // ScannedCandidates
                             String.valueOf(candKeptVersion),
@@ -1198,7 +1199,7 @@ public class ForwardSecureANNSystem {
             rw.writeTable("Query " + (q + 1) + " Results (dim=" + dim + ")",
                     new String[]{
                             "QIndex0","TopK","Returned","Ratio","Precision","RatioDenomSource",
-                            "ServerTimeMs","ClientTimeMs","InsertTimeMs",
+                            "ServerTimeMs","ClientTimeMs","OverheadMs","InsertTimeMs",
                             "ScannedCandidates","CandKeptVersion","CandDecrypted","ReturnedAgain",
                             "TokenSize","TokenK","VectorDim","TotalFlushed","FlushThreshold",
                             "CandMetricsMode","TokenKBase"
@@ -1213,6 +1214,7 @@ public class ForwardSecureANNSystem {
                             (gtTrusted ? "gt" : "base"),
                             String.valueOf(er.getTimeMs()),
                             String.valueOf(er.getClientTimeMs()),
+                            String.valueOf(Math.max(0, er.getClientTimeMs() - er.getTimeMs())),
                             String.valueOf(er.getInsertTimeMs()),
                             String.valueOf(candTotal),
                             String.valueOf(candKeptVersion),
