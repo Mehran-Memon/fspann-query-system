@@ -228,7 +228,7 @@ public final class GroundtruthPrecompute {
                             heap.offer(bi, base.l2(qbuf, bi));
                         }
                         rows[qi] = heap.idsAscending();
-                        if ((qi + 1) % 50 == 0) {
+                        if ((qi + 1) % 1000 == 0) {
                             System.out.printf("  [%d/%d] queries processed%n", qi + 1, Q);
                         }
                     }

@@ -19,7 +19,7 @@ $Name  = "SIFT1M"
 $Dim   = 128
 $Base  = "E:\Research Work\Datasets\sift_dataset\sift_base.fvecs"
 $Query = "E:\Research Work\Datasets\sift_dataset\sift_query.fvecs"
-$GT    = "E:\Research Work\Datasets\sift_dataset\sift_groundtruth.ivecs"   # ignored; "AUTO" is forced
+$GT    = "E:\Research Work\Datasets\sift_dataset\sift_query_groundtruth.ivecs"   # ignored; "AUTO" is forced
 
 # app batch size arg
 $Batch = 100000
@@ -28,7 +28,7 @@ $Batch = 100000
 # - blank/space => run all
 # - single name => exact match
 # - wildcard (e.g. "*precision*") => pattern filter
-$OnlyProfile = " "
+$OnlyProfile = ""
 
 # toggles
 $CleanPerRun = $true
@@ -43,7 +43,8 @@ $JvmArgs = @(
     "-Dfile.encoding=UTF-8",
     "-Dreenc.mode=end",      # accumulate touched IDs, re-encrypt once at end
     "-Dreenc.minTouched=5000", # gate the end-of-run job
-    "-Dreenc.batchSize=2000"    # IO-friendly batches
+    "-Dreenc.batchSize=2000",
+    "-Dlog.progress.everyN=0"
 )
 
 # ---------- helpers (PS5-safe) ----------
@@ -55,7 +56,6 @@ if ($o -is [System.Collections.IEnumerable] -and -not ($o -is [string])) { $arr=
 if ($o -is [pscustomobject]) { $ht=@{}; foreach($p in $o.PSObject.Properties){ $ht[$p.Name] = To-Hashtable $p.Value }; return $ht }
 return $o
 }
-
 function Copy-Hashtable {
     param([hashtable]$h)
     $out = @{}
@@ -81,8 +81,6 @@ function Copy-Hashtable {
     }
     return $out
 }
-
-
 function Apply-Overrides { param([hashtable]$base,[hashtable]$ovr)
 $result = Copy-Hashtable $base
 foreach($k in $ovr.Keys){
@@ -93,7 +91,6 @@ foreach($k in $ovr.Keys){
 }
 return $result
 }
-
 function Ensure-Files {
     param(
         [string]$base,
@@ -114,7 +111,6 @@ function Ensure-Files {
 
     return $ok
 }
-
 function Safe-Resolve([string]$Path, [bool]$AllowMissing = $false) {
     try {
         if ($AllowMissing -and -not (Test-Path -LiteralPath $Path)) { return $Path }
@@ -280,30 +276,25 @@ foreach ($p in $profiles) {
     }
     Save-Manifest -RunDir $runDir -Manifest $manifest
 
-    # Launch
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = "java"
-    $psi.Arguments = $argLine
-    $psi.WorkingDirectory = $runDir
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError  = $true
-    $psi.UseShellExecute = $false
+    # --- Launch (single run: live console + save to run.out.log; filter progress spam from console only) ---
+    $combinedLog   = Join-Path $runDir "run.out.log"
+    $progressRegex = '^\[\d+/\d+\]\s+ queries processed (GT)'
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $pobj = New-Object System.Diagnostics.Process
-    $pobj.StartInfo = $psi
-    [void]$pobj.Start()
-    $out = $pobj.StandardOutput.ReadToEnd()
-    $err = $pobj.StandardError.ReadToEnd()
-    $pobj.WaitForExit()
+
+    # IMPORTANT: pass the array, not the joined string
+    & java @argList 2>&1 |
+            Tee-Object -FilePath $combinedLog |
+            Where-Object { $_ -notmatch $progressRegex }
+
+    $exit = $LASTEXITCODE
     $sw.Stop()
 
-    $out | Out-File -FilePath (Join-Path $runDir "run.out.log") -Encoding utf8
-    $err | Out-File -FilePath (Join-Path $runDir "run.err.log") -Encoding utf8
-    ("ElapsedSec={0:N1}" -f $sw.Elapsed.TotalSeconds) | Out-File -FilePath (Join-Path $runDir "elapsed.txt") -Encoding utf8
+    ("ElapsedSec={0:N1}" -f $sw.Elapsed.TotalSeconds) |
+            Out-File -FilePath (Join-Path $runDir "elapsed.txt") -Encoding utf8
 
-    if ($pobj.ExitCode -ne 0) {
-        Write-Warning ("Run failed for profile {0} (exit={1})." -f $label, $pobj.ExitCode)
+    if ($exit -ne 0) {
+        Write-Warning ("Run failed for profile {0} (exit={1})." -f $label, $exit)
     } else {
         Write-Host ("Completed: {0} ({1})" -f $Name, $label)
     }

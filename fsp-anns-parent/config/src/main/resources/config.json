@@ -1,12 +1,12 @@
 {
   "numShards": 32,
   "opsThreshold": 1000000000,
-  "ageThresholdMs": 31536000000,
+  "ageThresholdMs": 2592000000,
   "profilerEnabled": true,
 
   "reencryption": { "enabled": true },
 
-  "ratio": {"source": "gt"  },
+  "ratio": {"source": "AUTO"  },
 
   "eval": {
     "computePrecision": true,
@@ -44,47 +44,45 @@
   },
 
   "profiles": [
-    {
-      "name": "ratio_ultra",
-      "overrides": {
-        "paper": { "enabled": true, "m": 26, "lambda": 2, "divisions": 24, "seed": 42 },
-        "lsh":   { "numTables": 64, "rowsPerBand": 8, "probeShards": 32 }
-      }
-    },
-    {
-      "name": "ratio_max",
-      "overrides": {
-        "paper": { "enabled": true, "m": 24, "lambda": 2, "divisions": 22, "seed": 42 },
-        "lsh":   { "numTables": 56, "rowsPerBand": 9, "probeShards": 32 }
-      }
-    },
-    {
-      "name": "ratio_plus",
-      "overrides": {
-        "paper": { "enabled": true, "m": 22, "lambda": 2, "divisions": 20, "seed": 42 },
-        "lsh":   { "numTables": 48, "rowsPerBand": 10, "probeShards": 32 }
-      }
-    },
-    {
-      "name": "ratio_mid",
-      "overrides": {
-        "paper": { "enabled": true, "m": 20, "lambda": 2, "divisions": 18, "seed": 42 },
-        "lsh":   { "numTables": 40, "rowsPerBand": 10, "probeShards": 32 }
-      }
-    },
-    {
-      "name": "ratio_fast",
-      "overrides": {
-        "paper": { "enabled": true, "m": 18, "lambda": 2, "divisions": 16, "seed": 42 },
-        "lsh":   { "numTables": 36, "rowsPerBand": 11, "probeShards": 32 }
-      }
-    },
-    {
-      "name": "ratio_fallback",
-      "overrides": {
-        "paper": { "enabled": true, "m": 16, "lambda": 2, "divisions": 14, "seed": 42 },
-        "lsh":   { "numTables": 32, "rowsPerBand": 12, "probeShards": 32 }
-      }
-    }
+    { "name": "J1_m25_l8_nt2048_rpb1_ps1024", "overrides": {
+      "reencryption": { "enabled": false }, "audit": { "enable": false },
+      "paper": { "enabled": true, "m": 25, "lambda": 8, "divisions": 26, "seed": 42 },
+      "lsh":   { "numTables": 2048, "rowsPerBand": 1, "probeShards": 1024 }
+    }},
+    { "name": "J2_m25_l10_nt2560_rpb1_ps1280", "overrides": {
+      "reencryption": { "enabled": false }, "audit": { "enable": false },
+      "paper": { "enabled": true, "m": 25, "lambda": 10, "divisions": 28, "seed": 42 },
+      "lsh":   { "numTables": 2560, "rowsPerBand": 1, "probeShards": 1280 }
+    }},
+    { "name": "J3_m24_l10_nt2560_rpb1_ps1280", "overrides": {
+      "reencryption": { "enabled": false }, "audit": { "enable": false },
+      "paper": { "enabled": true, "m": 24, "lambda": 10, "divisions": 28, "seed": 42 },
+      "lsh":   { "numTables": 2560, "rowsPerBand": 1, "probeShards": 1280 }
+    }},
+    { "name": "J4_m26_l12_nt2048_rpb1_ps1024_heavy", "overrides": {
+      "reencryption": { "enabled": false }, "audit": { "enable": false },
+      "paper": { "enabled": true, "m": 26, "lambda": 12, "divisions": 28, "seed": 42 },
+      "lsh":   { "numTables": 2048, "rowsPerBand": 1, "probeShards": 1024 }
+    }},
+    { "name": "J5_m25_l12_nt3072_rpb1_ps1536_max", "overrides": {
+      "reencryption": { "enabled": false }, "audit": { "enable": false },
+      "paper": { "enabled": true, "m": 25, "lambda": 12, "divisions": 30, "seed": 42 },
+      "lsh":   { "numTables": 3072, "rowsPerBand": 1, "probeShards": 1536 }
+    }},
+    { "name": "J6_m25_l8_nt1536_rpb1_ps768_fast", "overrides": {
+      "reencryption": { "enabled": false }, "audit": { "enable": false },
+      "paper": { "enabled": true, "m": 25, "lambda": 8, "divisions": 26, "seed": 42 },
+      "lsh":   { "numTables": 1536, "rowsPerBand": 1, "probeShards": 768 }
+    }},
+    { "name": "J7_m25_l2_nt2048_rpb1_ps1024_baseline", "overrides": {
+      "reencryption": { "enabled": false }, "audit": { "enable": false },
+      "paper": { "enabled": true, "m": 25, "lambda": 2, "divisions": 26, "seed": 42 },
+      "lsh":   { "numTables": 2048, "rowsPerBand": 1, "probeShards": 1024 }
+    }},
+    { "name": "J8_m24_l4_nt2048_rpb1_ps1024_safety", "overrides": {
+      "reencryption": { "enabled": false }, "audit": { "enable": false },
+      "paper": { "enabled": true, "m": 24, "lambda": 4, "divisions": 26, "seed": 42 },
+      "lsh":   { "numTables": 2048, "rowsPerBand": 1, "probeShards": 1024 }
+    }}
   ]
 }
