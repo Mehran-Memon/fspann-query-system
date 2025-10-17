@@ -8,6 +8,8 @@ import com.fspann.index.core.DimensionContext;
 import com.fspann.index.core.EvenLSH;
 import com.fspann.index.core.PartitioningPolicy;
 import com.fspann.index.core.SecureLSHIndex;
+import com.fspann.common.IndexService.LookupWithDiagnostics;
+import com.fspann.common.IndexService.SearchDiagnostics;
 import com.fspann.index.paper.PartitionedIndexService;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.slf4j.Logger;
@@ -21,17 +23,14 @@ import java.util.concurrent.ConcurrentHashMap;
  * SecureLSHIndexService
  * -----------------------------------------------------------------------------
  * Unified entry point for indexing and lookup with two modes:
- *
  *  1) partitioned (DEFAULT, paper-aligned):
  *     - Routes to a PaperSearchEngine (Coding → GreedyPartition → TagQuery).
  *     - Client-side kNN over subset union, forward-secure (re-encrypt only).
- *
  *  2) multiprobe (legacy):
  *     - EvenLSH + SecureLSHIndex with per-table bucket unions.
  *     - UPDATED: no dependence on K/topK for fetch size. If the token does not
  *       carry per-table buckets, we compute exactly one bucket per table using
  *       LSH over the plaintext query (no fanout), then return the FULL union.
- *
  * Configure with: -Dfspann.mode=partitioned | multiprobe
  * Storage/crypto/lifecycle (RocksDB/AES-GCM/KeyService) are shared across modes.
  */
@@ -332,7 +331,7 @@ public class SecureLSHIndexService implements IndexService {
     }
 
     @Override
-    public LookupWithDiagnostics lookupWithDiagnostics(QueryToken token) {
+        public LookupWithDiagnostics lookupWithDiagnostics(QueryToken token) {
         Objects.requireNonNull(token, "QueryToken cannot be null");
         if (isPartitioned() && paperEngine != null) {
             // Single call: do lookup once and wrap basic diagnostics

@@ -11,6 +11,8 @@ import static org.mockito.Mockito.*;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import java.util.*;
+import com.fspann.common.IndexService.LookupWithDiagnostics;
+import com.fspann.common.IndexService.SearchDiagnostics;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -114,21 +116,14 @@ class QueryServiceImplTest {
         when(indexService.lookup(any(QueryToken.class))).thenReturn(List.of(p));
         when(cryptoService.decryptFromPoint(eq(p), eq(fallbackKey))).thenReturn(new double[]{1.0, 2.0});
 
-        // ---- proper diagnostics stub
-        LookupWithDiagnostics diag = new LookupWithDiagnostics(
-                List.of(p),
-                new SearchDiagnostics(1, 0, java.util.Map.of())
-        );
-        when(indexService.lookupWithDiagnostics(any(QueryToken.class))).thenReturn(diag);
-
         assertDoesNotThrow(() -> service.search(token));
 
         verify(keyService).getVersion(999);
         verify(keyService, atLeastOnce()).getCurrentVersion();
         verify(cryptoService).decryptQuery(eq(encQuery), eq(iv), eq(fallbackKey));
 
-        // The service calls diagnostics more than once; don’t pin to 1.
-        verify(indexService, atLeastOnce()).lookupWithDiagnostics(any(QueryToken.class));
+        // Ensure a lookup happened
+        verify(indexService, atLeastOnce()).lookup(any(QueryToken.class));
     }
 
     @Test

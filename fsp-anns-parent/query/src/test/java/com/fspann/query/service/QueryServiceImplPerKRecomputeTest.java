@@ -15,6 +15,8 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
+import com.fspann.common.IndexService.LookupWithDiagnostics;
+import com.fspann.common.IndexService.SearchDiagnostics;
 
 class QueryServiceImplPerKRecomputeTest {
 
@@ -64,17 +66,12 @@ class QueryServiceImplPerKRecomputeTest {
         );
 
         // diagnostics stub with empty candidates (we only care about interaction pattern)
-        LookupWithDiagnostics diag = new LookupWithDiagnostics(
-                List.of(),                                  // candidates
-                new SearchDiagnostics(0, 0, java.util.Map.of()) // uniqueCandidates, fanout, perTable
-        );
-        when(indexService.lookupWithDiagnostics(any(QueryToken.class))).thenReturn(diag);
-
+        when(indexService.lookup(any(QueryToken.class))).thenReturn(List.of());
         service.searchWithTopKVariants(base, 0, groundtruth);
 
-        // capture all diagnostic lookups; they must all use the same base token (single scan contract)
+        // Capture the lookups that actually happen
         var captor = ArgumentCaptor.forClass(QueryToken.class);
-        verify(indexService, atLeastOnce()).lookupWithDiagnostics(captor.capture());
+        verify(indexService, atLeastOnce()).lookup(captor.capture());
 
         for (QueryToken lookedUp : captor.getAllValues()) {
             assertEquals(100, lookedUp.getTopK(), "Should evaluate at max-K only");

@@ -134,38 +134,39 @@ public class PartitionedIndexService implements PaperSearchEngine {
         final DimensionState S = dims.get(d);
         if (S == null) return Collections.emptyList();
 
-        ensureBuilt(S); // one-time build if needed
+        ensureBuilt(S);
 
-        // ---- purely (m, λ)-derived budgets/radii ----
-        // per-division targets ensure we don't cap globally or by K
-        final int perDivTarget  = Math.max(1, Math.max(m * lambda,  S.divisions.isEmpty() ? 1 : S.divisions.get(0).w));
-        final int perDivTarget2 = Math.max(perDivTarget, (int)Math.ceil(1.5 * m * lambda));
-
-        // symmetric widening around the hit interval(s)
-        final int maxRadius     = Math.max(1, lambda);       // pass-1
-        final int maxRadiusHard = Math.max(maxRadius + 1, 2 * lambda); // pass-2
+        // --- budgets from (m, λ) only ---
+        final int B = Math.max(1, m * Math.max(1, lambda));           // base budget per division
+        final int maxRadius     = Math.max(1, (2 * lambda) - 1);       // pass-1
+        final int maxRadiusHard = Math.max(maxRadius + 1, 3 * lambda); // pass-2
 
         final Set<String> seen = new LinkedHashSet<>();
         final List<EncryptedPoint> cands = new ArrayList<>();
         final double[] q = token.getPlaintextQuery();
 
-        // ---------- PASS 1: hits + bounded symmetric expansion ----------
+        // ---------- PASS 1 ----------
         for (DivisionState div : S.divisions) {
             if (div.I.isEmpty()) continue;
             BitSet Cq = Coding.C(q, div.G);
 
-            List<Integer> hitIdxs = findCoveringIntervals(Cq, div.I);
-            if (hitIdxs.isEmpty()) continue;
+            List<Integer> hits = findCoveringIntervals(Cq, div.I);
+            if (hits.isEmpty()) {
+                int seed = nearestIdx(Cq, div.I);
+                if (seed >= 0) hits = java.util.List.of(seed);
+            }
+            if (hits.isEmpty()) continue;
+
+            final int perDivTarget = Math.max(B, (int) Math.ceil(hits.size() * (B / 2.0)));
 
             int gatheredThisDiv = 0;
-            for (int idx : hitIdxs) {
+            for (int idx : hits) {
                 for (int radius = 0; radius <= maxRadius && gatheredThisDiv < perDivTarget; radius++) {
                     for (int j = idx - radius; j <= idx + radius && gatheredThisDiv < perDivTarget; j++) {
                         if (j < 0 || j >= div.I.size()) continue;
                         GreedyPartitioner.SubsetBounds sb = div.I.get(j);
                         List<EncryptedPoint> subset = div.tagToSubset.get(sb.tag);
-                        if (subset == null) continue;
-
+                        if (subset == null || subset.isEmpty()) continue;
                         for (EncryptedPoint p : subset) {
                             if (seen.add(p.getId())) {
                                 cands.add(p);
@@ -177,23 +178,29 @@ public class PartitionedIndexService implements PaperSearchEngine {
             }
         }
 
-        // ---------- PASS 2: gentle widening (still only (m, λ) driven) ----------
+        // ---------- PASS 2 ----------
         for (DivisionState div : S.divisions) {
             if (div.I.isEmpty()) continue;
             BitSet Cq = Coding.C(q, div.G);
 
-            List<Integer> hitIdxs = findCoveringIntervals(Cq, div.I);
-            if (hitIdxs.isEmpty()) continue;
+            List<Integer> hits = findCoveringIntervals(Cq, div.I);
+            if (hits.isEmpty()) {
+                int seed = nearestIdx(Cq, div.I);
+                if (seed >= 0) hits = java.util.List.of(seed);
+            }
+            if (hits.isEmpty()) continue;
+
+            final int perDivTarget  = Math.max(B, (int) Math.ceil(hits.size() * (B / 2.0)));
+            final int perDivTarget2 = Math.max(perDivTarget, (int) Math.ceil(2.0 * B));
 
             int gatheredThisDiv = 0;
-            for (int idx : hitIdxs) {
+            for (int idx : hits) {
                 for (int radius = maxRadius + 1; radius <= maxRadiusHard && gatheredThisDiv < perDivTarget2; radius++) {
                     for (int j = idx - radius; j <= idx + radius && gatheredThisDiv < perDivTarget2; j++) {
                         if (j < 0 || j >= div.I.size()) continue;
                         GreedyPartitioner.SubsetBounds sb = div.I.get(j);
                         List<EncryptedPoint> subset = div.tagToSubset.get(sb.tag);
-                        if (subset == null) continue;
-
+                        if (subset == null || subset.isEmpty()) continue;
                         for (EncryptedPoint p : subset) {
                             if (seen.add(p.getId())) {
                                 cands.add(p);
@@ -352,6 +359,26 @@ public class PartitionedIndexService implements PaperSearchEngine {
         x ^= (x >>> 33); x *= 0xc4ceb9fe1a85ec53l;
         x ^= (x >>> 33);
         return x;
+    }
+
+    private static int hammingGap(BitSet a, BitSet b) {
+        if (a == null || b == null) return Integer.MAX_VALUE;
+        BitSet x = (BitSet) a.clone();
+        x.xor(b);
+        return x.cardinality();
+    }
+
+    private static int nearestIdx(BitSet Cq, List<GreedyPartitioner.SubsetBounds> I) {
+        if (I == null || I.isEmpty()) return -1;
+        int best = -1, bestGap = Integer.MAX_VALUE;
+        for (int j = 0; j < I.size(); j++) {
+            GreedyPartitioner.SubsetBounds sb = I.get(j);
+            // use lower as a stable representative; fallback to upper if needed
+            BitSet rep = (sb.lower != null) ? sb.lower : sb.upper;
+            int gap = hammingGap(Cq, rep); // |Cq XOR rep|
+            if (gap < bestGap) { bestGap = gap; best = j; }
+        }
+        return best;
     }
 
     // Expose paper params for logging/artifacts
