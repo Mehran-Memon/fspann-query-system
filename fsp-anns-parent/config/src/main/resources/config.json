@@ -1,88 +1,79 @@
 {
-  "numShards": 32,
-  "opsThreshold": 1000000000,
-  "ageThresholdMs": 2592000000,
-  "profilerEnabled": true,
-
-  "reencryption": { "enabled": true },
-
-  "ratio": {"source": "AUTO"  },
-
-  "eval": {
-    "computePrecision": true,
-    "writeGlobalPrecisionCsv": true,
-    "kVariants": [1, 20, 40, 60, 80, 100]
+  "base":
+  {
+    "paper":
+  {
+    "enabled": true, "m": 25, "lambda": 2, "divisions": 9, "seed": 13
   },
-
-  "output": {
-    "resultsDir": "results",
-    "exportArtifacts": true,
-    "suppressLegacyMetrics": false
+    "lsh":
+    {
+      "numTables": 0, "rowsPerBand": 0, "probeShards": 0
+    },
+    "numShards": 1,
+    "opsThreshold": 2147483647,
+    "ageThresholdMs": 9223372036854775807,
+    "eval":
+    {
+      "computePrecision": true,
+      "writeGlobalPrecisionCsv": true,
+      "kVariants": [1, 5, 10, 20, 40, 60, 80, 100]
+    },
+    "output":
+    {
+      "exportArtifacts": true,
+      "suppressLegacyMetrics": false
+    },
+    "cloak":
+    {
+      "noise": 0.0
+    },
+    "audit":
+    {
+      "enable": false, "k": 100, "sampleEvery": 250, "worstKeep": 25
+    },
+    "ratio":
+    {
+      "source": "auto", "gtSample": 10000, "gtMismatchTolerance": 0.05
+    }
   },
+  "profiles":
+  [
+    {
+      "name": "baseline_sift1m_paper_m25_l2_ell9", "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 9 } } },
+    { "name": "exp1_divisions_ell3", "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 3 } } },
+    { "name": "exp1_divisions_ell5", "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 5 } } },
+    { "name": "exp1_divisions_ell7", "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 7 } } },
+    { "name": "exp1_divisions_ell9", "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 9 } } },
+    { "name": "exp1_divisions_ell11", "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 11 } } },
 
-  "cloak": { "noise": 0.0 },
+    { "name": "exp2_m_15", "overrides": { "paper": { "m": 15, "lambda": 2, "divisions": 9 } } },
+    { "name": "exp2_m_17", "overrides": { "paper": { "m": 17, "lambda": 2, "divisions": 9 } } },
+    { "name": "exp2_m_19", "overrides": { "paper": { "m": 19, "lambda": 2, "divisions": 9 } } },
+    { "name": "exp2_m_21", "overrides": { "paper": { "m": 21, "lambda": 2, "divisions": 9 } } },
+    { "name": "exp2_m_23", "overrides": { "paper": { "m": 23, "lambda": 2, "divisions": 9 } } },
+    { "name": "exp2_m_25", "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 9 } } },
 
-  "lsh": {
-    "numTables": 24,
-    "rowsPerBand": 12,
-    "probeShards": 32
-  },
+    { "name": "exp3_lambda_1", "overrides": { "paper": { "m": 25, "lambda": 1, "divisions": 9 } } },
+    { "name": "exp3_lambda_2", "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 9 } } },
+    { "name": "exp3_lambda_3", "overrides": { "paper": { "m": 25, "lambda": 3, "divisions": 9 } } },
+    { "name": "exp3_lambda_4", "overrides": { "paper": { "m": 25, "lambda": 4, "divisions": 9 } } },
+    { "name": "exp3_lambda_5", "overrides": { "paper": { "m": 25, "lambda": 5, "divisions": 9 } } },
 
-  "paper": {
-    "enabled": true,
-    "m": 18,
-    "lambda": 2,
-    "divisions": 14,
-    "seed": 42
-  },
+    [
+      { "name": "exp2_m_28", "overrides": { "paper": { "m": 28, "lambda": 2, "divisions": 9 },  "audit": { "enable": false }, "ratio": { "gtSample": 10000 } } },
+      { "name": "exp2_m_32", "overrides": { "paper": { "m": 32, "lambda": 2, "divisions": 9 },  "audit": { "enable": false }, "ratio": { "gtSample": 10000 } } },
+      { "name": "exp2_m_40", "overrides": { "paper": { "m": 40, "lambda": 2, "divisions": 9 },  "audit": { "enable": false }, "ratio": { "gtSample": 10000 } } },
+      { "name": "exp2_m_48", "overrides": { "paper": { "m": 48, "lambda": 2, "divisions": 9 },  "audit": { "enable": false }, "ratio": { "gtSample": 10000 } } },
 
-  "audit": {
-    "enable": true,
-    "k": 100,
-    "sampleEvery": 100,
-    "worstKeep": 25
-  },
+      { "name": "tradeoff_m20_l3_ell12", "overrides": { "paper": { "m": 20, "lambda": 3, "divisions": 12 }, "audit": { "enable": false }, "ratio": { "gtSample": 10000 } } },
+      { "name": "tradeoff_m25_l3_ell12", "overrides": { "paper": { "m": 25, "lambda": 3, "divisions": 12 }, "audit": { "enable": false }, "ratio": { "gtSample": 10000 } } },
+      { "name": "tradeoff_m32_l3_ell12", "overrides": { "paper": { "m": 32, "lambda": 3, "divisions": 12 }, "audit": { "enable": false }, "ratio": { "gtSample": 10000 } } },
 
-  "profiles": [
-    { "name": "J1_m25_l8_nt2048_rpb1_ps1024", "overrides": {
-      "reencryption": { "enabled": false }, "audit": { "enable": false },
-      "paper": { "enabled": true, "m": 25, "lambda": 8, "divisions": 26, "seed": 42 },
-      "lsh":   { "numTables": 2048, "rowsPerBand": 1, "probeShards": 1024 }
-    }},
-    { "name": "J2_m25_l10_nt2560_rpb1_ps1280", "overrides": {
-      "reencryption": { "enabled": false }, "audit": { "enable": false },
-      "paper": { "enabled": true, "m": 25, "lambda": 10, "divisions": 28, "seed": 42 },
-      "lsh":   { "numTables": 2560, "rowsPerBand": 1, "probeShards": 1280 }
-    }},
-    { "name": "J3_m24_l10_nt2560_rpb1_ps1280", "overrides": {
-      "reencryption": { "enabled": false }, "audit": { "enable": false },
-      "paper": { "enabled": true, "m": 24, "lambda": 10, "divisions": 28, "seed": 42 },
-      "lsh":   { "numTables": 2560, "rowsPerBand": 1, "probeShards": 1280 }
-    }},
-    { "name": "J4_m26_l12_nt2048_rpb1_ps1024_heavy", "overrides": {
-      "reencryption": { "enabled": false }, "audit": { "enable": false },
-      "paper": { "enabled": true, "m": 26, "lambda": 12, "divisions": 28, "seed": 42 },
-      "lsh":   { "numTables": 2048, "rowsPerBand": 1, "probeShards": 1024 }
-    }},
-    { "name": "J5_m25_l12_nt3072_rpb1_ps1536_max", "overrides": {
-      "reencryption": { "enabled": false }, "audit": { "enable": false },
-      "paper": { "enabled": true, "m": 25, "lambda": 12, "divisions": 30, "seed": 42 },
-      "lsh":   { "numTables": 3072, "rowsPerBand": 1, "probeShards": 1536 }
-    }},
-    { "name": "J6_m25_l8_nt1536_rpb1_ps768_fast", "overrides": {
-      "reencryption": { "enabled": false }, "audit": { "enable": false },
-      "paper": { "enabled": true, "m": 25, "lambda": 8, "divisions": 26, "seed": 42 },
-      "lsh":   { "numTables": 1536, "rowsPerBand": 1, "probeShards": 768 }
-    }},
-    { "name": "J7_m25_l2_nt2048_rpb1_ps1024_baseline", "overrides": {
-      "reencryption": { "enabled": false }, "audit": { "enable": false },
-      "paper": { "enabled": true, "m": 25, "lambda": 2, "divisions": 26, "seed": 42 },
-      "lsh":   { "numTables": 2048, "rowsPerBand": 1, "probeShards": 1024 }
-    }},
-    { "name": "J8_m24_l4_nt2048_rpb1_ps1024_safety", "overrides": {
-      "reencryption": { "enabled": false }, "audit": { "enable": false },
-      "paper": { "enabled": true, "m": 24, "lambda": 4, "divisions": 26, "seed": 42 },
-      "lsh":   { "numTables": 2048, "rowsPerBand": 1, "probeShards": 1024 }
-    }}
-  ]
+      { "name": "ell_sweep_ell12", "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 12 }, "audit": { "enable": false }, "ratio": { "gtSample": 10000 } } },
+      { "name": "ell_sweep_ell16", "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 16 }, "audit": { "enable": false }, "ratio": { "gtSample": 10000 } } },
+
+      { "name": "seed_baseline_seed29",  "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 9, "seed": 29  }, "audit": { "enable": false }, "ratio": { "gtSample": 10000 } } },
+      { "name": "seed_baseline_seed101", "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 9, "seed": 101 }, "audit": { "enable": false }, "ratio": { "gtSample": 10000 } } }
+    ]
+]
 }

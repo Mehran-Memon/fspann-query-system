@@ -1,10 +1,11 @@
 # ============================
 # FSP-ANN (single dataset, multi-profile)
-# PS 5.1 / ConstrainedLanguage safe
 # - Per-run cleanup for metadata/points/results
 # - GT is ALWAYS precomputed each run ("AUTO")
 # - Works with new config (no "base") and old (with "base")
 # - Adds: query-only mode, wildcard profile filter, per-run manifest/provenance
+# - After runs, merges results.csv and GlobalPrecision.csv across profiles
+#   into combined_results.csv and combined_precision.csv
 # ============================
 
 Set-StrictMode -Version Latest
@@ -41,7 +42,7 @@ $JvmArgs = @(
     "-XX:+UseG1GC","-XX:MaxGCPauseMillis=200","-XX:+AlwaysPreTouch",
     "-Ddisable.exit=true",
     "-Dfile.encoding=UTF-8",
-    "-Dreenc.mode=end",      # accumulate touched IDs, re-encrypt once at end
+    "-Dreenc.mode=end",        # accumulate touched IDs, re-encrypt once at end
     "-Dreenc.minTouched=5000", # gate the end-of-run job
     "-Dreenc.batchSize=2000",
     "-Dlog.progress.everyN=0"
@@ -56,30 +57,19 @@ if ($o -is [System.Collections.IEnumerable] -and -not ($o -is [string])) { $arr=
 if ($o -is [pscustomobject]) { $ht=@{}; foreach($p in $o.PSObject.Properties){ $ht[$p.Name] = To-Hashtable $p.Value }; return $ht }
 return $o
 }
-function Copy-Hashtable {
-    param([hashtable]$h)
-    $out = @{}
-    foreach ($k in $h.Keys) {
-        $v = $h[$k]
-        if ($v -is [hashtable]) {
-            $out[$k] = Copy-Hashtable $v
-        }
-        elseif ($v -is [System.Collections.IEnumerable] -and -not ($v -is [string])) {
-            $arr = @()
-            foreach ($e in $v) {
-                if ($e -is [hashtable]) {
-                    $arr += ,(Copy-Hashtable $e)
-                } else {
-                    $arr += ,$e
-                }
-            }
-            $out[$k] = $arr
-        }
-        else {
-            $out[$k] = $v
-        }
-    }
-    return $out
+function Copy-Hashtable { param([hashtable]$h)
+$out = @{}
+foreach ($k in $h.Keys) {
+    $v = $h[$k]
+    if ($v -is [hashtable]) {
+        $out[$k] = Copy-Hashtable $v
+    } elseif ($v -is [System.Collections.IEnumerable] -and -not ($v -is [string])) {
+        $arr = @()
+        foreach ($e in $v) { if ($e -is [hashtable]) { $arr += ,(Copy-Hashtable $e) } else { $arr += ,$e } }
+        $out[$k] = $arr
+    } else { $out[$k] = $v }
+}
+return $out
 }
 function Apply-Overrides { param([hashtable]$base,[hashtable]$ovr)
 $result = Copy-Hashtable $base
@@ -91,25 +81,11 @@ foreach($k in $ovr.Keys){
 }
 return $result
 }
-function Ensure-Files {
-    param(
-        [string]$base,
-        [string]$query
-    )
-
-    $ok = $true
-
-    if ([string]::IsNullOrWhiteSpace($base) -or -not (Test-Path -LiteralPath $base)) {
-        Write-Error "Missing base:  $base"
-        $ok = $false
-    }
-
-    if ([string]::IsNullOrWhiteSpace($query) -or -not (Test-Path -LiteralPath $query)) {
-        Write-Error "Missing query: $query"
-        $ok = $false
-    }
-
-    return $ok
+function Ensure-Files { param([string]$base,[string]$query)
+$ok = $true
+if ([string]::IsNullOrWhiteSpace($base) -or -not (Test-Path -LiteralPath $base)) { Write-Error "Missing base:  $base";  $ok = $false }
+if ([string]::IsNullOrWhiteSpace($query) -or -not (Test-Path -LiteralPath $query)) { Write-Error "Missing query: $query"; $ok = $false }
+return $ok
 }
 function Safe-Resolve([string]$Path, [bool]$AllowMissing = $false) {
     try {
@@ -153,6 +129,44 @@ function Save-Manifest([string]$RunDir, [hashtable]$Manifest) {
         $out = Join-Path $RunDir "manifest.json"
         ($Manifest | ConvertTo-Json -Depth 64) | Out-File -FilePath $out -Encoding utf8
     } catch {}
+}
+
+# --- Merge helpers ---
+function Combine-ProfileCSVs {
+    param(
+        [Parameter(Mandatory=$true)][string]$RootDatasetDir,   # e.g., G:\fsp-run\SIFT1M
+        [Parameter(Mandatory=$true)][string]$LeafCsvName,      # "results.csv" or "GlobalPrecision.csv"
+        [Parameter(Mandatory=$true)][string]$OutCsvPath        # output file path
+    )
+    $pattern = Join-Path $RootDatasetDir ("*\results\" + $LeafCsvName)
+    $files = Get-ChildItem -Path $pattern -File -ErrorAction SilentlyContinue
+    if (-not $files -or $files.Count -eq 0) {
+        Write-Warning "No $LeafCsvName found under $RootDatasetDir\*\results"
+        return
+    }
+    # Import all, add Profile column, union all headers
+    $rows = New-Object System.Collections.Generic.List[object]
+    $allCols = New-Object System.Collections.Generic.HashSet[string]
+    $null = $allCols.Add("Profile")
+
+    foreach ($f in $files) {
+        $profile = Split-Path (Split-Path (Split-Path $f.FullName -Parent) -Parent) -Leaf
+        $csv = @()
+        try { $csv = Import-Csv -LiteralPath $f.FullName -ErrorAction Stop } catch { continue }
+        foreach ($r in $csv) {
+            # track headers
+            foreach ($p in $r.PSObject.Properties.Name) { $null = $allCols.Add($p) }
+            # clone to PSObject and add profile
+            $o = [PSCustomObject]@{}
+            $o | Add-Member NoteProperty Profile $profile
+            foreach ($p in $r.PSObject.Properties) { $o | Add-Member NoteProperty $p.Name $p.Value }
+            $rows.Add($o) | Out-Null
+        }
+    }
+    if ($rows.Count -eq 0) { Write-Warning "No rows to combine for $LeafCsvName"; return }
+    $ordered = @("Profile") + ($allCols | Where-Object { $_ -ne "Profile" } | Sort-Object)
+    $rows | Select-Object $ordered | Export-Csv -LiteralPath $OutCsvPath -NoTypeInformation -Encoding UTF8
+    Write-Host ("Combined {0} files -> {1}" -f $files.Count, $OutCsvPath)
 }
 
 # ---------- STEP 0: optional global clean and exit ----------
@@ -262,7 +276,7 @@ foreach ($p in $profiles) {
     $argList += $gtArg
     $argList += "$Batch"
 
-    # Quote anything with spaces
+    # Quote anything with spaces for logging (we pass array to java)
     $quotedArgs = foreach ($a in $argList) { $s = [string]$a; if ($s -match '\s') { '"' + ($s -replace '"','\"') + '"' } else { $s } }
     $argLine = [string]::Join(" ", $quotedArgs)
     $argLine | Out-File -FilePath (Join-Path $runDir "cmdline.txt") -Encoding utf8
@@ -292,17 +306,13 @@ foreach ($p in $profiles) {
     $progressRegex = '^\[\d+/\d+\]\s+ queries processed (GT)'
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-
-    # IMPORTANT: pass the array, not the joined string
     & java @argList 2>&1 |
             Tee-Object -FilePath $combinedLog |
             Where-Object { $_ -notmatch $progressRegex }
-
     $exit = $LASTEXITCODE
     $sw.Stop()
 
-    ("ElapsedSec={0:N1}" -f $sw.Elapsed.TotalSeconds) |
-            Out-File -FilePath (Join-Path $runDir "elapsed.txt") -Encoding utf8
+    ("ElapsedSec={0:N1}" -f $sw.Elapsed.TotalSeconds) | Out-File -FilePath (Join-Path $runDir "elapsed.txt") -Encoding utf8
 
     if ($exit -ne 0) {
         Write-Warning ("Run failed for profile {0} (exit={1})." -f $label, $exit)
@@ -310,3 +320,13 @@ foreach ($p in $profiles) {
         Write-Host ("Completed: {0} ({1})" -f $Name, $label)
     }
 }
+
+# ---------- POST: merge CSVs across profiles ----------
+$rootDatasetDir = Join-Path $OutRoot $Name
+$combinedResults   = Join-Path $rootDatasetDir "combined_results.csv"
+$combinedPrecision = Join-Path $rootDatasetDir "combined_precision.csv"
+
+Combine-ProfileCSVs -RootDatasetDir $rootDatasetDir -LeafCsvName "results.csv"          -OutCsvPath $combinedResults
+Combine-ProfileCSVs -RootDatasetDir $rootDatasetDir -LeafCsvName "GlobalPrecision.csv"  -OutCsvPath $combinedPrecision
+
+Write-Host "All done."
