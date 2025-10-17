@@ -17,9 +17,9 @@ $OutRoot    = "G:\fsp-run"
 # ---- dataset: SIFT1M (edit these) ----
 $Name  = "SIFT1M"
 $Dim   = 128
-$Base  = "E:\Research Work\Datasets\sift_dataset\sift_base.fvecs"
-$Query = "E:\Research Work\Datasets\sift_dataset\sift_query.fvecs"
-$GT    = "E:\Research Work\Datasets\sift_dataset\sift_query_groundtruth.ivecs"   # ignored; "AUTO" is forced
+$Base  = "E:\Research Work\Datasets\SIFT1M\sift_base.fvecs"
+$Query = "E:\Research Work\Datasets\SIFT1M\sift_query.fvecs"
+$GT    = "E:\Research Work\Datasets\SIFT1M\sift_query_groundtruth.ivecs"   # ignored; "AUTO" is forced
 
 # app batch size arg
 $Batch = 100000
@@ -214,13 +214,24 @@ foreach ($p in $profiles) {
     $final['eval']['computePrecision'] = $true
     $final['eval']['writeGlobalPrecisionCsv'] = $true
 
-    # hard-pin noise=0 (no extra cloak noise)
     if (-not $final.ContainsKey('cloak')) { $final['cloak'] = @{} }
     $final['cloak']['noise'] = 0.0
 
-    # carry top-level audit settings if present
     if ($cfgObj.PSObject.Properties.Name -contains 'audit') { $final['audit'] = To-Hashtable $cfgObj.audit }
 
+    # --- HARDEN: force paper mode; neutralize legacy LSH knobs ---
+    if (-not $final.ContainsKey('paper')) { $final['paper'] = @{} }
+    $final['paper']['enabled'] = $true
+    if (-not $final['paper'].ContainsKey('seed')) { $final['paper']['seed'] = 13 }
+
+    if (-not $final.ContainsKey('lsh')) { $final['lsh'] = @{} }
+    $final['lsh']['numTables']   = 0
+    $final['lsh']['rowsPerBand'] = 0
+    $final['lsh']['probeShards'] = 0
+
+    if (-not $final.ContainsKey('numShards')) { $final['numShards'] = 32 }
+
+    # NOW write the hardened config
     $tmpConf = Join-Path $runDir "config.json"
     ($final | ConvertTo-Json -Depth 64) | Out-File -FilePath $tmpConf -Encoding utf8
 
