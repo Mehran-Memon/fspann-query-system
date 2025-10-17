@@ -6,10 +6,8 @@ import com.fspann.crypto.ReencryptionTracker;
 import com.fspann.loader.GroundtruthManager;
 import com.fspann.query.core.QueryEvaluationResult;
 import com.fspann.query.core.QueryTokenFactory;
-import com.fspann.index.service.SecureLSHIndexService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import javax.crypto.SecretKey;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -80,18 +78,22 @@ public class QueryServiceImpl implements QueryService {
             kv = keyService.getVersion(token.getVersion());
         } catch (RuntimeException ex) {
             kv = keyService.getCurrentVersion();
-            try { indexService.lookupWithDiagnostics(token); } catch (Throwable ignore) {}
+            // Best-effort warm path for paper engine; ignore any errors
+            try { indexService.lookup(token); } catch (Throwable ignore) {}
         }
 
         // Decrypt query
-        final double[] qVec = cryptoService.decryptQuery(token.getEncryptedQuery(), token.getIv(), kv.getKey());
+        final double[] qVec = cryptoService.decryptQuery(
+                token.getEncryptedQuery(), token.getIv(), kv.getKey());
 
-        // Diagnostics probe (best-effort)
-        try { indexService.lookupWithDiagnostics(token); } catch (Throwable ignore) {}
-
-        // 1) Lookup candidates
-        List<EncryptedPoint> raw = indexService.lookup(token);
-        if (raw == null) raw = java.util.Collections.emptyList();
+        // 1) Lookup candidates (single call)
+        List<EncryptedPoint> raw;
+        try {
+            List<EncryptedPoint> tmp = indexService.lookup(token);
+            raw = (tmp != null) ? tmp : java.util.Collections.emptyList();
+        } catch (Throwable t) {
+            raw = java.util.Collections.emptyList();
+        }
 
         // 2) De-duplicate by ID (subset union, stable order)
         final Map<String, EncryptedPoint> uniq = new LinkedHashMap<>(Math.max(16, raw.size()));
@@ -139,6 +141,7 @@ public class QueryServiceImpl implements QueryService {
         this.lastQueryDurationNs = System.nanoTime() - t0;
         return out;
     }
+
 
     private static double l2(double[] a, double[] b) {
         double s = 0.0;

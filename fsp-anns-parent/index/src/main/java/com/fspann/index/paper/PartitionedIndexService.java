@@ -26,7 +26,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class PartitionedIndexService implements PaperSearchEngine {
 
     // ----------------------------- Tunables -----------------------------
-    private final int m;                 // projections per division
+    private final int m;                // projections per division
     private final int lambda;           // bits per projection
     private final int divisions;        // ℓ
     private final long seedBase;        // base seed to derive per-division seeds
@@ -37,7 +37,7 @@ public class PartitionedIndexService implements PaperSearchEngine {
     public PartitionedIndexService(int m, int lambda, int divisions, long seedBase) {
         this(m, lambda, divisions, seedBase,
                 Integer.getInteger("paper.buildThreshold", 2_000),
-                Integer.getInteger("paper.maxCandidates", -1)); // <= 0 means disabled
+                Integer.getInteger("paper.maxCandidates", -1)); // 0 means disabled
     }
 
     public PartitionedIndexService(int m, int lambda, int divisions, long seedBase, int buildThreshold, int maxCandidates) {
@@ -134,31 +134,22 @@ public class PartitionedIndexService implements PaperSearchEngine {
         final DimensionState S = dims.get(d);
         if (S == null) return Collections.emptyList();
 
-        ensureBuilt(S); // build once if not built yet
+        ensureBuilt(S); // one-time build if needed
 
-        // ---- Tunables (via JVM props) ----
-        final int K = Math.max(1, token.getTopK());
-        final int maxRadius = Integer.getInteger("paper.expand.radius.max", 2);
-        final int maxRadiusHard = Integer.getInteger("paper.expand.radius.hard", Math.max(3, maxRadius + 1));
+        // ---- purely (m, λ)-derived budgets/radii ----
+        // per-division targets ensure we don't cap globally or by K
+        final int perDivTarget  = Math.max(1, Math.max(m * lambda,  S.divisions.isEmpty() ? 1 : S.divisions.get(0).w));
+        final int perDivTarget2 = Math.max(perDivTarget, (int)Math.ceil(1.5 * m * lambda));
 
-        /*
-         * Per-division gather budget is a FUNCTION OF THE ALGORITHM, not K and not a fixed target.
-         * Intuition:
-         *   - m = projections per division → more projections allow finer bucket discrimination,
-         *   - λ = bits per projection,
-         *   - ℓ = number of divisions (hash tables).
-         * We gather proportional to m per division, with a small constant slack.
-         * You can refine this later with a closed-form from your paper; the key is: no dependence on K.
-         */
-        final int algSlack = 2; // tiny constant; does NOT cap globally
-        final int perDivTarget = Math.max(2, m + algSlack);
-        final int perDivTarget2 = Math.max(perDivTarget, m + (algSlack << 1)); // second pass slightly wider
+        // symmetric widening around the hit interval(s)
+        final int maxRadius     = Math.max(1, lambda);       // pass-1
+        final int maxRadiusHard = Math.max(maxRadius + 1, 2 * lambda); // pass-2
 
         final Set<String> seen = new LinkedHashSet<>();
         final List<EncryptedPoint> cands = new ArrayList<>();
         final double[] q = token.getPlaintextQuery();
 
-        // ---------- PASS 1: direct hits + limited symmetric expansion ----------
+        // ---------- PASS 1: hits + bounded symmetric expansion ----------
         for (DivisionState div : S.divisions) {
             if (div.I.isEmpty()) continue;
             BitSet Cq = Coding.C(q, div.G);
@@ -168,9 +159,8 @@ public class PartitionedIndexService implements PaperSearchEngine {
 
             int gatheredThisDiv = 0;
             for (int idx : hitIdxs) {
-                int radius = 0;
-                while (radius <= maxRadius && gatheredThisDiv < perDivTarget) {
-                    for (int j = idx - radius; j <= idx + radius; j++) {
+                for (int radius = 0; radius <= maxRadius && gatheredThisDiv < perDivTarget; radius++) {
+                    for (int j = idx - radius; j <= idx + radius && gatheredThisDiv < perDivTarget; j++) {
                         if (j < 0 || j >= div.I.size()) continue;
                         GreedyPartitioner.SubsetBounds sb = div.I.get(j);
                         List<EncryptedPoint> subset = div.tagToSubset.get(sb.tag);
@@ -179,59 +169,42 @@ public class PartitionedIndexService implements PaperSearchEngine {
                         for (EncryptedPoint p : subset) {
                             if (seen.add(p.getId())) {
                                 cands.add(p);
-                                gatheredThisDiv++;
-                                // Optional safety cap ONLY if explicitly positive; otherwise disabled
-                                if (maxCandidates > 0 && cands.size() >= maxCandidates) return cands;
-                                if (gatheredThisDiv >= perDivTarget) break; // stop ONLY per-division; never globally by K
-
-                            }
-                        }
-                    }
-                    radius++;
-                }
-            }
-        }
-        if (cands.isEmpty()) {
-            logger.warn("Paper lookup produced 0 candidates for dim={} (K={}, divisions={}). " +
-                            "Check partitions build (threshold={}, stagedSize≈{}).",
-                    d, K, divisions, buildThreshold, S.staged.size());
-        }
-
-        if (cands.size() >= K || S.divisions.isEmpty()) return cands;
-
-        // ---------- PASS 2: gentle widening if still short of K ----------
-        final int deficit = K - cands.size();
-        if (deficit > 0) {
-            for (DivisionState div : S.divisions) {
-                if (div.I.isEmpty()) continue;
-                BitSet Cq = Coding.C(q, div.G);
-
-                List<Integer> hitIdxs = findCoveringIntervals(Cq, div.I);
-                if (hitIdxs.isEmpty()) continue;
-
-                int gatheredThisDiv = 0;
-                for (int idx : hitIdxs) {
-                    for (int radius = maxRadius + 1; radius <= maxRadiusHard && gatheredThisDiv < perDivTarget2; radius++) {
-                        for (int j = idx - radius; j <= idx + radius; j++) {
-                            if (j < 0 || j >= div.I.size()) continue;
-                            GreedyPartitioner.SubsetBounds sb = div.I.get(j);
-                            List<EncryptedPoint> subset = div.tagToSubset.get(sb.tag);
-                            if (subset == null) continue;
-
-                            for (EncryptedPoint p : subset) {
-                                if (seen.add(p.getId())) {
-                                    cands.add(p);
-                                    gatheredThisDiv++;
-                                    if (maxCandidates > 0 && cands.size() >= maxCandidates) return cands;
-                                    if (cands.size() >= K) return cands; // stop as soon as we hit K
-                                }
+                                if (++gatheredThisDiv >= perDivTarget) break;
                             }
                         }
                     }
                 }
-                if (cands.size() >= K) break;
             }
         }
+
+        // ---------- PASS 2: gentle widening (still only (m, λ) driven) ----------
+        for (DivisionState div : S.divisions) {
+            if (div.I.isEmpty()) continue;
+            BitSet Cq = Coding.C(q, div.G);
+
+            List<Integer> hitIdxs = findCoveringIntervals(Cq, div.I);
+            if (hitIdxs.isEmpty()) continue;
+
+            int gatheredThisDiv = 0;
+            for (int idx : hitIdxs) {
+                for (int radius = maxRadius + 1; radius <= maxRadiusHard && gatheredThisDiv < perDivTarget2; radius++) {
+                    for (int j = idx - radius; j <= idx + radius && gatheredThisDiv < perDivTarget2; j++) {
+                        if (j < 0 || j >= div.I.size()) continue;
+                        GreedyPartitioner.SubsetBounds sb = div.I.get(j);
+                        List<EncryptedPoint> subset = div.tagToSubset.get(sb.tag);
+                        if (subset == null) continue;
+
+                        for (EncryptedPoint p : subset) {
+                            if (seen.add(p.getId())) {
+                                cands.add(p);
+                                if (++gatheredThisDiv >= perDivTarget2) break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         return cands;
     }
 

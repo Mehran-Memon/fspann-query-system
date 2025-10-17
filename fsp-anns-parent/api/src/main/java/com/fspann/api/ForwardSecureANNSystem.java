@@ -311,15 +311,6 @@ public class ForwardSecureANNSystem {
         // Build index service
         this.indexService = SecureLSHIndexService.fromConfig(cryptoService, keyService, metadataManager, config);
 
-        if (config.getPaper().enabled) {
-            var pc = config.getPaper();
-            var pe = new com.fspann.index.paper.PartitionedIndexService(pc.m, pc.lambda, pc.divisions, pc.seed);
-            // No optional flags anymore.
-            applyPaperFlags(pe, pc); // currently a no-op to keep compatibility
-            indexService.setPaperEngine(pe);
-            logger.info("Paper engine enabled (m={}, λ={}, ℓ={}, seed={})", pc.m, pc.lambda, pc.divisions, pc.seed);
-        }
-
         if (keyService instanceof KeyRotationServiceImpl kr) {
             kr.setIndexService(indexService);
         }

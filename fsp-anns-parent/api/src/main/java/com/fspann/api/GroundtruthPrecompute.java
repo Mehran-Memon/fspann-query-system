@@ -141,26 +141,52 @@ public final class GroundtruthPrecompute {
             return Math.sqrt(sum);
         }
 
+        double l2sq(float[] q, int id) {
+            final int off = id * recordBytes + 4;
+            double sum = 0.0;
+            if (!streaming) {
+                if (bvecs) {
+                    for (int i = 0; i < dim; i++) { double d = q[i] - (map.get(off + i) & 0xFF); sum += d*d; }
+                } else {
+                    for (int i = 0; i < dim; i++) { double d = q[i] - map.getFloat(off + i*4); sum += d*d; }
+                }
+            } else {
+                try {
+                    ByteBuffer buf = tlBuf.get(); buf.clear();
+                    int n = ch.read(buf, (long) id * recordBytes); if (n < recordBytes) throw new IOException("Short read id="+id);
+                    buf.flip(); buf.getInt();
+                    if (bvecs) { for (int i = 0; i < dim; i++) { double d = q[i] - (buf.get() & 0xFF); sum += d*d; } }
+                    else       { for (int i = 0; i < dim; i++) { double d = q[i] - buf.getFloat();     sum += d*d; } }
+                } catch (IOException e) { throw new RuntimeException(e); }
+            }
+            return sum; // no sqrt
+        }
+
         @Override public void close() throws IOException { ch.close(); }
     }
 
+    private static final class Item { final int id; final double d; Item(int id, double d){this.id=id; this.d=d;} }
+    private static final Comparator<Item> BY_D_THEN_ID =
+            Comparator.<Item>comparingDouble(it -> it.d).thenComparingInt(it -> it.id);
+    private static final Comparator<Item> BY_D_THEN_ID_REVERSED = BY_D_THEN_ID.reversed();
+
     private static final class HeapK {
         final int k;
-        final PriorityQueue<Item> pq = new PriorityQueue<>(Comparator.<Item>comparingDouble(it -> it.d).reversed());
+        final PriorityQueue<Item> pq = new PriorityQueue<>(BY_D_THEN_ID_REVERSED); // max-heap by (d,id)
         HeapK(int k) { this.k = k; }
         void offer(int id, double d) {
-            if (pq.size() < k) { pq.offer(new Item(id, d)); return; }
-            if (!pq.isEmpty() && d < pq.peek().d) { pq.poll(); pq.offer(new Item(id, d)); }
+            Item cand = new Item(id, d);
+            if (pq.size() < k) { pq.offer(cand); return; }
+            if (BY_D_THEN_ID.compare(cand, pq.peek()) < 0) { pq.poll(); pq.offer(cand); }
         }
         int[] idsAscending() {
             ArrayList<Item> list = new ArrayList<>(pq);
-            list.sort(Comparator.comparingDouble(it -> it.d));
+            list.sort(BY_D_THEN_ID); // ascending (d,id)
             int[] out = new int[list.size()];
             for (int i = 0; i < out.length; i++) out[i] = list.get(i).id;
             return out;
         }
     }
-    private static final class Item { final int id; final double d; Item(int id, double d){this.id=id; this.d=d;} }
 
     private static boolean looksLike(Path p, String suffix) {
         String s = p.getFileName().toString().toLowerCase(Locale.ROOT);
@@ -177,12 +203,13 @@ public final class GroundtruthPrecompute {
     private static void writeIvecs(Path out, int[][] rows) throws IOException {
         try (OutputStream raw = Files.newOutputStream(out, CREATE, TRUNCATE_EXISTING, WRITE);
              BufferedOutputStream bos = new BufferedOutputStream(raw, 1<<20)) {
+            int maxK = 0; for (int[] r : rows) if (r != null && r.length > maxK) maxK = r.length;
+            ByteBuffer bb = ByteBuffer.allocate(4 + 4 * Math.max(1, maxK)).order(ByteOrder.LITTLE_ENDIAN);
             for (int[] ids : rows) {
-                ByteBuffer bb = ByteBuffer.allocate(4 + 4 * ids.length).order(ByteOrder.LITTLE_ENDIAN);
-                bb.putInt(ids.length);
-                for (int id : ids) bb.putInt(id);
-                bb.flip();
-                bos.write(bb.array(), 0, bb.remaining());
+                int k = (ids == null ? 0 : ids.length);
+                bb.clear(); bb.putInt(k);
+                for (int i = 0; i < k; i++) bb.putInt(ids[i]);
+                bos.write(bb.array(), 0, 4 + 4*k);
             }
         }
     }
@@ -212,6 +239,12 @@ public final class GroundtruthPrecompute {
             final int kFinal = Math.min(Math.max(1, K), base.count);   // <-- make it final
             final int Q = qry.count;                                   // good practice to mark these final too
             final int[][] rows = new int[Q][];
+            if (base.count <= 0 || qry.count <= 0) {
+                throw new IllegalArgumentException("Empty or malformed vector files (zero records).");
+            }
+            if ((base.ch.size() % base.recordBytes) != 0L) {
+                throw new IllegalArgumentException("Base file size not a multiple of record size; wrong type/dim?");
+            }
 
             final AtomicInteger nextQ = new AtomicInteger(0);
             ExecutorService exec = Executors.newFixedThreadPool(Math.max(1, threads));
@@ -225,7 +258,7 @@ public final class GroundtruthPrecompute {
                         qry.read(qi, qbuf);
                         HeapK heap = new HeapK(kFinal);                 // <-- use kFinal inside lambda
                         for (int bi = 0; bi < base.count; bi++) {
-                            heap.offer(bi, base.l2(qbuf, bi));
+                            heap.offer(bi, base.l2sq(qbuf, bi)); // squared distance
                         }
                         rows[qi] = heap.idsAscending();
                         if ((qi + 1) % 1000 == 0) {

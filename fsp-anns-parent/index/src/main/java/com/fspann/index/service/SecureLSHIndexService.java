@@ -334,16 +334,12 @@ public class SecureLSHIndexService implements IndexService {
     @Override
     public LookupWithDiagnostics lookupWithDiagnostics(QueryToken token) {
         Objects.requireNonNull(token, "QueryToken cannot be null");
-        // One-shot fanout snapshot label (first diagnostic call)
-        fanoutLogOnce();
-
-        // ---- Partitioned path (paper engine) ----
         if (isPartitioned() && paperEngine != null) {
+            // Single call: do lookup once and wrap basic diagnostics
             List<EncryptedPoint> cands = paperEngine.lookup(token);
-            // Diagnostics (subset size only for now in paper mode)
             SearchDiagnostics diag = new SearchDiagnostics(
                     (cands != null) ? cands.size() : 0,
-                    0,
+                    /*probedBuckets*/ 0,
                     java.util.Map.of()
             );
             return new LookupWithDiagnostics((cands != null) ? cands : java.util.List.of(), diag);
