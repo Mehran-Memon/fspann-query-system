@@ -9,6 +9,11 @@
 # ============================
 
 Set-StrictMode -Version Latest
+if (-not (Get-Command java -ErrorAction SilentlyContinue)) {
+    throw "Java not found in PATH. Install JDK or add 'java' to PATH."
+}
+$javaVer = (& java -version 2>&1)[0]
+$manifest.javaVersion = $javaVer
 
 # ---- required paths ----
 $JarPath    = "F:\fspann-query-system\fsp-anns-parent\api\target\api-0.0.1-SNAPSHOT-jar-with-dependencies.jar"
@@ -130,6 +135,35 @@ function Save-Manifest([string]$RunDir, [hashtable]$Manifest) {
         ($Manifest | ConvertTo-Json -Depth 64) | Out-File -FilePath $out -Encoding utf8
     } catch {}
 }
+function Get-LatestRestoreVersion {
+    param([string]$RunDir)
+    # Try to infer from metadata folder names like "epoch_5_*", fallback to a version file if you have one.
+    $meta = Join-Path $RunDir "metadata"
+    if (Test-Path -LiteralPath $meta) {
+        $latest = Get-ChildItem -LiteralPath $meta -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match '^epoch_(\d+)' } |
+                ForEach-Object {
+                    [pscustomobject]@{ Dir=$_; Epoch=[int]([regex]::Match($_.Name,'^epoch_(\d+)').Groups[1].Value) }
+                } |
+                Sort-Object Epoch -Descending |
+                Select-Object -First 1
+        if ($latest) { return [string]$latest.Epoch }
+    }
+    return ""  # unknown
+}
+function Get-LatestRestoreVersionForProfile {
+    param([string]$RootDatasetDir, [string]$Profile)
+    $profileDir = Join-Path $RootDatasetDir $Profile
+    $meta = Join-Path $profileDir "metadata"
+    if (-not (Test-Path -LiteralPath $meta)) { return "" }
+    $latest = Get-ChildItem -LiteralPath $meta -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^epoch_(\d+)' } |
+            ForEach-Object {
+                [pscustomobject]@{ Epoch=[int]([regex]::Match($_.Name,'^epoch_(\d+)').Groups[1].Value) }
+            } |
+            Sort-Object Epoch -Descending | Select-Object -First 1
+    if ($latest) { return [string]$latest.Epoch } else { return "" }
+}
 
 # --- Merge helpers ---
 function Combine-ProfileCSVs {
@@ -186,7 +220,8 @@ if (-not $QueryOnly) {
 
 # ---------- read config ----------
 $cfgObj = (Get-Content -LiteralPath $ConfigPath -Raw) | ConvertFrom-Json
-$profiles = $cfgObj.profiles
+$profiles = @($cfgObj.profiles)
+if ($profiles.Count -eq 0) { throw "config.json must contain a non-empty 'profiles' array." }
 if ($null -eq $profiles) { throw "config.json must contain a 'profiles' array." }
 
 # Build base payload (back-compat w/ optional 'base' node)
@@ -209,41 +244,75 @@ if ($OnlyProfile -and $OnlyProfile.Trim().Length -gt 0) {
 }
 
 # ---------- run all (or filtered) profiles ----------
-foreach ($p in $profiles) {
+foreach ($p in $profiles)
+{
     $pHT = To-Hashtable $p
-    if (-not $pHT.ContainsKey('name')) { continue }
+    if (-not $pHT.ContainsKey('name'))
+    {
+        continue
+    }
     $label = [string]$pHT['name']
-    $ovr   = @{}; if ($pHT.ContainsKey('overrides')) { $ovr = $pHT['overrides'] }
+    $ovr = @{ }; if ( $pHT.ContainsKey('overrides'))
+    {
+        $ovr = $pHT['overrides']
+    }
 
     $runDir = Join-Path (Join-Path $OutRoot $Name) $label
     New-Item -ItemType Directory -Force -Path $runDir | Out-Null
-    if ($CleanPerRun) { Clean-RunMetadata -RunDir $runDir }
+    if ($CleanPerRun)
+    {
+        Clean-RunMetadata -RunDir $runDir
+    }
 
     # merge + ensure outputs/eval/reencryption match new system defaults
     $final = Apply-Overrides -base $baseHT -ovr $ovr
 
-    if (-not $final.ContainsKey('output')) { $final['output'] = @{} }
+    if (-not $final.ContainsKey('output'))
+    {
+        $final['output'] = @{ }
+    }
     $final['output']['resultsDir'] = (Join-Path $runDir "results")
-    if (-not $final.ContainsKey('eval')) { $final['eval'] = @{} }
+    if (-not $final.ContainsKey('eval'))
+    {
+        $final['eval'] = @{ }
+    }
     $final['eval']['computePrecision'] = $true
     $final['eval']['writeGlobalPrecisionCsv'] = $true
 
-    if (-not $final.ContainsKey('cloak')) { $final['cloak'] = @{} }
+    if (-not $final.ContainsKey('cloak'))
+    {
+        $final['cloak'] = @{ }
+    }
     $final['cloak']['noise'] = 0.0
 
-    if ($cfgObj.PSObject.Properties.Name -contains 'audit') { $final['audit'] = To-Hashtable $cfgObj.audit }
+    if ($cfgObj.PSObject.Properties.Name -contains 'audit')
+    {
+        $final['audit'] = To-Hashtable $cfgObj.audit
+    }
 
     # --- HARDEN: force paper mode; neutralize legacy LSH knobs ---
-    if (-not $final.ContainsKey('paper')) { $final['paper'] = @{} }
+    if (-not $final.ContainsKey('paper'))
+    {
+        $final['paper'] = @{ }
+    }
     $final['paper']['enabled'] = $true
-    if (-not $final['paper'].ContainsKey('seed')) { $final['paper']['seed'] = 13 }
+    if (-not $final['paper'].ContainsKey('seed'))
+    {
+        $final['paper']['seed'] = 13
+    }
 
-    if (-not $final.ContainsKey('lsh')) { $final['lsh'] = @{} }
-    $final['lsh']['numTables']   = 0
+    if (-not $final.ContainsKey('lsh'))
+    {
+        $final['lsh'] = @{ }
+    }
+    $final['lsh']['numTables'] = 0
     $final['lsh']['rowsPerBand'] = 0
     $final['lsh']['probeShards'] = 0
 
-    if (-not $final.ContainsKey('numShards')) { $final['numShards'] = 32 }
+    if (-not $final.ContainsKey('numShards'))
+    {
+        $final['numShards'] = 32
+    }
 
     # NOW write the hardened config
     $tmpConf = Join-Path $runDir "config.json"
@@ -253,14 +322,32 @@ foreach ($p in $profiles) {
     $gtArg = "AUTO"  # FORCE PRECOMPUTE EVERY RUN
 
     # Build app args: <config> <dataPath> <queryPath> <keysFilePath> <dimensions> <metadataPath> <groundtruth> [batch]
-    $dataArg  = $Base
+    $dataArg = $Base
     $queryArg = $Query
     $restoreFlag = @()
-    if ($QueryOnly) {
+    if ($QueryOnly)
+    {
         $dataArg = "POINTS_ONLY"
-        $restoreFlag = @("-Dquery.only=true")
-        if ($RestoreVersion -and $RestoreVersion.Trim().Length -gt 0) { $restoreFlag += "-Drestore.version=$RestoreVersion" }
+        $restoreFlag += "-Dquery.only=true"
+        $autoVer = ""
+        if (-not $RestoreVersion -or $RestoreVersion.Trim().Length -eq 0)
+        {
+            $autoVer = Get-LatestRestoreVersionForProfile -RootDatasetDir (Join-Path $OutRoot $Name) -Profile $label
+        }
+        $verToUse = if ($RestoreVersion)
+        {
+            $RestoreVersion
+        }
+        else
+        {
+            $autoVer
+        }
+        if ($verToUse)
+        {
+            $restoreFlag += "-Drestore.version=$verToUse"
+        }
     }
+}
 
     $argList = @()
     $argList += $JvmArgs
@@ -319,14 +406,18 @@ foreach ($p in $profiles) {
     } else {
         Write-Host ("Completed: {0} ({1})" -f $Name, $label)
     }
-}
+
 
 # ---------- POST: merge CSVs across profiles ----------
-$rootDatasetDir = Join-Path $OutRoot $Name
-$combinedResults   = Join-Path $rootDatasetDir "combined_results.csv"
-$combinedPrecision = Join-Path $rootDatasetDir "combined_precision.csv"
+$rootDatasetDir     = Join-Path $OutRoot $Name
+$combinedResults    = Join-Path $rootDatasetDir "combined_results.csv"
+$combinedPrecision  = Join-Path $rootDatasetDir "combined_precision.csv"
+$combinedEvaluation = Join-Path $rootDatasetDir "combined_evaluation.csv"
 
-Combine-ProfileCSVs -RootDatasetDir $rootDatasetDir -LeafCsvName "results.csv"          -OutCsvPath $combinedResults
-Combine-ProfileCSVs -RootDatasetDir $rootDatasetDir -LeafCsvName "GlobalPrecision.csv"  -OutCsvPath $combinedPrecision
+# NOTE: Leaf names must match what the app writes. If your app writes "GlobalPrecision.csv"
+# (capitalized), keep that exact string instead of "global_precision.csv".
+Combine-ProfileCSVs -RootDatasetDir $rootDatasetDir -LeafCsvName "results_table.csv"      -OutCsvPath $combinedResults
+Combine-ProfileCSVs -RootDatasetDir $rootDatasetDir -LeafCsvName "GlobalPrecision.csv"    -OutCsvPath $combinedPrecision
+Combine-ProfileCSVs -RootDatasetDir $rootDatasetDir -LeafCsvName "topk_evaluation.csv"    -OutCsvPath $combinedEvaluation
 
 Write-Host "All done."

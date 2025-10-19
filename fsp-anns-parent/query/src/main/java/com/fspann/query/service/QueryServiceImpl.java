@@ -9,7 +9,6 @@ import com.fspann.query.core.QueryTokenFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import java.util.*;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -71,6 +70,8 @@ public class QueryServiceImpl implements QueryService {
 
         final long t0 = System.nanoTime();
         clearLastMetrics();
+
+        try {
 
         // Resolve key version
         KeyVersion kv;
@@ -139,18 +140,13 @@ public class QueryServiceImpl implements QueryService {
         this.lastTouchedCumulativeUnique = after;
 
         this.lastQueryDurationNs = System.nanoTime() - t0;
-        return out;
-    }
-
-
-    private static double l2(double[] a, double[] b) {
-        double s = 0.0;
-        for (int i = 0; i < a.length; i++) { double d = a[i] - b[i]; s += d*d; }
-        return Math.sqrt(s);
+            return out;
+        } finally {
+            lastQueryDurationNs = Math.max(0L, System.nanoTime() - t0);
+        }
     }
 
     private record QueryScored(String id, double dist) {}
-
 
     @Override
     public List<QueryEvaluationResult> searchWithTopKVariants(QueryToken baseToken,
@@ -161,9 +157,14 @@ public class QueryServiceImpl implements QueryService {
         final List<Integer> topKVariants = List.of(1, 5, 10, 20, 40, 60, 80, 100);
 
         // One real search; counters populated by search()
-        final long t0 = System.nanoTime();
+        final long clientStartNs = System.nanoTime();
         final List<QueryResult> baseResults = nn(search(baseToken));
-        final long queryDurationMs = Math.round((System.nanoTime() - t0) / 1_000_000.0);
+        final long clientEndNs = System.nanoTime();
+
+        // Use the server's own timer, but cap it to the client window for consistency.
+        final long clientWindowNs = Math.max(0L, clientEndNs - clientStartNs);
+        final long serverNsBounded = getLastQueryDurationNsCappedTo(clientWindowNs);
+        final long queryDurationMs = Math.round(serverNsBounded / 1_000_000.0);
 
         final int candTotal       = getLastCandTotal();
         final int candKeptVersion = getLastCandKeptVersion();
@@ -198,7 +199,7 @@ public class QueryServiceImpl implements QueryService {
                     upto,
                     Double.NaN,           // ratio computed upstream
                     precision,
-                    queryDurationMs,      // ServerTimeMs
+                    queryDurationMs,      // ServerTimeMs (bounded)
                     insertTimeMs,
                     candDecrypted,        // actually decrypted/scored
                     tokenSizeBytes,
@@ -210,8 +211,8 @@ public class QueryServiceImpl implements QueryService {
                     /*reencTimeMs*/ 0L,
                     /*reencBytesDelta*/ 0L,
                     /*reencBytesAfter*/ 0L,
-                    /*ratioDenomSource*/ "none",      // <-- moved above
-                    /*clientTimeMs*/     -1L,         // <-- moved below
+                    /*ratioDenomSource*/ "none",
+                    /*clientTimeMs*/     -1L,
                     /*tokenK*/           baseToken.getTopK(),
                     /*tokenKBase*/       baseToken.getTopK(),
                     /*qIndexZeroBased*/  queryIndex,
@@ -229,7 +230,6 @@ public class QueryServiceImpl implements QueryService {
 
     private static <T> List<T> nn(List<T> v) { return (v == null) ? Collections.emptyList() : v; }
     private static int[] safeGt(int[] a)     { return (a == null) ? new int[0] : a; }
-
     private static double l2sq(double[] a, double[] b) {
         if (a.length != b.length) throw new IllegalArgumentException("Vector dimension mismatch: " + a.length + " vs " + b.length);
         double s = 0;
@@ -239,29 +239,6 @@ public class QueryServiceImpl implements QueryService {
         }
         return s; // squared L2, no sqrt
     }
-
-    private static void sqrtInPlace(List<QueryResult> results) {
-        if (!RETURN_SQRT) return;
-        for (int i = 0; i < results.size(); i++) {
-            QueryResult r = results.get(i);
-            // Re-wrap with sqrt distance; assumes QueryResult(id, distance)
-            results.set(i, new QueryResult(r.getId(), Math.sqrt(r.getDistance())));
-        }
-    }
-
-    private Integer parseVersionFromContext(String ctx) {
-        if (ctx == null) return null;
-        Matcher m = VERSION_PATTERN.matcher(ctx);
-        if (!m.matches()) return null;
-        try { return Integer.parseInt(m.group(1)); } catch (Exception ignore) { return null; }
-    }
-
-    private static List<List<Integer>> deepCopy(List<List<Integer>> src) {
-        List<List<Integer>> out = new ArrayList<>(src.size());
-        for (List<Integer> l : src) out.add(new ArrayList<>(l));
-        return out;
-    }
-
     public static int estimateTokenSizeBytes(QueryToken t) {
         int bytes = 0;
         if (t.getIv() != null) bytes += t.getIv().length;
@@ -286,7 +263,10 @@ public class QueryServiceImpl implements QueryService {
     public int  getLastCandKeptVersion()   { return lastCandKeptVersion; }
     public int  getLastCandDecrypted()     { return lastCandDecrypted; }
     public int  getLastReturned()          { return lastReturned; }
-    public static int getGlobalTouchedUniqueCount() { return GLOBAL_TOUCHED.size(); }
+    public long getLastQueryDurationNsCappedTo(long clientWindowNs) {
+        if (clientWindowNs <= 0L) return Math.max(0L, lastQueryDurationNs);
+        return Math.min(Math.max(0L, lastQueryDurationNs), clientWindowNs);
+    }
     public List<String> getLastCandidateIds() {
         return (lastCandIds == null) ? java.util.Collections.emptyList()
                 : java.util.Collections.unmodifiableList(lastCandIds);

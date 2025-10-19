@@ -562,7 +562,8 @@ public class ForwardSecureANNSystem {
         List<QueryResult> cached = cache.get(ckey);
         if (cached != null) {
             if (profiler != null) {
-                profiler.recordQueryMetric("Q_cache_" + topK, 0, (System.nanoTime() - start) / 1_000_000.0, 0);
+                long clientNsCached = Math.max(0L, System.nanoTime() - start);
+                profiler.recordQueryMetric("Q_cache_" + topK, 0.0, clientNsCached / 1_000_000.0, 0.0);
             }
             return cached;
         }
@@ -570,13 +571,18 @@ public class ForwardSecureANNSystem {
         List<QueryResult> results = queryService.search(token);
         cache.put(ckey, results);
 
-        long elapsed = System.nanoTime() - start;
-        totalQueryTime += elapsed;
+        long elapsedNs = Math.max(0L, System.nanoTime() - start);
+        totalQueryTime += elapsedNs;
+
         if (profiler != null) {
-            profiler.recordQueryMetric("Q_" + topK,
-                    ((QueryServiceImpl) queryService).getLastQueryDurationNs() / 1_000_000.0,
-                    elapsed / 1_000_000.0,
-                    0);
+            long rawServerNs = Math.max(0L, ((QueryServiceImpl) queryService).getLastQueryDurationNs());
+            long serverNs = capServerNs(rawServerNs, elapsedNs);
+            profiler.recordQueryMetric(
+                    "Q_" + topK,
+                    serverNs / 1_000_000.0,
+                    elapsedNs / 1_000_000.0,
+                    0.0
+            );
         }
         return results;
     }
@@ -600,7 +606,8 @@ public class ForwardSecureANNSystem {
         List<QueryResult> cached = cache.get(ckey);
         if (cached != null) {
             if (profiler != null) {
-                profiler.recordQueryMetric("Q_cloak_cache_" + topK, 0, (System.nanoTime() - start) / 1_000_000.0, 0);
+                long clientNsCached = Math.max(0L, System.nanoTime() - start);
+                profiler.recordQueryMetric("Q_cloak_cache_" + topK, 0.0, clientNsCached / 1_000_000.0, 0.0);
             }
             return cached;
         }
@@ -608,69 +615,21 @@ public class ForwardSecureANNSystem {
         List<QueryResult> results = queryService.search(token);
         cache.put(ckey, results);
 
-        long elapsed = System.nanoTime() - start;
-        totalQueryTime += elapsed;
+        long elapsedNs = Math.max(0L, System.nanoTime() - start);
+        totalQueryTime += elapsedNs;
+
         if (profiler != null) {
-            profiler.recordQueryMetric("Q_cloak_" + topK,
-                    ((QueryServiceImpl) queryService).getLastQueryDurationNs() / 1_000_000.0,
-                    elapsed / 1_000_000.0,
-                    0);
+            long rawServerNs = Math.max(0L, ((QueryServiceImpl) queryService).getLastQueryDurationNs());
+            long serverNs = capServerNs(rawServerNs, elapsedNs);
+            profiler.recordQueryMetric(
+                    "Q_cloak_" + topK,
+                    serverNs / 1_000_000.0,
+                    elapsedNs / 1_000_000.0,
+                    0.0
+            );
         }
         if (verbose) logger.debug("Cloaked query returned {} results for topK={}", results.size(), topK);
         return results;
-    }
-
-    /** Literature ratio@K = best(returned K) / trueNN(base). Does not rely on GT. **/
-    /**
-     * Ununsed - kept for future debugging if needed
-     **/
-    private double distanceRatioFromBase(double[] q, List<QueryResult> retrievedTopK, int k) {
-        if (baseReader == null || q == null || retrievedTopK == null || retrievedTopK.isEmpty() || k <= 0) {
-            return Double.NaN;
-        }
-
-        final double eps = 1e-12;
-
-        double denom = Double.POSITIVE_INFINITY;
-        int trueIdx = -1;
-        final int N = baseReader.count;
-        for (int i = 0; i < N; i++) {
-            double d = baseReader.l2(q, i);
-            if (!Double.isNaN(d) && d < denom) {
-                denom = d;
-                trueIdx = i;
-            }
-        }
-        if (Double.isNaN(denom) || !Double.isFinite(denom)) return Double.NaN;
-        if (denom <= eps) return 1.0;
-
-        double num = Double.POSITIVE_INFINITY;
-        String bestId = "NA";
-        final int upto = Math.min(k, retrievedTopK.size());
-        for (int i = 0; i < upto; i++) {
-            String id = retrievedTopK.get(i).getId();
-            int baseIdx;
-            try {
-                baseIdx = Integer.parseInt(id);
-            } catch (NumberFormatException nfe) {
-                continue;
-            }
-            double d = baseReader.l2(q, baseIdx);
-            if (!Double.isNaN(d) && d < num) {
-                num = d;
-                bestId = id;
-            }
-        }
-        if (!Double.isFinite(num)) return Double.NaN;
-
-        double ratio = num / denom;
-        if (ratio + 1e-12 < 1.0) {
-            logger.warn("Distance ratio < 1.0 ({}). This should not happen with base-scan. " +
-                            "Denom(trueNN)={}, Num(bestRetrieved)={}, k={}, trueIdx={}, bestRetrievedId={}",
-                    String.format(Locale.ROOT, "%.6f", ratio),
-                    denom, num, k, trueIdx, bestId);
-        }
-        return ratio;
     }
 
     // ---------------------- E2E Runner ----------------------
@@ -760,7 +719,7 @@ public class ForwardSecureANNSystem {
 
             QueryServiceImpl qs = (QueryServiceImpl) queryService;
             double clientMs = (clientEnd - clientStart) / 1_000_000.0;
-            double serverMs = qs.getLastQueryDurationNs() / 1_000_000.0;
+            double serverMs = boundedServerMs(qs, clientStart, clientEnd);
 
             // selective re-encryption accounting
             ReencOutcome rep = maybeReencryptTouched("Q" + q, qs);
@@ -927,7 +886,7 @@ public class ForwardSecureANNSystem {
                     .findFirst().orElseGet(() -> enriched.get(enriched.size() - 1));
 
             if (profiler != null) profiler.recordQueryMetric("Q" + q, serverMs, clientMs, atK.getRatio());
-            totalQueryTime += (long) (clientMs * 1_000_000L);
+            totalQueryTime += clientMs;
 
             if (q < 3 && !baseReturned.isEmpty() && baseReader != null) {
                 int topId = -1;
@@ -1060,7 +1019,7 @@ public class ForwardSecureANNSystem {
 
             QueryServiceImpl qs = (QueryServiceImpl) queryService;
             double clientMs = (clientEnd - clientStart) / 1_000_000.0;
-            double serverMs = qs.getLastQueryDurationNs() / 1_000_000.0;
+            double serverMs = boundedServerMs(qs, clientStart, clientEnd);
 
             ReencOutcome rep = maybeReencryptTouched("Q" + q, qs);
             int svcCum = ((QueryServiceImpl) queryService).getLastTouchedCumulativeUnique();
@@ -1226,7 +1185,7 @@ public class ForwardSecureANNSystem {
                     .findFirst().orElseGet(() -> enriched.get(enriched.size() - 1));
 
             if (profiler != null) profiler.recordQueryMetric("Q" + q, serverMs, clientMs, atK.getRatio());
-            totalQueryTime += (long) (clientMs * 1_000_000L);
+            totalQueryTime += clientMs;
 
             if (q < 3 && !baseReturned.isEmpty() && baseReader != null) {
                 int topId = -1;
@@ -1583,50 +1542,6 @@ public class ForwardSecureANNSystem {
         }
     }
 
-    /** Compute topK* ground-truth from the base vectors for every query and write an .ivecs file. */
-    public static Path precomputeGroundtruthFromBase(Path basePath,
-                                                     Path queryPath,
-                                                     int dim,
-                                                     int topKMax,
-                                                     Path outPath) throws IOException {
-        Objects.requireNonNull(basePath, "basePath");
-        Objects.requireNonNull(queryPath, "queryPath");
-        Objects.requireNonNull(outPath, "outPath");
-        if (dim <= 0) throw new IllegalArgumentException("dim must be positive");
-        if (topKMax <= 0) throw new IllegalArgumentException("topKMax must be positive");
-
-        final boolean isBvecs = basePath.toString().toLowerCase(Locale.ROOT).endsWith(".bvecs");
-
-        // Load all queries (same way your pipeline already does)
-        DefaultDataLoader loader = new DefaultDataLoader();
-        List<double[]> queries = new ArrayList<>();
-        while (true) {
-            List<double[]> batch = loader.loadData(normalizePath(queryPath.toString()), dim);
-            if (batch == null || batch.isEmpty()) break;
-            queries.addAll(batch);
-        }
-        if (queries.isEmpty()) throw new IllegalStateException("No queries loaded from " + queryPath);
-
-        Files.createDirectories(outPath.getParent());
-        try (BaseVectorReader base = BaseVectorReader.open(basePath, dim, isBvecs);
-             FileChannel ch = FileChannel.open(outPath,
-                     StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)) {
-
-            final int N = base.count;
-            for (double[] q : queries) {
-                int k = Math.min(topKMax, N);
-                int[] ids = topKFromBase(base, q, k);
-
-                ByteBuffer rec = ByteBuffer.allocate(4 + 4 * k).order(ByteOrder.LITTLE_ENDIAN);
-                rec.putInt(k);
-                for (int id : ids) rec.putInt(id);
-                rec.flip();
-                ch.write(rec);
-            }
-        }
-        return outPath;
-    }
-
     private static final class DistId {
         final double dsq; final int id;
         DistId(double dsq, int id) { this.dsq = dsq; this.id = id; }
@@ -1908,8 +1823,6 @@ public class ForwardSecureANNSystem {
         return new TrueNN(bestId, Math.sqrt(bestSq));
     }
 
-    // Add inside ForwardSecureANNSystem (near your other ratio helpers)
-
     /** Compute ratio@K(q) using ranked lists: average over i=1..upto of sqrt(d2(ret_i)/d2(gt_i)). */
     private static double ratioAtKFromLists(double[] q,
                                             List<QueryResult> retPrefix,
@@ -2084,62 +1997,6 @@ public class ForwardSecureANNSystem {
     /** Disable System exit on shutdown (for tests). */
     public void setExitOnShutdown(boolean exitOnShutdown) { this.exitOnShutdown = exitOnShutdown; }
 
-    // No optional flags anymore; keep method to avoid rippling deletes.
-    private static void applyPaperFlags(Object pe, SystemConfig.PaperConfig pc) {
-        // intentionally no-op
-    }
-
-    private static boolean tryInvokeInt(Object o, String[] names, int v) {
-        for (String n : names) {
-            try {
-                Method m;
-                try { m = o.getClass().getMethod(n, int.class); }
-                catch (NoSuchMethodException e) { m = o.getClass().getMethod(n, Integer.class); }
-                m.setAccessible(true);
-                m.invoke(o, v);
-                return true;
-            } catch (NoSuchMethodException ignored) {
-            } catch (Exception e) {
-                LoggerFactory.getLogger(ForwardSecureANNSystem.class)
-                        .debug("Paper flag method '{}' exists but failed to apply ({}). Continuing.", n, e.toString());
-                return true; // method existed; don't try other names
-            }
-        }
-        return false;
-    }
-
-    private static boolean tryInvokeDouble(Object o, String[] names, double v) {
-        for (String n : names) {
-            try {
-                Method m;
-                try { m = o.getClass().getMethod(n, double.class); }
-                catch (NoSuchMethodException e) { m = o.getClass().getMethod(n, Double.class); }
-                m.setAccessible(true);
-                m.invoke(o, v);
-                return true;
-            } catch (NoSuchMethodException ignored) {
-            } catch (Exception e) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static boolean trySetField(Object o, String[] fields, Object v) {
-        for (String f : fields) {
-            try {
-                Field fld = o.getClass().getDeclaredField(f);
-                fld.setAccessible(true);
-                fld.set(o, v);
-                return true;
-            } catch (NoSuchFieldException ignored) {
-            } catch (Exception e) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     private static boolean propOr(boolean defaultVal, String... keys) {
         for (String k : keys) {
             String v = System.getProperty(k);
@@ -2227,6 +2084,12 @@ public class ForwardSecureANNSystem {
 
     // CSV helpers
 
+    /** Ensure server timing is never larger than the client's measured window. */
+    private static long capServerNs(long serverNs, long clientWindowNs) {
+        if (serverNs < 0L) serverNs = 0L;
+        if (clientWindowNs <= 0L) return serverNs;
+        return (serverNs > clientWindowNs) ? clientWindowNs : serverNs;
+    }
     private static void initReencCsvIfNeeded(Path p) {
         try {
             Files.createDirectories(p.getParent());
@@ -2333,7 +2196,6 @@ public class ForwardSecureANNSystem {
                     .warn("Failed to append re-encryption CSV for {}", qid, e);
         }
     }
-
     public IndexService getIndexService() { return this.indexService; }
     public QueryService getQueryService() { return this.queryService; }
     public Profiler getProfiler() { return this.profiler; }
@@ -2408,6 +2270,14 @@ public class ForwardSecureANNSystem {
             this.rep = rep;
         }
     }
+    /** Server time bounded by the client-side window (returns milliseconds). */
+    private static double boundedServerMs(QueryServiceImpl qs, long clientStartNs, long clientEndNs) {
+        long clientWinNs = Math.max(0L, clientEndNs - clientStartNs);
+        long rawServerNs = Math.max(0L, qs.getLastQueryDurationNs());
+        long boundedNs   = Math.min(rawServerNs, clientWinNs);
+        return boundedNs / 1_000_000.0;
+    }
+
 
     // ====== retrieved IDs auditor ======
     private static final class RetrievedAudit {
