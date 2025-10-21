@@ -261,9 +261,6 @@ public final class GroundtruthPrecompute {
                             heap.offer(bi, base.l2sq(qbuf, bi)); // squared distance
                         }
                         rows[qi] = heap.idsAscending();
-                        if ((qi + 1) % 1000 == 0) {
-                            System.out.printf("  [%d/%d] queries processed%n", qi + 1, Q);
-                        }
                     }
                 }));
             }

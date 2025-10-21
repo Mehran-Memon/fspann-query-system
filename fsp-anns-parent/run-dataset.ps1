@@ -49,7 +49,8 @@ $JvmArgs = @(
     "-Dreenc.minTouched=5000", # gate the end-of-run job
     "-Dreenc.batchSize=2000",
     "-Dlog.progress.everyN=0",
-    "-Dpaper.alpha=0.02"
+    "-Dpaper.buildThreshold=2000000",
+    "-Dpaper.alpha=0.01"
 )
 
 # ---------- helpers (PS5-safe) ----------
@@ -380,7 +381,7 @@ $combinedPrecision  = Join-Path $rootDatasetDir "combined_precision.csv"
 $combinedEvaluation = Join-Path $rootDatasetDir "combined_evaluation.csv"
 
 Combine-ProfileCSVs -RootDatasetDir $rootDatasetDir -LeafCsvName "results_table.csv"      -OutCsvPath $combinedResults
-Combine-ProfileCSVs -RootDatasetDir $rootDatasetDir -LeafCsvName "GlobalPrecision.csv"    -OutCsvPath $combinedPrecision
+Combine-ProfileCSVs -RootDatasetDir $rootDatasetDir -LeafCsvName "global_precision.csv"    -OutCsvPath $combinedPrecision
 Combine-ProfileCSVs -RootDatasetDir $rootDatasetDir -LeafCsvName "topk_evaluation.csv"    -OutCsvPath $combinedEvaluation
 
 Write-Host "All done."

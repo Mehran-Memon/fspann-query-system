@@ -9,8 +9,8 @@
       "numTables": 0, "rowsPerBand": 0, "probeShards": 0
     },
     "numShards": 1,
-    "opsThreshold": 2147483647,
-    "ageThresholdMs": 9223372036854775807,
+    "opsThreshold": 1000000,
+    "ageThresholdMs": 604800000,
     "eval":
     {
       "computePrecision": true,

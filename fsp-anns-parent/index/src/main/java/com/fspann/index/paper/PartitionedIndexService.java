@@ -220,7 +220,11 @@ public class PartitionedIndexService implements PaperSearchEngine {
             }
             if (hits.isEmpty()) continue;
 
-            final int targetPerDiv = Math.max(1, div.w);
+            final int currentSize = getVectorCountForDimension(S.d);
+            final int targetPerDiv = Math.max(
+                    1,
+                    (int) Math.ceil(PAPER_W_ALPHA * currentSize / (double) this.divisions)
+            );
             int gatheredThisDiv = 0;
             final boolean[] visited = new boolean[div.I.size()];
 
