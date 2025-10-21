@@ -1,8 +1,7 @@
 {
   "base":
   {
-    "paper":
-  {
+    "paper":  {
     "enabled": true, "m": 25, "lambda": 2, "divisions": 9, "seed": 13
   },
     "lsh":
@@ -21,7 +20,7 @@
     "output":
     {
       "exportArtifacts": true,
-      "suppressLegacyMetrics": false
+      "suppressLegacyMetrics": true
     },
     "cloak":
     {
@@ -33,17 +32,16 @@
     },
     "ratio":
     {
-      "source": "auto", "gtSample": 10000, "gtMismatchTolerance": 0.05
+      "source": "gt", "gtSample": 10000, "gtMismatchTolerance": 0.0
     }
   },
   "profiles":
   [
     {
-      "name": "baseline_sift1m_paper_m25_l2_ell9", "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 9 } } },
+      "name": "baseline", "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 9 } } },
     { "name": "exp1_divisions_ell3", "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 3 } } },
     { "name": "exp1_divisions_ell5", "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 5 } } },
     { "name": "exp1_divisions_ell7", "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 7 } } },
-    { "name": "exp1_divisions_ell9", "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 9 } } },
     { "name": "exp1_divisions_ell11", "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 11 } } },
 
     { "name": "exp2_m_15", "overrides": { "paper": { "m": 15, "lambda": 2, "divisions": 9 } } },
@@ -51,10 +49,8 @@
     { "name": "exp2_m_19", "overrides": { "paper": { "m": 19, "lambda": 2, "divisions": 9 } } },
     { "name": "exp2_m_21", "overrides": { "paper": { "m": 21, "lambda": 2, "divisions": 9 } } },
     { "name": "exp2_m_23", "overrides": { "paper": { "m": 23, "lambda": 2, "divisions": 9 } } },
-    { "name": "exp2_m_25", "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 9 } } },
 
     { "name": "exp3_lambda_1", "overrides": { "paper": { "m": 25, "lambda": 1, "divisions": 9 } } },
-    { "name": "exp3_lambda_2", "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 9 } } },
     { "name": "exp3_lambda_3", "overrides": { "paper": { "m": 25, "lambda": 3, "divisions": 9 } } },
     { "name": "exp3_lambda_4", "overrides": { "paper": { "m": 25, "lambda": 4, "divisions": 9 } } },
     { "name": "exp3_lambda_5", "overrides": { "paper": { "m": 25, "lambda": 5, "divisions": 9 } } }

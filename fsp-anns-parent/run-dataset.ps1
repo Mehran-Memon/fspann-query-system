@@ -12,8 +12,6 @@ Set-StrictMode -Version Latest
 if (-not (Get-Command java -ErrorAction SilentlyContinue)) {
     throw "Java not found in PATH. Install JDK or add 'java' to PATH."
 }
-$javaVer = (& java -version 2>&1)[0]
-$manifest.javaVersion = $javaVer
 
 # ---- required paths ----
 $JarPath    = "F:\fspann-query-system\fsp-anns-parent\api\target\api-0.0.1-SNAPSHOT-jar-with-dependencies.jar"
@@ -34,7 +32,7 @@ $Batch = 100000
 # - blank/space => run all
 # - single name => exact match
 # - wildcard (e.g. "*precision*") => pattern filter
-$OnlyProfile = ""
+$OnlyProfile = "baseline"
 
 # toggles
 $CleanPerRun = $true
@@ -50,7 +48,8 @@ $JvmArgs = @(
     "-Dreenc.mode=end",        # accumulate touched IDs, re-encrypt once at end
     "-Dreenc.minTouched=5000", # gate the end-of-run job
     "-Dreenc.batchSize=2000",
-    "-Dlog.progress.everyN=0"
+    "-Dlog.progress.everyN=0",
+    "-Dpaper.alpha=0.02"
 )
 
 # ---------- helpers (PS5-safe) ----------
@@ -164,43 +163,20 @@ function Get-LatestRestoreVersionForProfile {
             Sort-Object Epoch -Descending | Select-Object -First 1
     if ($latest) { return [string]$latest.Epoch } else { return "" }
 }
-
-# --- Merge helpers ---
 function Combine-ProfileCSVs {
     param(
-        [Parameter(Mandatory=$true)][string]$RootDatasetDir,   # e.g., G:\fsp-run\SIFT1M
-        [Parameter(Mandatory=$true)][string]$LeafCsvName,      # "results.csv" or "GlobalPrecision.csv"
-        [Parameter(Mandatory=$true)][string]$OutCsvPath        # output file path
+        [Parameter(Mandatory = $true)][string]$RootDatasetDir,
+        [Parameter(Mandatory = $true)][string]$LeafCsvName,
+        [Parameter(Mandatory = $true)][string]$OutCsvPath
     )
     $pattern = Join-Path $RootDatasetDir ("*\results\" + $LeafCsvName)
-    $files = Get-ChildItem -Path $pattern -File -ErrorAction SilentlyContinue
-    if (-not $files -or $files.Count -eq 0) {
+    $files = @(Get-ChildItem -Path $pattern -File -ErrorAction SilentlyContinue)  # <-- wrap in @()
+
+    if (-not $files -or $files.Count -eq 0)
+    {
         Write-Warning "No $LeafCsvName found under $RootDatasetDir\*\results"
         return
     }
-    # Import all, add Profile column, union all headers
-    $rows = New-Object System.Collections.Generic.List[object]
-    $allCols = New-Object System.Collections.Generic.HashSet[string]
-    $null = $allCols.Add("Profile")
-
-    foreach ($f in $files) {
-        $profile = Split-Path (Split-Path (Split-Path $f.FullName -Parent) -Parent) -Leaf
-        $csv = @()
-        try { $csv = Import-Csv -LiteralPath $f.FullName -ErrorAction Stop } catch { continue }
-        foreach ($r in $csv) {
-            # track headers
-            foreach ($p in $r.PSObject.Properties.Name) { $null = $allCols.Add($p) }
-            # clone to PSObject and add profile
-            $o = [PSCustomObject]@{}
-            $o | Add-Member NoteProperty Profile $profile
-            foreach ($p in $r.PSObject.Properties) { $o | Add-Member NoteProperty $p.Name $p.Value }
-            $rows.Add($o) | Out-Null
-        }
-    }
-    if ($rows.Count -eq 0) { Write-Warning "No rows to combine for $LeafCsvName"; return }
-    $ordered = @("Profile") + ($allCols | Where-Object { $_ -ne "Profile" } | Sort-Object)
-    $rows | Select-Object $ordered | Export-Csv -LiteralPath $OutCsvPath -NoTypeInformation -Encoding UTF8
-    Write-Host ("Combined {0} files -> {1}" -f $files.Count, $OutCsvPath)
 }
 
 # ---------- STEP 0: optional global clean and exit ----------
@@ -290,28 +266,17 @@ foreach ($p in $profiles)
         $final['audit'] = To-Hashtable $cfgObj.audit
     }
 
-    # --- HARDEN: force paper mode; neutralize legacy LSH knobs ---
-    if (-not $final.ContainsKey('paper'))
-    {
-        $final['paper'] = @{ }
-    }
-    $final['paper']['enabled'] = $true
-    if (-not $final['paper'].ContainsKey('seed'))
-    {
-        $final['paper']['seed'] = 13
-    }
+    # --- Respect profile choice; default to multiprobe (plaintext inserts allowed) ---
+    if (-not $final.ContainsKey('paper')) { $final['paper'] = @{ } }
+    if (-not $final['paper'].ContainsKey('enabled')) { $final['paper']['enabled'] = $false }
 
-    if (-not $final.ContainsKey('lsh'))
-    {
-        $final['lsh'] = @{ }
-    }
-    $final['lsh']['numTables'] = 0
-    $final['lsh']['rowsPerBand'] = 0
-    $final['lsh']['probeShards'] = 0
-
-    if (-not $final.ContainsKey('numShards'))
-    {
-        $final['numShards'] = 32
+    # Only when paper mode is explicitly enabled, neutralize legacy LSH knobs
+    if ($final['paper']['enabled']) {
+    if (-not $final['paper'].ContainsKey('seed')) { $final['paper']['seed'] = 13 }
+    if (-not $final.ContainsKey('lsh')) { $final['lsh'] = @{ } }
+    $final['lsh']['numTables']    = 0
+    $final['lsh']['rowsPerBand']  = 0
+    $final['lsh']['probeShards']  = 0
     }
 
     # NOW write the hardened config
@@ -347,7 +312,7 @@ foreach ($p in $profiles)
             $restoreFlag += "-Drestore.version=$verToUse"
         }
     }
-}
+
 
     $argList = @()
     $argList += $JvmArgs
@@ -406,7 +371,7 @@ foreach ($p in $profiles)
     } else {
         Write-Host ("Completed: {0} ({1})" -f $Name, $label)
     }
-
+}
 
 # ---------- POST: merge CSVs across profiles ----------
 $rootDatasetDir     = Join-Path $OutRoot $Name
@@ -414,8 +379,6 @@ $combinedResults    = Join-Path $rootDatasetDir "combined_results.csv"
 $combinedPrecision  = Join-Path $rootDatasetDir "combined_precision.csv"
 $combinedEvaluation = Join-Path $rootDatasetDir "combined_evaluation.csv"
 
-# NOTE: Leaf names must match what the app writes. If your app writes "GlobalPrecision.csv"
-# (capitalized), keep that exact string instead of "global_precision.csv".
 Combine-ProfileCSVs -RootDatasetDir $rootDatasetDir -LeafCsvName "results_table.csv"      -OutCsvPath $combinedResults
 Combine-ProfileCSVs -RootDatasetDir $rootDatasetDir -LeafCsvName "GlobalPrecision.csv"    -OutCsvPath $combinedPrecision
 Combine-ProfileCSVs -RootDatasetDir $rootDatasetDir -LeafCsvName "topk_evaluation.csv"    -OutCsvPath $combinedEvaluation
