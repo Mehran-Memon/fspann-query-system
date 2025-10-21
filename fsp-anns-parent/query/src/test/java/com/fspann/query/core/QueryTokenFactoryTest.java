@@ -30,23 +30,27 @@ class QueryTokenFactoryTest {
     @BeforeEach
     void setUp() {
         MockitoAnnotations.openMocks(this);
+
         SecretKey mockKey = new SecretKeySpec(new byte[16], "AES");
         when(keyService.getCurrentVersion()).thenReturn(new KeyVersion(7, mockKey));
         when(lsh.getDimensions()).thenReturn(2);
 
         // For numTables = 3, return 3 lists of contiguous buckets
-        when(lsh.getBucketsForAllTables(any(double[].class), eq(5), eq(3)))
+        when(lsh.getBucketsForAllTables(any(double[].class), anyInt(), eq(3)))
                 .thenReturn(List.of(
                         Arrays.asList(1, 2, 3),
                         Arrays.asList(4, 5, 6),
                         Arrays.asList(7, 8, 9)
                 ));
 
-        // Legacy/multiprobe path safeguard
+        // Legacy/multiprobe path safeguard (not used when getBucketsForAllTables responds)
         lenient().when(lsh.getBuckets(any(double[].class), anyInt(), anyInt()))
                 .thenReturn(List.of(1, 2, 3));
 
-        factory = new QueryTokenFactory(cryptoService, keyService, lsh, 2, 3);
+        // New ctor: (crypto, key, lsh, numTables, divisions(ℓ), m, seedBase)
+        // Use divisions=2, m=3, seedBase=13 for deterministic code shape
+        factory = new QueryTokenFactory(cryptoService, keyService, lsh,
+                /*numTables*/ 3, /*divisions*/ 2, /*m*/ 3, /*seedBase*/ 13L);
     }
 
     @Test
@@ -64,7 +68,14 @@ class QueryTokenFactoryTest {
         assertEquals(3, token.getNumTables());
         assertEquals(3, token.getTableBuckets().size());
         assertTrue(token.getTableBuckets().stream().allMatch(l -> !l.isEmpty()));
-        assertArrayEquals(vector, token.getPlaintextQuery());
+
+        // Paper path: codes should be present (length = divisions)
+        assertNotNull(token.getCodes());
+        assertEquals(2, token.getCodes().length);
+
+        // Plaintext is intentionally NOT embedded in paper mode
+        assertNull(token.getPlaintextQuery());
+
         assertEquals(5, token.getTopK());
         assertEquals(String.format("epoch_%d_dim_%d", 7, vector.length), token.getEncryptionContext());
         assertEquals(vector.length, token.getDimension());
@@ -75,8 +86,10 @@ class QueryTokenFactoryTest {
     @Test
     void testCreateTokenWithDifferentNumTables() {
         // For numTables = 5, change factory and mock
-        factory = new QueryTokenFactory(cryptoService, keyService, lsh, 2, 5);
-        when(lsh.getBucketsForAllTables(any(double[].class), eq(5), eq(5)))
+        factory = new QueryTokenFactory(cryptoService, keyService, lsh,
+                /*numTables*/ 5, /*divisions*/ 2, /*m*/ 3, /*seedBase*/ 13L);
+
+        when(lsh.getBucketsForAllTables(any(double[].class), anyInt(), eq(5)))
                 .thenReturn(List.of(
                         List.of(1), List.of(2), List.of(3), List.of(4), List.of(5)
                 ));
@@ -86,6 +99,10 @@ class QueryTokenFactoryTest {
         QueryToken token = factory.create(new double[]{1.0, 2.0}, 5);
         assertEquals(5, token.getNumTables());
         assertEquals(5, token.getTableBuckets().size());
+
+        // Codes still present with same divisions
+        assertNotNull(token.getCodes());
+        assertEquals(2, token.getCodes().length);
     }
 
     @Test
@@ -119,14 +136,20 @@ class QueryTokenFactoryTest {
     void testInvalidConstructorThrowsException() {
         // numTables <= 0
         assertThrows(IllegalArgumentException.class, () ->
-                new QueryTokenFactory(cryptoService, keyService, lsh, 2, 0));
+                new QueryTokenFactory(cryptoService, keyService, lsh, 0, 2, 3, 13L));
+        // divisions <= 0
+        assertThrows(IllegalArgumentException.class, () ->
+                new QueryTokenFactory(cryptoService, keyService, lsh, 3, 0, 3, 13L));
+        // m <= 0
+        assertThrows(IllegalArgumentException.class, () ->
+                new QueryTokenFactory(cryptoService, keyService, lsh, 3, 2, 0, 13L));
 
         // null deps
         assertThrows(NullPointerException.class, () ->
-                new QueryTokenFactory(null, keyService, lsh, 2, 3));
+                new QueryTokenFactory(null, keyService, lsh, 3, 2, 3, 13L));
         assertThrows(NullPointerException.class, () ->
-                new QueryTokenFactory(cryptoService, null, lsh, 2, 3));
+                new QueryTokenFactory(cryptoService, null, lsh, 3, 2, 3, 13L));
         assertThrows(NullPointerException.class, () ->
-                new QueryTokenFactory(cryptoService, keyService, null, 2, 3));
+                new QueryTokenFactory(cryptoService, keyService, null, 3, 2, 3, 13L));
     }
 }

@@ -1,16 +1,22 @@
 package com.index;
 
-import com.fspann.common.*;
+import com.fspann.common.EncryptedPoint;
+import com.fspann.common.KeyLifeCycleService;
+import com.fspann.common.KeyVersion;
+import com.fspann.common.QueryToken;
+import com.fspann.common.RocksDBMetadataManager;
+import com.fspann.common.EncryptedPointBuffer;
 import com.fspann.crypto.CryptoService;
 import com.fspann.index.service.SecureLSHIndexService;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.IOException;
-import java.util.*;
+import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -51,21 +57,20 @@ class SecureLSHIndexServicePaperModeTest {
     }
 
     @Test
-    void insert_encrypts_persists_buffers_and_delegates_toPaper() throws IOException {
+    void insert_encrypts_persists_buffers_then_throws_without_codes_engine() throws IOException {
         String id = "42";
         double[] vec = new double[]{0.1, 0.2};
 
-        // The crypto layer produces an EncryptedPoint that carries version/dim/iv/ciphertext
         EncryptedPoint enc = new EncryptedPoint(id, /*shard*/ 0, new byte[12], new byte[32], 1, vec.length, /*perTable*/ null);
         when(crypto.encrypt(eq(id), eq(vec))).thenReturn(enc);
 
-        // Call
-        svc.insert(id, vec);
+        UnsupportedOperationException ex =
+                assertThrows(UnsupportedOperationException.class, () -> svc.insert(id, vec));
+        assertTrue(ex.getMessage().contains("requires precomputed codes"));
 
-        // 1) encryption happened
+        // Work that happens before the guarded handoff:
         verify(crypto).encrypt(eq(id), eq(vec));
 
-        // 2) metadata persisted with version & dim
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Map<String, String>>> metaCap = ArgumentCaptor.forClass(Map.class);
         verify(meta).batchUpdateVectorMetadata(metaCap.capture());
@@ -73,19 +78,57 @@ class SecureLSHIndexServicePaperModeTest {
         assertTrue(md.containsKey(id));
         assertEquals("1", md.get(id).get("version"));
         assertEquals(String.valueOf(vec.length), md.get(id).get("dim"));
+        assertTrue(md.get(id).keySet().stream().noneMatch(k -> k.startsWith("b")),
+                "Paper mode must not persist legacy per-table bucket metadata");
 
-        // 3) point saved
         verify(meta).saveEncryptedPoint(eq(enc));
-
-        // 4) key op counted
         verify(keySvc).incrementOperation();
-
-        // 5) buffered write
         verify(buffer).add(eq(enc));
 
-        // 6) paper-engine placement with plaintext vector
-        verify(paper).insert(eq(enc), eq(vec));
+        // The guarded handoff prevents calling paper.insert(...)
+        verify(paper, never()).insert(any(EncryptedPoint.class), any(double[].class));
+        verify(paper, never()).insert(any(EncryptedPoint.class));
     }
+
+    @Test
+    void batchInsert_encrypts_persists_each_then_throws_on_first_handoff_without_codes_engine() throws IOException {
+        // Prepare two ids/vectors
+        List<String> ids = List.of("0", "1");
+        List<double[]> vecs = List.of(new double[]{0.1, 0.2}, new double[]{0.3, 0.4});
+
+        EncryptedPoint enc0 = new EncryptedPoint("0", 0, new byte[12], new byte[32], 1, 2, null);
+        EncryptedPoint enc1 = new EncryptedPoint("1", 0, new byte[12], new byte[32], 1, 2, null);
+        when(crypto.encrypt(eq("0"), eq(vecs.get(0)))).thenReturn(enc0);
+        when(crypto.encrypt(eq("1"), eq(vecs.get(1)))).thenReturn(enc1);
+
+        // The first handoff to a non-codes engine triggers the guard
+        UnsupportedOperationException ex =
+                assertThrows(UnsupportedOperationException.class, () -> svc.batchInsert(ids, vecs));
+        assertTrue(ex.getMessage().contains("requires precomputed codes"));
+
+        // We still expect pre-handoff work for the first element
+        verify(crypto).encrypt("0", vecs.get(0));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Map<String, String>>> metaCap = ArgumentCaptor.forClass(Map.class);
+        verify(meta).batchUpdateVectorMetadata(metaCap.capture());
+        Map<String, Map<String, String>> md = metaCap.getValue();
+        assertTrue(md.containsKey("0"));
+        assertEquals("1", md.get("0").get("version"));
+        assertEquals("2", md.get("0").get("dim"));
+
+        verify(meta).saveEncryptedPoint(eq(enc0));
+        verify(keySvc).incrementOperation();
+        verify(buffer).add(eq(enc0));
+
+        // No paper calls (guarded)
+        verify(paper, never()).insert(any(EncryptedPoint.class), any(double[].class));
+        verify(paper, never()).insert(any(EncryptedPoint.class));
+
+        // Depending on your implementation, the second item may not be attempted after the first throws.
+        // If your service ever changes to continue-on-error, add verifies for "1" similar to above.
+    }
+
 
     @Test
     void lookup_delegates_to_paper() {
