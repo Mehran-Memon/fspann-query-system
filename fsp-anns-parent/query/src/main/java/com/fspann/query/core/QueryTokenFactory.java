@@ -11,19 +11,31 @@ import org.slf4j.LoggerFactory;
 
 import javax.crypto.SecretKey;
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.List;
 import java.util.Objects;
 
+/**
+ * Builds QueryToken with:
+ *  - per-table LSH bucket expansions (for legacy multiprobe path)
+ *  - paper codes: one BitSet per division (REQUIRED for partitioned mode with seed-only GMeta)
+ */
 public class QueryTokenFactory {
     private static final Logger logger = LoggerFactory.getLogger(QueryTokenFactory.class);
 
     private final CryptoService cryptoService;
     private final KeyLifeCycleService keyService;
     private final EvenLSH lsh;
-    /** Unused with contiguous/Hamming expansion. Retained for compatibility. */
+
+    // Multiprobe knobs
+    private final int numTables;
     @SuppressWarnings("unused")
     private final int expansionRange;
-    private final int numTables;
+
+    // Paper knobs (must MATCH server's PartitionedIndexService)
+    private final int divisions;  // ℓ
+    private final int m;          // projections per division
+    private final long seedBase;  // same seed used by server
 
     public QueryTokenFactory(CryptoService cryptoService,
                              KeyLifeCycleService keyService,
@@ -31,19 +43,49 @@ public class QueryTokenFactory {
                              int expansionRange,
                              int numTables) {
         this.cryptoService = Objects.requireNonNull(cryptoService, "CryptoService must not be null");
-        this.keyService = Objects.requireNonNull(keyService, "KeyService must not be null");
-        this.lsh = Objects.requireNonNull(lsh, "EvenLSH must not be null");
+        this.keyService    = Objects.requireNonNull(keyService, "KeyService must not be null");
+        this.lsh           = Objects.requireNonNull(lsh, "EvenLSH must not be null");
+
         if (numTables <= 0) throw new IllegalArgumentException("numTables must be positive");
         if (expansionRange < 0) throw new IllegalArgumentException("expansionRange must be >= 0");
+
+        this.numTables      = numTables;
         this.expansionRange = expansionRange;
-        this.numTables = numTables;
+
+        // Paper params from system properties (match server config)
+        this.divisions = Math.max(1, Integer.getInteger("paper.divisions", 9));
+        this.m         = Math.max(1, Integer.getInteger("paper.m", 25));
+        this.seedBase  = Long.getLong("paper.seed", 13L);
+
+        logger.info("TokenFactory created: dim={} divisions(ℓ)={} m={} numTables={} shardsToProbe={}",
+                lsh.getDimensions(), divisions, m, numTables, expansionRange);
     }
 
+    /** Convenience ctor: expansionRange defaults to 0. */
     public QueryTokenFactory(CryptoService cryptoService,
                              KeyLifeCycleService keyService,
                              EvenLSH lsh,
-                             int numTables) {
-        this(cryptoService, keyService, lsh, 0, numTables);
+                             int numTables,
+                             int divisions,
+                             int m,
+                             long seedBase) {
+        this.cryptoService = Objects.requireNonNull(cryptoService, "CryptoService must not be null");
+        this.keyService    = Objects.requireNonNull(keyService, "KeyService must not be null");
+        this.lsh           = Objects.requireNonNull(lsh, "EvenLSH must not be null");
+
+        if (numTables <= 0) throw new IllegalArgumentException("numTables must be positive");
+        if (divisions  <= 0) throw new IllegalArgumentException("divisions must be > 0");
+        if (m          <= 0) throw new IllegalArgumentException("m must be > 0");
+
+        this.numTables      = numTables;
+        this.expansionRange = 0; // unused in paper mode
+
+        this.divisions = divisions;
+        this.m         = m;
+        this.seedBase  = seedBase;
+
+        logger.info("TokenFactory created: dim={} divisions(ℓ)={} m={} numTables={} shardsToProbe={}",
+                lsh.getDimensions(), divisions, m, numTables, expansionRange);
     }
 
     public QueryToken create(double[] vector, int topK) {
@@ -55,6 +97,7 @@ public class QueryTokenFactory {
             throw new IllegalArgumentException("Vector dimension mismatch: expected " + lshDim + " but got " + vector.length);
         }
 
+        // Version/context + encrypt query
         KeyVersion currentVersion = keyService.getCurrentVersion();
         SecretKey key = currentVersion.getKey();
         int version = currentVersion.getVersion();
@@ -62,11 +105,9 @@ public class QueryTokenFactory {
 
         EncryptedPoint ep = cryptoService.encryptToPoint("query", vector, key);
 
-        // Heuristic: grow probes with tables; tune later via flags.
-        final int probeHint = Math.min(256, Math.max(32, numTables * 2)); // start point; make configurable
+        // Per-table bucket expansions (legacy multiprobe path; harmless in paper mode)
+        final int probeHint = Math.min(256, Math.max(32, numTables * 2));
         List<List<Integer>> perTable = lsh.getBucketsForAllTables(vector, probeHint, numTables);
-
-        // deep mutable copy
         List<List<Integer>> copy = new ArrayList<>(numTables);
         if (perTable == null || perTable.size() != numTables) {
             for (int t = 0; t < numTables; t++) {
@@ -76,14 +117,19 @@ public class QueryTokenFactory {
             for (List<Integer> l : perTable) copy.add(new ArrayList<>(l));
         }
 
-        int total = copy.stream().mapToInt(List::size).sum();
-        logger.debug("Created token: dim={}, topK={}, tables={}, totalProbes={}", vector.length, topK, numTables, total);
+        // REQUIRED for partitioned mode: attach codes (one BitSet per division)
+        BitSet[] codes = code(vector);
+
+        int totalProbes = copy.stream().mapToInt(List::size).sum();
+        logger.debug("Created token: dim={}, topK={}, tables={}, totalProbes={}, hasCodes=true(ℓ={})",
+                vector.length, topK, numTables, totalProbes, divisions);
 
         return new QueryToken(
-                copy,
+                copy,                 // per-table buckets
+                codes,                // paper codes (ℓ BitSets)
                 ep.getIv(),
                 ep.getCiphertext(),
-                vector.clone(),
+                null,                 // avoid sending plaintext in production
                 topK,
                 numTables,
                 encryptionContext,
@@ -96,18 +142,22 @@ public class QueryTokenFactory {
         Objects.requireNonNull(base, "base");
         if (newTopK <= 0) throw new IllegalArgumentException("newTopK must be > 0");
 
-        double[] q = base.getPlaintextQuery();
+        // Preserve original version to keep forward-secure semantics
+        int version = base.getVersion();
+        KeyVersion kv = keyService.getVersion(version);
+
+        final double[] q = (base.getQueryVector() != null)
+                ? base.getQueryVector()
+                : throwNoPlaintext();
+
         int lshDim = lsh.getDimensions();
         if (lshDim > 0 && lshDim != q.length) {
             throw new IllegalArgumentException("Vector dimension mismatch: expected " + lshDim + " but got " + q.length);
         }
 
-        // Use the SAME version as the base token
-        int version = base.getVersion();
-        KeyVersion kv = keyService.getVersion(version);
         EncryptedPoint ep = cryptoService.encryptToPoint("query", q, kv.getKey());
 
-        // Heuristic: grow probes with tables; tune later via flags.
+        // Recompute per-table expansions at the new K (heuristic limit still applies)
         final int probeHint = Math.min(256, Math.max(32, numTables * 2));
         List<List<Integer>> perTable = lsh.getBucketsForAllTables(q, probeHint, numTables);
         List<List<Integer>> copy = new ArrayList<>(numTables);
@@ -117,19 +167,66 @@ public class QueryTokenFactory {
             for (List<Integer> l : perTable) copy.add(new ArrayList<>(l));
         }
 
-        logger.debug("Derived token: dim={}, topK={}, tables={}, totalProbes={}",
-                q.length, newTopK, numTables, copy.stream().mapToInt(List::size).sum());
+        // Codes depend only on (seedBase, ℓ, m) and q; recompute to be safe
+        BitSet[] codes = code(q);
+
+        logger.debug("Derived token: dim={}, topK={}, tables={}, totalProbes={}, hasCodes=true(ℓ={})",
+                q.length, newTopK, numTables, copy.stream().mapToInt(List::size).sum(), divisions);
 
         return new QueryToken(
                 copy,
+                codes,
                 ep.getIv(),
                 ep.getCiphertext(),
-                q.clone(),
+                null,
                 newTopK,
                 numTables,
-                base.getEncryptionContext(), // preserve context
+                base.getEncryptionContext(),
                 q.length,
-                version                      // preserve version
+                version
         );
+    }
+
+    /* ----------------------- paper coding ----------------------- */
+
+    /**
+     * Deterministic coding; MUST match PartitionedIndexService.code(...).
+     * Produces ℓ BitSets, each of length m. Bit j is set iff signed projection >= 0.
+     */
+    private BitSet[] code(double[] vec) {
+        Objects.requireNonNull(vec, "vec");
+        BitSet[] out = new BitSet[divisions];
+        for (int div = 0; div < divisions; div++) {
+            BitSet bits = new BitSet(m);
+            for (int proj = 0; proj < m; proj++) {
+                long seed = mix64(seedBase
+                        ^ ((long) div * 0x9E3779B97F4A7C15L)
+                        ^ ((long) proj * 0xBF58476D1CE4E5B9L));
+                double dot = 0.0;
+                long s = seed;
+                for (double v : vec) {
+                    // xorshift-ish update
+                    s ^= (s << 21);
+                    s ^= (s >>> 35);
+                    s ^= (s << 4);
+                    // map to [-1, 1]
+                    double r = ((s & 0x3fffffffL) / (double) 0x3fffffffL) * 2.0 - 1.0;
+                    dot += v * r;
+                }
+                if (dot >= 0) bits.set(proj);
+            }
+            out[div] = bits;
+        }
+        return out;
+    }
+
+    private static long mix64(long z) {
+        z = (z ^ (z >>> 33)) * 0xff51afd7ed558ccdl;
+        z = (z ^ (z >>> 33)) * 0xc4ceb9fe1a85ec53l;
+        return z ^ (z >>> 33);
+    }
+
+    private static double[] throwNoPlaintext() {
+        throw new IllegalStateException("Base token has no plaintext vector; cannot derive a new token without recomputing codes/encryption.");
     }
 }

@@ -2,10 +2,11 @@ package com.fspann.common;
 
 import java.io.Serializable;
 import java.util.*;
+import java.util.BitSet;
 
 /**
  * Unified query token supporting both legacy single-bucket set and per-table expansions.
- * Prefer the per-table constructor going forward.
+ * Preferred path: supply per-table buckets and precomputed codes (one BitSet per division).
  */
 public class QueryToken implements Serializable {
     private static final long serialVersionUID = 1L;
@@ -13,6 +14,7 @@ public class QueryToken implements Serializable {
     // --- new preferred fields ---
     private final List<List<Integer>> tableBuckets;  // per-table expansions
     private final int numTables;
+    private final BitSet[] codes;                    // one BitSet per division (ℓ)
 
     // --- legacy fields (kept for compatibility) ---
     @Deprecated
@@ -23,17 +25,18 @@ public class QueryToken implements Serializable {
     // --- shared fields ---
     private final byte[] iv;
     private final byte[] encryptedQuery;
-    private final double[] queryVector;
+    private final double[] queryVector; // legacy plaintext for tests only
     private final int topK;
     private final String encryptionContext;
     private final int dimension;
     private final int version;
 
-    // ---- Preferred constructor (per-table) ----
+    // ---- Preferred constructor (per-table + codes) ----
     public QueryToken(List<List<Integer>> tableBuckets,
+                      BitSet[] codes,
                       byte[] iv,
                       byte[] encryptedQuery,
-                      double[] queryVector,
+                      double[] queryVector,     // may be null in production (server won’t use)
                       int topK,
                       int numTables,
                       String encryptionContext,
@@ -43,12 +46,16 @@ public class QueryToken implements Serializable {
                 Objects.requireNonNull(tableBuckets, "tableBuckets"));
         this.numTables = positive(numTables, "numTables");
 
+        // Deep-copy BitSets for immutability
+        this.codes = (codes == null) ? null : deepCloneCodes(codes);
+
         this.iv = Objects.requireNonNull(iv, "iv").clone();
         this.encryptedQuery = Objects.requireNonNull(encryptedQuery, "encryptedQuery").clone();
-        this.queryVector = Objects.requireNonNull(queryVector, "queryVector").clone();
+        this.queryVector = (queryVector == null ? null : queryVector.clone());
 
         this.topK = positive(topK, "topK");
-        this.encryptionContext = Objects.requireNonNull(encryptionContext, "encryptionContext");
+        this.encryptionContext = Objects.requireNonNullElseGet(
+                encryptionContext, () -> "epoch_" + version + "_dim_" + dimension);
         this.dimension = positive(dimension, "dimension");
         this.version = version;
 
@@ -60,42 +67,49 @@ public class QueryToken implements Serializable {
         if (this.tableBuckets.stream().anyMatch(List::isEmpty)) {
             throw new IllegalArgumentException("Each table must have at least one bucket");
         }
+        // codes may be null for legacy clients; server code should handle null defensively.
     }
 
     // ---- Legacy constructor (kept so old tests & callers continue to compile) ----
+    /** @deprecated Prefer the constructor that also accepts BitSet[] codes (one per division). */
     @Deprecated
-    public QueryToken(List<Integer> candidateBuckets,
+    public QueryToken(List<List<Integer>> tableBuckets,
                       byte[] iv,
                       byte[] encryptedQuery,
-                      double[] plaintextQuery,
+                      double[] queryVector,      // may be null in production (server won’t use)
                       int topK,
                       int numTables,
                       String encryptionContext,
                       int dimension,
-                      int shardId,
                       int version) {
-        if (candidateBuckets == null || candidateBuckets.isEmpty()) {
-            throw new IllegalArgumentException("candidateBuckets must be non-null and non-empty");
-        }
-        this.candidateBuckets = List.copyOf(candidateBuckets);
-
-        this.iv = Objects.requireNonNull(iv, "iv").clone();
-        this.encryptedQuery = Objects.requireNonNull(encryptedQuery, "encryptedQuery").clone();
-        this.queryVector = Objects.requireNonNull(plaintextQuery, "plaintextQuery").clone();
-
-        this.topK = positive(topK, "topK");
-        this.numTables = positive(numTables, "numTables");
-        this.encryptionContext = (encryptionContext == null || encryptionContext.isBlank())
-                ? ("epoch_" + version + "_dim_" + dimension)
-                : encryptionContext;
-        this.dimension = positive(dimension, "dimension");
-        this.shardId = shardId;
-        this.version = version;
-
-        // new path absent
-        this.tableBuckets = null;
+        this(
+                tableBuckets,
+                /* codes = */ null,        // legacy path: no per-division codes provided
+                iv,
+                encryptedQuery,
+                queryVector,
+                topK,
+                numTables,
+                encryptionContext,
+                dimension,
+                version
+        );
     }
 
+
+    private static BitSet[] deepCloneCodes(BitSet[] src) {
+        BitSet[] out = new BitSet[src.length];
+        for (int i = 0; i < src.length; i++) {
+            out[i] = (src[i] == null) ? null : (BitSet) src[i].clone();
+        }
+        return out;
+    }
+
+    /** One BitSet per division (length == ℓ). May be null for legacy tokens. */
+    public BitSet[] getCodes() {
+        if (codes == null) return null;
+        return deepCloneCodes(codes);
+    }
     // ---- helpers ----
     public boolean hasPerTable() { return tableBuckets != null && !tableBuckets.isEmpty(); }
 
@@ -127,32 +141,23 @@ public class QueryToken implements Serializable {
     }
 
     // ---- getters (legacy names preserved) ----
-    @Deprecated
-    public List<Integer> getCandidateBuckets() { return candidateBuckets; }
-
+    @Deprecated public List<Integer> getCandidateBuckets() { return candidateBuckets; }
     public List<List<Integer>> getPerTableBuckets() { return getTableBuckets(); }
 
     public byte[] getIv() { return iv.clone(); }
-
     public byte[] getEncryptedQuery() { return encryptedQuery.clone(); }
 
-    public double[] getPlaintextQuery() { return queryVector.clone(); }
-
-    // alias for some callers
+    /** Server should avoid using plaintext; kept for tests. */
+    @Deprecated public double[] getPlaintextQuery() { return queryVector == null ? null : queryVector.clone(); }
     public double[] getQueryVector() { return getPlaintextQuery(); }
 
     public int getTopK() { return topK; }
-
     public int getNumTables() { return numTables; }
-
     public String getEncryptionContext() { return encryptionContext; }
-
     public int getDimension() { return dimension; }
-
     public int getVersion() { return version; }
 
-    @Deprecated
-    public int getShardId() { return shardId; }
+    @Deprecated public int getShardId() { return shardId; }
 
     @Override
     public boolean equals(Object o) {
@@ -183,7 +188,7 @@ public class QueryToken implements Serializable {
     @Override public String toString() {
         return "QueryToken{topK=" + topK + ", numTables=" + numTables +
                 ", dim=" + dimension + ", version=" + version +
-                ", perTable=" + (hasPerTable() ? tableBuckets.size() : 0) + "}";
+                ", perTable=" + (hasPerTable() ? tableBuckets.size() : 0) +
+                ", hasCodes=" + (codes != null) + "}";
     }
-
 }

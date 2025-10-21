@@ -87,8 +87,8 @@ public class ForwardSecureANNSystem {
     }
 
     private final int BATCH_SIZE;
-    private long totalIndexingTime = 0;
-    private long totalQueryTime = 0;
+    private long totalIndexingTimeNs = 0L;
+    private long totalQueryTimeNs    = 0L;
     private int totalInserted = 0;
     private final java.util.concurrent.atomic.AtomicInteger indexedCount = new java.util.concurrent.atomic.AtomicInteger();
     private final java.util.concurrent.atomic.AtomicLong fileOrdinal = new java.util.concurrent.atomic.AtomicLong(0);
@@ -339,17 +339,19 @@ public class ForwardSecureANNSystem {
             // probe-shards override
             int shards = shardsToProbe();
 
+            int ell = (config != null && config.getPaper() != null) ? Math.max(1, config.getPaper().divisions) : 1;
+            int m   = (config != null && config.getPaper() != null) ? Math.max(1, config.getPaper().m)         : 1;
+            long seedBase = (config != null && config.getPaper() != null) ? config.getPaper().seed             : 13L;
+
             tokenFactories.put(dim, new QueryTokenFactory(
-                    cryptoService, keyService, lshForDim, shards, tables
+                    cryptoService, keyService, lshForDim, /*numTables*/ tables, /*divisions*/ ell, /*m*/ m, /*seedBase*/ seedBase
             ));
 
             // === MODE-AWARE LOGGING (ℓ/m in partitioned, L/m in multiprobe) ===
             boolean partitionedMode = (config != null && config.getPaper() != null && config.getPaper().enabled);
             if (partitionedMode) {
-                int ell = Math.max(1, config.getPaper().divisions);
-                int mProj = Math.max(1, config.getPaper().m);
                 logger.info("TokenFactory created: dim={} divisions (ℓ)={} m(projections/division)={} shardsToProbe={}",
-                        dim, ell, mProj, shards);
+                        dim, ell, m, shards);
             } else {
                 int mRows = -1;
                 try {
@@ -486,7 +488,7 @@ public class ForwardSecureANNSystem {
             profiler.stop("batchInsert");
             List<Long> timings = profiler.getTimings("batchInsert");
             long durationNs = (!timings.isEmpty() ? timings.get(timings.size() - 1) : (System.nanoTime() - startNs));
-            totalIndexingTime += durationNs;
+            totalIndexingTimeNs += durationNs;
         }
     }
 
@@ -511,7 +513,7 @@ public class ForwardSecureANNSystem {
                 List<Long> timings = profiler.getTimings("insert");
                 if (!timings.isEmpty()) {
                     long durationNs = timings.get(timings.size() - 1);
-                    totalIndexingTime += durationNs;
+                    totalIndexingTimeNs += durationNs;
                     if (verbose) logger.debug("Insert complete for id={} in {} ms", id, durationNs / 1_000_000.0);
                 }
             }
@@ -525,16 +527,26 @@ public class ForwardSecureANNSystem {
             int tables = (OVERRIDE_TABLES > 0) ? OVERRIDE_TABLES : numTablesFor(lsh, config);
             int shards = shardsToProbe();
 
-            // Mode-aware log: "tables (L)" in multiprobe, "divisions (ℓ)" in partitioned mode
             boolean partitionedMode = (config != null && config.getPaper() != null && config.getPaper().enabled);
+
+            // Paper params (match PartitionedIndexService)
+            int ell = 1;
+            int m   = 1;
+            long seedBase = 13L;
+
             if (partitionedMode) {
-                int ell = Math.max(1, config.getPaper().divisions);
-                logger.info("TokenFactory (lazy): dim={} divisions (ℓ)={} shardsToProbe={}", d, ell, shards);
+                var pc = config.getPaper();
+                ell = Math.max(1, pc.divisions);
+                m   = Math.max(1, pc.m);
+                seedBase = pc.seed;
+                logger.info("TokenFactory (lazy): dim={} divisions (ℓ)={} m={} seedBase={} shardsToProbe={}",
+                        d, ell, m, seedBase, shards);
             } else {
                 logger.info("TokenFactory (lazy): dim={} LSH tables (L)={} shardsToProbe={}", d, tables, shards);
             }
 
-            return new QueryTokenFactory(cryptoService, keyService, lsh, shards, tables);
+            // New ctor: (crypto, key, lsh, numTables, divisions, m, seedBase)
+            return new QueryTokenFactory(cryptoService, keyService, lsh, tables, ell, m, seedBase);
         });
     }
 
@@ -554,35 +566,33 @@ public class ForwardSecureANNSystem {
         if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
         if (queryVector.length != dim) throw new IllegalArgumentException("Query vector length must match dimension");
 
-        long start = System.nanoTime();
-        QueryToken token = factoryForDim(dim).create(queryVector, topK);
-        String ckey = cacheKeyOf(token);
+        final long start = System.nanoTime();
+        final QueryToken token = factoryForDim(dim).create(queryVector, topK);
+        final String ckey = cacheKeyOf(token);
         recordRecent(queryVector);
 
+        // cache check
         List<QueryResult> cached = cache.get(ckey);
         if (cached != null) {
-            if (profiler != null) {
-                long clientNsCached = Math.max(0L, System.nanoTime() - start);
-                profiler.recordQueryMetric("Q_cache_" + topK, 0.0, clientNsCached / 1_000_000.0, 0.0);
-            }
+            long ns = Math.max(0L, System.nanoTime() - start);
+            totalQueryTimeNs += ns;  // accumulate client time (cache hit)
+            if (profiler != null) profiler.recordQueryMetric("Q_cache_" + topK, 0.0, ns / 1e6, 0.0);
             return cached;
         }
 
+        // miss → go to service
         List<QueryResult> results = queryService.search(token);
+        long end = System.nanoTime();
         cache.put(ckey, results);
 
-        long elapsedNs = Math.max(0L, System.nanoTime() - start);
-        totalQueryTime += elapsedNs;
+        long clientNs = Math.max(0L, end - start);
+        totalQueryTimeNs += clientNs;  // accumulate client time (cache miss)
 
         if (profiler != null) {
-            long rawServerNs = Math.max(0L, ((QueryServiceImpl) queryService).getLastQueryDurationNs());
-            long serverNs = capServerNs(rawServerNs, elapsedNs);
-            profiler.recordQueryMetric(
-                    "Q_" + topK,
-                    serverNs / 1_000_000.0,
-                    elapsedNs / 1_000_000.0,
-                    0.0
-            );
+            QueryServiceImpl qs = (QueryServiceImpl) queryService;
+            double serverMs = boundedServerMs(qs, start, end);
+            double clientMs = clientNs / 1_000_000.0;
+            profiler.recordQueryMetric("Q_" + topK, serverMs, clientMs, 0.0);
         }
         return results;
     }
@@ -598,35 +608,31 @@ public class ForwardSecureANNSystem {
             return query(queryVector, topK, dim);
         }
 
-        long start = System.nanoTime();
-        QueryToken token = cloakQuery(queryVector, dim, topK);
-        String ckey = cacheKeyOf(token);
+        final long start = System.nanoTime();
+        final QueryToken token = cloakQuery(queryVector, dim, topK);
+        final String ckey = cacheKeyOf(token);
         recordRecent(queryVector);
 
         List<QueryResult> cached = cache.get(ckey);
         if (cached != null) {
-            if (profiler != null) {
-                long clientNsCached = Math.max(0L, System.nanoTime() - start);
-                profiler.recordQueryMetric("Q_cloak_cache_" + topK, 0.0, clientNsCached / 1_000_000.0, 0.0);
-            }
+            long clientNs = Math.max(0L, System.nanoTime() - start);
+            totalQueryTimeNs += clientNs; // accumulate client time (cache hit)
+            if (profiler != null) profiler.recordQueryMetric("Q_cache_" + topK, 0.0, clientNs / 1_000_000.0, 0.0);
             return cached;
         }
 
         List<QueryResult> results = queryService.search(token);
+        long end = System.nanoTime();
         cache.put(ckey, results);
 
-        long elapsedNs = Math.max(0L, System.nanoTime() - start);
-        totalQueryTime += elapsedNs;
+        long clientNs = Math.max(0L, end - start);
+        totalQueryTimeNs += clientNs; // accumulate client time (cache miss)
 
         if (profiler != null) {
-            long rawServerNs = Math.max(0L, ((QueryServiceImpl) queryService).getLastQueryDurationNs());
-            long serverNs = capServerNs(rawServerNs, elapsedNs);
-            profiler.recordQueryMetric(
-                    "Q_cloak_" + topK,
-                    serverNs / 1_000_000.0,
-                    elapsedNs / 1_000_000.0,
-                    0.0
-            );
+            QueryServiceImpl qs = (QueryServiceImpl) queryService;
+            double serverMs = boundedServerMs(qs, start, end);
+            double clientMs = clientNs / 1_000_000.0;
+            profiler.recordQueryMetric("Q_" + topK, serverMs, clientMs, 0.0);
         }
         if (verbose) logger.debug("Cloaked query returned {} results for topK={}", results.size(), topK);
         return results;
@@ -711,9 +717,8 @@ public class ForwardSecureANNSystem {
         for (int q = 0; q < queries.size(); q++) {
             final int qIndex = q;
             double[] queryVec = queries.get(q);
+            long clientStart = System.nanoTime();                   // start client window BEFORE token build
             QueryToken baseToken = factoryForDim(dim).create(queryVec, baseKForToken);
-
-            long clientStart = System.nanoTime();
             List<QueryResult> baseReturned = queryService.search(baseToken);
             long clientEnd = System.nanoTime();
 
@@ -886,7 +891,8 @@ public class ForwardSecureANNSystem {
                     .findFirst().orElseGet(() -> enriched.get(enriched.size() - 1));
 
             if (profiler != null) profiler.recordQueryMetric("Q" + q, serverMs, clientMs, atK.getRatio());
-            totalQueryTime += clientMs;
+            totalQueryTimeNs += Math.max(0L, clientEnd - clientStart); // nanoseconds
+
 
             if (q < 3 && !baseReturned.isEmpty() && baseReader != null) {
                 int topId = -1;
@@ -1011,9 +1017,8 @@ public class ForwardSecureANNSystem {
             final int qIndex = q;
 
             double[] queryVec = queries.get(q);
+            long clientStart = System.nanoTime();                   // start client window BEFORE token build
             QueryToken baseToken = factoryForDim(dim).create(queryVec, baseKForToken);
-
-            long clientStart = System.nanoTime();
             List<QueryResult> baseReturned = queryService.search(baseToken);
             long clientEnd = System.nanoTime();
 
@@ -1185,7 +1190,7 @@ public class ForwardSecureANNSystem {
                     .findFirst().orElseGet(() -> enriched.get(enriched.size() - 1));
 
             if (profiler != null) profiler.recordQueryMetric("Q" + q, serverMs, clientMs, atK.getRatio());
-            totalQueryTime += clientMs;
+            totalQueryTimeNs += Math.max(0L, clientEnd - clientStart); // nanoseconds
 
             if (q < 3 && !baseReturned.isEmpty() && baseReader != null) {
                 int topId = -1;
@@ -2083,13 +2088,6 @@ public class ForwardSecureANNSystem {
     }
 
     // CSV helpers
-
-    /** Ensure server timing is never larger than the client's measured window. */
-    private static long capServerNs(long serverNs, long clientWindowNs) {
-        if (serverNs < 0L) serverNs = 0L;
-        if (clientWindowNs <= 0L) return serverNs;
-        return (serverNs > clientWindowNs) ? clientWindowNs : serverNs;
-    }
     private static void initReencCsvIfNeeded(Path p) {
         try {
             Files.createDirectories(p.getParent());
@@ -2270,14 +2268,19 @@ public class ForwardSecureANNSystem {
             this.rep = rep;
         }
     }
-    /** Server time bounded by the client-side window (returns milliseconds). */
+    /** Server ms, gently bounded to the client window to avoid nonsense but not forced-equal. */
     private static double boundedServerMs(QueryServiceImpl qs, long clientStartNs, long clientEndNs) {
-        long clientWinNs = Math.max(0L, clientEndNs - clientStartNs);
-        long rawServerNs = Math.max(0L, qs.getLastQueryDurationNs());
-        long boundedNs   = Math.min(rawServerNs, clientWinNs);
-        return boundedNs / 1_000_000.0;
-    }
+        final long clientWin = Math.max(0L, clientEndNs - clientStartNs);
+        long server = Math.max(0L, qs.getLastQueryDurationNs());
 
+        // If server > client by a small jitter margin, keep server; if it’s much larger, clamp & log once.
+        if (clientWin > 0 && server > clientWin * 1.10) { // 10% tolerance
+            // (optional) LoggerFactory.getLogger(ForwardSecureANNSystem.class)
+            //     .debug("Clamping serverNs={} to clientWinNs={}", server, clientWin);
+            server = clientWin;
+        }
+        return server / 1_000_000.0;
+    }
 
     // ====== retrieved IDs auditor ======
     private static final class RetrievedAudit {
@@ -2347,11 +2350,10 @@ public class ForwardSecureANNSystem {
     }
 
     public void shutdown() {
-        System.out.printf(
-                "Total indexing time: %d ms%nTotal query time: %d ms%n%n",
-                TimeUnit.NANOSECONDS.toMillis(totalIndexingTime),
-                TimeUnit.NANOSECONDS.toMillis(totalQueryTime)
-        );
+        long idxMs = Math.round(totalIndexingTimeNs / 1_000_000.0);
+        long qryMs = Math.round(totalQueryTimeNs / 1_000_000.0);
+        System.out.println("Total indexing time: " + idxMs + " ms");
+        System.out.println("Total query time: " + qryMs + " ms");
         try {
 //            logger.info("Shutdown sequence started");
 //            logger.info("Performing final flushAll()");

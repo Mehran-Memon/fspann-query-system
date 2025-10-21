@@ -23,8 +23,12 @@ public final class Coding {
 
     private Coding() {}
 
+    public interface CodeFamily {
+        int codeBits();
+    }
+
     /** Parameters of a G-function family used to produce H(v) and C(v). */
-    public static final class GFunction implements Serializable {
+    public static final class GFunction implements Serializable, CodeFamily {
         public final double[][] alpha; // [m][d] Gaussian rows, L2-normalized
         public final double[] r;       // [m] offset r_j ∈ [0, ω_j)
         public final double[] omega;   // [m] bin width ω_j > 0
@@ -50,12 +54,43 @@ public final class Coding {
         }
 
         /** Total code length (bits). */
+        @Override
         public int codeBits() { return m * lambda; }
     }
 
     // ----------------------------------------------------------------------
     // Factories for G
     // ----------------------------------------------------------------------
+
+    /** Minimal, seed-only descriptor for server-side metadata (no alpha/r/omega). */
+    public static final class GMeta implements java.io.Serializable, CodeFamily {
+        private final int m;
+        private final int lambda;
+        private final long seed;
+
+        public GMeta(int m, int lambda, long seed) {
+            if (m <= 0 || lambda <= 0) throw new IllegalArgumentException("m and lambda must be > 0");
+            this.m = m;
+            this.lambda = lambda;
+            this.seed = seed;
+        }
+        public int m() { return m; }
+        public int lambda() { return lambda; }
+        public long seed() { return seed; }
+        @Override public int codeBits() { return Math.multiplyExact(m, lambda); }
+        @Override public String toString() { return "GMeta{m=" + m + ", lambda=" + lambda + ", seed=" + seed + '}'; }
+        @Override public int hashCode() { return java.util.Objects.hash(m, lambda, seed); }
+        @Override public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof GMeta g)) return false;
+            return m == g.m && lambda == g.lambda && seed == g.seed;
+        }
+    }
+
+    /** Server-side factory: deterministic, seed-only description (no plaintext needed). */
+    public static GMeta fromSeedOnly(int m, int lambda, long seed) {
+        return new GMeta(m, lambda, seed);
+    }
 
     /**
      * Build a random G with Gaussian alpha, L2-normalized rows, fixed ω, randomized r∈[0,ω).

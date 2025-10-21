@@ -34,16 +34,28 @@ public class PartitionedIndexService implements PaperSearchEngine {
     private final int maxCandidates;    // safety cap for re-rank set size
     // Paper's recommended widening target w ≈ 2–5% of |D|.
     // We use 3% by default and scale per-division (mSANN_P) as |D| * α / ℓ.
-    private static final double PAPER_W_ALPHA = 0.03;
+    private static final double PAPER_W_ALPHA = clampAlpha(
+            Double.parseDouble(System.getProperty("paper.alpha", "0.02"))
+    );
+    // hard cap across all divisions (safety)
+    private static final int MAX_ALL_CANDIDATES =
+            Integer.getInteger("paper.maxCandidatesAllDivs", -1);
+    // dimension -> state
+    private final Map<Integer, DimensionState> dims = new ConcurrentHashMap<>();
+    // quick access by point id (for delete)
+    private final Map<String, Integer> idToDim = new ConcurrentHashMap<>();
     private static final Logger logger = LoggerFactory.getLogger(PartitionedIndexService.class);
 
     public PartitionedIndexService(int m, int lambda, int divisions, long seedBase) {
         this(m, lambda, divisions, seedBase,
                 Integer.getInteger("paper.buildThreshold", 2_000),
-                Integer.getInteger("paper.maxCandidates", -1)); // 0 means disabled
+                Integer.getInteger("paper.maxCandidates", -1)
+        );
     }
 
-    public PartitionedIndexService(int m, int lambda, int divisions, long seedBase, int buildThreshold, int maxCandidates) {
+    public PartitionedIndexService(int m, int lambda, int divisions, long seedBase,
+                                   int buildThreshold, int maxCandidates
+    ) {
         if (m <= 0 || lambda <= 0 || divisions <= 0) {
             throw new IllegalArgumentException("m, lambda, divisions must be > 0");
         }
@@ -58,80 +70,109 @@ public class PartitionedIndexService implements PaperSearchEngine {
     // ------------------------- In-memory state --------------------------
 
     private static final class DivisionState {
-        final Coding.GFunction G;
+        final Coding.CodeFamily G;  // was Coding.GFunction
         List<GreedyPartitioner.SubsetBounds> I = Collections.emptyList(); // sorted
         Map<String, List<EncryptedPoint>> tagToSubset = new ConcurrentHashMap<>();
         int w = 0;
-        DivisionState(Coding.GFunction g) { this.G = g; }
+        DivisionState(Coding.CodeFamily g) { this.G = g; }
     }
 
     private static final class DimensionState {
         final int d;
         // staged points (before first build)
         final List<EncryptedPoint> staged = new ArrayList<>();
-        final List<double[]> stagedVectors = new ArrayList<>();
+        final List<BitSet[]> stagedCodes = new ArrayList<>();
         // built divisions
         final List<DivisionState> divisions = new ArrayList<>();
         DimensionState(int d) { this.d = d; }
     }
-
-    // dimension -> state
-    private final Map<Integer, DimensionState> dims = new ConcurrentHashMap<>();
-    // quick access by point id (for delete)
-    private final Map<String, Integer> idToDim = new ConcurrentHashMap<>();
 
     // --------------------------------------------------------------------
     // PaperSearchEngine API
     // --------------------------------------------------------------------
 
     @Override
+    @Deprecated
     public void insert(EncryptedPoint pt) {
-        // Without plaintext vector, we cannot code; keep staged until caller provides vector later,
-        // or drop it if your workflow always calls insert(pt, vector). Here we stage with a null vector.
-        Objects.requireNonNull(pt, "EncryptedPoint");
-        idToDim.put(pt.getId(), pt.getVectorLength());
-        DimensionState S = dims.computeIfAbsent(pt.getVectorLength(), DimensionState::new);
+        throw new UnsupportedOperationException("Server requires precomputed codes; use insertWithCodes().");
+    }
+
+    @Override
+    @Deprecated
+    public void insert(EncryptedPoint pt, double[] plaintextVector) {
+        if (plaintextVector == null) throw new IllegalArgumentException("plaintextVector cannot be null");
+        final BitSet[] codes = code(plaintextVector); // length == divisions
+        insertWithCodes(new com.fspann.index.paper.CodedPoint(pt, codes, this.divisions));
+    }
+
+
+    public void insertWithCodes(com.fspann.index.paper.CodedPoint cp) {
+        if (cp == null || cp.pt == null || cp.codes == null || cp.codes.length != divisions) {
+            throw new IllegalArgumentException("CodedPoint must provide codes for all divisions.");
+        }
+        final int d = cp.pt.getVectorLength();
+        idToDim.put(cp.pt.getId(), d);
+        final DimensionState S = dims.computeIfAbsent(d, DimensionState::new);
         synchronized (S) {
-            S.staged.add(pt);
-            S.stagedVectors.add(null); // will be ignored unless vector available for coding
+            if (isBuilt(S)) {
+                for (int divIdx = 0; divIdx < divisions; divIdx++) {
+                    final DivisionState div = S.divisions.get(divIdx);
+                    final BitSet code = cp.codes[divIdx];
+                    for (int idx : findCoveringIntervals(code, div.I)) {
+                        final var sb = div.I.get(idx);
+                        div.tagToSubset.computeIfAbsent(sb.tag, k -> new java.util.concurrent.CopyOnWriteArrayList<>())
+                                .add(cp.pt);
+                    }
+                }
+            } else {
+                // stage point + codes for a later build
+                S.staged.add(cp.pt);
+                S.stagedCodes.add(cp.codes);
+            }
             maybeBuild(S);
         }
     }
 
-    @Override
-    public void insert(EncryptedPoint pt, double[] plaintextVector) {
-        Objects.requireNonNull(pt, "EncryptedPoint");
-        Objects.requireNonNull(plaintextVector, "plaintextVector");
-        if (pt.getVectorLength() != plaintextVector.length) {
-            throw new IllegalArgumentException("Vector length mismatch for id=" + pt.getId());
-        }
-        idToDim.put(pt.getId(), pt.getVectorLength());
-        DimensionState S = dims.computeIfAbsent(pt.getVectorLength(), DimensionState::new);
-        synchronized (S) {
-            if (isBuilt(S)) {
-                // Fast-path: place directly into existing partitions (no staging)
-                for (DivisionState div : S.divisions) {
-                    BitSet code = Coding.C(plaintextVector, div.G);
-                    List<Integer> hits = findCoveringIntervals(code, div.I);
-                    if (hits.isEmpty()) continue;
-                    for (int idx : hits) {
-                        GreedyPartitioner.SubsetBounds sb = div.I.get(idx);
-                        div.tagToSubset
-                                .computeIfAbsent(sb.tag, k -> new java.util.concurrent.CopyOnWriteArrayList<>())
-                                .add(pt);
-                    }
+    /**
+     * Client-side coding for a single plaintext vector.
+     * Produces {@code divisions} BitSets; each BitSet has length {@code m} (projections per division).
+     * A bit j in division i is set iff the signed random projection (seeded, deterministic) is >= 0.
+     * This keeps the server free of plaintext while enabling strict insertWithCodes().
+     */
+    public BitSet[] code(double[] vec) {
+        Objects.requireNonNull(vec, "vec");
+        final BitSet[] out = new BitSet[divisions];
+        for (int div = 0; div < divisions; div++) {
+            final BitSet bits = new BitSet(m);
+            // Seed per (division, projection) to keep coding deterministic across runs with same seed.
+            for (int proj = 0; proj < m; proj++) {
+                long seed = mix64(seedBase ^ (long) div * 0x9E3779B97F4A7C15L ^ (long) proj * 0xBF58476D1CE4E5B9L);
+                double dot = 0.0;
+                // Signed random projection using a simple LCG-derived pseudo-random vector
+                long s = seed;
+                for (double v : vec) {
+                    s ^= (s << 21); s ^= (s >>> 35); s ^= (s << 4); // xorshift-ish
+                    // Map bits to pseudo-normal-ish multiplier in [-1,1]
+                    double r = ((s & 0x3fffffffL) / (double) 0x3fffffffL) * 2.0 - 1.0;
+                    dot += v * r;
                 }
-            } else {
-                // Pre-build: stage until we have G and I
-                S.staged.add(pt);
-                S.stagedVectors.add(plaintextVector.clone());
-                maybeBuild(S);
+                if (dot >= 0) bits.set(proj);
             }
+            out[div] = bits;
         }
+        return out;
+    }
+
+
+    // --- helpers (deterministic hashing) ---
+    private static long mix64(long z) {
+        z = (z ^ (z >>> 33)) * 0xff51afd7ed558ccdl;
+        z = (z ^ (z >>> 33)) * 0xc4ceb9fe1a85ec53l;
+        return z ^ (z >>> 33);
     }
 
     @Override
-    public List<EncryptedPoint> lookup(QueryToken token) {
+    public List<EncryptedPoint> lookup(com.fspann.common.QueryToken token) {
         Objects.requireNonNull(token, "QueryToken");
         final int d = token.getDimension();
         final DimensionState S = dims.get(d);
@@ -141,14 +182,37 @@ public class PartitionedIndexService implements PaperSearchEngine {
 
         final Set<String> seen = new LinkedHashSet<>();
         final List<EncryptedPoint> cands = new ArrayList<>();
-        final double[] q = token.getPlaintextQuery();
 
-        for (DivisionState div : S.divisions) {
+        // Prefer codes from the token (privacy-preserving path)
+        final BitSet[] codesFromClient = token.getCodes();
+
+        // Legacy test path: compute codes from plaintext ONLY if present (not used in production)
+        final double[] qPlain = (codesFromClient == null ? token.getPlaintextQuery() : null);
+
+        // Hard cap across all divisions (optional)
+        final int globalCap = MAX_ALL_CANDIDATES > 0 ? MAX_ALL_CANDIDATES : Integer.MAX_VALUE;
+
+        for (int divIdx = 0; divIdx < S.divisions.size(); divIdx++) {
+            if (cands.size() >= globalCap) break;
+
+            final DivisionState div = S.divisions.get(divIdx);
             if (div.I.isEmpty()) continue;
 
-            final BitSet Cq = Coding.C(q, div.G);
+            final Coding.GFunction legacyG = toLegacyGFunction(div.G);
+            final BitSet Cq =
+                    (codesFromClient != null &&
+                            divIdx < codesFromClient.length &&
+                            codesFromClient[divIdx] != null)
+                            ? (BitSet) codesFromClient[divIdx].clone()
+                            : ((qPlain != null && legacyG != null) ? Coding.C(qPlain, legacyG) : null);
 
-            // Seeds: intervals covering Cq; fallback to nearest interval
+
+            if (Cq == null) {
+                // No way to obtain a code for this division; skip (keeps privacy guarantees)
+                continue;
+            }
+
+            // Seed intervals that cover Cq; fallback to nearest interval
             List<Integer> hits = findCoveringIntervals(Cq, div.I);
             if (hits.isEmpty()) {
                 int seed = nearestIdx(Cq, div.I);
@@ -156,18 +220,18 @@ public class PartitionedIndexService implements PaperSearchEngine {
             }
             if (hits.isEmpty()) continue;
 
-            final int targetPerDiv = Math.max(1, div.w);  // paper: per-division target
+            final int targetPerDiv = Math.max(1, div.w);
             int gatheredThisDiv = 0;
             final boolean[] visited = new boolean[div.I.size()];
 
-            // 1) Add anchor intervals first (the ones that cover Cq)
+            // 1) anchors
             for (int idx : hits) {
                 if (idx < 0 || idx >= div.I.size() || visited[idx]) continue;
                 GreedyPartitioner.SubsetBounds sb = div.I.get(idx);
                 List<EncryptedPoint> subset = div.tagToSubset.get(sb.tag);
                 if (subset != null && !subset.isEmpty()) {
                     for (EncryptedPoint p : subset) {
-                        if (maxCandidates > 0 && cands.size() >= maxCandidates) break;
+                        if (cands.size() >= globalCap) break;
                         if (seen.add(p.getId())) {
                             cands.add(p);
                             if (++gatheredThisDiv >= targetPerDiv) break;
@@ -175,23 +239,22 @@ public class PartitionedIndexService implements PaperSearchEngine {
                     }
                 }
                 visited[idx] = true;
-                if (gatheredThisDiv >= targetPerDiv) break;
-                if (maxCandidates > 0 && cands.size() >= maxCandidates) break;
+                if (gatheredThisDiv >= targetPerDiv || cands.size() >= globalCap) break;
             }
-            if (gatheredThisDiv >= targetPerDiv) continue;
-            if (maxCandidates > 0 && cands.size() >= maxCandidates) break;
+            if (gatheredThisDiv >= targetPerDiv || cands.size() >= globalCap) continue;
 
-            // 2) Symmetric widening: ±1, ±2, ... around each anchor until we reach targetPerDiv
+            // 2) symmetric widening
             for (int radius = 1; gatheredThisDiv < targetPerDiv && radius < div.I.size(); radius++) {
                 for (int anchor : hits) {
-                    // left
+                    if (cands.size() >= globalCap) break;
+
                     int left = anchor - radius;
                     if (left >= 0 && !visited[left]) {
                         GreedyPartitioner.SubsetBounds sbL = div.I.get(left);
                         List<EncryptedPoint> subsetL = div.tagToSubset.get(sbL.tag);
                         if (subsetL != null && !subsetL.isEmpty()) {
                             for (EncryptedPoint p : subsetL) {
-                                if (maxCandidates > 0 && cands.size() >= maxCandidates) break;
+                                if (cands.size() >= globalCap) break;
                                 if (seen.add(p.getId())) {
                                     cands.add(p);
                                     if (++gatheredThisDiv >= targetPerDiv) break;
@@ -200,17 +263,15 @@ public class PartitionedIndexService implements PaperSearchEngine {
                         }
                         visited[left] = true;
                     }
-                    if (gatheredThisDiv >= targetPerDiv) break;
-                    if (maxCandidates > 0 && cands.size() >= maxCandidates) break;
+                    if (gatheredThisDiv >= targetPerDiv || cands.size() >= globalCap) break;
 
-                    // right
                     int right = anchor + radius;
                     if (right < div.I.size() && !visited[right]) {
                         GreedyPartitioner.SubsetBounds sbR = div.I.get(right);
                         List<EncryptedPoint> subsetR = div.tagToSubset.get(sbR.tag);
                         if (subsetR != null && !subsetR.isEmpty()) {
                             for (EncryptedPoint p : subsetR) {
-                                if (maxCandidates > 0 && cands.size() >= maxCandidates) break;
+                                if (cands.size() >= globalCap) break;
                                 if (seen.add(p.getId())) {
                                     cands.add(p);
                                     if (++gatheredThisDiv >= targetPerDiv) break;
@@ -219,12 +280,9 @@ public class PartitionedIndexService implements PaperSearchEngine {
                         }
                         visited[right] = true;
                     }
-                    if (gatheredThisDiv >= targetPerDiv) break;
-                    if (maxCandidates > 0 && cands.size() >= maxCandidates) break;
+                    if (gatheredThisDiv >= targetPerDiv || cands.size() >= globalCap) break;
                 }
             }
-
-            if (maxCandidates > 0 && cands.size() >= maxCandidates) break;
         }
 
         return cands;
@@ -242,7 +300,6 @@ public class PartitionedIndexService implements PaperSearchEngine {
             for (int i = S.staged.size() - 1; i >= 0; i--) {
                 if (id.equals(S.staged.get(i).getId())) {
                     S.staged.remove(i);
-                    S.stagedVectors.remove(i);
                     break;
                 }
             }
@@ -314,59 +371,58 @@ public class PartitionedIndexService implements PaperSearchEngine {
         return !S.divisions.isEmpty() && !S.divisions.get(0).I.isEmpty();
     }
 
+    /**
+     * Build all divisions using only staged codes (no plaintext).
+     * Uses Coding.GMeta (seed-only) so we can persist metadata deterministically.
+     */
     private void buildAllDivisions(DimensionState S) {
-        // Gather only items with available plaintext vectors
+        // Collect staged items that have codes for all divisions
         List<EncryptedPoint> pts = new ArrayList<>();
-        List<double[]> vecs = new ArrayList<>();
+        List<BitSet[]> codes = new ArrayList<>();
         for (int i = 0; i < S.staged.size(); i++) {
-            double[] v = S.stagedVectors.get(i);
-            if (v != null) {
+            BitSet[] cs = S.stagedCodes.get(i);
+            if (cs != null && cs.length == divisions) {
                 pts.add(S.staged.get(i));
-                vecs.add(v);
+                codes.add(cs);
             }
         }
-        if (pts.isEmpty()) return; // nothing to build
+        if (pts.isEmpty()) return;
 
-        int d = S.d;
-
-        // Reset divisions
+        final int d = S.d;
         S.divisions.clear();
 
-        // For each division, build independent G from a sample then partition
-        for (int div = 0; div < divisions; div++) {
-            long seed = mix(seedBase, d, m, lambda, div);
+        for (int divIdx = 0; divIdx < divisions; divIdx++) {
+            long seed = mix(seedBase, d, m, lambda, divIdx);
 
-            // Build G from a sample (use all vecs here; you can subsample for speed)
-            Coding.GFunction G = Coding.buildFromSample(vecs.toArray(new double[0][]), m, lambda, seed);
-            DivisionState D = new DivisionState(G);
+            // Metadata only (no plaintext projections on server)
+            Coding.GMeta G = Coding.fromSeedOnly(m, lambda, seed);
 
-            // Create items with codes
             List<GreedyPartitioner.Item> items = new ArrayList<>(pts.size());
             for (int i = 0; i < pts.size(); i++) {
-                items.add(new GreedyPartitioner.Item(pts.get(i).getId(), pts.get(i), Coding.C(vecs.get(i), G)));
+                items.add(new GreedyPartitioner.Item(pts.get(i).getId(), pts.get(i), codes.get(i)[divIdx]));
             }
 
-            // Build partitions (Algorithm-2)
             GreedyPartitioner.BuildResult br = GreedyPartitioner.build(items, G.codeBits(), seed ^ 0x9E3779B97F4A7C15L);
+
+            DivisionState D = new DivisionState(G); // change DivisionState.G type to accept GMeta
             D.I = br.indexI;
-            // Wrap with thread-safe collections for concurrent reads/writes
+
             Map<String, List<EncryptedPoint>> safe = new ConcurrentHashMap<>();
             for (var e : br.tagToSubset.entrySet()) {
                 safe.put(e.getKey(), new java.util.concurrent.CopyOnWriteArrayList<>(e.getValue()));
             }
             D.tagToSubset = safe;
-            // Paper widening target per division: ceil(α * |D| / ℓ)
+
             D.w = Math.max(1, (int) Math.ceil(PAPER_W_ALPHA * pts.size() / (double) this.divisions));
             logger.info("Division {} paper-w target set to {} (alpha={} * |D|={} / ℓ={})",
-                    (div + 1), D.w, PAPER_W_ALPHA, pts.size(), this.divisions);
-
+                    (divIdx + 1), D.w, PAPER_W_ALPHA, pts.size(), this.divisions);
 
             S.divisions.add(D);
         }
 
-        // Clear staged (we have built with these)
+        // SECURITY: clear staged references
         S.staged.clear();
-        S.stagedVectors.clear();
+        S.stagedCodes.clear();
     }
 
     private static long mix(long seedBase, int d, int m, int lambda, int division) {
@@ -401,9 +457,22 @@ public class PartitionedIndexService implements PaperSearchEngine {
         return best;
     }
 
+    // Legacy-only adapter: returns a GFunction if (and only if) the division stored one.
+    // In production (seed-only GMeta), this returns null so we do NOT compute codes server-side.
+    private static Coding.GFunction toLegacyGFunction(Coding.CodeFamily g) {
+        return (g instanceof Coding.GFunction) ? (Coding.GFunction) g : null;
+    }
+
     // Expose paper params for logging/artifacts
     public int getM() { return m; }
     public int getLambda() { return lambda; }
     public int getDivisions() { return divisions; }
     public long getSeedBase() { return seedBase; }
+    private static double clampAlpha(double x) {
+        // keep sane & safe bounds to prevent massive candidate leaks
+        if (Double.isNaN(x)) return 0.03;
+        if (x < 0.005) return 0.005;   // 0.5%
+        if (x > 0.10)  return 0.10;    // 10%
+        return x;
+    }
 }

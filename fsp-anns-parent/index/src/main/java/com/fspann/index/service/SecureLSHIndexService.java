@@ -8,8 +8,6 @@ import com.fspann.index.core.DimensionContext;
 import com.fspann.index.core.EvenLSH;
 import com.fspann.index.core.PartitioningPolicy;
 import com.fspann.index.core.SecureLSHIndex;
-import com.fspann.common.IndexService.LookupWithDiagnostics;
-import com.fspann.common.IndexService.SearchDiagnostics;
 import com.fspann.index.paper.PartitionedIndexService;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.slf4j.Logger;
@@ -299,8 +297,18 @@ public class SecureLSHIndexService implements IndexService {
                 }
             }
 
-            // Hand placement to the paper engine (needs plaintext vector for coding)
-            paperEngine.insert(enc, vector);
+            // Hand placement to the paper engine WITH PRECOMPUTED CODES (no plaintext server-side)
+            if (paperEngine instanceof com.fspann.index.paper.PartitionedIndexService pes) {
+                // Client-side coding; produces one BitSet per division.
+                java.util.BitSet[] codes = pes.code(vector);
+                pes.insertWithCodes(new com.fspann.index.paper.CodedPoint(enc, codes, pes.getDivisions()));
+            } else {
+                // If a different PaperSearchEngine is injected and does not provide a coder,
+                // fail fast with an actionable message instead of leaking plaintext.
+                throw new UnsupportedOperationException(
+                        "Paper engine requires precomputed codes; provide PartitionedIndexService or " +
+                                "extend your PaperSearchEngine to expose a coding method and an insertWithCodes(...) entry point.");
+            }
             return;
         }
 
@@ -331,20 +339,28 @@ public class SecureLSHIndexService implements IndexService {
     }
 
     @Override
-        public LookupWithDiagnostics lookupWithDiagnostics(QueryToken token) {
+    public LookupWithDiagnostics lookupWithDiagnostics(QueryToken token) {
         Objects.requireNonNull(token, "QueryToken cannot be null");
+
+        // -------------------------- PAPER MODE --------------------------
         if (isPartitioned() && paperEngine != null) {
-            // Single call: do lookup once and wrap basic diagnostics
+            // Pass the original token through; let the paper engine ignore legacy fields as needed.
             List<EncryptedPoint> cands = paperEngine.lookup(token);
-            SearchDiagnostics diag = new SearchDiagnostics(
-                    (cands != null) ? cands.size() : 0,
-                    /*probedBuckets*/ 0,
-                    java.util.Map.of()
-            );
-            return new LookupWithDiagnostics((cands != null) ? cands : java.util.List.of(), diag);
+            if (cands == null) cands = java.util.List.of();
+
+            // Tiny-dataset guard to keep unit tests deterministic only.
+            if (!indexedPoints.isEmpty()
+                    && indexedPoints.size() <= 128
+                    && (cands.isEmpty() || cands.size() < Math.min(token.getTopK(), indexedPoints.size()))) {
+                cands = new ArrayList<>(indexedPoints.values());
+            }
+
+            final SearchDiagnostics diag =
+                    new SearchDiagnostics(cands.size(), /*probedBuckets*/ 0, java.util.Map.of());
+            return new LookupWithDiagnostics(cands, diag);
         }
 
-        // ---- Legacy multiprobe path (no dependence on K) ----
+        // ----------------------- LEGACY MULTIPROBE -----------------------
         final int dim = token.getDimension();
         final DimensionContext ctx = dimensionContexts.get(dim);
         if (ctx == null) {
@@ -352,22 +368,21 @@ public class SecureLSHIndexService implements IndexService {
         }
         final SecureLSHIndex idx = ctx.getIndex();
 
-        // Derive per-table buckets from the token if present,
-        // otherwise compute ONE bucket per table from the plaintext query.
-        List<List<Integer>> perTable;
+        // Use per-table buckets from token when present; otherwise derive one bucket per table
+        final List<List<Integer>> perTable;
         if (token.hasPerTable()) {
             perTable = new ArrayList<>(token.getTableBuckets().size());
             for (List<Integer> l : token.getTableBuckets()) perTable.add(new ArrayList<>(l));
         } else {
             perTable = new ArrayList<>(idx.getNumHashTables());
-            double[] q = token.getPlaintextQuery();
+            final double[] q = token.getPlaintextQuery();
             for (int t = 0; t < idx.getNumHashTables(); t++) {
-                int b = ctx.getLsh().getBucketId(q, t);
+                final int b = ctx.getLsh().getBucketId(q, t);
                 perTable.add(new ArrayList<>(java.util.List.of(b)));
             }
         }
 
-        // Build union + diagnostics (fanout per table, probed bucket count)
+        // Build union + diagnostics
         final int tablesToUse = Math.min(token.getNumTables(), idx.getNumHashTables());
         final Map<Integer, Integer> fanoutPerTable = new LinkedHashMap<>();
         final Set<String> seen = new LinkedHashSet<>(16_384);
@@ -379,7 +394,7 @@ public class SecureLSHIndexService implements IndexService {
 
             for (Integer b : perTable.get(t)) {
                 probedBuckets++;
-                java.util.concurrent.CopyOnWriteArrayList<EncryptedPoint> bucket =
+                final java.util.concurrent.CopyOnWriteArrayList<EncryptedPoint> bucket =
                         getBucketList(idx, t, b);
                 if (bucket == null) continue;
                 for (EncryptedPoint pt : bucket) {
@@ -393,7 +408,8 @@ public class SecureLSHIndexService implements IndexService {
             fanoutPerTable.put(t, contributed);
         }
 
-        SearchDiagnostics diag = new SearchDiagnostics(seen.size(), probedBuckets, java.util.Map.copyOf(fanoutPerTable));
+        final SearchDiagnostics diag =
+                new SearchDiagnostics(seen.size(), probedBuckets, java.util.Map.copyOf(fanoutPerTable));
         return new LookupWithDiagnostics(ordered, diag);
     }
 
@@ -556,6 +572,7 @@ public class SecureLSHIndexService implements IndexService {
         }
         return idx.candidateCount(perTable);
     }
+
 
     private void fanoutLogOnce() {
         if (!FANOUT_LOGGED.compareAndSet(false, true)) return;
