@@ -9,8 +9,8 @@
       "numTables": 0, "rowsPerBand": 0, "probeShards": 0
     },
     "numShards": 1,
-    "opsThreshold": 1000000,
-    "ageThresholdMs": 604800000,
+    "opsThreshold": 10000000,
+    "ageThresholdMs": 6048000000,
     "eval":
     {
       "computePrecision": true,
@@ -32,27 +32,43 @@
     },
     "ratio":
     {
-      "source": "gt", "gtSample": 10000, "gtMismatchTolerance": 0.0
+      "source": "gt",
+      "gtSample": 10000,
+      "gtMismatchTolerance": 0.0,
+      "autoComputeGT": false,
+      "allowComputeIfMissing": false
     }
   },
-  "profiles":
-  [
-    {
-      "name": "baseline", "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 9 } } },
-    { "name": "exp1_divisions_ell3", "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 3 } } },
-    { "name": "exp1_divisions_ell5", "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 5 } } },
-    { "name": "exp1_divisions_ell7", "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 7 } } },
-    { "name": "exp1_divisions_ell11", "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 11 } } },
+  "profiles": [
+    { "name": "P01_baseline_l9",        "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 9 } } },
 
-    { "name": "exp2_m_15", "overrides": { "paper": { "m": 15, "lambda": 2, "divisions": 9 } } },
-    { "name": "exp2_m_17", "overrides": { "paper": { "m": 17, "lambda": 2, "divisions": 9 } } },
-    { "name": "exp2_m_19", "overrides": { "paper": { "m": 19, "lambda": 2, "divisions": 9 } } },
-    { "name": "exp2_m_21", "overrides": { "paper": { "m": 21, "lambda": 2, "divisions": 9 } } },
-    { "name": "exp2_m_23", "overrides": { "paper": { "m": 23, "lambda": 2, "divisions": 9 } } },
+    { "name": "P02_div_l2",             "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 2 } } },
+    { "name": "P03_div_l3",             "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 3 } } },  // your current best
+    { "name": "P04_div_l4",             "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 4 } } },
+    { "name": "P05_div_l5",             "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 5 } } },
+    { "name": "P06_div_l6",             "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 6 } } },
+    { "name": "P07_div_l7",             "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 7 } } },
+    { "name": "P08_div_l8",             "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 8 } } },
+    { "name": "P09_div_l10",            "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 10 } } },
+    { "name": "P10_div_l11",            "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 11 } } },
+    { "name": "P11_div_l12",            "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 12 } } },
 
-    { "name": "exp3_lambda_1", "overrides": { "paper": { "m": 25, "lambda": 1, "divisions": 9 } } },
-    { "name": "exp3_lambda_3", "overrides": { "paper": { "m": 25, "lambda": 3, "divisions": 9 } } },
-    { "name": "exp3_lambda_4", "overrides": { "paper": { "m": 25, "lambda": 4, "divisions": 9 } } },
-    { "name": "exp3_lambda_5", "overrides": { "paper": { "m": 25, "lambda": 5, "divisions": 9 } } }
+    { "name": "P12_m5_l3",             "overrides": { "paper": { "m": 5, "lambda": 2, "divisions": 3 } } },
+    { "name": "P13_m10_l3",             "overrides": { "paper": { "m": 10, "lambda": 2, "divisions": 3 } } },
+    { "name": "P14_m15_l3",             "overrides": { "paper": { "m": 15, "lambda": 2, "divisions": 3 } } },
+    { "name": "P15_m20_l3",             "overrides": { "paper": { "m": 20, "lambda": 2, "divisions": 3 } } },
+    { "name": "P16_m25_l3",             "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 3 } } },
+    { "name": "P17_m30_l3",             "overrides": { "paper": { "m": 30, "lambda": 2, "divisions": 3 } } },
+    { "name": "P18_m35_l3",             "overrides": { "paper": { "m": 35, "lambda": 2, "divisions": 3 } } },
+
+    { "name": "P19_lambda1_l3",         "overrides": { "paper": { "m": 25, "lambda": 1, "divisions": 3 } } },
+    { "name": "P20_lambda2_l3",         "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 3 } } },
+    { "name": "P21_lambda3_l3",         "overrides": { "paper": { "m": 25, "lambda": 3, "divisions": 3 } } },
+    { "name": "P22_lambda4_l3",         "overrides": { "paper": { "m": 25, "lambda": 4, "divisions": 3 } } },
+    { "name": "P23_lambda5_l3",         "overrides": { "paper": { "m": 25, "lambda": 5, "divisions": 3 } } },
+
+    { "name": "P24_fast_lowlat",        "overrides": { "paper": { "m": 20, "lambda": 2, "divisions": 2 } } },
+    { "name": "P25_balanced",           "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 3 } } },
+    { "name": "P26_highrecall_l4_m30",  "overrides": { "paper": { "m": 30, "lambda": 3, "divisions": 4 } } }
   ]
 }

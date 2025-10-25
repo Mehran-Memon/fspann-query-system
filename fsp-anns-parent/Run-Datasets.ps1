@@ -1,360 +1,362 @@
 # ============================
-# FSP-ANN batch runner (3 configs) — full indexing + querying
-# Updated: precision-first + GT AUTO precompute each run
+# FSP-ANN (multi-dataset, multi-profile batch)
+# - Disables GT recompute; uses explicit GT path
+# - Integrates EvaluationSummaryPrinter (expects Java side in place)
+# - Consolidates CSVs per dataset and across datasets
 # ============================
 
-# ---------- SETTINGS ----------
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+if (-not (Get-Command java -ErrorAction SilentlyContinue)) {
+    throw "Java not found in PATH. Install JDK or add 'java' to PATH."
+}
+
+# ---- required paths ----
 $JarPath    = "F:\fspann-query-system\fsp-anns-parent\api\target\api-0.0.1-SNAPSHOT-jar-with-dependencies.jar"
 $ConfigPath = "F:\fspann-query-system\fsp-anns-parent\config\src\main\resources\config.json"
-$KeysPath   = "G:\fsp-run\metadata\keys.ser"   # will be created if missing
-$MetaRoot   = "G:\fsp-run\metadata"            # per-dataset subfolders will be created
-$OutRoot    = "G:\fsp-run\out"                 # where logs/CSVs will go
+$OutRoot    = "G:\fsp-run"
 
-# Default JVM sizing (dataset-specific bump is applied later)
-$Xms = "4g"
-$Xmx = "16g"
-
-# Java executable
-$Java = "java"
-
-# Clean behavior
-$CleanPerRun = $true   # clean metadata/points/results for each dataset×config before running
-$CleanAllNow = $false  # set $true to wipe ALL per-dataset metadata under $MetaRoot once and exit
-
-function Get-XmxForDataset([string]$datasetName, [string]$defaultXmx) {
-    if ($datasetName -in @("SIFT_50M","SIFT_100M","synthetic_1024")) { return "32g" }
-    return $defaultXmx
-}
-
-# ----------------- EXPLORE/WIDTH CONFIGS (ordered) -----------------
-$Configs = @(
-# 💨 throughput
-    @{ Label="throughput";
-    ProbePerTable=6;  ProbeBitsMax=1; FanoutTarget=0.008;
-    PaperM=10; PaperLambda=5; PaperDivisions=8; PaperMaxCandidates=80000 },
-
-    # ⚖️ balanced
-    @{ Label="balanced";
-    ProbePerTable=12; ProbeBitsMax=1; FanoutTarget=0.012;
-    PaperM=12; PaperLambda=6; PaperDivisions=10; PaperMaxCandidates=120000 },
-
-    # 🎯 recall-first (kept label for continuity; system reports precision now)
-    @{ Label="recall_first";
-    ProbePerTable=28; ProbeBitsMax=3; FanoutTarget=0.035;
-    PaperM=14; PaperLambda=8; PaperDivisions=12; PaperMaxCandidates=200000 }
+# ---- alpha and JVM system props ----
+$Alpha = 0.3
+$JvmArgs = @(
+    "-XX:+UseG1GC","-XX:MaxGCPauseMillis=200","-XX:+AlwaysPreTouch",
+    "-Ddisable.exit=true",
+    "-Dfile.encoding=UTF-8",
+    "-Dreenc.mode=end",
+    "-Dreenc.minTouched=5000",
+    "-Dreenc.batchSize=2000",
+    "-Dlog.progress.everyN=0",
+    "-Dpaper.buildThreshold=2000000",
+    ("-Dpaper.alpha={0}" -f $Alpha)
 )
 
-# -------------- DATASETS (only include ones you have base+query) --------------
-$Datasets = @(
-    @{ Name="SIFT1M"; Dim=128;
-    Base="E:\Research Work\Datasets\sift_dataset\sift_base.fvecs";
-    Query="E:\Research Work\Datasets\sift_dataset\sift_query.fvecs" },
+# ---- app batch size arg ----
+$Batch = 100000
 
-    @{ Name="Audio"; Dim=192;
-    Base="E:\Research Work\Datasets\audio\audio_base.fvecs";
-    Query="E:\Research Work\Datasets\audio\audio_query.fvecs" },
+# ---- profile filter ----
+# - "" => all
+# - exact name => that profile only
+# - wildcard => pattern (e.g., "*ell3*")
+$OnlyProfile = ""
 
-    @{ Name="GloVe100"; Dim=100;
-    Base="E:\Research Work\Datasets\glove-100\glove-100_base.fvecs";
-    Query="E:\Research Work\Datasets\glove-100\glove-100_query.fvecs" },
+# ---- toggles ----
+$CleanPerRun = $true
+$QueryOnly   = $false
+$RestoreVersion = ""
 
-    @{ Name="Enron"; Dim=1369;
-    Base="E:\Research Work\Datasets\Enron\enron_base.fvecs";
-    Query="E:\Research Work\Datasets\Enron\enron_query.fvecs" },
-
-    # Synthetic datasets
-    @{ Name="synthetic_128"; Dim=128;
-    Base="E:\Research Work\Datasets\synthetic_data\synthetic_128\base.fvecs";
-    Query="E:\Research Work\Datasets\synthetic_data\synthetic_128\query.fvecs" },
-
-    @{ Name="synthetic_256"; Dim=256;
-    Base="E:\Research Work\Datasets\synthetic_data\synthetic_256\base.fvecs";
-    Query="E:\Research Work\Datasets\synthetic_data\synthetic_256\query.fvecs" },
-
-    @{ Name="synthetic_512"; Dim=512;
-    Base="E:\Research Work\Datasets\synthetic_data\synthetic_512\base.fvecs";
-    Query="E:\Research Work\Datasets\synthetic_data\synthetic_512\query.fvecs" },
-
-    @{ Name="synthetic_1024"; Dim=1024;
-    Base="E:\Research Work\Datasets\synthetic_data\synthetic_1024\base.fvecs";
-    Query="E:\Research Work\Datasets\synthetic_data\synthetic_1024\query.fvecs" }
-)
-
-# ---------- PREP ROOT FOLDERS ----------
-New-Item -ItemType Directory -Force -Path $OutRoot  | Out-Null
-New-Item -ItemType Directory -Force -Path $MetaRoot | Out-Null
-
-# ---------- HELPERS ----------
-function Ensure-Files([string]$base,[string]$query) {
-    $ok = $true
-    if ([string]::IsNullOrWhiteSpace($base)  -or -not (Test-Path -LiteralPath $base))  { Write-Error "Missing base:  $base";  $ok = $false }
-    if ([string]::IsNullOrWhiteSpace($query) -or -not (Test-Path -LiteralPath $query)) { Write-Error "Missing query: $query"; $ok = $false }
-    return $ok
+# ---------- helpers ----------
+function To-Hashtable { param([Parameter(Mandatory=$true)]$o)
+if ($null -eq $o) { return $null }
+if ($o -is [hashtable]) { return $o }
+if ($o -is [System.Collections.IDictionary]) { $ht=@{}; foreach($k in $o.Keys){ $ht[$k] = To-Hashtable $o[$k] }; return $ht }
+if ($o -is [System.Collections.IEnumerable] -and -not ($o -is [string])) { $arr=@(); foreach($e in $o){ $arr += ,(To-Hashtable $e) }; return $arr }
+if ($o -is [pscustomobject]) { $ht=@{}; foreach($p in $o.PSObject.Properties){ $ht[$p.Name] = To-Hashtable $p.Value }; return $ht }
+return $o
 }
-
+function Copy-Hashtable { param([hashtable]$h)
+$out = @{}
+foreach ($k in $h.Keys) {
+    $v = $h[$k]
+    if ($v -is [hashtable]) {
+        $out[$k] = Copy-Hashtable $v
+    } elseif ($v -is [System.Collections.IEnumerable] -and -not ($v -is [string])) {
+        $arr = @()
+        foreach ($e in $v) { if ($e -is [hashtable]) { $arr += ,(Copy-Hashtable $e) } else { $arr += ,$e } }
+        $out[$k] = $arr
+    } else { $out[$k] = $v }
+}
+return $out
+}
+function Apply-Overrides { param([hashtable]$base,[hashtable]$ovr)
+$result = Copy-Hashtable $base
+foreach($k in $ovr.Keys){
+    $ov = $ovr[$k]
+    if ($result.ContainsKey($k) -and ($result[$k] -is [hashtable]) -and ($ov -is [hashtable])) {
+        foreach($sub in $ov.Keys){ $result[$k][$sub] = $ov[$sub] }
+    } else { $result[$k] = $ov }
+}
+return $result
+}
+function Ensure-Files { param([string]$base,[string]$query,[string]$gt)
+$ok = $true
+if ([string]::IsNullOrWhiteSpace($base) -or -not (Test-Path -LiteralPath $base)) { Write-Error "Missing base:  $base";  $ok = $false }
+if ([string]::IsNullOrWhiteSpace($query) -or -not (Test-Path -LiteralPath $query)) { Write-Error "Missing query: $query"; $ok = $false }
+if ([string]::IsNullOrWhiteSpace($gt) -or -not (Test-Path -LiteralPath $gt)) { Write-Error "Missing GT:    $gt";  $ok = $false }
+return $ok
+}
 function Safe-Resolve([string]$Path, [bool]$AllowMissing = $false) {
     try {
-        if ($AllowMissing) {
-            if (-not (Test-Path -LiteralPath $Path)) { return $Path }
-        }
+        if ($AllowMissing -and -not (Test-Path -LiteralPath $Path)) { return $Path }
         return (Resolve-Path -LiteralPath $Path).Path
-    } catch {
-        if ($AllowMissing) { return $Path } else { throw }
-    }
+    } catch { if ($AllowMissing) { return $Path } else { throw } }
 }
-
-# ---------- FAST DELETE ----------
 function Invoke-FastDelete([string]$PathToDelete) {
     if (-not (Test-Path -LiteralPath $PathToDelete)) { return }
     $item = Get-Item -LiteralPath $PathToDelete -ErrorAction SilentlyContinue
     if ($null -eq $item) { return }
-
-    if (-not $item.PSIsContainer) {
-        Remove-Item -LiteralPath $PathToDelete -Force -ErrorAction SilentlyContinue
-        return
-    }
-
+    if (-not $item.PSIsContainer) { Remove-Item -LiteralPath $PathToDelete -Force -ErrorAction SilentlyContinue; return }
     $empty = New-Item -ItemType Directory -Path (Join-Path $env:TEMP ("empty_" + [guid]::NewGuid())) -Force
-    try {
-        robocopy $empty.FullName $PathToDelete /MIR /NFL /NDL /NJH /NJS /NC /NS /NP | Out-Null
-    } finally {
+    try { robocopy $empty.FullName $PathToDelete /MIR /NFL /NDL /NJH /NJS /NC /NS /NP | Out-Null }
+    finally {
         try { Remove-Item -LiteralPath $PathToDelete -Recurse -Force -ErrorAction SilentlyContinue } catch {}
         try { Remove-Item -LiteralPath $empty.FullName -Recurse -Force -ErrorAction SilentlyContinue } catch {}
     }
 }
-
-function Clean-RunMetadata([string]$MetaDir,[string]$RunDir) {
-    $paths = @(
-        (Join-Path $MetaDir "metadata"),
-        (Join-Path $MetaDir "points"),
-        (Join-Path $RunDir  "results")
-    )
+function Clean-RunMetadata([string]$RunDir) {
+    $paths = @((Join-Path $RunDir "metadata"),(Join-Path $RunDir "points"),(Join-Path $RunDir "results"))
     foreach ($p in $paths) {
-        if (Test-Path -LiteralPath $p) {
-            Write-Host "Cleaning $p ..."
-            Invoke-FastDelete $p
-        }
+        if (Test-Path -LiteralPath $p) { Write-Host "Cleaning $p ..."; Invoke-FastDelete $p }
         New-Item -ItemType Directory -Force -Path $p | Out-Null
     }
 }
-
-function Clean-AllMetadataUnderRoot([string]$MetaRootPath, [string]$KeysFullPath) {
-    if (-not (Test-Path -LiteralPath $MetaRootPath)) { return }
-    $keysLeaf = Split-Path -Leaf $KeysFullPath
-    $children = Get-ChildItem -LiteralPath $MetaRootPath -Force -ErrorAction SilentlyContinue
-    foreach ($c in $children) {
-        if (-not $c.PSIsContainer -and $c.Name -ieq $keysLeaf) { continue }
-        Write-Host "Wiping $($c.FullName) ..."
-        Invoke-FastDelete $c.FullName
+function Get-Sha256([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return "" }
+    try { return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash } catch { return "" }
+}
+function Save-Manifest([string]$RunDir, [hashtable]$Manifest) {
+    try {
+        $out = Join-Path $RunDir "manifest.json"
+        ($Manifest | ConvertTo-Json -Depth 64) | Out-File -FilePath $out -Encoding utf8
+    } catch {}
+}
+function Combine-CSV {
+    param(
+        [Parameter(Mandatory=$true)][string[]]$Files,
+        [Parameter(Mandatory=$true)][string]$OutCsv
+    )
+    if ($Files.Count -eq 0) { return }
+    $headerWritten = $false
+    $outDir = Split-Path -Parent $OutCsv
+    if ($outDir) { New-Item -ItemType Directory -Force -Path $outDir | Out-Null }
+    Remove-Item -LiteralPath $OutCsv -ErrorAction SilentlyContinue
+    foreach ($f in $Files) {
+        if (-not (Test-Path -LiteralPath $f)) { continue }
+        $lines = Get-Content -LiteralPath $f
+        if (-not $lines) { continue }
+        if (-not $headerWritten) {
+            $lines | Set-Content -LiteralPath $OutCsv -Encoding UTF8
+            $headerWritten = $true
+        } else {
+            $lines | Select-Object -Skip 1 | Add-Content -LiteralPath $OutCsv -Encoding UTF8
+        }
     }
 }
 
-# ---------- STEP 1: Optional global clean & exit ----------
-if ($CleanAllNow) {
-    Write-Host "Global clean requested. Removing all dataset/config metadata under $MetaRoot (keeping keys at $KeysPath)."
-    Clean-AllMetadataUnderRoot -MetaRootPath $MetaRoot -KeysFullPath $KeysPath
-    Write-Host "Global clean completed."
-    return
+function Detect-FvecsDim([string]$Path) {
+    # Reads first 4 bytes little-endian as Int32
+    $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+    try {
+        $buf = New-Object byte[] 4
+        $n = $fs.Read($buf, 0, 4)
+        if ($n -ne 4) { throw "Could not read dimension header from $Path" }
+        return [System.BitConverter]::ToInt32($buf, 0)
+    } finally { $fs.Dispose() }
 }
 
-# ---------- STEP 2: RUN ALL DATASETS x CONFIGS ----------
-$CombinedTopK      = @()
-$CombinedPrecision = @()
-$CombinedTopKPath      = Join-Path $OutRoot "all_datasets_topk_eval.csv"
-$CombinedPrecisionPath = Join-Path $OutRoot "all_datasets_global_precision.csv"
+# ---------- dataset matrix ----------
+# If Dim is $null, it will be auto-detected from base file header.
+$Datasets = @(
+    @{ Name="Enron";        Base="E:\Research Work\Datasets\Enron\enron_base.fvecs";          Query="E:\Research Work\Datasets\Enron\enron_query.fvecs";          GT="E:\Research Work\Datasets\Enron\enron_groundtruth.ivecs";       Dim=1369 },
+    @{ Name="audio";        Base="E:\Research Work\Datasets\audio\audio_base.fvecs";          Query="E:\Research Work\Datasets\audio\audio_query.fvecs";          GT="E:\Research Work\Datasets\audio\audio_groundtruth.ivecs";       Dim=$null },
+    @{ Name="glove-100";    Base="E:\Research Work\Datasets\glove-100\glove-100_base.fvecs";  Query="E:\Research Work\Datasets\glove-100\glove-100_query.fvecs";  GT="E:\Research Work\Datasets\glove-100\glove-100_groundtruth.ivecs"; Dim=100 },
+    @{ Name="SIFT1M";       Base="E:\Research Work\Datasets\SIFT1M\sift_base.fvecs";          Query="E:\Research Work\Datasets\SIFT1M\sift_query.fvecs";          GT="E:\Research Work\Datasets\SIFT1M\sift_query_groundtruth.ivecs"; Dim=128 },
+    @{ Name="synthetic_128";   Base="E:\Research Work\Datasets\synthetic_128\base.fvecs";     Query="E:\Research Work\Datasets\synthetic_128\query.fvecs";        GT="E:\Research Work\Datasets\synthetic_128\groundtruth.ivecs";     Dim=128 },
+    @{ Name="synthetic_256";   Base="E:\Research Work\Datasets\synthetic_256\base.fvecs";     Query="E:\Research Work\Datasets\synthetic_256\query.fvecs";        GT="E:\Research Work\Datasets\synthetic_256\groundtruth.ivecs";     Dim=256 },
+    @{ Name="synthetic_512";   Base="E:\Research Work\Datasets\synthetic_512\base.fvecs";     Query="E:\Research Work\Datasets\synthetic_512\query.fvecs";        GT="E:\Research Work\Datasets\synthetic_512\groundtruth.ivecs";     Dim=512 },
+    @{ Name="synthetic_1024";  Base="E:\Research Work\Datasets\synthetic_1024\base.fvecs";    Query="E:\Research Work\Datasets\synthetic_1024\query.fvecs";       GT="E:\Research Work\Datasets\synthetic_1024\groundtruth.ivecs";    Dim=1024 }
+)
+
+# ---------- sanity ----------
+if (-not (Test-Path -LiteralPath $JarPath))    { throw "Jar not found: $JarPath" }
+if (-not (Test-Path -LiteralPath $ConfigPath)) { throw "Config not found: $ConfigPath" }
+
+# ---------- read config ----------
+$cfgObj = (Get-Content -LiteralPath $ConfigPath -Raw) | ConvertFrom-Json
+$profiles = @($cfgObj.profiles)
+if ($profiles.Count -eq 0 -or $null -eq $profiles) { throw "config.json must contain a non-empty 'profiles' array." }
+
+# Build base payload (back-compat w/ optional 'base' node)
+$baseHT = $null
+if ($cfgObj.PSObject.Properties.Name -contains 'base') { $baseHT = To-Hashtable $cfgObj.base }
+else { $tmp = To-Hashtable $cfgObj; if ($tmp.ContainsKey('profiles')) { $tmp.Remove('profiles') }; $baseHT = $tmp }
+if ($null -eq $baseHT) { throw "Failed to construct base config object." }
+
+New-Item -ItemType Directory -Force -Path $OutRoot | Out-Null
+
+# ---------- profile filter ----------
+if ($OnlyProfile -and $OnlyProfile.Trim().Length -gt 0) {
+    $needle = $OnlyProfile.Trim()
+    if ($needle.Contains("*") -or $needle.Contains("?")) {
+        $profiles = @($profiles | Where-Object { $_.name -like $needle })
+    } else {
+        $profiles = @($profiles | Where-Object { $_.name -eq $needle })
+    }
+    if ($profiles.Count -eq 0) { throw "Profile filter '$needle' matched nothing in config.json" }
+}
+
+# ---------- MAIN LOOP: datasets x profiles ----------
+$allSummaryFiles = @()
 
 foreach ($ds in $Datasets) {
-    $name  = $ds.Name
-    $dim   = [string]$ds.Dim
-    $base  = $ds.Base
-    $query = $ds.Query
+    $Name  = $ds.Name
+    $Base  = $ds.Base
+    $Query = $ds.Query
+    $GT    = $ds.GT
+    $Dim   = $ds.Dim
 
-    if (-not (Ensure-Files $base $query)) { continue }
+    if ($null -eq $Dim) {
+        if (-not (Test-Path -LiteralPath $Base)) { Write-Warning "Skipping $Name (missing base)"; continue }
+        try { $Dim = Detect-FvecsDim $Base } catch { throw "Could not detect dimension for $Name from $Base. Set Dim explicitly." }
+    }
 
-    foreach ($cfg in $Configs) {
-        $label   = $cfg.Label
-        $metaDir = Join-Path $MetaRoot "$name\$label"
-        $runDir  = Join-Path $OutRoot  "$name\$label"
-        New-Item -ItemType Directory -Force -Path $metaDir | Out-Null
-        New-Item -ItemType Directory -Force -Path $runDir  | Out-Null
+    if (-not (Ensure-Files $Base $Query $GT)) {
+        Write-Warning "Skipping $Name due to missing files."
+        continue
+    }
 
-        if ($CleanPerRun) {
-            Write-Host "Cleaning metadata/points/results for $name ($label) at $metaDir ..."
-            Clean-RunMetadata -MetaDir $metaDir -RunDir $runDir
+    $datasetRoot = Join-Path $OutRoot $Name
+    New-Item -ItemType Directory -Force -Path $datasetRoot | Out-Null
+
+    foreach ($p in $profiles) {
+        $pHT = To-Hashtable $p
+        if (-not $pHT.ContainsKey('name')) { continue }
+        $label = [string]$pHT['name']
+        $ovr = if ($pHT.ContainsKey('overrides')) { $pHT['overrides'] } else { @{} }
+
+        $runDir = Join-Path $datasetRoot $label
+        New-Item -ItemType Directory -Force -Path $runDir | Out-Null
+        if ($CleanPerRun) { Clean-RunMetadata -RunDir $runDir }
+
+        # merge + ensure outputs/eval/ratio
+        $final = Apply-Overrides -base $baseHT -ovr $ovr
+
+        if (-not $final.ContainsKey('output')) { $final['output'] = @{} }
+        $final['output']['resultsDir'] = (Join-Path $runDir "results")
+        $final['output']['exportArtifacts'] = $true
+        $final['output']['suppressLegacyMetrics'] = $true
+
+        if (-not $final.ContainsKey('eval')) { $final['eval'] = @{} }
+        $final['eval']['computePrecision'] = $true
+        $final['eval']['writeGlobalPrecisionCsv'] = $true
+
+        if (-not $final.ContainsKey('cloak')) { $final['cloak'] = @{} }
+        $final['cloak']['noise'] = 0.0
+
+        # ratio: enforce GT path & disable recompute
+        if (-not $final.ContainsKey('ratio')) { $final['ratio'] = @{} }
+        $final['ratio']['source'] = "gt"
+        $final['ratio']['gtPath'] = $GT
+        $final['ratio']['gtSample'] = 10000
+        $final['ratio']['gtMismatchTolerance'] = 0.0
+        $final['ratio']['autoComputeGT'] = $false
+        $final['ratio']['allowComputeIfMissing'] = $false
+
+        # paper vs lsh knobs (keep your logic)
+        if (-not $final.ContainsKey('paper')) { $final['paper'] = @{} }
+        if (-not $final['paper'].ContainsKey('enabled')) { $final['paper']['enabled'] = $false }
+        if ($final['paper']['enabled']) {
+            if (-not $final['paper'].ContainsKey('seed')) { $final['paper']['seed'] = 13 }
+            if (-not $final.ContainsKey('lsh')) { $final['lsh'] = @{} }
+            $final['lsh']['numTables']    = 0
+            $final['lsh']['rowsPerBand']  = 0
+            $final['lsh']['probeShards']  = 0
         }
 
-        Push-Location $runDir
-        Get-ChildItem -Filter "*.csv" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+        # write run-specific config
+        $tmpConf = Join-Path $runDir "config.json"
+        ($final | ConvertTo-Json -Depth 64) | Out-File -FilePath $tmpConf -Encoding utf8
 
-        $XmxThis = Get-XmxForDataset $name $Xmx
-        $logFile = Join-Path $runDir "run.log"
+        # args
+        $keysFile = Join-Path $runDir "keystore.blob"
+        $gtArg = "gt"  # ignored by manager when gtPath provided & compute disabled
 
-        # Dataset-specific widening for hard cases (e.g., 1024-dim)
-        if ($name -eq "synthetic_1024" -and $label -eq "recall_first") {
-            $cfg.PaperMaxCandidates = [Math]::Max($cfg.PaperMaxCandidates, 200000)
-            $cfg.ProbePerTable = [Math]::Max($cfg.ProbePerTable, 32)
-            $cfg.ProbeBitsMax  = [Math]::Max($cfg.ProbeBitsMax, 3)
-            $cfg.FanoutTarget  = [Math]::Max($cfg.FanoutTarget, 0.04)
+        $dataArg = $Base
+        $queryArg = $Query
+        $restoreFlag = @()
+        if ($QueryOnly) {
+            $dataArg = "POINTS_ONLY"
+            $restoreFlag += "-Dquery.only=true"
+            if ($RestoreVersion) { $restoreFlag += "-Drestore.version=$RestoreVersion" }
         }
 
-        Write-Host "Running $name ($label) dim=$dim (Xmx=$XmxThis)"
+        $argList = @()
+        $argList += $JvmArgs
+        $argList += $restoreFlag
+        $argList += "-Dbase.path=$(Safe-Resolve $Base -AllowMissing:$true)"
+        $argList += "-jar";           $argList += (Safe-Resolve $JarPath)
+        $argList += (Safe-Resolve $tmpConf)
+        $argList += (Safe-Resolve $dataArg -AllowMissing:$true)
+        $argList += (Safe-Resolve $queryArg -AllowMissing:$true)
+        $argList += (Safe-Resolve $keysFile -AllowMissing:$true)
+        $argList += "$Dim"
+        $argList += (Safe-Resolve $runDir)
+        $argList += $gtArg
+        $argList += "$Batch"
 
-        # ---- Per-config widening / target tuning for paper engine ----
-        $passFlags = @()
-        switch ($label) {
-            "throughput" {
-                $passFlags += "-Dpaper.target.mult=1.60"
-                $passFlags += "-Dpaper.expand.radius.max=2"
-                $passFlags += "-Dpaper.expand.radius.hard=4"
-            }
-            "balanced" {
-                $passFlags += "-Dpaper.target.mult=1.75"
-                $passFlags += "-Dpaper.expand.radius.max=3"
-                $passFlags += "-Dpaper.expand.radius.hard=5"
-            }
-            "recall_first" {
-                $passFlags += "-Dpaper.target.mult=1.85"
-                $passFlags += "-Dpaper.expand.radius.max=3"
-                $passFlags += "-Dpaper.expand.radius.hard=6"
-            }
+        # log commandline & manifest
+        $quotedArgs = foreach ($a in $argList) { $s = [string]$a; if ($s -match '\s') { '"' + ($s -replace '"','\"') + '"' } else { $s } }
+        $argLine = [string]::Join(" ", $quotedArgs)
+        $argLine | Out-File -FilePath (Join-Path $runDir "cmdline.txt") -Encoding utf8
+
+        $manifest = @{
+            dataset          = $Name
+            dimension        = $Dim
+            profile          = $label
+            queryOnly        = $QueryOnly
+            batchSize        = $Batch
+            jarPath          = (Safe-Resolve $JarPath)
+            jarSha256        = (Get-Sha256 (Safe-Resolve $JarPath))
+            configPath       = (Safe-Resolve $tmpConf)
+            configSha256     = (Get-Sha256 (Safe-Resolve $tmpConf))
+            baseVectors      = (Safe-Resolve $Base -AllowMissing:$true)
+            queryVectors     = (Safe-Resolve $Query -AllowMissing:$true)
+            gtPath           = (Safe-Resolve $GT -AllowMissing:$true)
+            jvmArgs          = $JvmArgs
+            alpha            = $Alpha
+            timestampUtc     = ([DateTime]::UtcNow.ToString("o"))
         }
+        Save-Manifest -RunDir $runDir -Manifest $manifest
 
-        # JVM/system tuning
-        $jvm = @(
-            "-Xms$Xms","-Xmx$XmxThis",
-            "-XX:+UseG1GC","-XX:MaxGCPauseMillis=200","-XX:+AlwaysPreTouch",
-            "-Ddisable.exit=true",
-
-            # multiprobe knobs (harmless in paper mode, kept for A/B):
-            "-Dprobe.perTable=$($cfg.ProbePerTable)",
-            "-Dprobe.bits.max=$($cfg.ProbeBitsMax)",
-            "-Dfanout.target=$($cfg.FanoutTarget)",
-
-            # --- force partitioned + paper engine with per-config params ---
-            "-Dfspann.mode=partitioned",
-            "-Dpaper.mode=true",
-            "-Dpaper.m=$($cfg.PaperM)",
-            "-Dpaper.lambda=$($cfg.PaperLambda)",
-            "-Dpaper.divisions=$($cfg.PaperDivisions)",
-            "-Dpaper.maxCandidates=$($cfg.PaperMaxCandidates)",
-            "-Dpaper.buildThreshold=1000",
-            "-Dcloak.noise=0.0",
-
-            # write-through on so points hit Rocks/points immediately
-            "-Dindex.writeThrough=true",
-
-            # full scale (index + query)
-            "-Dquery.only=false"
-        ) + $passFlags + @(
-        # evaluation wiring (precision on; GT will be AUTO)
-            "-Deval.computePrecision=true",
-            "-Deval.writeGlobalPrecisionCsv=true",
-            "-Dbase.path=$base",
-            "-Daudit.enable=false",
-            "-Dexport.artifacts=true",
-            "-Dfile.encoding=UTF-8",
-            "-jar", (Resolve-Path $JarPath)
-        )
-
-        # Ensure keystore directory exists; don't Resolve-Path the file itself
-        $KeysDir = Split-Path -Parent $KeysPath
-        New-Item -ItemType Directory -Force -Path $KeysDir | Out-Null
-
-        # ---- FORCE PRECOMPUTE EVERY RUN ----
-        $gtArg = "AUTO"
-
-        $app = @(
-            (Safe-Resolve $ConfigPath),
-            (Safe-Resolve $base),
-            (Safe-Resolve $query),
-            (Safe-Resolve $KeysPath $true),  # allow missing (will be created)
-            $dim,
-            (Safe-Resolve $metaDir),
-            $gtArg,                          # AUTO => Java will precompute <query>.ivecs and use it
-            "100000"
-        )
-
+        # run
+        $combinedLog   = Join-Path $runDir "run.out.log"
+        $progressRegex = '^\[\d+/\d+\]\s+ queries processed (GT)'
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
-        & $Java @jvm @app *>&1 | Tee-Object -FilePath $logFile
+        & java @argList 2>&1 |
+                Tee-Object -FilePath $combinedLog |
+                Where-Object { $_ -notmatch $progressRegex }
+        $exit = $LASTEXITCODE
         $sw.Stop()
 
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warning "Run failed for $name ($label) -- see $logFile"
-            Pop-Location
-            continue
+        ("ElapsedSec={0:N1}" -f $sw.Elapsed.TotalSeconds) | Out-File -FilePath (Join-Path $runDir "elapsed.txt") -Encoding utf8
+        if ($exit -ne 0) {
+            Write-Warning ("Run failed: dataset={0}, profile={1}, exit={2}" -f $Name, $label, $exit)
         } else {
-            Add-Content -Path $logFile -Value ("Elapsed: {0:N1} sec" -f ($sw.Elapsed.TotalSeconds))
+            Write-Host    ("Completed: {0} ({1})" -f $Name, $label)
         }
-
-        # Collect per-run CSVs
-        $resultsDir = Join-Path $runDir "results"
-        $topkPath   = Join-Path $resultsDir "topk_evaluation.csv"
-        $gprec      = Join-Path $resultsDir "global_precision.csv"
-
-        if (Test-Path $topkPath) {
-            try {
-                $rows = Import-Csv $topkPath
-                foreach ($r in $rows) {
-                    $r | Add-Member -NotePropertyName Dataset -NotePropertyValue $name
-                    $r | Add-Member -NotePropertyName Config  -NotePropertyValue $label
-                    $CombinedTopK += $r
-                }
-                Copy-Item $topkPath (Join-Path $runDir "topk_evaluation.csv") -Force
-            } catch { Write-Warning "Failed to read $topkPath : $_" }
-        } else {
-            Write-Warning "No topk_evaluation.csv found for $name ($label)"
-        }
-
-        if (Test-Path $gprec) {
-            try {
-                $rows2 = Import-Csv $gprec
-                foreach ($g in $rows2) {
-                    $g | Add-Member -NotePropertyName Dataset -NotePropertyValue $name
-                    $g | Add-Member -NotePropertyName Config  -NotePropertyValue $label
-                    $CombinedPrecision += $g
-                }
-                Copy-Item $gprec (Join-Path $runDir "global_precision.csv") -Force
-            } catch { Write-Warning "Failed to read $gprec : $_" }
-        } else {
-            Write-Warning "No global_precision.csv found for $name ($label)"
-        }
-
-        try {
-            $summary = @()
-            if (Test-Path $gprec) {
-                $last = (Import-Csv $gprec) | Sort-Object {[int]$_.topK} | Select-Object -Last 1
-                if ($null -ne $last) {
-                    $summary += "GlobalPrecision@K$($last.topK): $([double]::Parse($last.global_precision)) (matches=$($last.matches)/retrieved=$($last.retrieved))"
-                }
-            }
-            $logTail = (Get-Content $logFile | Select-String -Pattern "Average Client Query Time", "Average Ratio") -join "`n"
-            Add-Content -Path (Join-Path $runDir "summary.txt") -Value @"
-Dataset : $name
-Config  : $label
-Dim     : $dim
-Elapsed : {0:N1} sec
-$($summary -join "`n")
-            $logTail
-"@ -f ($sw.Elapsed.TotalSeconds)
-        } catch {}
-
-        Pop-Location
     }
+
+    # ---- per-dataset merges ----
+    $resultsGlob    = Get-ChildItem -Path (Join-Path $datasetRoot "*\results\results_table.csv")     -File -ErrorAction SilentlyContinue
+    $precisionGlob  = Get-ChildItem -Path (Join-Path $datasetRoot "*\results\global_precision.csv")  -File -ErrorAction SilentlyContinue
+    $topkGlob       = Get-ChildItem -Path (Join-Path $datasetRoot "*\results\topk_evaluation.csv")   -File -ErrorAction SilentlyContinue
+    $summaryGlob    = Get-ChildItem -Path (Join-Path $datasetRoot "*\results\summary.csv")           -File -ErrorAction SilentlyContinue
+
+    $combinedResults    = Join-Path $datasetRoot "combined_results.csv"
+    $combinedPrecision  = Join-Path $datasetRoot "combined_precision.csv"
+    $combinedTopk       = Join-Path $datasetRoot "combined_evaluation.csv"
+    $combinedSummary    = Join-Path $datasetRoot "combined_summary.csv"
+
+    Combine-CSV -Files ($resultsGlob.FullName)   -OutCsv $combinedResults
+    Combine-CSV -Files ($precisionGlob.FullName) -OutCsv $combinedPrecision
+    Combine-CSV -Files ($topkGlob.FullName)      -OutCsv $combinedTopk
+    Combine-CSV -Files ($summaryGlob.FullName)   -OutCsv $combinedSummary
+
+    if (Test-Path -LiteralPath $combinedSummary) { $allSummaryFiles += $combinedSummary }
 }
 
-# ---------- WRITE COMBINED CSVs ----------
-if ($CombinedTopK.Count -gt 0) {
-    $CombinedTopK | Export-Csv -NoTypeInformation -Path $CombinedTopKPath
-    Write-Host "Combined TopK CSV saved to: $CombinedTopKPath"
-} else {
-    Write-Warning "No TopK rows collected; check per-dataset outputs."
-}
+# ---- cross-dataset master summary (from per-dataset combined_summary.csv) ----
+$masterSummary = Join-Path $OutRoot "batch_master_summary.csv"
+Combine-CSV -Files $allSummaryFiles -OutCsv $masterSummary
 
-if ($CombinedPrecision.Count -gt 0) {
-    $CombinedPrecision | Export-Csv -NoTypeInformation -Path $CombinedPrecisionPath
-    Write-Host "Combined Global Precision CSV saved to: $CombinedPrecisionPath"
-} else {
-    Write-Warning "No Global Precision rows collected; check per-dataset outputs."
-}
-
-Write-Host "All runs completed."
+Write-Host "Batch done. Master summary: $masterSummary"

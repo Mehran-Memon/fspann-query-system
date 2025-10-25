@@ -19,11 +19,11 @@ $ConfigPath = "F:\fspann-query-system\fsp-anns-parent\config\src\main\resources\
 $OutRoot    = "G:\fsp-run"
 
 # ---- dataset: SIFT1M (edit these) ----
-$Name  = "SIFT1M"
-$Dim   = 128
-$Base  = "E:\Research Work\Datasets\SIFT1M\sift_base.fvecs"
-$Query = "E:\Research Work\Datasets\SIFT1M\sift_query.fvecs"
-$GT    = "E:\Research Work\Datasets\SIFT1M\sift_query_groundtruth.ivecs"   # ignored; "AUTO" is forced
+$Name  = "Enron"
+$Dim   = 1369
+$Base  = "E:\Research Work\Datasets\Enron\enron_base.fvecs"
+$Query = "E:\Research Work\Datasets\Enron\enron_query.fvecs"
+$GT    = "E:\Research Work\Datasets\Enron\enron_groundtruth.ivecs"   # ignored; "AUTO" is forced
 
 # app batch size arg
 $Batch = 100000
@@ -32,7 +32,7 @@ $Batch = 100000
 # - blank/space => run all
 # - single name => exact match
 # - wildcard (e.g. "*precision*") => pattern filter
-$OnlyProfile = "baseline"
+$OnlyProfile = ""
 
 # toggles
 $CleanPerRun = $true
@@ -285,7 +285,7 @@ foreach ($p in $profiles)
     ($final | ConvertTo-Json -Depth 64) | Out-File -FilePath $tmpConf -Encoding utf8
 
     $keysFile = Join-Path $runDir "keystore.blob"
-    $gtArg = "AUTO"  # FORCE PRECOMPUTE EVERY RUN
+    $gtArg = "gt"  # FORCE PRECOMPUTE EVERY RUN
 
     # Build app args: <config> <dataPath> <queryPath> <keysFilePath> <dimensions> <metadataPath> <groundtruth> [batch]
     $dataArg = $Base
