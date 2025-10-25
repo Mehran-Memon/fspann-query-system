@@ -150,6 +150,15 @@ public class SystemConfig {
             logger.warn("paper.safetyMaxCandidates < 0; disabling safety cap");
             paper.safetyMaxCandidates = 0;
         }
+        if (ratio.gtMismatchTolerance < 0.0 || ratio.gtMismatchTolerance > 1.0) {
+            logger.warn("ratio.gtMismatchTolerance={} outside [0,1], clamping", ratio.gtMismatchTolerance);
+            ratio.gtMismatchTolerance = Math.max(0.0, Math.min(1.0, ratio.gtMismatchTolerance));
+        }
+        if (ratio.source == null || ratio.source.isBlank()) ratio.source = "auto";
+
+        if (!ratio.autoComputeGT && !ratio.allowComputeIfMissing && (ratio.gtPath == null || ratio.gtPath.isBlank())) {
+            throw new ConfigLoadException("Groundtruth disabled (autoComputeGT=false, allowComputeIfMissing=false) but ratio.gtPath is not set", null);
+        }
     }
 
     // ---------------- loading ----------------
@@ -216,9 +225,14 @@ public class SystemConfig {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class RatioConfig {
-        @JsonProperty("source")                 public String source = "auto"; // auto|gt|base
-        @JsonProperty("gtSample")               public int    gtSample = 20;
-        @JsonProperty("gtMismatchTolerance")    public double gtMismatchTolerance = 0.02;
+        @JsonProperty("source")              public String  source = "auto"; // auto|gt|base
+        @JsonProperty("gtSample")            public int     gtSample = 20;
+        @JsonProperty("gtMismatchTolerance") public double  gtMismatchTolerance = 0.02;
+
+        @JsonProperty("gtPath")              public String  gtPath = null;    // absolute or relative path to *.ivecs
+        @JsonProperty("autoComputeGT")       public boolean autoComputeGT = true;
+        @JsonProperty("allowComputeIfMissing") public boolean allowComputeIfMissing = true;
+
         public RatioConfig() {}
     }
 

@@ -170,20 +170,22 @@ public class QueryEvaluationResult {
     public int    getQIndexZeroBased()  { return qIndexZeroBased; }
     public String getCandMetricsMode()  { return candMetricsMode; }
 
-    // toString() — append the new fields at the end for clarity
     @Override
     public String toString() {
         return String.format(
-                "TopK=%d, Retrieved=%d, Ratio=%.4f, Precision=%.4f, ServerTime=%dms, ClientTime=%dms, InsertTime=%dms, " +
+                // NOTE: RunTime = Server + Client (end-to-end). Keep components visible.
+                "TopK=%d, Retrieved=%d, Ratio=%.4f, Precision=%.4f, RunTime=%dms (Query=%dms, Client=%dms), InsertTime=%dms, " +
                         "Candidates=%d, TokenSize=%d, Dim=%d, Flushed=%d/%d, " +
                         "Touched=%d, Reenc=%d, ReencTime=%dms, ReencΔ=%dB, ReencAfter=%dB, " +
                         "RatioDenom=%s, TokenK=%d, TokenKBase=%d, qIndex0=%d, CandMetrics=%s",
-                topKRequested, retrieved, ratio, precision, timeMs, clientTimeMs, insertTimeMs,
+                topKRequested, retrieved, ratio, precision,
+                getRunTimeMs(), timeMs, Math.max(0L, clientTimeMs), insertTimeMs,
                 candidateCount, tokenSizeBytes, vectorDim, totalFlushedPoints, flushThreshold,
                 touchedCount, reencryptedCount, reencTimeMs, reencBytesDelta, reencBytesAfter,
                 ratioDenomSource, tokenK, tokenKBase, qIndexZeroBased, candMetricsMode
         );
     }
+
 
     // ---------------- getters ----------------
     public int getTopKRequested() { return topKRequested; }
@@ -241,4 +243,11 @@ public class QueryEvaluationResult {
                 ratioDenomSource, clientTimeMs, tokenK, tokenKBase, qIndexZeroBased, candMetricsMode
         );
     }
+
+    /** End-to-end run time = server (index) time + client/offline overhead. */
+    public long getRunTimeMs() {
+        long client = Math.max(0L, clientTimeMs); // treat -1 as 0
+        return timeMs + client;
+    }
+
 }
