@@ -755,10 +755,10 @@ public class ForwardSecureANNSystem {
             if (returned > 0) {
                 double fanout = candTotal / (double) returned;
                 double fanoutWarn = Double.parseDouble(System.getProperty("guard.fanout.warn", "2000"));
-                if (fanout > fanoutWarn) {
-                    logger.warn("q{} excessive fanout: scanned/returned ≈ {} ({} / {})",
-                            qIndex, String.format(Locale.ROOT, "%.1f", fanout), candTotal, returned);
-                }
+//                if (fanout > fanoutWarn) {
+//                    logger.warn("q{} excessive fanout: scanned/returned ≈ {} ({} / {})",
+//                            qIndex, String.format(Locale.ROOT, "%.1f", fanout), candTotal, returned);
+//                }
             }
 
             int Kmax = Arrays.stream(K_VARIANTS).max().orElse(100);

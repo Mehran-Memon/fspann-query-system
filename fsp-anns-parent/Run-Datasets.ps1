@@ -18,7 +18,7 @@ $ConfigPath = "F:\fspann-query-system\fsp-anns-parent\config\src\main\resources\
 $OutRoot    = "G:\fsp-run"
 
 # ---- alpha and JVM system props ----
-$Alpha = 0.3
+$Alpha = 0.1
 $JvmArgs = @(
     "-XX:+UseG1GC","-XX:MaxGCPauseMillis=200","-XX:+AlwaysPreTouch",
     "-Ddisable.exit=true",
@@ -157,9 +157,9 @@ function Detect-FvecsDim([string]$Path) {
 # ---------- dataset matrix ----------
 # If Dim is $null, it will be auto-detected from base file header.
 $Datasets = @(
-    @{ Name="Enron";        Base="E:\Research Work\Datasets\Enron\enron_base.fvecs";          Query="E:\Research Work\Datasets\Enron\enron_query.fvecs";          GT="E:\Research Work\Datasets\Enron\enron_groundtruth.ivecs";       Dim=1369 },
-    @{ Name="audio";        Base="E:\Research Work\Datasets\audio\audio_base.fvecs";          Query="E:\Research Work\Datasets\audio\audio_query.fvecs";          GT="E:\Research Work\Datasets\audio\audio_groundtruth.ivecs";       Dim=$null },
-    @{ Name="glove-100";    Base="E:\Research Work\Datasets\glove-100\glove-100_base.fvecs";  Query="E:\Research Work\Datasets\glove-100\glove-100_query.fvecs";  GT="E:\Research Work\Datasets\glove-100\glove-100_groundtruth.ivecs"; Dim=100 },
+#    @{ Name="Enron";        Base="E:\Research Work\Datasets\Enron\enron_base.fvecs";          Query="E:\Research Work\Datasets\Enron\enron_query.fvecs";          GT="E:\Research Work\Datasets\Enron\enron_groundtruth.ivecs";       Dim=1369 },
+#    @{ Name="audio";        Base="E:\Research Work\Datasets\audio\audio_base.fvecs";          Query="E:\Research Work\Datasets\audio\audio_query.fvecs";          GT="E:\Research Work\Datasets\audio\audio_groundtruth.ivecs";       Dim=192 },
+#    @{ Name="glove-100";    Base="E:\Research Work\Datasets\glove-100\glove-100_base.fvecs";  Query="E:\Research Work\Datasets\glove-100\glove-100_query.fvecs";  GT="E:\Research Work\Datasets\glove-100\glove-100_groundtruth.ivecs"; Dim=100 },
     @{ Name="SIFT1M";       Base="E:\Research Work\Datasets\SIFT1M\sift_base.fvecs";          Query="E:\Research Work\Datasets\SIFT1M\sift_query.fvecs";          GT="E:\Research Work\Datasets\SIFT1M\sift_query_groundtruth.ivecs"; Dim=128 },
     @{ Name="synthetic_128";   Base="E:\Research Work\Datasets\synthetic_128\base.fvecs";     Query="E:\Research Work\Datasets\synthetic_128\query.fvecs";        GT="E:\Research Work\Datasets\synthetic_128\groundtruth.ivecs";     Dim=128 },
     @{ Name="synthetic_256";   Base="E:\Research Work\Datasets\synthetic_256\base.fvecs";     Query="E:\Research Work\Datasets\synthetic_256\query.fvecs";        GT="E:\Research Work\Datasets\synthetic_256\groundtruth.ivecs";     Dim=256 },
@@ -269,7 +269,7 @@ foreach ($ds in $Datasets) {
 
         # args
         $keysFile = Join-Path $runDir "keystore.blob"
-        $gtArg = "gt"  # ignored by manager when gtPath provided & compute disabled
+        $gtArg = (Safe-Resolve $GT)  # ignored by manager when gtPath provided & compute disabled
 
         $dataArg = $Base
         $queryArg = $Query
@@ -340,23 +340,12 @@ foreach ($ds in $Datasets) {
     $resultsGlob    = Get-ChildItem -Path (Join-Path $datasetRoot "*\results\results_table.csv")     -File -ErrorAction SilentlyContinue
     $precisionGlob  = Get-ChildItem -Path (Join-Path $datasetRoot "*\results\global_precision.csv")  -File -ErrorAction SilentlyContinue
     $topkGlob       = Get-ChildItem -Path (Join-Path $datasetRoot "*\results\topk_evaluation.csv")   -File -ErrorAction SilentlyContinue
-    $summaryGlob    = Get-ChildItem -Path (Join-Path $datasetRoot "*\results\summary.csv")           -File -ErrorAction SilentlyContinue
 
     $combinedResults    = Join-Path $datasetRoot "combined_results.csv"
     $combinedPrecision  = Join-Path $datasetRoot "combined_precision.csv"
     $combinedTopk       = Join-Path $datasetRoot "combined_evaluation.csv"
-    $combinedSummary    = Join-Path $datasetRoot "combined_summary.csv"
 
     Combine-CSV -Files ($resultsGlob.FullName)   -OutCsv $combinedResults
     Combine-CSV -Files ($precisionGlob.FullName) -OutCsv $combinedPrecision
     Combine-CSV -Files ($topkGlob.FullName)      -OutCsv $combinedTopk
-    Combine-CSV -Files ($summaryGlob.FullName)   -OutCsv $combinedSummary
-
-    if (Test-Path -LiteralPath $combinedSummary) { $allSummaryFiles += $combinedSummary }
 }
-
-# ---- cross-dataset master summary (from per-dataset combined_summary.csv) ----
-$masterSummary = Join-Path $OutRoot "batch_master_summary.csv"
-Combine-CSV -Files $allSummaryFiles -OutCsv $masterSummary
-
-Write-Host "Batch done. Master summary: $masterSummary"
