@@ -13,9 +13,9 @@ if (-not (Get-Command java -ErrorAction SilentlyContinue)) {
 }
 
 # ---- required paths ----
-$JarPath    = "/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/api/target/api-0.0.1-SNAPSHOT-jar-with-dependencies.jar"
-$ConfigPath = "/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/config/src/main/resources/config.json"
-$OutRoot    = "/mnt/data/mehran/fsp-ann"
+$JarPath    = "F:\fspann-query-system\fsp-anns-parent\api\target\api-0.0.1-SNAPSHOT-jar-with-dependencies.jar"
+$ConfigPath = "F:\fspann-query-system\fsp-anns-parent\config\src\main\resources\config.json"
+$OutRoot    = "G:\fsp-run"
 
 # ---- alpha and JVM system props ----
 $Alpha = 0.1
@@ -96,8 +96,8 @@ function Invoke-FastDelete([string]$PathToDelete) {
     $item = Get-Item -LiteralPath $PathToDelete -ErrorAction SilentlyContinue
     if ($null -eq $item) { return }
     if (-not $item.PSIsContainer) { Remove-Item -LiteralPath $PathToDelete -Force -ErrorAction SilentlyContinue; return }
-    $empty = New-Item -ItemType Directory -Path (Join-Path "/tmp" ("empty_" + [guid]::NewGuid())) -Force
-    try { rsync -a --delete "$empty.FullName/|" "$PathToDelete/" }
+    $empty = New-Item -ItemType Directory -Path (Join-Path $env:TEMP ("empty_" + [guid]::NewGuid())) -Force
+    try { robocopy $empty.FullName $PathToDelete /MIR /NFL /NDL /NJH /NJS /NC /NS /NP | Out-Null }
     finally {
         try { Remove-Item -LiteralPath $PathToDelete -Recurse -Force -ErrorAction SilentlyContinue } catch {}
         try { Remove-Item -LiteralPath $empty.FullName -Recurse -Force -ErrorAction SilentlyContinue } catch {}
@@ -142,6 +142,7 @@ function Combine-CSV {
         }
     }
 }
+
 function Detect-FvecsDim([string]$Path) {
     # Reads first 4 bytes little-endian as Int32
     $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
@@ -156,14 +157,14 @@ function Detect-FvecsDim([string]$Path) {
 # ---------- dataset matrix ----------
 # If Dim is $null, it will be auto-detected from base file header.
 $Datasets = @(
-    @{ Name="Enron";        Base="/mnt/data/mehran/Datasets/Enron/enron_base.fvecs";          Query="/mnt/data/mehran/Datasets/Enron/enron_query.fvecs";          GT="/mnt/data/mehran/Datasets/Enron/enron_groundtruth.ivecs";       Dim=1369 },
-    @{ Name="audio";        Base="/mnt/data/mehran/Datasets/audio/audio_base.fvecs";          Query="/mnt/data/mehran/Datasets/audio/audio_query.fvecs";          GT="/mnt/data/mehran/Datasets/audio/audio_groundtruth.ivecs";       Dim=192 },
-    @{ Name="SIFT1M";       Base="/mnt/data/mehran/Datasets/SIFT1M/sift_base.fvecs";          Query="/mnt/data/mehran/Datasets/SIFT1M/sift_query.fvecs";          GT="/mnt/data/mehran/Datasets/SIFT1M/sift_groundtruth.ivecs"; Dim=128 },
-    @{ Name="synthetic_128";   Base="/mnt/data/mehran/Datasets/synthetic_128/base.fvecs";     Query="/mnt/data/mehran/Datasets/synthetic_128/query.fvecs";        GT="/mnt/data/mehran/Datasets/synthetic_128/groundtruth.ivecs";     Dim=128 },
-    @{ Name="synthetic_256";   Base="/mnt/data/mehran/Datasets/synthetic_256/base.fvecs";     Query="/mnt/data/mehran/Datasets/synthetic_256/query.fvecs";        GT="/mnt/data/mehran/Datasets/synthetic_256/groundtruth.ivecs";     Dim=256 },
-    @{ Name="synthetic_512";   Base="/mnt/data/mehran/Datasets/synthetic_512/base.fvecs";     Query="/mnt/data/mehran/Datasets/synthetic_512/query.fvecs";        GT="/mnt/data/mehran/Datasets/synthetic_512/groundtruth.ivecs";     Dim=512 },
-    @{ Name="synthetic_1024";  Base="/mnt/data/mehran/Datasets/synthetic_1024/base.fvecs";    Query="/mnt/data/mehran/Datasets/synthetic_1024/query.fvecs";       GT="/mnt/data/mehran/Datasets/synthetic_1024/groundtruth.ivecs";    Dim=1024 },
-    @{ Name="glove-100";    Base="/mnt/data/mehran/Datasets/glove-100/glove-100_base.fvecs";  Query="/mnt/data/mehran/Datasets/glove-100/glove-100_query.fvecs";  GT="/mnt/data/mehran/Datasets/glove-100/glove-100_groundtruth.ivecs"; Dim=100 }
+    @{ Name="Enron";        Base="E:\Research Work\Datasets\Enron\enron_base.fvecs";          Query="E:\Research Work\Datasets\Enron\enron_query.fvecs";          GT="E:\Research Work\Datasets\Enron\enron_groundtruth.ivecs";       Dim=1369 },
+    @{ Name="audio";        Base="E:\Research Work\Datasets\audio\audio_base.fvecs";          Query="E:\Research Work\Datasets\audio\audio_query.fvecs";          GT="E:\Research Work\Datasets\audio\audio_groundtruth.ivecs";       Dim=192 },
+    @{ Name="glove-100";    Base="E:\Research Work\Datasets\glove-100\glove-100_base.fvecs";  Query="E:\Research Work\Datasets\glove-100\glove-100_query.fvecs";  GT="E:\Research Work\Datasets\glove-100\glove-100_groundtruth.ivecs"; Dim=100 },
+    @{ Name="SIFT1M";       Base="E:\Research Work\Datasets\SIFT1M\sift_base.fvecs";          Query="E:\Research Work\Datasets\SIFT1M\sift_query.fvecs";          GT="E:\Research Work\Datasets\SIFT1M\sift_query_groundtruth.ivecs"; Dim=128 },
+    @{ Name="synthetic_128";   Base="E:\Research Work\Datasets\synthetic_128\base.fvecs";     Query="E:\Research Work\Datasets\synthetic_128\query.fvecs";        GT="E:\Research Work\Datasets\synthetic_128\groundtruth.ivecs";     Dim=128 },
+    @{ Name="synthetic_256";   Base="E:\Research Work\Datasets\synthetic_256\base.fvecs";     Query="E:\Research Work\Datasets\synthetic_256\query.fvecs";        GT="E:\Research Work\Datasets\synthetic_256\groundtruth.ivecs";     Dim=256 },
+    @{ Name="synthetic_512";   Base="E:\Research Work\Datasets\synthetic_512\base.fvecs";     Query="E:\Research Work\Datasets\synthetic_512\query.fvecs";        GT="E:\Research Work\Datasets\synthetic_512\groundtruth.ivecs";     Dim=512 },
+    @{ Name="synthetic_1024";  Base="E:\Research Work\Datasets\synthetic_1024\base.fvecs";    Query="E:\Research Work\Datasets\synthetic_1024\query.fvecs";       GT="E:\Research Work\Datasets\synthetic_1024\groundtruth.ivecs";    Dim=1024 }
 )
 
 # ---------- sanity ----------
