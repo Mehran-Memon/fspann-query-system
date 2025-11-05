@@ -157,9 +157,9 @@ function Detect-FvecsDim([string]$Path) {
 # ---------- dataset matrix ----------
 # If Dim is $null, it will be auto-detected from base file header.
 $Datasets = @(
-#    @{ Name="Enron";        Base="E:\Research Work\Datasets\Enron\enron_base.fvecs";          Query="E:\Research Work\Datasets\Enron\enron_query.fvecs";          GT="E:\Research Work\Datasets\Enron\enron_groundtruth.ivecs";       Dim=1369 },
-#    @{ Name="audio";        Base="E:\Research Work\Datasets\audio\audio_base.fvecs";          Query="E:\Research Work\Datasets\audio\audio_query.fvecs";          GT="E:\Research Work\Datasets\audio\audio_groundtruth.ivecs";       Dim=192 },
-#    @{ Name="glove-100";    Base="E:\Research Work\Datasets\glove-100\glove-100_base.fvecs";  Query="E:\Research Work\Datasets\glove-100\glove-100_query.fvecs";  GT="E:\Research Work\Datasets\glove-100\glove-100_groundtruth.ivecs"; Dim=100 },
+    @{ Name="Enron";        Base="E:\Research Work\Datasets\Enron\enron_base.fvecs";          Query="E:\Research Work\Datasets\Enron\enron_query.fvecs";          GT="E:\Research Work\Datasets\Enron\enron_groundtruth.ivecs";       Dim=1369 },
+    @{ Name="audio";        Base="E:\Research Work\Datasets\audio\audio_base.fvecs";          Query="E:\Research Work\Datasets\audio\audio_query.fvecs";          GT="E:\Research Work\Datasets\audio\audio_groundtruth.ivecs";       Dim=192 },
+    @{ Name="glove-100";    Base="E:\Research Work\Datasets\glove-100\glove-100_base.fvecs";  Query="E:\Research Work\Datasets\glove-100\glove-100_query.fvecs";  GT="E:\Research Work\Datasets\glove-100\glove-100_groundtruth.ivecs"; Dim=100 },
     @{ Name="SIFT1M";       Base="E:\Research Work\Datasets\SIFT1M\sift_base.fvecs";          Query="E:\Research Work\Datasets\SIFT1M\sift_query.fvecs";          GT="E:\Research Work\Datasets\SIFT1M\sift_query_groundtruth.ivecs"; Dim=128 },
     @{ Name="synthetic_128";   Base="E:\Research Work\Datasets\synthetic_128\base.fvecs";     Query="E:\Research Work\Datasets\synthetic_128\query.fvecs";        GT="E:\Research Work\Datasets\synthetic_128\groundtruth.ivecs";     Dim=128 },
     @{ Name="synthetic_256";   Base="E:\Research Work\Datasets\synthetic_256\base.fvecs";     Query="E:\Research Work\Datasets\synthetic_256\query.fvecs";        GT="E:\Research Work\Datasets\synthetic_256\groundtruth.ivecs";     Dim=256 },
