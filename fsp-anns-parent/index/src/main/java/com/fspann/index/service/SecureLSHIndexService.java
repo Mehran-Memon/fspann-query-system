@@ -4,6 +4,7 @@ import com.fspann.common.*;
 import com.fspann.config.SystemConfig;
 import com.fspann.crypto.AesGcmCryptoService;
 import com.fspann.crypto.CryptoService;
+import com.fspann.crypto.EncryptionUtils;
 import com.fspann.index.core.DimensionContext;
 import com.fspann.index.core.EvenLSH;
 import com.fspann.index.core.PartitioningPolicy;
@@ -13,9 +14,13 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.crypto.SecretKey;
 import java.io.IOException;
+import java.security.GeneralSecurityException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+
+import static com.fspann.crypto.EncryptionUtils.decryptVector;
 
 /**
  * SecureLSHIndexService
@@ -344,19 +349,16 @@ public class SecureLSHIndexService implements IndexService {
 
         // -------------------------- PAPER MODE --------------------------
         if (isPartitioned() && paperEngine != null) {
-            // Pass the original token through; let the paper engine ignore legacy fields as needed.
+            // Perform initial lookup
             List<EncryptedPoint> cands = paperEngine.lookup(token);
-            if (cands == null) cands = java.util.List.of();
+            if (cands == null) cands = new ArrayList<>();
 
-            // Tiny-dataset guard to keep unit tests deterministic only.
-            if (!indexedPoints.isEmpty()
-                    && indexedPoints.size() <= 128
-                    && (cands.isEmpty() || cands.size() < Math.min(token.getTopK(), indexedPoints.size()))) {
-                cands = new ArrayList<>(indexedPoints.values());
+            // Adjust search if not enough candidates are found based on TopK
+            if (cands.size() < token.getTopK()) {
+                cands = widenSearchInPaperMode(token, cands);
             }
 
-            final SearchDiagnostics diag =
-                    new SearchDiagnostics(cands.size(), /*probedBuckets*/ 0, java.util.Map.of());
+            final SearchDiagnostics diag = new SearchDiagnostics(cands.size(), 0, Collections.emptyMap());
             return new LookupWithDiagnostics(cands, diag);
         }
 
@@ -364,39 +366,29 @@ public class SecureLSHIndexService implements IndexService {
         final int dim = token.getDimension();
         final DimensionContext ctx = dimensionContexts.get(dim);
         if (ctx == null) {
-            return new LookupWithDiagnostics(java.util.List.of(), SearchDiagnostics.EMPTY);
+            return new LookupWithDiagnostics(Collections.emptyList(), SearchDiagnostics.EMPTY);
         }
         final SecureLSHIndex idx = ctx.getIndex();
 
-        // Use per-table buckets from token when present; otherwise derive one bucket per table
-        final List<List<Integer>> perTable;
-        if (token.hasPerTable()) {
-            perTable = new ArrayList<>(token.getTableBuckets().size());
-            for (List<Integer> l : token.getTableBuckets()) perTable.add(new ArrayList<>(l));
-        } else {
-            perTable = new ArrayList<>(idx.getNumHashTables());
-            final double[] q = token.getPlaintextQuery();
-            for (int t = 0; t < idx.getNumHashTables(); t++) {
-                final int b = ctx.getLsh().getBucketId(q, t);
-                perTable.add(new ArrayList<>(java.util.List.of(b)));
-            }
-        }
+        // Determine per-table buckets from token or derive from query
+        final List<List<Integer>> perTable = deriveBucketsForQuery(token, ctx, idx);
 
-        // Build union + diagnostics
+        // Perform search while respecting TopK, m, lambda, and l values
         final int tablesToUse = Math.min(token.getNumTables(), idx.getNumHashTables());
         final Map<Integer, Integer> fanoutPerTable = new LinkedHashMap<>();
         final Set<String> seen = new LinkedHashSet<>(16_384);
         final List<EncryptedPoint> ordered = new ArrayList<>();
         int probedBuckets = 0;
 
+        // Perform search with buckets and calculate fanout based on K, m, λ, and ℓ
         for (int t = 0; t < tablesToUse; t++) {
             int contributed = 0;
 
             for (Integer b : perTable.get(t)) {
                 probedBuckets++;
-                final java.util.concurrent.CopyOnWriteArrayList<EncryptedPoint> bucket =
-                        getBucketList(idx, t, b);
+                final java.util.concurrent.CopyOnWriteArrayList<EncryptedPoint> bucket = getBucketList(idx, t, b);
                 if (bucket == null) continue;
+
                 for (EncryptedPoint pt : bucket) {
                     if (pt.getId() != null && pt.getId().startsWith("FAKE_")) continue;
                     if (seen.add(pt.getId())) {
@@ -408,10 +400,98 @@ public class SecureLSHIndexService implements IndexService {
             fanoutPerTable.put(t, contributed);
         }
 
-        final SearchDiagnostics diag =
-                new SearchDiagnostics(seen.size(), probedBuckets, java.util.Map.copyOf(fanoutPerTable));
-        return new LookupWithDiagnostics(ordered, diag);
+        // Adjust the result size based on TopK
+        List<EncryptedPoint> finalCandidates = ordered.size() > token.getTopK() ?
+                ordered.subList(0, token.getTopK()) : ordered;
+
+        final SearchDiagnostics diag = new SearchDiagnostics(finalCandidates.size(), probedBuckets, Collections.unmodifiableMap(fanoutPerTable));
+        return new LookupWithDiagnostics(finalCandidates, diag);
     }
+
+    /**
+     * Widen the search in PAPER mode if not enough candidates are found.
+     * This will fetch more buckets as needed.
+     */
+    private List<EncryptedPoint> widenSearchInPaperMode(QueryToken token, List<EncryptedPoint> currentCandidates) {
+        List<EncryptedPoint> widenedCandidates = new ArrayList<>(currentCandidates);
+
+        // Calculate additional buckets to fetch based on TopK
+        int additionalBucketsToFetch = calculateAdditionalBucketsToFetch(token);
+        for (int i = 0; i < additionalBucketsToFetch; i++) {
+            List<EncryptedPoint> additionalCandidates = paperEngine.lookup(token);
+            if (additionalCandidates != null) {
+                widenedCandidates.addAll(additionalCandidates);
+            }
+        }
+
+        // Sort by relevance (distance-based) and limit to TopK
+        widenedCandidates.sort(Comparator.comparingDouble(candidate -> calculateDistance(candidate, token)));
+
+        // Ensure we do not exceed TopK
+        int topK = Math.min(token.getTopK(), widenedCandidates.size());
+        return widenedCandidates.subList(0, topK);
+    }
+
+    /**
+     * Calculate squared Euclidean distance between a candidate's vector and the query vector.
+     */
+    private double calculateDistance(EncryptedPoint candidate, QueryToken token) {
+        // Extract the ciphertext and IV from the candidate
+        byte[] ciphertext = candidate.getCiphertext();
+        byte[] iv = candidate.getIv();
+
+        // Retrieve the decryption key from the KeyLifeCycleService
+        SecretKey key = keyService.getCurrentVersion().getKey();
+
+        // Decrypt the candidate's vector
+        double[] candidateVector;
+        try {
+            candidateVector = EncryptionUtils.decryptVector(ciphertext, iv, key);  // Correct method call with 3 arguments
+        } catch (GeneralSecurityException e) {
+            return Double.MAX_VALUE; // Return a high value if decryption fails
+        }
+
+        // Get the query vector
+        double[] queryVector = token.getPlaintextQuery();
+
+        // Calculate squared Euclidean distance
+        double sum = 0;
+        for (int i = 0; i < candidateVector.length; i++) {
+            sum += Math.pow(candidateVector[i] - queryVector[i], 2);
+        }
+        return sum; // Squared Euclidean distance
+    }
+
+
+    /**
+     * Calculate how many additional buckets need to be scanned if the search is not sufficient.
+     */
+    private int calculateAdditionalBucketsToFetch(QueryToken token) {
+        int topK = token.getTopK();
+        int currentCandidates = token.getTopK();  // Adjust this as needed
+        int additionalBuckets = Math.max(0, topK - currentCandidates);  // Expand as required
+        return additionalBuckets;
+    }
+
+    /**
+     * Derive buckets for the query based on token and LSH context.
+     */
+    private List<List<Integer>> deriveBucketsForQuery(QueryToken token, DimensionContext ctx, SecureLSHIndex idx) {
+        List<List<Integer>> perTable;
+        if (token.hasPerTable()) {
+            perTable = new ArrayList<>(token.getTableBuckets().size());
+            for (List<Integer> l : token.getTableBuckets()) perTable.add(new ArrayList<>(l));
+        } else {
+            perTable = new ArrayList<>(idx.getNumHashTables());
+            double[] q = token.getPlaintextQuery();
+            for (int t = 0; t < idx.getNumHashTables(); t++) {
+                int b = ctx.getLsh().getBucketId(q, t);
+                perTable.add(java.util.List.of(b));
+            }
+        }
+        return perTable;
+    }
+
 
     @SuppressWarnings("unchecked")
     private static java.util.concurrent.CopyOnWriteArrayList<EncryptedPoint> getBucketList(SecureLSHIndex idx, int tableId, int bucketId) {

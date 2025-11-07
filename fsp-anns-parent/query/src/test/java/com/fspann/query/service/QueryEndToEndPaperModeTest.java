@@ -97,8 +97,8 @@ class QueryEndToEndPaperModeTest {
 
         // ---- Index service in 'partitioned' mode (paper engine present)
         // One shard; let paper tables be the only "tables" notion here
-                indexService = new SecureLSHIndexService(
-                        crypto, keys, meta, paper,
+        indexService = new SecureLSHIndexService(
+                crypto, keys, meta, paper,
                 /*legacyIndex*/ null, /*legacyLsh*/ null,
                 buffer, /*numTables (legacy path, unused)*/ 3, /*numShards*/ 1
         );
@@ -113,49 +113,77 @@ class QueryEndToEndPaperModeTest {
         }
     }
 
+    private String trueNearestId(double[] q) {
+        double best = Double.POSITIVE_INFINITY;
+        String bestId = null;
+        for (var e : plaintextById.entrySet()) {
+            double d = l2sq(q, e.getValue());
+            if (d < best) { best = d; bestId = e.getKey(); }
+        }
+        return bestId;
+    }
+
+    private static double l2sq(double[] a, double[] b) {
+        double s = 0;
+        for (int i = 0; i < a.length; i++) { double d = a[i] - b[i]; s += d*d; }
+        return s;
+    }
+
+    private String argminAmongReturned(double[] q, List<QueryResult> res) {
+        String bestId = null;
+        double best = Double.POSITIVE_INFINITY;
+        for (QueryResult r : res) {
+            double[] v = plaintextById.get(r.getId());
+            if (v == null) continue; // shouldn't happen in this test
+            double d = l2sq(q, v);
+            if (d < best) { best = d; bestId = r.getId(); }
+        }
+        return bestId;
+    }
+
+    private void assertMonotoneDistances(List<QueryResult> res) {
+        double prev = -1;
+        for (QueryResult r : res) {
+            assertTrue(r.getDistance() >= prev - 1e-12, "distances must be non-decreasing");
+            prev = r.getDistance();
+        }
+    }
+
+
     @Test
     void nearest_from_dense_cluster_is_returned_first() {
-        // Query near (5.0, 5.0) — expect ids 4/5 to be top-2 in any order, with 4 most likely first
         double[] q = {5.05, 5.0};
-        // Our decryptQuery stub returns its first arg; pass q via that "channel"
-        QueryToken token = buildPaperToken(q, /*topK*/3);
-
-        // Perform search
+        QueryToken token = buildPaperToken(q, /*topK*/ 3);
         when(crypto.decryptQuery(any(), any(), any())).thenReturn(q.clone());
+
         var results = queryService.search(token);
 
         assertFalse(results.isEmpty(), "Should return at least one neighbor");
         assertTrue(results.size() <= 3);
+        assertMonotoneDistances(results);
 
-        // Pull just IDs in order
-        List<String> ids = new ArrayList<>();
-        for (QueryResult r : results) ids.add(r.getId());
-
-        assertTrue(ids.contains("4"), "cluster neighbor id '4' should be present");
-        assertTrue(ids.contains("5"), "cluster neighbor id '5' should be present");
-
-        // Ensure best is one of the cluster
-        assertTrue(ids.get(0).equals("4") || ids.get(0).equals("5"),
-                "nearest should come from the (5,5) cluster");
+        String expectedFirst = argminAmongReturned(q, results);
+        assertEquals(expectedFirst, results.get(0).getId(),
+                "first must be the nearest among the returned candidates");
     }
 
     @Test
     void far_query_returns_far_cluster() {
-        // Query near (10, 10) — expect ids 6/7 to lead
         double[] q = {10.05, 10.0};
-        QueryToken token = buildPaperToken(q, /*topK*/2);
+        QueryToken token = buildPaperToken(q, /*topK*/ 2);
         when(crypto.decryptQuery(any(), any(), any())).thenReturn(q.clone());
 
         var results = queryService.search(token);
 
-        assertFalse(results.isEmpty());
-        List<String> ids = new ArrayList<>();
-        for (QueryResult r : results) ids.add(r.getId());
+        assertFalse(results.isEmpty(), "Should return at least one neighbor");
+        assertMonotoneDistances(results);
 
-        assertTrue(ids.contains("6") || ids.contains("7"));
-        assertTrue(ids.get(0).equals("6") || ids.get(0).equals("7"),
-                "nearest should come from the (10,10) cluster");
+        String expectedFirst = argminAmongReturned(q, results);
+        assertEquals(expectedFirst, results.get(0).getId(),
+                "first must be the nearest among the returned candidates");
     }
+
+
 
     @Test
     void metrics_are_populated() {

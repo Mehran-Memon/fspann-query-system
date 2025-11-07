@@ -186,7 +186,6 @@ public class QueryEvaluationResult {
         );
     }
 
-
     // ---------------- getters ----------------
     public int getTopKRequested() { return topKRequested; }
     public int getRetrieved() { return retrieved; }

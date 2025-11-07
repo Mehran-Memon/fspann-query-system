@@ -4,18 +4,16 @@ import com.fspann.common.*;
 import com.fspann.crypto.CryptoService;
 import com.fspann.loader.GroundtruthManager;
 import com.fspann.query.core.QueryEvaluationResult;
+import com.fspann.query.service.QueryServiceImpl;
 import org.junit.jupiter.api.*;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
-import static org.mockito.Mockito.*;
+
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import java.util.*;
-import com.fspann.common.IndexService.LookupWithDiagnostics;
-import com.fspann.common.IndexService.SearchDiagnostics;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class QueryServiceImplTest {
@@ -83,7 +81,7 @@ class QueryServiceImplTest {
         EncryptedPoint good = new EncryptedPoint("good", 0, iv, encQuery, 7, 2, List.of(1));
         EncryptedPoint bad  = new EncryptedPoint("bad",  0, iv, encQuery, 7, 2, List.of(1));
 
-        when(indexService.lookup(token)).thenReturn(List.of(good, bad));
+        when(indexService.lookup(any(QueryToken.class))).thenReturn(List.of(good, bad));
         when(cryptoService.decryptFromPoint(good, key)).thenReturn(new double[]{1.0, 2.0});     // dist=0
         when(cryptoService.decryptFromPoint(bad,  key)).thenReturn(new double[]{100.0, 100.0}); // far
 
@@ -94,7 +92,6 @@ class QueryServiceImplTest {
         assertEquals(2, service.getLastCandKeptVersion());
         assertEquals(2, service.getLastCandDecrypted());
         assertEquals(2, service.getLastReturned());
-
     }
 
     @Test
@@ -288,5 +285,4 @@ class QueryServiceImplTest {
         assertEquals(1, service.getLastCandDecrypted(),    "Decrypted");
         assertEquals(1, service.getLastReturned(),         "Returned");
     }
-
 }
