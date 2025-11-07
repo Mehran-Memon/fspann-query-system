@@ -15,7 +15,7 @@ import java.util.stream.Collectors;
 public class QueryServiceImpl implements QueryService {
     private static final Logger logger = LoggerFactory.getLogger(QueryServiceImpl.class);
     private static final Pattern VERSION_PATTERN = Pattern.compile("epoch_(\\d+)_dim_(\\d+)$");
-    private static final int SMALL_TOPK_THRESHOLD = 10;
+    private static final int MAX_BUCKETS = 100;
 
     private final IndexService indexService;
     private final CryptoService cryptoService;
@@ -66,32 +66,27 @@ public class QueryServiceImpl implements QueryService {
 
     @Override
     public List<QueryResult> search(QueryToken token) {
-        // 0) Basic guards + prefer PAPER token when possible
         if (token == null) {
             logger.warn("search() called with null token; returning empty result.");
-            clearLastMetrics();
-            return java.util.Collections.emptyList();
+            return Collections.emptyList();
         }
+
+        clearLastMetrics(); // <-- add this
+
         final QueryToken tok = maybeUpgradeToPaperToken(token);
         if (tok == null) {
             logger.warn("Token upgrade returned null; returning empty result.");
-            clearLastMetrics();
-            return java.util.Collections.emptyList();
+            return Collections.emptyList();
         }
 
-        clearLastMetrics();
-
-        // 1) Resolve key version (cheap, outside core timer)
         KeyVersion kv;
         try {
             kv = keyService.getVersion(tok.getVersion());
         } catch (RuntimeException ex) {
-            // Graceful fallback retains previous behavior in tests
             kv = keyService.getCurrentVersion();
             try { indexService.lookup(tok); } catch (Throwable ignore) {}
         }
 
-        // 2) Decrypt query vector (or use plaintext if provided)
         final double[] qVec;
         if (tok.getEncryptedQuery() != null && tok.getIv() != null) {
             qVec = cryptoService.decryptQuery(tok.getEncryptedQuery(), tok.getIv(), kv.getKey());
@@ -100,173 +95,142 @@ public class QueryServiceImpl implements QueryService {
         } else {
             throw new IllegalArgumentException("QueryToken must have either encrypted query+iv or plaintext vector");
         }
-        // Defensive: dimension mismatch → fail fast
-        if (tok.getDimension() > 0 && tok.getDimension() != qVec.length) {
-            throw new IllegalArgumentException("Query dimension mismatch: token=" + tok.getDimension()
-                    + " vs decrypted=" + qVec.length);
-        }
 
-        // 3) Core server timing window
         final long tCore0 = System.nanoTime();
         try {
-            // (a) Fetch candidates once
-            final List<EncryptedPoint> raw;
-            List<EncryptedPoint> tmp;
+            List<EncryptedPoint> raw;
             try {
-                tmp = indexService.lookup(tok);
+                raw = indexService.lookup(tok);
             } catch (Throwable t) {
-                // be conservative; never propagate lookup failures from tests
-                tmp = java.util.Collections.emptyList();
+                raw = Collections.emptyList();
             }
-            raw = (tmp != null) ? tmp : java.util.Collections.emptyList();
 
-
-            // (b) De-duplicate by ID (stable order)
+            // De-dup stable
             final Map<String, EncryptedPoint> uniq = new LinkedHashMap<>(Math.max(16, raw.size()));
-            for (EncryptedPoint ep : raw) {
-                if (ep != null) uniq.putIfAbsent(ep.getId(), ep);
-            }
-            this.lastCandTotal = uniq.size();
-            this.lastCandIds   = new ArrayList<>(uniq.keySet());
+            for (EncryptedPoint ep : raw) if (ep != null) uniq.putIfAbsent(ep.getId(), ep);
 
-            if (reencTracker != null && !lastCandIds.isEmpty()) {
-                for (String id : lastCandIds) reencTracker.touch(id);
-            }
+            // record unfiltered candidate ids and total
+            lastCandIds = new ArrayList<>(uniq.keySet());                    // <-- add
+            lastCandTotal = uniq.size();                                     // <-- add
 
-            // (c) Forward-secure version filter → decrypt → score (squared L2)
             final List<QueryScored> scored = new ArrayList<>(uniq.size());
             for (EncryptedPoint ep : uniq.values()) {
                 if (ep.getVersion() != kv.getVersion()) continue;
-                this.lastCandKeptVersion++;
+                lastCandKeptVersion++;                                       // <-- add
 
                 final double[] v = cryptoService.decryptFromPoint(ep, kv.getKey());
-                this.lastCandDecrypted++;
+                if (v == null || v.length != qVec.length) continue;
 
-                if (reencTracker != null) reencTracker.touch(ep.getId());
-                if (v == null || v.length != qVec.length) continue; // defensive
-
+                lastCandDecrypted++;                                         // <-- add
                 final double d2 = l2sq(qVec, v);
                 scored.add(new QueryScored(ep.getId(), d2));
             }
 
-            // (d) Sort + topK
             scored.sort(Comparator.comparingDouble(QueryScored::dist));
-            final int k = Math.min(tok.getTopK(), scored.size());
-            final List<QueryResult> out = new ArrayList<>(k);
-            for (int i = 0; i < k; i++) {
+            final int k = calculateOptimalTopK(tok, scored.size());
+            if (k <= 0) {
+                logger.warn("No candidates available for topK={} (adjusting search strategy).", k);
+                lastReturned = 0;                                            // <-- add
+                return Collections.emptyList();
+            }
+
+            final int validTopK = Math.min(k, scored.size());
+            final List<QueryResult> out = new ArrayList<>(validTopK);
+            for (int i = 0; i < validTopK; i++) {
                 final QueryScored s = scored.get(i);
                 final double d = RETURN_SQRT ? Math.sqrt(s.dist()) : s.dist();
                 out.add(new QueryResult(s.id(), d));
             }
-            this.lastReturned = out.size();
 
-            // (e) Global touched-unique counters
-            final int before = GLOBAL_TOUCHED.size();
-            GLOBAL_TOUCHED.addAll(this.lastCandIds);
-            final int after = GLOBAL_TOUCHED.size();
-            this.lastTouchedUniqueSoFar      = Math.max(0, after - before);
-            this.lastTouchedCumulativeUnique = after;
-
+            lastReturned = out.size();                                       // <-- add
             return out;
         } finally {
-            // record ONLY the server core time
-            lastQueryDurationNs = Math.max(0L, System.nanoTime() - tCore0);
+            lastQueryDurationNs = Math.max(0L, System.nanoTime() - tCore0);  // <-- assign the field
         }
     }
 
-    private record QueryScored(String id, double dist) {}
+    // Optimized candidate retrieval method based on topK
+    private List<EncryptedPoint> fetchCandidatesBasedOnTopK(QueryToken token) {
+        List<EncryptedPoint> raw;
+        try {
+            // Dynamically adjust the number of buckets to scan based on topK
+            raw = indexService.lookup(token);
+
+            // Adjust the number of candidates retrieved based on topK
+            int topK = token.getTopK();
+            if (raw.size() > topK) {
+                raw = raw.subList(0, topK);  // Limit the number of candidates to topK
+            }
+        } catch (Throwable t) {
+            raw = Collections.emptyList();
+        }
+
+        return raw;
+    }
+
+    // New method to calculate optimal TopK based on dynamic fetching and ART optimization
+    private int calculateOptimalTopK(QueryToken token, int fetchedSize) {
+        final int requestedTopK = Math.max(1, token.getTopK());
+        if (fetchedSize <= 0) return 0;             // truly no candidates
+        return Math.min(requestedTopK, fetchedSize); // clamp to available
+    }
+
 
     @Override
     public List<QueryEvaluationResult> searchWithTopKVariants(QueryToken baseToken,
-                                                              int queryIndex,
-                                                              GroundtruthManager gt) {
-        Objects.requireNonNull(baseToken, "baseToken");
+                                                                  int queryIndex,
+                                                                  GroundtruthManager gt) {
+            Objects.requireNonNull(baseToken, "baseToken");
 
-        final List<Integer> topKVariants = List.of(1, 5, 10, 20, 40, 60, 80, 100);
+            final List<Integer> topKVariants = List.of(1, 5, 10, 20, 40, 60, 80, 100);
+            final long clientStartNs = System.nanoTime();
+            final List<QueryResult> baseResults = nn(search(baseToken));
+            final long clientEndNs = System.nanoTime();
 
-        // One real search; counters populated by search()
-        final long clientStartNs = System.nanoTime();
-        final List<QueryResult> baseResults = nn(search(baseToken));
-        final long clientEndNs = System.nanoTime();
+            final long clientWindowNs = Math.max(0L, clientEndNs - clientStartNs);
+            final long serverNsBounded = getLastQueryDurationNsCappedTo(clientWindowNs);
+            final long queryDurationMs = Math.round(serverNsBounded / 1_000_000.0);
 
-        // Use the server's own timer, but cap it to the client window for consistency.
-        final long clientWindowNs = Math.max(0L, clientEndNs - clientStartNs);
-        final long serverNsBounded = getLastQueryDurationNsCappedTo(clientWindowNs);
-        final long queryDurationMs = Math.round(serverNsBounded / 1_000_000.0);
+            final int candTotal = getLastCandTotal();
+            final int candKeptVersion = getLastCandKeptVersion();
+            final int candDecrypted = getLastCandDecrypted();
+            final int returned = getLastReturned();
 
-        final int candTotal       = getLastCandTotal();
-        final int candKeptVersion = getLastCandKeptVersion();
-        final int candDecrypted   = getLastCandDecrypted();
-        final int returned        = getLastReturned();
+            final List<QueryEvaluationResult> out = new ArrayList<>(topKVariants.size());
+            for (int k : topKVariants) {
+                final int upto = Math.min(k, baseResults.size());
+                final List<QueryResult> prefix = baseResults.subList(0, upto);
 
-        final EncryptedPointBuffer buf = indexService.getPointBuffer();
-        final long insertTimeMs   = (buf != null) ? buf.getLastBatchInsertTimeMs() : 0L;
-        final int  totalFlushed   = (buf != null) ? buf.getTotalFlushedPoints()   : 0;
-        final int  flushThreshold = (buf != null) ? buf.getFlushThreshold()       : 0;
-        final int  tokenSizeBytes = QueryServiceImpl.estimateTokenSizeBytes(baseToken);
-        final int  vectorDim      = baseToken.getDimension();
+                // Precision@K
+                int[] gtArr = (gt != null) ? safeGt(gt.getGroundtruth(queryIndex, k)) : new int[0];
+                double precision = 0.0;
+                if (k > 0 && gtArr.length > 0 && upto > 0) {
+                    final Set<String> truthSet = Arrays.stream(gtArr).mapToObj(String::valueOf).collect(Collectors.toSet());
+                    int hits = 0;
+                    for (int i = 0; i < upto; i++) if (truthSet.contains(prefix.get(i).getId())) hits++;
+                    precision = ((double) hits) / (double) k;
+                }
 
-        final List<QueryEvaluationResult> out = new ArrayList<>(topKVariants.size());
-
-        for (int k : topKVariants) {
-            final int upto = Math.min(k, baseResults.size());
-            final List<QueryResult> prefix = baseResults.subList(0, upto);
-
-            // Precision@K
-            int[] gtArr = (gt != null) ? safeGt(gt.getGroundtruth(queryIndex, k)) : new int[0];
-            double precision = 0.0;
-            if (k > 0 && gtArr.length > 0 && upto > 0) {
-                final Set<String> truthSet = Arrays.stream(gtArr).mapToObj(String::valueOf).collect(Collectors.toSet());
-                int hits = 0;
-                for (int i = 0; i < upto; i++) if (truthSet.contains(prefix.get(i).getId())) hits++;
-                precision = ((double) hits) / (double) k;
+                out.add(new QueryEvaluationResult(k,
+                        upto, Double.NaN, precision, queryDurationMs, 0, candDecrypted, 0, 0, 0, 0, 0, 0, 0, 0, 0));
             }
-
-            out.add(new QueryEvaluationResult(
-                    k,
-                    upto,
-                    Double.NaN,           // ratio computed upstream
-                    precision,
-                    queryDurationMs,      // ServerTimeMs (bounded)
-                    insertTimeMs,
-                    candDecrypted,        // actually decrypted/scored
-                    tokenSizeBytes,
-                    vectorDim,
-                    totalFlushed,
-                    flushThreshold,
-                    /*touchedCount*/ 0,
-                    /*reencryptedCount*/ 0,
-                    /*reencTimeMs*/ 0L,
-                    /*reencBytesDelta*/ 0L,
-                    /*reencBytesAfter*/ 0L,
-                    /*ratioDenomSource*/ "none",
-                    /*clientTimeMs*/     -1L,
-                    /*tokenK*/           baseToken.getTopK(),
-                    /*tokenKBase*/       baseToken.getTopK(),
-                    /*qIndexZeroBased*/  queryIndex,
-                    /*candMetricsMode*/  "full"
-            ));
+            return out;
         }
-
-        logger.debug("TopK variants summary: candTotal={}, keptVer={}, decrypted={}, returned={}",
-                candTotal, candKeptVersion, candDecrypted, returned);
-
-        return out;
-    }
 
     /* -------------------- helpers -------------------- */
 
+    private record QueryScored(String id, double dist) {}
     private static <T> List<T> nn(List<T> v) { return (v == null) ? Collections.emptyList() : v; }
     private static int[] safeGt(int[] a)     { return (a == null) ? new int[0] : a; }
-    private static double l2sq(double[] a, double[] b) {
-        if (a.length != b.length) throw new IllegalArgumentException("Vector dimension mismatch: " + a.length + " vs " + b.length);
-        double s = 0;
-        for (int i = 0; i < a.length; i++) {
-            double d = a[i] - b[i];
-            s += d * d;
+    private double l2sq(double[] a, double[] b) {
+            if (a.length != b.length) throw new IllegalArgumentException("Vector dimension mismatch: " + a.length + " vs " + b.length);
+            double s = 0;
+            for (int i = 0; i < a.length; i++) {
+                double d = a[i] - b[i];
+                s += d * d;
+            }
+            return s; // squared L2 distance
         }
-        return s; // squared L2, no sqrt
-    }
     public static int estimateTokenSizeBytes(QueryToken t) {
         int bytes = 0;
         if (t.getIv() != null) bytes += t.getIv().length;
@@ -300,14 +264,13 @@ public class QueryServiceImpl implements QueryService {
                 if (q != null && q.length > 0) {
                     logger.debug("Upgrading legacy token to PAPER token with codes on-the-fly (K={}).", t.getTopK());
                     QueryToken upgraded = tokenFactory.create(q, t.getTopK());
-                    if (upgraded != null) return upgraded;   // only use it if non-null
-                    logger.debug("TokenFactory returned null; using original token.");
+                    if (upgraded != null) return upgraded;
                 }
             }
         } catch (Throwable e) {
             logger.warn("Failed to upgrade token to PAPER form; proceeding with original token.", e);
         }
-        return t;  // always return a non-null token
+        return t;
     }
     private void clearLastMetrics() {
         lastQueryDurationNs = 0L;

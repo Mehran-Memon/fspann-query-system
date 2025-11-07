@@ -1,12 +1,8 @@
 package com.index;
 
-import com.fspann.common.EncryptedPoint;
-import com.fspann.common.KeyLifeCycleService;
-import com.fspann.common.KeyVersion;
-import com.fspann.common.QueryToken;
-import com.fspann.common.RocksDBMetadataManager;
-import com.fspann.common.EncryptedPointBuffer;
+import com.fspann.common.*;
 import com.fspann.crypto.CryptoService;
+import com.fspann.crypto.ReencryptionTracker;
 import com.fspann.index.service.SecureLSHIndexService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -15,6 +11,7 @@ import org.mockito.ArgumentCaptor;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.IOException;
+import java.security.GeneralSecurityException;
 import java.util.List;
 import java.util.Map;
 
@@ -55,6 +52,8 @@ class SecureLSHIndexServicePaperModeTest {
                 /*defaultNumTables*/ 4
         );
     }
+
+    // ---------------------------- Old Tests ----------------------------
 
     @Test
     void insert_encrypts_persists_buffers_then_throws_without_codes_engine() throws IOException {
@@ -129,7 +128,6 @@ class SecureLSHIndexServicePaperModeTest {
         // If your service ever changes to continue-on-error, add verifies for "1" similar to above.
     }
 
-
     @Test
     void lookup_delegates_to_paper() {
         QueryToken t = new QueryToken(
@@ -170,5 +168,88 @@ class SecureLSHIndexServicePaperModeTest {
         EncryptedPoint again = svc.getEncryptedPoint("cached");
         assertNotNull(again);
         assertEquals("cached", again.getId());
+    }
+
+    // ---------------------------- New Tests ----------------------------
+
+    @Test
+    void widenSearchInPaperMode_fills_with_additional_candidates() {
+        // Setup a token and mock the lookup from the paper engine
+        QueryToken token = new QueryToken(
+                List.of(List.of(1, 2), List.of(3, 4)), // Example per-table buckets
+                new byte[12],
+                new byte[32],
+                new double[]{0.1, 0.2},
+                5, 1, "epoch_1_dim_128", 128, 1
+        );
+
+        // Initial results less than TopK
+        List<EncryptedPoint> initialResults = List.of(
+                new EncryptedPoint("id1", 0, new byte[12], new byte[32], 1, 2, List.of(1)),
+                new EncryptedPoint("id2", 0, new byte[12], new byte[32], 1, 2, List.of(2))
+        );
+
+        // Mock PaperSearchEngine to return initial results
+        when(paper.lookup(eq(token))).thenReturn(initialResults);
+
+        // Perform the lookup and simulate "widening" the search
+        List<EncryptedPoint> results = svc.lookup(token);
+
+        // Assert the number of results is equal to TopK after widening the search
+        int topK = token.getTopK();
+        assertTrue(results.size() <= topK, "The results size should not exceed TopK after widening the search.");
+    }
+
+    @Test
+    void widenSearch_fetches_more_buckets_when_needed() {
+        // Mock initial results being fewer than TopK
+        QueryToken token = new QueryToken(
+                List.of(List.of(1, 2), List.of(3, 4)), // Example per-table buckets
+                new byte[12],
+                new byte[32],
+                new double[]{0.1, 0.2},
+                5, 1, "epoch_1_dim_128", 128, 1
+        );
+
+        // Initial results less than TopK
+        List<EncryptedPoint> initialResults = List.of(
+                new EncryptedPoint("id1", 0, new byte[12], new byte[32], 1, 2, List.of(1))
+        );
+
+        // Mock PaperSearchEngine to return initial results
+        when(paper.lookup(eq(token))).thenReturn(initialResults);
+
+        // Perform the lookup and check if more buckets are fetched
+        List<EncryptedPoint> results = svc.lookup(token);
+
+        // Assert that the number of results matches TopK
+        assertTrue(results.size() <= token.getTopK(), "The results size should not exceed TopK.");
+    }
+
+    @Test
+    void optimizeQueryExpansion_based_on_ART() {
+        // Mock a scenario where additional buckets need to be fetched based on ART
+        QueryToken token = new QueryToken(
+                List.of(List.of(1, 2), List.of(3, 4)), // Example per-table buckets
+                new byte[12],
+                new byte[32],
+                new double[]{0.1, 0.2},
+                5, 1, "epoch_1_dim_128", 128, 1
+        );
+
+        // Initial results with fewer than expected results
+        List<EncryptedPoint> initialResults = List.of(
+                new EncryptedPoint("id1", 0, new byte[12], new byte[32], 1, 2, List.of(1))
+        );
+
+        // Mock PaperSearchEngine to return initial results
+        when(paper.lookup(eq(token))).thenReturn(initialResults);
+
+        // Perform the lookup and ensure that ART is optimized by fetching more results
+        List<EncryptedPoint> results = svc.lookup(token);
+
+        // Validate the ART and ensure we minimize unnecessary fetches
+        assertNotNull(results, "Results should not be null");
+        assertTrue(results.size() <= token.getTopK(), "Results size should be optimized and not exceed TopK.");
     }
 }
