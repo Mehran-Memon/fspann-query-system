@@ -24,8 +24,6 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.nio.*;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
@@ -39,8 +37,6 @@ import java.security.MessageDigest;
 
 public class ForwardSecureANNSystem {
     private static final Logger logger = LoggerFactory.getLogger(ForwardSecureANNSystem.class);
-    private static final double DEFAULT_NOISE_SCALE = 0.0;
-
     private final SecureLSHIndexService indexService;
     private final Map<Integer, QueryTokenFactory> tokenFactories = new ConcurrentHashMap<>();
     private final QueryService queryService;

@@ -178,44 +178,66 @@ public class QueryServiceImpl implements QueryService {
 
     @Override
     public List<QueryEvaluationResult> searchWithTopKVariants(QueryToken baseToken,
-                                                                  int queryIndex,
-                                                                  GroundtruthManager gt) {
-            Objects.requireNonNull(baseToken, "baseToken");
+                                                              int queryIndex,
+                                                              GroundtruthManager gt) {
+        Objects.requireNonNull(baseToken, "baseToken");
 
-            final List<Integer> topKVariants = List.of(1, 5, 10, 20, 40, 60, 80, 100);
-            final long clientStartNs = System.nanoTime();
-            final List<QueryResult> baseResults = nn(search(baseToken));
-            final long clientEndNs = System.nanoTime();
+        final List<Integer> topKVariants = List.of(1, 5, 10, 20, 40, 60, 80, 100);
+        final long clientStartNs = System.nanoTime();
+        final List<QueryResult> baseResults = nn(search(baseToken));
+        final long clientEndNs = System.nanoTime();
 
-            final long clientWindowNs = Math.max(0L, clientEndNs - clientStartNs);
-            final long serverNsBounded = getLastQueryDurationNsCappedTo(clientWindowNs);
-            final long queryDurationMs = Math.round(serverNsBounded / 1_000_000.0);
+        final long clientWindowNs = Math.max(0L, clientEndNs - clientStartNs);
+        final long serverNsBounded = getLastQueryDurationNsCappedTo(clientWindowNs);
+        final long queryDurationMs = Math.round(serverNsBounded / 1_000_000.0);
 
-            final int candTotal = getLastCandTotal();
-            final int candKeptVersion = getLastCandKeptVersion();
-            final int candDecrypted = getLastCandDecrypted();
-            final int returned = getLastReturned();
+        final int candTotal = getLastCandTotal();
+        final int candKeptVersion = getLastCandKeptVersion();
+        final int candDecrypted = getLastCandDecrypted();
+        final int returned = getLastReturned();
 
-            final List<QueryEvaluationResult> out = new ArrayList<>(topKVariants.size());
-            for (int k : topKVariants) {
-                final int upto = Math.min(k, baseResults.size());
-                final List<QueryResult> prefix = baseResults.subList(0, upto);
+        final List<QueryEvaluationResult> out = new ArrayList<>(topKVariants.size());
+        for (int k : topKVariants) {
+            final int upto = Math.min(k, baseResults.size());
+            final List<QueryResult> prefix = baseResults.subList(0, upto);
 
-                // Precision@K
-                int[] gtArr = (gt != null) ? safeGt(gt.getGroundtruth(queryIndex, k)) : new int[0];
-                double precision = 0.0;
-                if (k > 0 && gtArr.length > 0 && upto > 0) {
-                    final Set<String> truthSet = Arrays.stream(gtArr).mapToObj(String::valueOf).collect(Collectors.toSet());
-                    int hits = 0;
-                    for (int i = 0; i < upto; i++) if (truthSet.contains(prefix.get(i).getId())) hits++;
-                    precision = ((double) hits) / (double) k;
-                }
-
-                out.add(new QueryEvaluationResult(k,
-                        upto, Double.NaN, precision, queryDurationMs, 0, candDecrypted, 0, 0, 0, 0, 0, 0, 0, 0, 0));
+            // Precision@K
+            int[] gtArr = (gt != null) ? safeGt(gt.getGroundtruth(queryIndex, k)) : new int[0];
+            double precision = 0.0;
+            if (k > 0 && gtArr.length > 0 && upto > 0) {
+                final Set<String> truthSet = Arrays.stream(gtArr).mapToObj(String::valueOf).collect(Collectors.toSet());
+                int hits = 0;
+                for (int i = 0; i < upto; i++) if (truthSet.contains(prefix.get(i).getId())) hits++;
+                precision = ((double) hits) / (double) k;
             }
-            return out;
+
+            out.add(new QueryEvaluationResult(
+                    k,                  // topKRequested
+                    upto,               // retrieved
+                    Double.NaN,         // ratio
+                    precision,          // precision
+                    queryDurationMs,    // timeMs (server)
+                    0,                  // insertTimeMs
+                    candDecrypted,      // candidateCount
+                    0,                  // tokenSizeBytes
+                    0,                  // vectorDim
+                    0,                  // totalFlushedPoints
+                    0,                  // flushThreshold
+                    0,                  // touchedCount
+                    0,                  // reencryptedCount
+                    0,                  // reencTimeMs
+                    0,                  // reencBytesDelta
+                    0,                  // reencBytesAfter
+                    "test",             // ratioDenomSource
+                    0,                  // clientTimeMs
+                    k,                  // tokenK
+                    k,                  // tokenKBase
+                    0,                  // qIndexZeroBased
+                    "test"              // candMetricsMode
+            ));
         }
+        return out;
+    }
 
     /* -------------------- helpers -------------------- */
 
@@ -223,14 +245,14 @@ public class QueryServiceImpl implements QueryService {
     private static <T> List<T> nn(List<T> v) { return (v == null) ? Collections.emptyList() : v; }
     private static int[] safeGt(int[] a)     { return (a == null) ? new int[0] : a; }
     private double l2sq(double[] a, double[] b) {
-            if (a.length != b.length) throw new IllegalArgumentException("Vector dimension mismatch: " + a.length + " vs " + b.length);
-            double s = 0;
-            for (int i = 0; i < a.length; i++) {
-                double d = a[i] - b[i];
-                s += d * d;
-            }
-            return s; // squared L2 distance
+        if (a.length != b.length) throw new IllegalArgumentException("Vector dimension mismatch: " + a.length + " vs " + b.length);
+        double s = 0;
+        for (int i = 0; i < a.length; i++) {
+            double d = a[i] - b[i];
+            s += d * d;
         }
+        return s; // squared L2 distance
+    }
     public static int estimateTokenSizeBytes(QueryToken t) {
         int bytes = 0;
         if (t.getIv() != null) bytes += t.getIv().length;
