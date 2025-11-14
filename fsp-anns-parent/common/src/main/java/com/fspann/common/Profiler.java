@@ -56,12 +56,12 @@ public class Profiler {
 
     public void exportToCSV(String filePath) {
         try (FileWriter fw = new FileWriter(filePath)) {
-            fw.write("Label,AvgTimeMs,Runs\n");
+            fw.write("Label,AvgTime(ms),Runs\n");
             for (Map.Entry<String, List<Long>> e : timings.entrySet()) {
                 double avgMs = e.getValue().stream().mapToLong(Long::longValue).average().orElse(0.0) / 1_000_000.0;
                 fw.write(String.format("%s,%.4f,%d%n", e.getKey(), avgMs, e.getValue().size()));
             }
-            System.out.println("📤 Profiler data written to " + filePath);
+            System.out.println("Profiler data written to " + filePath);
         } catch (IOException ex) {
             System.err.println("Failed to write profiler CSV: " + ex.getMessage());
         }
