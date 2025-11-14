@@ -2549,11 +2549,23 @@ public class ForwardSecureANNSystem {
         sys.runEndToEnd(dataPath, queryPath, dim, groundtruthPath);
 
         if (sys.getProfiler() != null) {
-            System.out.printf("Average Client Query Time: %.2f ms\n",
-                    sys.getProfiler().getAllClientQueryTimes().stream().mapToDouble(d -> d).average().orElse(0.0));
-            System.out.printf("Average Ratio: %.4f\n",
-                    sys.getProfiler().getAllQueryRatios().stream().mapToDouble(d -> d).average().orElse(0.0));
+            var client = sys.getProfiler().getAllClientQueryTimes();
+            var server = sys.getProfiler().getAllServerQueryTimes();
+            var ratios = sys.getProfiler().getAllQueryRatios();
+
+            double avgClient = client.stream().mapToDouble(d -> d).average().orElse(0.0);
+            double avgServer = server.stream().mapToDouble(d -> d).average().orElse(0.0);
+            double artMs = java.util.stream.IntStream.range(0, Math.min(client.size(), server.size()))
+                    .mapToDouble(i -> client.get(i) + server.get(i))
+                    .average().orElse(0.0);
+            double avgRatio = ratios.stream().mapToDouble(Double::doubleValue).average().orElse(0.0);
+
+            System.out.printf("Average Client Query Time: %.2f ms%n", avgClient);
+            System.out.printf("Average Server Query Time: %.2f ms%n", avgServer);
+            System.out.printf("Average Total Query Time (ART): %.2f ms%n", artMs);
+            System.out.printf("Average Ratio: %.4f%n", avgRatio);
         }
+
 
         long start = System.currentTimeMillis();
 //        logger.info("Calling system.shutdown()...");
