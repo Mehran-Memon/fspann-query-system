@@ -5,7 +5,7 @@ import com.fspann.common.KeyLifeCycleService;
 import com.fspann.common.KeyVersion;
 import com.fspann.common.QueryToken;
 import com.fspann.crypto.CryptoService;
-import com.fspann.index.core.EvenLSH;
+import com.fspann.index.paper.EvenLSH;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -18,7 +18,10 @@ import java.util.Objects;
 /**
  * Builds QueryToken with:
  *  - per-table LSH bucket expansions (for legacy multiprobe path)
- *  - paper codes: one BitSet per division (REQUIRED for partitioned mode with seed-only GMeta)
+ *  - paper codes: one BitSet per division (REQUIRED for partitioned mode)
+ *
+ * This factory runs on the trusted side (client / orchestrator) and
+ * never embeds the plaintext vector in the token: only IV + ciphertext + codes.
  */
 public class QueryTokenFactory {
     private static final Logger logger = LoggerFactory.getLogger(QueryTokenFactory.class);
@@ -52,7 +55,7 @@ public class QueryTokenFactory {
         this.numTables      = numTables;
         this.expansionRange = expansionRange;
 
-        // Paper params from system properties (match server config)
+        // Paper params from system properties (must match server config)
         this.divisions = Math.max(1, Integer.getInteger("paper.divisions", 9));
         this.m         = Math.max(1, Integer.getInteger("paper.m", 25));
         this.seedBase  = Long.getLong("paper.seed", 13L);
@@ -88,10 +91,12 @@ public class QueryTokenFactory {
                 lsh.getDimensions(), divisions, m, numTables, expansionRange);
     }
 
+    /** Build a fresh token for a plaintext query vector. */
     public QueryToken create(double[] vector, int topK) {
         Objects.requireNonNull(vector, "vector");
         if (vector.length == 0) throw new IllegalArgumentException("vector must be non-empty");
         if (topK <= 0) throw new IllegalArgumentException("topK must be > 0");
+
         int lshDim = lsh.getDimensions();
         if (lshDim > 0 && lshDim != vector.length) {
             throw new IllegalArgumentException("Vector dimension mismatch: expected " + lshDim + " but got " + vector.length);
@@ -99,13 +104,13 @@ public class QueryTokenFactory {
 
         // Version/context + encrypt query
         KeyVersion currentVersion = keyService.getCurrentVersion();
-        SecretKey key = currentVersion.getKey();
-        int version = currentVersion.getVersion();
-        String encryptionContext = "epoch_" + version + "_dim_" + vector.length;
+        SecretKey key    = currentVersion.getKey();
+        int version      = currentVersion.getVersion();
+        String encCtx    = "epoch_" + version + "_dim_" + vector.length;
 
         EncryptedPoint ep = cryptoService.encryptToPoint("query", vector, key);
 
-        // Per-table bucket expansions (legacy multiprobe path; harmless in paper mode)
+        // Per-table bucket expansions for multiprobe path
         final int probeHint = Math.min(256, Math.max(32, numTables * 2));
         List<List<Integer>> perTable = lsh.getBucketsForAllTables(vector, probeHint, numTables);
         List<List<Integer>> copy = new ArrayList<>(numTables);
@@ -127,63 +132,42 @@ public class QueryTokenFactory {
         return new QueryToken(
                 copy,                 // per-table buckets
                 codes,                // paper codes (ℓ BitSets)
-                ep.getIv(),
-                ep.getCiphertext(),
-                null,                 // avoid sending plaintext in production
+                ep.getIv(),           // IV
+                ep.getCiphertext(),   // encrypted query
                 topK,
                 numTables,
-                encryptionContext,
+                encCtx,
                 vector.length,
                 version
         );
     }
 
+    /**
+     * Derive a new token with a different topK from an existing token.
+     *
+     * NOTE:
+     *  - We reuse per-table buckets, codes, IV and ciphertext.
+     *  - This avoids needing plaintext on the server side.
+     *  - If you ever want "true" re-bucketing at new K, that must be done
+     *    on the client/orchestrator which still has the plaintext vector.
+     */
     public QueryToken derive(QueryToken base, int newTopK) {
         Objects.requireNonNull(base, "base");
         if (newTopK <= 0) throw new IllegalArgumentException("newTopK must be > 0");
 
-        // Preserve original version to keep forward-secure semantics
-        int version = base.getVersion();
-        KeyVersion kv = keyService.getVersion(version);
-
-        final double[] q = (base.getQueryVector() != null)
-                ? base.getQueryVector()
-                : throwNoPlaintext();
-
-        int lshDim = lsh.getDimensions();
-        if (lshDim > 0 && lshDim != q.length) {
-            throw new IllegalArgumentException("Vector dimension mismatch: expected " + lshDim + " but got " + q.length);
-        }
-
-        EncryptedPoint ep = cryptoService.encryptToPoint("query", q, kv.getKey());
-
-        // Recompute per-table expansions at the new K (heuristic limit still applies)
-        final int probeHint = Math.min(256, Math.max(32, numTables * 2));
-        List<List<Integer>> perTable = lsh.getBucketsForAllTables(q, probeHint, numTables);
-        List<List<Integer>> copy = new ArrayList<>(numTables);
-        if (perTable == null || perTable.size() != numTables) {
-            for (int t = 0; t < numTables; t++) copy.add(new ArrayList<>(lsh.getBuckets(q, newTopK, t)));
-        } else {
-            for (List<Integer> l : perTable) copy.add(new ArrayList<>(l));
-        }
-
-        // Codes depend only on (seedBase, ℓ, m) and q; recompute to be safe
-        BitSet[] codes = code(q);
-
-        logger.debug("Derived token: dim={}, topK={}, tables={}, totalProbes={}, hasCodes=true(ℓ={})",
-                q.length, newTopK, numTables, copy.stream().mapToInt(List::size).sum(), divisions);
+        logger.debug("Deriving token from base: oldK={}, newK={}, dim={}, tables={}",
+                base.getTopK(), newTopK, base.getDimension(), base.getNumTables());
 
         return new QueryToken(
-                copy,
-                codes,
-                ep.getIv(),
-                ep.getCiphertext(),
-                null,
+                base.getTableBuckets(),      // reuse buckets
+                base.getCodes(),             // reuse codes
+                base.getIv(),                // reuse IV
+                base.getEncryptedQuery(),    // reuse ciphertext
                 newTopK,
-                numTables,
+                base.getNumTables(),
                 base.getEncryptionContext(),
-                q.length,
-                version
+                base.getDimension(),
+                base.getVersion()
         );
     }
 
@@ -224,9 +208,5 @@ public class QueryTokenFactory {
         z = (z ^ (z >>> 33)) * 0xff51afd7ed558ccdl;
         z = (z ^ (z >>> 33)) * 0xc4ceb9fe1a85ec53l;
         return z ^ (z >>> 33);
-    }
-
-    private static double[] throwNoPlaintext() {
-        throw new IllegalStateException("Base token has no plaintext vector; cannot derive a new token without recomputing codes/encryption.");
     }
 }
