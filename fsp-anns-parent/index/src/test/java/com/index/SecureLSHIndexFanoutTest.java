@@ -1,9 +1,7 @@
 package com.index;
 
 import com.fspann.common.EncryptedPoint;
-import com.fspann.index.core.EvenLSH;
 import com.fspann.index.core.PartitioningPolicy;
-import com.fspann.index.core.SecureLSHIndex;
 import org.junit.jupiter.api.Test;
 
 import java.util.*;
