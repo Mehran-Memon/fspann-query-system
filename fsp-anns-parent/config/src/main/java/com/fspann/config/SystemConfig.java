@@ -2,293 +2,415 @@ package com.fspann.config;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-import java.io.File;
 import java.io.IOException;
-import java.nio.file.*;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
 /**
- * Application configuration loaded from a JSON or YAML file.
- * Backward compatible top-level knobs + structured nested sections.
+ * Canonical system configuration for FSP-ANN.
  *
- * This version removes pre-sizing / biasing knobs from paper mode:
- * - targetMult (fanout)
- * - expandRadiusMax / expandRadiusHard
- * - fixed maxCandidates budgeting
- *
- * Fetch size is now an outcome of (m, lambda, divisions) and index distribution.
- * An optional safetyMaxCandidates exists purely as an OOM guard (disabled by default).
+ * - Loaded from JSON via {@link #load(String, boolean)}.
+ * - Cached per absolute/real path.
+ * - Exposes nested config blocks: LSH, paper, reencryption, eval, output, audit, cloak, ratio, kAware.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class SystemConfig {
-    private static final Logger logger = LoggerFactory.getLogger(SystemConfig.class);
 
-    // --- caps / guards ---
-    private static final int  MAX_SHARDS            = 8192;
-    private static final int  MAX_TABLES            = 1024;
-    private static final long MAX_OPS_THRESHOLD     = 1_000_000_000L;
-    private static final long MAX_AGE_THRESHOLD_MS  = 30L * 24 * 60 * 60 * 1000; // 30d
-    private static final int  MAX_REENC_BATCH_SIZE  = 10_000;
+    private static final int  MAX_SHARDS        = 8192;
+    private static final int  MAX_TABLES        = 1024;
+    private static final long MAX_OPS_THRESHOLD = 1_000_000_000L;
+    private static final long MAX_AGE_THRESHOLD = 365L * 24L * 60L * 60L * 1000L; // 1 year
 
+    private static final ObjectMapper MAPPER = new ObjectMapper()
+            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+
+    /** Per-path cache for loaded configs. */
     private static final ConcurrentMap<String, SystemConfig> configCache = new ConcurrentHashMap<>();
 
-    // --- existing top-level (back-compat) ---
-    @JsonProperty("numShards")        private int  numShards       = 32;
-    @JsonProperty("numTables")        private int  numTables       = 8;
-    @JsonProperty("opsThreshold")     private long opsThreshold    = 500_000_000L;
-    @JsonProperty("ageThresholdMs")   private long ageThresholdMs  = 7L * 24 * 60 * 60 * 1000; // 7d
-    @JsonProperty("reEncBatchSize")   private int  reEncBatchSize  = 2_000;
-    @JsonProperty("profilerEnabled")  private boolean profilerEnabled = true;
-    @JsonProperty("reencryptionEnabled") private boolean reencryptionEnabled = true;
-    @JsonProperty("reencryption")  private ReencryptionConfig reencryption = new ReencryptionConfig();
-    @JsonProperty("reencryptionGloballyEnabled") private Boolean reencryptionGloballyEnabled;
-    // --- nested sections ---
-    @JsonProperty("eval")    private EvalConfig   eval   = new EvalConfig();
-    @JsonProperty("ratio")   private RatioConfig  ratio  = new RatioConfig();
-    @JsonProperty("audit")   private AuditConfig  audit  = new AuditConfig();
-    @JsonProperty("output")  private OutputConfig output = new OutputConfig();
-    @JsonProperty("cloak")   private CloakConfig  cloak  = new CloakConfig();
-    @JsonProperty("lsh")     private LshConfig    lsh    = new LshConfig();
-    @JsonProperty("paper")   private PaperConfig  paper  = new PaperConfig();
+    /* ======================== Top-level fields ======================== */
 
-    public SystemConfig() {} // for Jackson
+    @JsonProperty("numShards")
+    private int numShards = 32;
 
-    // ---------------- getters (top-level) ----------------
-    public int getNumShards() { return numShards; }
-    public int getNumTables() { return numTables; }
-    public long getOpsThreshold() { return opsThreshold; }
-    public long getAgeThresholdMs() { return ageThresholdMs; }
-    public int getReEncBatchSize() { return reEncBatchSize; }
-    public boolean isProfilerEnabled() { return profilerEnabled; }
-    public boolean isReencryptionGloballyEnabled() {
-        return (reencryptionGloballyEnabled != null)
-                ? reencryptionGloballyEnabled
-                : reencryptionEnabled;
-    }
-    public ReencryptionConfig getReencryption() { return reencryption; }
+    @JsonProperty("numTables")
+    private int numTables = 8;
 
-    // ---------------- getters (nested) ----------------
-    public EvalConfig getEval() { return eval; }
-    public RatioConfig getRatio() { return ratio; }
-    public AuditConfig getAudit() { return audit; }
-    public OutputConfig getOutput() { return output; }
-    public CloakConfig getCloak() { return cloak; }
-    public LshConfig getLsh() { return lsh; }
-    public PaperConfig getPaper() { return paper; }
+    @JsonProperty("opsThreshold")
+    private long opsThreshold = 500_000_000L;
 
-    // ---------------- validation ----------------
-    public void validate() throws ConfigLoadException {
-        // top-level
-        if (numShards <= 0) throw new ConfigLoadException("numShards must be positive", null);
-        if (numShards > MAX_SHARDS) {
-            logger.warn("numShards {} exceeds maximum {}, capping", numShards, MAX_SHARDS);
-            numShards = MAX_SHARDS;
-        }
-        if (numTables <= 0) throw new ConfigLoadException("numTables must be positive", null);
-        if (numTables > MAX_TABLES) {
-            logger.warn("numTables {} exceeds maximum {}, capping", numTables, MAX_TABLES);
-            numTables = MAX_TABLES;
-        }
-        if (opsThreshold <= 0) throw new ConfigLoadException("opsThreshold must be positive", null);
-        if (opsThreshold > MAX_OPS_THRESHOLD) {
-            logger.warn("opsThreshold {} exceeds maximum {}, capping", opsThreshold, MAX_OPS_THRESHOLD);
-            opsThreshold = MAX_OPS_THRESHOLD;
-        }
-        if (ageThresholdMs <= 0) throw new ConfigLoadException("ageThresholdMs must be positive", null);
-        if (ageThresholdMs > MAX_AGE_THRESHOLD_MS) {
-            logger.warn("ageThresholdMs {} exceeds maximum {}, capping", ageThresholdMs, MAX_AGE_THRESHOLD_MS);
-            ageThresholdMs = MAX_AGE_THRESHOLD_MS;
-        }
-        if (reEncBatchSize <= 0) throw new ConfigLoadException("reEncBatchSize must be positive", null);
-        if (reEncBatchSize > MAX_REENC_BATCH_SIZE) {
-            logger.warn("reEncBatchSize {} exceeds maximum {}, capping", reEncBatchSize, MAX_REENC_BATCH_SIZE);
-            reEncBatchSize = MAX_REENC_BATCH_SIZE;
-        }
-        if (reencryption == null) reencryption = new ReencryptionConfig();
+    @JsonProperty("ageThresholdMs")
+    private long ageThresholdMs = 24L * 60L * 60L * 1000L; // 1 day
 
-        // nested sections sanity
-        if (eval == null)   eval   = new EvalConfig();
-        if (ratio == null)  ratio  = new RatioConfig();
-        if (audit == null)  audit  = new AuditConfig();
-        if (output == null) output = new OutputConfig();
-        if (cloak == null)  cloak  = new CloakConfig();
-        if (lsh == null)    lsh    = new LshConfig();
-        if (paper == null)  paper  = new PaperConfig();
+    @JsonProperty("reencryptionEnabled")
+    private boolean reencryptionEnabled = true;
 
-        // bounds
-        if (ratio.gtMismatchTolerance < 0.0 || ratio.gtMismatchTolerance > 1.0) {
-            logger.warn("ratio.gtMismatchTolerance={} outside [0,1], clamping", ratio.gtMismatchTolerance);
-            ratio.gtMismatchTolerance = Math.max(0.0, Math.min(1.0, ratio.gtMismatchTolerance));
-        }
-        if (eval.kVariants == null || eval.kVariants.length == 0) {
-            eval.kVariants = new int[]{1,20,40,60,80,100};
-        }
-        if (cloak.noise < 0.0) {
-            logger.warn("cloak.noise < 0, setting to 0");
-            cloak.noise = 0.0;
-        }
-        if (output.resultsDir == null || output.resultsDir.isBlank()) {
-            output.resultsDir = "results";
-        }
-        // lsh overrides are optional; no caps beyond positivity
-        if (lsh.numTables < 0) lsh.numTables = 0;
-        if (lsh.rowsPerBand < 0) lsh.rowsPerBand = 0;
-        if (lsh.probeShards < 0) lsh.probeShards = 0;
+    @JsonProperty("forwardSecurityEnabled")
+    private boolean forwardSecurityEnabled = true;
 
-        // paper-mode: enforce positivity and disable safety cap if invalid
-        if (paper.m <= 0) throw new ConfigLoadException("paper.m must be positive", null);
-        if (paper.lambda <= 0) throw new ConfigLoadException("paper.lambda must be positive", null);
-        if (paper.divisions <= 0) throw new ConfigLoadException("paper.divisions must be positive", null);
-        if (paper.safetyMaxCandidates < 0) {
-            logger.warn("paper.safetyMaxCandidates < 0; disabling safety cap");
-            paper.safetyMaxCandidates = 0;
-        }
-        if (ratio.gtMismatchTolerance < 0.0 || ratio.gtMismatchTolerance > 1.0) {
-            logger.warn("ratio.gtMismatchTolerance={} outside [0,1], clamping", ratio.gtMismatchTolerance);
-            ratio.gtMismatchTolerance = Math.max(0.0, Math.min(1.0, ratio.gtMismatchTolerance));
-        }
-        if (ratio.source == null || ratio.source.isBlank()) ratio.source = "auto";
+    @JsonProperty("partitionedIndexingEnabled")
+    private boolean partitionedIndexingEnabled = true;
 
-        if (!ratio.autoComputeGT && !ratio.allowComputeIfMissing && (ratio.gtPath == null || ratio.gtPath.isBlank())) {
-            throw new ConfigLoadException("Groundtruth disabled (autoComputeGT=false, allowComputeIfMissing=false) but ratio.gtPath is not set", null);
-        }
-    }
+    /** Whether MicrometerProfiler should be enabled. */
+    @JsonProperty("profilerEnabled")
+    private boolean profilerEnabled = true;
 
-    // ---------------- loading ----------------
-    public static SystemConfig load(String filePath) throws ConfigLoadException {
-        return load(filePath, false);
-    }
+    @JsonProperty("lsh")
+    private LshConfig lsh = new LshConfig();
 
-    public static SystemConfig load(String filePath, boolean refresh) throws ConfigLoadException {
-        Objects.requireNonNull(filePath, "Config file path cannot be null");
-        Path path = Paths.get(filePath).toAbsolutePath().normalize();
+    @JsonProperty("reencryption")
+    private ReencryptionConfig reencryption = new ReencryptionConfig();
+
+    @JsonProperty("paper")
+    private PaperConfig paper = new PaperConfig();
+
+    @JsonProperty("eval")
+    private EvalConfig eval = new EvalConfig();
+
+    @JsonProperty("output")
+    private OutputConfig output = new OutputConfig();
+
+    @JsonProperty("audit")
+    private AuditConfig audit = new AuditConfig();
+
+    @JsonProperty("cloak")
+    private CloakConfig cloak = new CloakConfig();
+
+    @JsonProperty("ratio")
+    private RatioConfig ratio = new RatioConfig();
+
+    @JsonProperty("kAware")
+    private KAwareConfig kAware = new KAwareConfig();
+
+    /* ======================== Static loading API ======================== */
+
+    public static SystemConfig load(String path, boolean refresh) throws ConfigLoadException {
+        Objects.requireNonNull(path, "Config path cannot be null");
+        String key;
         try {
-            // Resolve symlinks to stabilize the cache key across different references
-            path = path.toRealPath(LinkOption.NOFOLLOW_LINKS);
-        } catch (IOException e) {
-            // Best-effort: keep normalized absolute path if realPath fails
-            logger.debug("toRealPath failed for {} (continuing with normalized path): {}", path, e.toString());
-        }        String cacheKey = path.toString();
-
-        if (!Files.isReadable(path)) {
-            logger.error("Config file is not readable: {}", path);
-            throw new ConfigLoadException("Config file is not readable: " + path, null);
+            Path p = Paths.get(path).toAbsolutePath().normalize();
+            try {
+                p = p.toRealPath();
+            } catch (IOException ignore) {
+                // fall back to normalized absolute path
+            }
+            key = p.toString();
+        } catch (Exception e) {
+            throw new ConfigLoadException("Invalid config path: " + path, e);
         }
 
         if (!refresh) {
-            SystemConfig cached = configCache.get(cacheKey);
-            if (cached != null) {
-                logger.debug("Returning cached configuration for: {}", cacheKey);
-                return cached;
-            }
+            SystemConfig cached = configCache.get(key);
+            if (cached != null) return cached;
         }
 
-        ObjectMapper mapper = (cacheKey.toLowerCase().endsWith(".yaml") || cacheKey.toLowerCase().endsWith(".yml"))
-                ? new ObjectMapper(new YAMLFactory())
-                : new ObjectMapper();
-
+        SystemConfig cfg;
         try {
-            logger.info("Loading configuration from: {}", cacheKey);
-            SystemConfig config = mapper.readValue(new File(cacheKey), SystemConfig.class);
-            config.validate();
-            configCache.put(cacheKey, config);
-            logger.info("Successfully loaded and validated config from {}", cacheKey);
-            return config;
+            Path p = Paths.get(key);
+            if (!Files.isRegularFile(p) || !Files.isReadable(p)) {
+                throw new IOException("Config file not found or not readable: " + key);
+            }
+            cfg = MAPPER.readValue(p.toFile(), SystemConfig.class);
         } catch (IOException e) {
-            logger.error("Failed to load config from {}", cacheKey, e);
-            throw new ConfigLoadException("Unable to load configuration: " + e.getMessage(), e);
+            throw new ConfigLoadException("Failed to read/parse SystemConfig from " + key, e);
         }
+
+        cfg.numShards      = clamp(cfg.numShards, 1, MAX_SHARDS);
+        cfg.numTables      = clamp(cfg.numTables, 1, MAX_TABLES);
+        cfg.opsThreshold   = clamp(cfg.opsThreshold, 1L, MAX_OPS_THRESHOLD);
+        cfg.ageThresholdMs = clamp(cfg.ageThresholdMs, 0L, MAX_AGE_THRESHOLD);
+
+        configCache.put(key, cfg);
+        return cfg;
     }
 
-    public static void clearCache() { configCache.clear(); }
-
-    public static class ConfigLoadException extends Exception {
-        public ConfigLoadException(String message, Throwable cause) { super(message, cause); }
+    public static void clearCache() {
+        configCache.clear();
     }
 
-    // ---------------- nested POJOs ----------------
+    /* ======================== Getters used by other modules ======================== */
 
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class EvalConfig {
-        @JsonProperty("computePrecision")         public boolean computePrecision = false;
-        @JsonProperty("writeGlobalPrecisionCsv")  public boolean writeGlobalPrecisionCsv = false;
-        @JsonProperty("kVariants")                public int[]   kVariants = new int[]{1,20,40,60,80,100};
-        public EvalConfig() {}
+    public int getNumShards() {
+        return clamp(numShards, 1, MAX_SHARDS);
     }
 
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class RatioConfig {
-        @JsonProperty("source")              public String  source = "auto"; // auto|gt|base
-        @JsonProperty("gtSample")            public int     gtSample = 20;
-        @JsonProperty("gtMismatchTolerance") public double  gtMismatchTolerance = 0.02;
-
-        @JsonProperty("gtPath")              public String  gtPath = null;    // absolute or relative path to *.ivecs
-        @JsonProperty("autoComputeGT")       public boolean autoComputeGT = true;
-        @JsonProperty("allowComputeIfMissing") public boolean allowComputeIfMissing = true;
-
-        public RatioConfig() {}
+    public int getNumTables() {
+        return clamp(numTables, 1, MAX_TABLES);
     }
 
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class AuditConfig {
-        @JsonProperty("enable")      public boolean enable = false;
-        @JsonProperty("k")           public int     k = 100;
-        @JsonProperty("sampleEvery") public int     sampleEvery = 200;
-        @JsonProperty("worstKeep")   public int     worstKeep = 50;
-        public AuditConfig() {}
+    public long getOpsThreshold() {
+        return clamp(opsThreshold, 1L, MAX_OPS_THRESHOLD);
     }
 
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class OutputConfig {
-        @JsonProperty("resultsDir")            public String  resultsDir = "results";
-        @JsonProperty("exportArtifacts")       public boolean exportArtifacts = false;
-        @JsonProperty("suppressLegacyMetrics") public boolean suppressLegacyMetrics = false;
-        public OutputConfig() {}
+    public long getAgeThresholdMs() {
+        return clamp(ageThresholdMs, 0L, MAX_AGE_THRESHOLD);
     }
 
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class CloakConfig {
-        @JsonProperty("noise") public double noise = 0.0; // 0 disables noise
-        public CloakConfig() {}
+    public boolean isForwardSecurityEnabled() {
+        return forwardSecurityEnabled;
     }
+
+    public boolean isPartitionedIndexingEnabled() {
+        return partitionedIndexingEnabled;
+    }
+
+    public boolean isReencryptionEnabled() {
+        return reencryptionEnabled;
+    }
+
+    /** Global re-encryption toggle used by ForwardSecureANNSystem. */
+    public boolean isReencryptionGloballyEnabled() {
+        return reencryptionEnabled && (reencryption == null || reencryption.isEnabled());
+    }
+
+    public boolean isProfilerEnabled() {
+        return profilerEnabled;
+    }
+
+    public LshConfig getLsh() {
+        return lsh;
+    }
+
+    public ReencryptionConfig getReencryption() {
+        return reencryption;
+    }
+
+    public PaperConfig getPaper() {
+        return paper;
+    }
+
+    public EvalConfig getEval() {
+        return eval;
+    }
+
+    public OutputConfig getOutput() {
+        return output;
+    }
+
+    public AuditConfig getAudit() {
+        return audit;
+    }
+
+    public CloakConfig getCloak() {
+        return cloak;
+    }
+
+    public RatioConfig getRatio() {
+        return ratio;
+    }
+
+    public KAwareConfig getKAware() {
+        return kAware;
+    }
+
+    /* ======================== Nested config types ======================== */
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class LshConfig {
-        @JsonProperty("numTables")   public int numTables = 0;   // 0 means "no override"
-        @JsonProperty("rowsPerBand") public int rowsPerBand = 0; // 0 means "no override"
-        @JsonProperty("probeShards") public int probeShards = 0; // 0 means "no override"
-        public LshConfig() {}
+        @JsonProperty("numTables")
+        public int numTables = 8;
+
+        @JsonProperty("rowsPerBand")
+        public int rowsPerBand = 0;
+
+        @JsonProperty("probeShards")
+        public int probeShards = 0;
+
+        public int getNumTables() {
+            return clamp(numTables, 1, MAX_TABLES);
+        }
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class ReencryptionConfig {
-        @JsonProperty("enabled") public boolean enabled = true; // default on; set false to disable
-        public ReencryptionConfig() {}
+        @JsonProperty("enabled")
+        public boolean enabled = true;
+
+        @JsonProperty("batchSize")
+        public int batchSize = 1024;
+
+        @JsonProperty("maxMsPerBatch")
+        public long maxMsPerBatch = 50L;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public int getBatchSize() {
+            return Math.max(1, batchSize);
+        }
+
+        public long getMaxMsPerBatch() {
+            return Math.max(0L, maxMsPerBatch);
+        }
     }
 
-    /**
-     * Paper-aligned ANN configuration:
-     * - Fetch size is emergent from (m, lambda, divisions), NOT pre-sized.
-     * - Optional safetyMaxCandidates is an OOM guard (disabled by default).
-     */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class PaperConfig {
-        @JsonProperty("enabled")   public boolean enabled = false;
-        @JsonProperty("m")         public int     m = 12;
-        @JsonProperty("lambda")    public int     lambda = 6;
-        @JsonProperty("divisions") public int     divisions = 8;
-        @JsonProperty("seed")      public long    seed = 42L;
+        @JsonProperty("enabled")
+        public boolean enabled = false;
 
-        // Optional: OOM safety only. <=0 disables (default).
-        @JsonProperty("safetyMaxCandidates") public int safetyMaxCandidates = 0;
+        @JsonProperty("m")
+        public int m = 12;
 
-        public PaperConfig() {}
+        @JsonProperty("lambda")
+        public int lambda = 6;
+
+        @JsonProperty("divisions")
+        public int divisions = 8;
+
+        @JsonProperty("seed")
+        public long seed = 42L;
+
+        @JsonProperty("safetyMaxCandidates")
+        public int safetyMaxCandidates = 0;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public int getM() {
+            return Math.max(1, m);
+        }
+
+        public int getLambda() {
+            return Math.max(1, lambda);
+        }
+
+        public int getDivisions() {
+            return Math.max(1, divisions);
+        }
+
+        public long getSeed() {
+            return seed;
+        }
+
+        public int getSafetyMaxCandidates() {
+            return Math.max(0, safetyMaxCandidates);
+        }
+    }
+
+    /** Evaluation knobs (precision, K-variants, etc.). */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class EvalConfig {
+        @JsonProperty("computePrecision")
+        public boolean computePrecision = true;
+
+        @JsonProperty("writeGlobalPrecisionCsv")
+        public boolean writeGlobalPrecisionCsv = true;
+
+        @JsonProperty("kVariants")
+        public int[] kVariants = new int[]{1, 5, 10, 20, 40, 60, 80, 100};
+    }
+
+    /** Output / export behavior. */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class OutputConfig {
+        @JsonProperty("resultsDir")
+        public String resultsDir = "results";
+
+        @JsonProperty("suppressLegacyMetrics")
+        public boolean suppressLegacyMetrics = false;
+
+        @JsonProperty("exportArtifacts")
+        public boolean exportArtifacts = true;
+    }
+
+    /** Audit sampling & worst-K logging. */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class AuditConfig {
+        @JsonProperty("enable")
+        public boolean enable = false;
+
+        @JsonProperty("k")
+        public int k = 100;
+
+        @JsonProperty("sampleEvery")
+        public int sampleEvery = 100;
+
+        @JsonProperty("worstKeep")
+        public int worstKeep = 25;
+    }
+
+    /** Cloaked query parameters (noise scale, etc.). */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class CloakConfig {
+        @JsonProperty("noise")
+        public double noise = 0.0;
+    }
+
+    /** Ratio / groundtruth evaluation settings. */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class RatioConfig {
+        /** "auto" | "gt" | "base". */
+        @JsonProperty("source")
+        public String source = "auto";
+
+        /** Explicit GT path (optional). */
+        @JsonProperty("gtPath")
+        public String gtPath;
+
+        /** If true, we may compute GT when missing. */
+        @JsonProperty("allowComputeIfMissing")
+        public boolean allowComputeIfMissing = false;
+
+        /** If true and allowed, auto-compute GT when absent. */
+        @JsonProperty("autoComputeGT")
+        public boolean autoComputeGT = false;
+
+        /** How many queries to sample when validating GT vs base. */
+        @JsonProperty("gtSample")
+        public int gtSample = 16;
+
+        /** Allowed mismatch fraction between GT@1 and base true NN. */
+        @JsonProperty("gtMismatchTolerance")
+        public double gtMismatchTolerance = 0.10;
+    }
+
+    /** Optional K-aware candidate selection options. */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class KAwareConfig {
+        @JsonProperty("enabled")
+        public boolean enabled = false;
+
+        @JsonProperty("baseOversample")
+        public double baseOversample = 2.0;
+
+        @JsonProperty("logFactor")
+        public double logFactor = 0.5;
+
+        @JsonProperty("minPerDiv")
+        public int minPerDiv = 1;
+
+        @JsonProperty("maxPerDiv")
+        public int maxPerDiv = 0;
+    }
+
+    /* ======================== Helper methods ======================== */
+
+    private static int clamp(int v, int min, int max) {
+        if (v < min) return min;
+        if (v > max) return max;
+        return v;
+    }
+
+    private static long clamp(long v, long min, long max) {
+        if (v < min) return min;
+        if (v > max) return max;
+        return v;
+    }
+
+    /* ======================== Exception type ======================== */
+
+    public static class ConfigLoadException extends Exception {
+        public ConfigLoadException(String message, Throwable cause) {
+            super(message, cause);
+        }
     }
 }
