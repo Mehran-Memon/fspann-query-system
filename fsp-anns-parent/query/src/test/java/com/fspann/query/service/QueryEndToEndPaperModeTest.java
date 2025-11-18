@@ -2,7 +2,6 @@ package com.fspann.query.service;
 
 import com.fspann.common.*;
 import com.fspann.crypto.CryptoService;
-import com.fspann.index.core.EvenLSH;
 import com.fspann.index.service.SecureLSHIndexService;
 import com.fspann.index.paper.PartitionedIndexService;
 import org.junit.jupiter.api.BeforeEach;

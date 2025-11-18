@@ -5,7 +5,7 @@ import com.fspann.common.KeyLifeCycleService;
 import com.fspann.common.KeyVersion;
 import com.fspann.common.QueryToken;
 import com.fspann.crypto.CryptoService;
-import com.fspann.index.core.EvenLSH;
+import com.fspann.index.paper.EvenLSH;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
