@@ -160,6 +160,16 @@ public class EncryptedPointBuffer {
     public int  getTotalFlushedPoints()  { return totalFlushedPoints; }
     public int  getFlushThreshold()      { return flushThreshold; }
     public long getLastBatchInsertTimeMs(){ return lastBatchInsertTimeMs; }
+    public synchronized void clear() {
+        versionBuffer.clear();
+        batchCounters.clear();
+        globalBufferCount = 0; // Reset the global buffer count
+        logger.info("Cleared all buffered points.");
+    }
+    public synchronized int getCount() {
+        // Sum up the sizes of all lists in versionBuffer to get the total number of buffered points
+        return globalBufferCount;
+    }
 
     public void shutdown() {
         flushAll();
