@@ -1,7 +1,6 @@
 package com.index;
 
 import com.fspann.common.EncryptedPoint;
-import com.fspann.index.core.BucketConstructor;
 import org.junit.jupiter.api.Test;
 
 import java.util.*;

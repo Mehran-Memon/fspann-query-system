@@ -9,13 +9,11 @@ import java.util.*;
 /**
  * GreedyPartitioner (Algorithm-2)
  * --------------------------------
- * Sort items by code C, compute width w = max multiplicity of identical codes,
- * and sweep to form subsets SD_i with bounds ⟨C_low, C_up⟩ and unique tags.
- *
- * P1–P3 constraints:
- *  - Never split equal-code runs across two subsets.
- *  - Bounds independent of any particular item.
- *  - Each code belongs to exactly one subset (single mapping).
+ * Implements multi-table LSH and partitioning strategy with forward-secure indexing.
+ * This engine:
+ *   - Builds multiple LSH partitions using G_m and divides data into smaller, locality-aware subregions.
+ *   - Supports forward security by implementing key evolution and selective re-encryption.
+ *   - Provides fast query retrieval while maintaining secure storage of metadata and vectors.
  */
 public final class GreedyPartitioner {
 
@@ -81,6 +79,7 @@ public final class GreedyPartitioner {
         if (items == null || items.isEmpty()) {
             return new BuildResult(Collections.emptyList(), Collections.emptyMap(), 0);
         }
+
         // Group by exact code to compute w and to prevent splitting
         Map<BitSet, List<Item>> byCode = new TreeMap<>(new CodeComparator(codeBits));
         for (Item it : items) {
@@ -117,9 +116,6 @@ public final class GreedyPartitioner {
 
             indexI.add(new SubsetBounds(lower, upper, tag, codeBits));
             tagToSubset.put(tag, subset);
-
-            // Safety: ensure that for any code in [lower,upper] we entirely included that run.
-            // (By construction, we only add whole groups, never partial.)
         }
 
         // Ensure indexI is sorted by lower
