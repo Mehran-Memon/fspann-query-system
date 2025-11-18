@@ -7,6 +7,9 @@ public record LookupWithDiagnostics(
         SearchDiagnostics diagnostics      // union size / fanout you’ll fill later
 ) {
     public static LookupWithDiagnostics of(List<EncryptedPoint> c) {
-        return new LookupWithDiagnostics(c, SearchDiagnostics.EMPTY);
+        return new LookupWithDiagnostics(
+                c != null ? c : List.of(),
+                SearchDiagnostics.EMPTY
+        );
     }
 }

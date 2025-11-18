@@ -11,10 +11,6 @@ import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-/**
- * Minimal, robust RocksDB-backed metadata store with explicit lifecycle management.
- * Avoids Cleaner/finalize to prevent JNI crashes. Always close() before destroyDB.
- */
 public class RocksDBMetadataManager implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(RocksDBMetadataManager.class);
     private static final Object LOCK = new Object();
@@ -47,10 +43,6 @@ public class RocksDBMetadataManager implements AutoCloseable {
         }
     }
 
-    /**
-     * Singleton factory. Returns an open instance for the given paths.
-     * Call close() between tests to allow different paths in the same JVM.
-     */
     public static RocksDBMetadataManager create(String dbPath, String pointsPath) throws IOException {
         synchronized (LOCK) {
             if (instance != null && !instance.closed) {
@@ -137,15 +129,11 @@ public class RocksDBMetadataManager implements AutoCloseable {
         }
     }
 
-    /**
-     * Merge only-missing keys (existing values win). Matches your test expectations.
-     */
     public synchronized void mergeVectorMetadata(String vectorId, Map<String, String> updates) {
         Objects.requireNonNull(vectorId, "vectorId");
         Objects.requireNonNull(updates, "updates");
         Map<String, String> existing = getVectorMetadata(vectorId);
         if (existing.isEmpty()) {
-            // nothing there: merging behaves like put-all
             existing = new HashMap<>(updates);
         } else {
             updates.forEach(existing::putIfAbsent);
@@ -194,17 +182,13 @@ public class RocksDBMetadataManager implements AutoCloseable {
         Path versionDir = Paths.get(baseDir, safeVersion);
         Files.createDirectories(versionDir);
 
-        // write to a temp file, then atomically move
         Path tmp = versionDir.resolve(pt.getId() + ".point.tmp");
         Path dst = versionDir.resolve(pt.getId() + ".point");
 
-        // 1) write temp
         PersistenceUtils.saveObject(pt, tmp.toString(), baseDir);
 
-        // 2) atomic move
         Files.move(tmp, dst, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
 
-        // 3) finally, metadata (include minimal fields that query/restore rely on)
         Map<String, String> meta = new HashMap<>();
         meta.put("version", String.valueOf(pt.getVersion()));
         meta.put("shardId", String.valueOf(pt.getShardId()));
@@ -212,7 +196,6 @@ public class RocksDBMetadataManager implements AutoCloseable {
         try {
             updateVectorMetadata(pt.getId(), meta);
         } catch (RuntimeException e) {
-            // rollback the file so we never have “file exists, metadata missing”
             try { Files.deleteIfExists(dst); } catch (IOException ignore) {}
             throw e;
         }
@@ -221,7 +204,6 @@ public class RocksDBMetadataManager implements AutoCloseable {
     public void saveEncryptedPointsBatch(Collection<EncryptedPoint> points) throws IOException {
         if (points == null || points.isEmpty()) return;
 
-        // 1) write all files to temp
         List<Path> tmps = new ArrayList<>(points.size());
         List<Path> dsts = new ArrayList<>(points.size());
         for (EncryptedPoint pt : points) {
@@ -234,19 +216,16 @@ public class RocksDBMetadataManager implements AutoCloseable {
             tmps.add(tmp); dsts.add(dst);
         }
 
-        // 2) atomically move all
         for (int i = 0; i < tmps.size(); i++) {
             Files.move(tmps.get(i), dsts.get(i), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         }
 
-        // 3) single write-batch for metadata
         Map<String, Map<String, String>> allMeta = new LinkedHashMap<>();
         for (EncryptedPoint pt : points) {
             Map<String, String> m = new HashMap<>();
             m.put("version", String.valueOf(pt.getVersion()));
             m.put("shardId", String.valueOf(pt.getShardId()));
             m.put("dim", String.valueOf(pt.getVectorLength()));
-            // (buckets optional, but helpful if present on pt)
             List<Integer> buckets = pt.getBuckets();
             if (buckets != null) {
                 for (int t = 0; t < buckets.size(); t++) m.put("b" + t, String.valueOf(buckets.get(t)));
@@ -363,7 +342,6 @@ public class RocksDBMetadataManager implements AutoCloseable {
             logger.debug("rocksdb.stats:\n{}", db.getProperty("rocksdb.stats"));
         } catch (RocksDBException ignore) {}
     }
-    public void setSyncWrites(boolean on) { this.syncWrites = on; }
 
     public void printSummary() {
         try {
@@ -371,6 +349,7 @@ public class RocksDBMetadataManager implements AutoCloseable {
             logger.debug("num-live-sst-files={}", db.getProperty("rocksdb.num-live-sst-files"));
         } catch (RocksDBException ignore) {}
     }
+
     public String quickSummaryLine() {
         int version = loadIndexVersion();
         int metaKeys = getAllVectorIds().size();
@@ -406,10 +385,12 @@ public class RocksDBMetadataManager implements AutoCloseable {
         }
         return new DriftReport(idsInMeta.size(), idsOnDisk.size(), onlyMeta, onlyDisk);
     }
+
     private static String stripExt(String name) {
         int i = name.lastIndexOf('.');
         return (i < 0) ? name : name.substring(0, i);
     }
+
     public static final class DriftReport {
         public final int metaCount, diskCount;
         public final Set<String> onlyMeta, onlyDisk;
