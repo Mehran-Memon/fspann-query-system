@@ -1,12 +1,14 @@
 package com.index;
 
 import com.fspann.common.EncryptedPoint;
+import com.fspann.common.EncryptedPointBuffer;
 import com.fspann.common.KeyLifeCycleService;
 import com.fspann.common.RocksDBMetadataManager;
 import com.fspann.crypto.CryptoService;
 import com.fspann.index.service.SecureLSHIndexService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 
 import java.util.Collections;
 import java.util.Map;
@@ -20,16 +22,33 @@ class SecureLSHIndexServiceTest {
     private KeyLifeCycleService keyService;
     private RocksDBMetadataManager metadataManager;
     private SecureLSHIndexService indexService;
-
+    private EncryptedPointBuffer buffer;
+    private SecureLSHIndexService.PaperSearchEngine paper;
+    @BeforeEach
+    void setUp() {
+        crypto = mock(CryptoService.class);
+    }
     @BeforeEach
     void setup() {
         crypto = mock(CryptoService.class);
         keyService = mock(KeyLifeCycleService.class);
         metadataManager = mock(RocksDBMetadataManager.class);
+        paper = mock(SecureLSHIndexService.PaperSearchEngine.class);
+        buffer = mock(EncryptedPointBuffer.class);
+
         when(metadataManager.getPointsBaseDir())
                 .thenReturn(System.getProperty("java.io.tmpdir") + "/points");
-        indexService = new SecureLSHIndexService(crypto, keyService, metadataManager);
+
+        indexService = new SecureLSHIndexService(
+                crypto,
+                keyService,
+                metadataManager,
+                paper,
+                buffer
+
+        );
     }
+
 
     @Test
     void insert_VectorIsEncryptedAndMetadataPersisted() throws Exception {
@@ -38,7 +57,15 @@ class SecureLSHIndexServiceTest {
         int dimension = vector.length;
 
         // Crypto returns IV/cipher only; service computes buckets itself
-        EncryptedPoint enc = new EncryptedPoint(id, 0, new byte[]{1}, new byte[]{2}, 1, dimension, Collections.emptyList());
+        EncryptedPoint enc = new EncryptedPoint(
+                id,
+                0,
+                new byte[]{1},
+                new byte[]{2},
+                1,
+                dimension,
+                Collections.emptyList()
+        );
         when(crypto.encrypt(eq(id), eq(vector))).thenReturn(enc);
 
         indexService.insert(id, vector);
@@ -56,7 +83,15 @@ class SecureLSHIndexServiceTest {
     @Test
     void insert_PreEncryptedPoint_WritesMetadata() throws Exception {
         var buckets = java.util.Arrays.asList(1, 1, 1, 1);
-        EncryptedPoint pt = new EncryptedPoint("vec123", buckets.get(0), new byte[]{0}, new byte[]{1}, 99, 2, buckets);
+        EncryptedPoint pt = new EncryptedPoint(
+                "vec123",
+                buckets.get(0),
+                new byte[]{0},
+                new byte[]{1},
+                99,
+                2,
+                buckets
+        );
 
         indexService.insert(pt);
 
