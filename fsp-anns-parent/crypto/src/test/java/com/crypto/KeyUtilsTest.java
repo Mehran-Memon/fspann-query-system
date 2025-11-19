@@ -23,6 +23,18 @@ class KeyUtilsTest {
     }
 
     @Test
+    void fromBytes_nullBytesThrows() {
+        assertThrows(NullPointerException.class, () -> KeyUtils.fromBytes(null));
+    }
+
+    @Test
+    void fromBytes_setsAesAlgorithm_andSizes() {
+        assertEquals("AES", KeyUtils.fromBytes(new byte[16]).getAlgorithm());
+        assertEquals("AES", KeyUtils.fromBytes(new byte[24]).getAlgorithm());
+        assertEquals("AES", KeyUtils.fromBytes(new byte[32]).getAlgorithm());
+    }
+
+    @Test
     void tryDecryptWithKeyOnly_successAndFailure() throws Exception {
         KeyGenerator kg = KeyGenerator.getInstance("AES");
         kg.init(256, SecureRandom.getInstanceStrong());
@@ -39,13 +51,6 @@ class KeyUtilsTest {
         assertArrayEquals(vec, ok.get(), 1e-12);
 
         assertTrue(KeyUtils.tryDecryptWithKeyOnly(pt, k2).isEmpty());
-    }
-
-    @Test
-    void fromBytes_setsAesAlgorithm_andSizes() {
-        assertEquals("AES", KeyUtils.fromBytes(new byte[16]).getAlgorithm());
-        assertEquals("AES", KeyUtils.fromBytes(new byte[24]).getAlgorithm());
-        assertEquals("AES", KeyUtils.fromBytes(new byte[32]).getAlgorithm());
     }
 
     @Test
