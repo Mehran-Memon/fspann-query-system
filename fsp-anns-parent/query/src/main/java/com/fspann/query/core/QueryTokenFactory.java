@@ -60,7 +60,7 @@ public class QueryTokenFactory {
         this.m         = Math.max(1, Integer.getInteger("paper.m", 25));
         this.seedBase  = Long.getLong("paper.seed", 13L);
 
-        logger.info("TokenFactory created: dim={} divisions(ℓ)={} m={} numTables={} shardsToProbe={}",
+        logger.info("TokenFactory created: dim={} divisions(ℓ)={} m={} numTables={} expansionRange={}",
                 lsh.getDimensions(), divisions, m, numTables, expansionRange);
     }
 
@@ -87,7 +87,7 @@ public class QueryTokenFactory {
         this.m         = m;
         this.seedBase  = seedBase;
 
-        logger.info("TokenFactory created: dim={} divisions(ℓ)={} m={} numTables={} shardsToProbe={}",
+        logger.info("TokenFactory created: dim={} divisions(ℓ)={} m={} numTables={} expansionRange={}",
                 lsh.getDimensions(), divisions, m, numTables, expansionRange);
     }
 
@@ -111,10 +111,12 @@ public class QueryTokenFactory {
         EncryptedPoint ep = cryptoService.encryptToPoint("query", vector, key);
 
         // Per-table bucket expansions for multiprobe path
-        final int probeHint = Math.min(256, Math.max(32, numTables * 2));
+        final int probeHint = resolveProbeHint(topK);
         List<List<Integer>> perTable = lsh.getBucketsForAllTables(vector, probeHint, numTables);
         List<List<Integer>> copy = new ArrayList<>(numTables);
+
         if (perTable == null || perTable.size() != numTables) {
+            // Fallback: per-table buckets from basic API if multi-table helper not available
             for (int t = 0; t < numTables; t++) {
                 copy.add(new ArrayList<>(lsh.getBuckets(vector, topK, t)));
             }
@@ -126,8 +128,8 @@ public class QueryTokenFactory {
         BitSet[] codes = code(vector);
 
         int totalProbes = copy.stream().mapToInt(List::size).sum();
-        logger.debug("Created token: dim={}, topK={}, tables={}, totalProbes={}, hasCodes=true(ℓ={})",
-                vector.length, topK, numTables, totalProbes, divisions);
+        logger.debug("Created token: dim={}, topK={}, tables={}, totalProbes={}, probeHint={}, hasCodes=true(ℓ={})",
+                vector.length, topK, numTables, totalProbes, probeHint, divisions);
 
         return new QueryToken(
                 copy,                 // per-table buckets
@@ -169,6 +171,45 @@ public class QueryTokenFactory {
                 base.getDimension(),
                 base.getVersion()
         );
+    }
+
+    /* ----------------------- probe.shards support ----------------------- */
+
+    /**
+     * Resolve the effective probe hint for multiprobe LSH.
+     *
+     * Priority:
+     *  1) System property "probe.shards" (set by K-adaptive loop in ForwardSecureANNSystem)
+     *  2) Legacy heuristic based on numTables
+     *
+     * We clamp to a reasonable range to avoid pathological values:
+     *  - At least max(numTables, topK)
+     *  - At most 8192 (defensive upper bound)
+     */
+    private int resolveProbeHint(int topK) {
+        int fromProp = -1;
+        String prop = System.getProperty("probe.shards");
+        if (prop != null) {
+            try {
+                fromProp = Integer.parseInt(prop.trim());
+            } catch (NumberFormatException ignore) {
+                // fall through to fallback
+            }
+        }
+
+        if (fromProp > 0) {
+            int min = Math.max(1, Math.max(numTables, topK));
+            int max = 8192;
+            int resolved = Math.min(max, Math.max(min, fromProp));
+            logger.trace("resolveProbeHint: using probe.shards={} -> resolved={} (min={}, max={})",
+                    fromProp, resolved, min, max);
+            return resolved;
+        }
+
+        // Fallback to original heuristic if no system property is set
+        int fallback = Math.min(256, Math.max(32, numTables * 2));
+        logger.trace("resolveProbeHint: no valid probe.shards; using fallback={}", fallback);
+        return fallback;
     }
 
     /* ----------------------- paper coding ----------------------- */

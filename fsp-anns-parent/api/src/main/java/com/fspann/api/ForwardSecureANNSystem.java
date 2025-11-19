@@ -73,6 +73,7 @@ public class ForwardSecureANNSystem {
     private final double configuredNoiseScale;
     private final RetrievedAudit retrievedAudit;
     private Path reencCsv;
+    private final SystemConfig.KAdaptiveConfig kAdaptive;
 
     enum RatioSource {AUTO, GT, BASE}
 
@@ -166,6 +167,10 @@ public class ForwardSecureANNSystem {
             throw e;
         }
         this.config = cfg;
+
+        this.kAdaptive = (config.getKAdaptive() != null)
+                ? config.getKAdaptive()
+                : new SystemConfig.KAdaptiveConfig();
 
         // ---- Materialize commonly used settings from config ----
         boolean defaultComputePrecision =
@@ -644,6 +649,11 @@ public class ForwardSecureANNSystem {
         Objects.requireNonNull(groundtruthPath, "Groundtruth path cannot be null");
         if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
 
+        // Local view of K-adaptive config (with sane defaults if null)
+        SystemConfig.KAdaptiveConfig kCfg = (config.getKAdaptive() != null)
+                ? config.getKAdaptive()
+                : new SystemConfig.KAdaptiveConfig();
+
         // Freeze rotation while indexing
         if (keyService instanceof KeyRotationServiceImpl kr) kr.freezeRotation(true);
 
@@ -734,37 +744,77 @@ public class ForwardSecureANNSystem {
         for (int q = 0; q < queries.size(); q++) {
             final int qIndex = q;
             double[] queryVec = queries.get(q);
-            long clientStart = System.nanoTime();
-            QueryToken baseToken = factoryForDim(dim).create(queryVec, baseKForToken);
-            List<QueryResult> baseReturned = queryService.search(baseToken);
-            long clientEnd = System.nanoTime();
 
+            // --- K-adaptive query execution ---
+            final int Kmax = Arrays.stream(K_VARIANTS).max().orElse(100);
             QueryServiceImpl qs = (QueryServiceImpl) queryService;
-            double clientMs = (clientEnd - clientStart) / 1_000_000.0;
-            double serverMs = boundedServerMs(qs, clientStart, clientEnd);
+            QueryToken baseToken = null;
+            List<QueryResult> baseReturned = Collections.emptyList();
 
-            ReencOutcome rep = maybeReencryptTouched("Q" + q, qs);
-            int svcCum = ((QueryServiceImpl) queryService).getLastTouchedCumulativeUnique();
-            if (svcCum != rep.cumulativeUnique) {
-                logger.debug("q{} touch-set divergence: svc={} sys={}", qIndex, svcCum, rep.cumulativeUnique);
+            long clientStart = System.nanoTime();
+            long clientEnd = clientStart;
+            double clientMs = 0.0;
+            double serverMs = 0.0;
+
+            int candTotal = -1;
+            int candKeptVersion = -1;
+            int candDecrypted = -1;
+            int returned = -1;
+
+            int round = 0;
+            while (true) {
+                baseToken = factoryForDim(dim).create(queryVec, baseKForToken);
+                baseReturned = queryService.search(baseToken);
+                clientEnd = System.nanoTime();
+
+                clientMs = (clientEnd - clientStart) / 1_000_000.0;
+                serverMs = boundedServerMs(qs, clientStart, clientEnd);
+
+                candTotal = qs.getLastCandTotal();
+                candKeptVersion = qs.getLastCandKeptVersion();
+                candDecrypted = qs.getLastCandDecrypted();
+                returned = qs.getLastReturned();
+
+                int uptoMax = Math.min(Kmax, baseReturned.size());
+                double rr = (Kmax > 0) ? (double) uptoMax / (double) Kmax : 0.0;
+                double fanout = (returned > 0)
+                        ? candTotal / (double) returned
+                        : Double.POSITIVE_INFINITY;
+
+                if (!kCfg.enabled) {
+                    break;
+                }
+
+                boolean rrOk = rr >= kCfg.targetReturnRate;
+                boolean fanoutTooHigh = fanout >= kCfg.maxFanout;
+                boolean roundsExceeded = round >= kCfg.maxRounds;
+
+                if (rrOk || fanoutTooHigh || roundsExceeded) {
+                    if (rrOk) {
+                        logger.debug("q{} k-adaptive: return-rate {} reached target {}", qIndex, rr, kCfg.targetReturnRate);
+                    } else if (fanoutTooHigh) {
+                        logger.debug("q{} k-adaptive: fanout {} exceeded max {}", qIndex, fanout, kCfg.maxFanout);
+                    } else {
+                        logger.debug("q{} k-adaptive: maxRounds {} reached", qIndex, kCfg.maxRounds);
+                    }
+                    break;
+                }
+
+                round++;
+                int curShards = shardsToProbe();
+                int widened = (int) Math.ceil(curShards * kCfg.probeFactor);
+                System.setProperty("probe.shards", Integer.toString(widened));
+                logger.info("q{} k-adaptive round {}: rr={} fanout={} – widening probe.shards {} -> {}",
+                        qIndex,
+                        round,
+                        String.format(Locale.ROOT, "%.4f", rr),
+                        (Double.isFinite(fanout) ? String.format(Locale.ROOT, "%.1f", fanout) : "inf"),
+                        curShards,
+                        widened);
             }
-            int touchedCount = (qs.getLastCandidateIds() != null) ? qs.getLastCandidateIds().size() : 0;
-            var last = qs.getLastCandidateIds();
-            if (last != null && !last.isEmpty()) {
-                touchedGlobal.addAll(last);
-            }
-            com.fspann.common.EncryptedPointBuffer buf = indexService.getPointBuffer();
-            long insertTimeMs = buf != null ? buf.getLastBatchInsertTimeMs() : 0;
-            int totalFlushed = buf != null ? buf.getTotalFlushedPoints() : 0;
-            int flushThreshold = buf != null ? buf.getFlushThreshold() : 0;
-            int tokenSizeBytes = QueryServiceImpl.estimateTokenSizeBytes(baseToken);
-            int vectorDim = baseToken.getDimension();
+            // --- end K-adaptive query execution ---
 
-            int candTotal = qs.getLastCandTotal();
-            int candKeptVersion = qs.getLastCandKeptVersion();
-            int candDecrypted = qs.getLastCandDecrypted();
-            int returned = qs.getLastReturned();
-
+            // Post-query invariants and guards
             guardCandidateInvariants(qIndex, candTotal, candKeptVersion, candDecrypted, returned);
 
             if (returned > 0) {
@@ -776,14 +826,33 @@ public class ForwardSecureANNSystem {
                 }
             }
 
-            int Kmax = Arrays.stream(K_VARIANTS).max().orElse(100);
             int uptoMax = Math.min(Kmax, baseReturned.size());
-            double rr = (Kmax > 0) ? (double) uptoMax / (double) Kmax : 0.0;
+            double rrFinal = (Kmax > 0) ? (double) uptoMax / (double) Kmax : 0.0;
             double minRR = Double.parseDouble(System.getProperty("guard.returnrate.min", "0.70"));
-            if (rr < minRR) {
+            if (rrFinal < minRR) {
                 logger.warn("q{} low return-rate at Kmax={}: returned={} ({}% of K). Consider increasing probes/tables.",
-                        qIndex, Kmax, uptoMax, String.format(Locale.ROOT, "%.0f", 100.0 * rr));
+                        qIndex, Kmax, uptoMax, String.format(Locale.ROOT, "%.0f", 100.0 * rrFinal));
             }
+
+            // Re-encryption + touch metrics use *final* candidate set
+            ReencOutcome rep = maybeReencryptTouched("Q" + q, qs);
+            int svcCum = qs.getLastTouchedCumulativeUnique();
+            if (svcCum != rep.cumulativeUnique) {
+                logger.debug("q{} touch-set divergence: svc={} sys={}", qIndex, svcCum, rep.cumulativeUnique);
+            }
+
+            int touchedCount = (qs.getLastCandidateIds() != null) ? qs.getLastCandidateIds().size() : 0;
+            var last = qs.getLastCandidateIds();
+            if (last != null && !last.isEmpty()) {
+                touchedGlobal.addAll(last);
+            }
+
+            com.fspann.common.EncryptedPointBuffer buf = indexService.getPointBuffer();
+            long insertTimeMs = buf != null ? buf.getLastBatchInsertTimeMs() : 0;
+            int totalFlushed = buf != null ? buf.getTotalFlushedPoints() : 0;
+            int flushThreshold = buf != null ? buf.getFlushThreshold() : 0;
+            int tokenSizeBytes = QueryServiceImpl.estimateTokenSizeBytes(baseToken);
+            int vectorDim = baseToken.getDimension();
 
             List<QueryEvaluationResult> enriched = new ArrayList<>(K_VARIANTS.length);
             for (int k : K_VARIANTS) {
@@ -835,6 +904,13 @@ public class ForwardSecureANNSystem {
                         /* candMetricsMode   */ candMode
                 ));
             }
+            // ---- make captured vars effectively final for the lambda ----
+            final int qIndexF = qIndex;
+            final int candTotalF = candTotal;
+            final int candKeptVersionF = candKeptVersion;
+            final int candDecryptedF = candDecrypted;
+            final int returnedF = returned;
+            // -------------------------------------------------------------
 
             topKProfiler.record("Q" + q, enriched, candTotal, candKeptVersion, candDecrypted, returned);
 
@@ -869,7 +945,6 @@ public class ForwardSecureANNSystem {
                     if (worstPQ.size() > keepWorst) worstPQ.poll();
                 }
             }
-
             rw.writeTable("Query " + (q + 1) + " Results (dim=" + dim + ")",
                     new String[]{
                             "QIndex0", "TopK", "Returned", "Ratio", "Precision", "RatioDenomSource",
@@ -879,7 +954,7 @@ public class ForwardSecureANNSystem {
                             "CandMetricsMode", "TokenKBase"
                     },
                     enriched.stream().map(er -> new String[]{
-                            String.valueOf(qIndex),
+                            String.valueOf(qIndexF),
                             String.valueOf(er.getTopKRequested()),
                             String.valueOf(er.getRetrieved()),
                             (Double.isNaN(er.getRatio()) ? "NaN" :
@@ -890,10 +965,10 @@ public class ForwardSecureANNSystem {
                             String.valueOf(er.getClientTimeMs()),
                             String.valueOf(Math.max(0, er.getClientTimeMs() - er.getTimeMs())),
                             String.valueOf(er.getInsertTimeMs()),
-                            String.valueOf(candTotal),
-                            String.valueOf(candKeptVersion),
-                            String.valueOf(candDecrypted),
-                            String.valueOf(returned),
+                            String.valueOf(candTotalF),
+                            String.valueOf(candKeptVersionF),
+                            String.valueOf(candDecryptedF),
+                            String.valueOf(returnedF),
                             String.valueOf(er.getTokenSizeBytes()),
                             String.valueOf(er.getTokenK()),
                             String.valueOf(er.getVectorDim()),
@@ -903,7 +978,6 @@ public class ForwardSecureANNSystem {
                             String.valueOf(er.getTokenKBase())
                     }).collect(Collectors.toList())
             );
-
             QueryEvaluationResult atK = enriched.stream()
                     .filter(e -> e.getTopKRequested() == Math.max(auditK, 1))
                     .findFirst().orElseGet(() -> enriched.get(enriched.size() - 1));
@@ -1005,6 +1079,8 @@ public class ForwardSecureANNSystem {
         } catch (Throwable ignore) {}
 
         final boolean doAudit = auditEnable && (retrievedAudit != null);
+
+        // Base K for token (before k-adaptive widening)
         final int baseKForToken = Math.max(
                 Math.max(auditK, 100),
                 Arrays.stream(K_VARIANTS).max().orElse(100)
@@ -1034,12 +1110,64 @@ public class ForwardSecureANNSystem {
 
         if (!queries.isEmpty()) computeAndLogFanoutForQ0(queries.get(0), dim, K_VARIANTS);
 
+        // --- system-property based K-adaptive controls ---
+        final boolean kAdaptiveEnabled = Boolean.parseBoolean(
+                System.getProperty("search.kadaptive.enabled", "false")
+        );
+        final double normLow = Double.parseDouble(
+                System.getProperty("search.kadaptive.norm.low", "0.5")
+        );
+        final double normHigh = Double.parseDouble(
+                System.getProperty("search.kadaptive.norm.high", "2.0")
+        );
+        final double widenLow = Double.parseDouble(
+                System.getProperty("search.kadaptive.widen.low", "1.0")
+        );
+        final double widenHigh = Double.parseDouble(
+                System.getProperty("search.kadaptive.widen.high", "2.0")
+        );
+        final int minKAdaptive = Integer.parseInt(
+                System.getProperty("search.kadaptive.minK", "32")
+        );
+        final int maxKAdaptive = Integer.parseInt(
+                System.getProperty(
+                        "search.kadaptive.maxK",
+                        Integer.toString(Math.max(baseKForToken, 1024))
+                )
+        );
+        // -------------------------------------------------
+
         for (int q = 0; q < queries.size(); q++) {
             final int qIndex = q;
 
             double[] queryVec = queries.get(q);
+
+            // ---- per-query K-adaptive widening ----
+            int adaptiveKForToken = baseKForToken;
+            if (kAdaptiveEnabled) {
+                double norm = 0.0;
+                for (double v : queryVec) norm += v * v;
+                norm = Math.sqrt(norm);
+
+                double factor;
+                if (norm <= normLow) {
+                    factor = widenLow;
+                } else if (norm >= normHigh) {
+                    factor = widenHigh;
+                } else {
+                    double t = (norm - normLow) / Math.max(1e-9, (normHigh - normLow));
+                    factor = widenLow + t * (widenHigh - widenLow);
+                }
+
+                int candidateK = (int) Math.round(baseKForToken * factor);
+                if (candidateK < minKAdaptive) candidateK = minKAdaptive;
+                if (candidateK > maxKAdaptive) candidateK = maxKAdaptive;
+                adaptiveKForToken = candidateK;
+            }
+            // ----------------------------------------
+
             long clientStart = System.nanoTime();
-            QueryToken baseToken = factoryForDim(dim).create(queryVec, baseKForToken);
+            QueryToken baseToken = factoryForDim(dim).create(queryVec, adaptiveKForToken);
             List<QueryResult> baseReturned = queryService.search(baseToken);
             long clientEnd = System.nanoTime();
 
@@ -1132,7 +1260,7 @@ public class ForwardSecureANNSystem {
                         /* reencBytesAfter   */ rep.rep.bytesAfter,
                         /* ratioDenomSource  */ ratioDenomLabel(gtTrusted),
                         /* clientTimeMs      */ Math.round(clientMs),
-                        /* tokenK            */ baseKForToken,
+                        /* tokenK            */ adaptiveKForToken,
                         /* tokenKBase        */ baseKForToken,
                         /* qIndexZeroBased   */ qIndex,
                         /* candMetricsMode   */ candMode
@@ -1173,6 +1301,13 @@ public class ForwardSecureANNSystem {
                 }
             }
 
+            // make captured vars effectively final for the lambda
+            final int qIndexF = qIndex;
+            final int candTotalF = candTotal;
+            final int candKeptVersionF = candKeptVersion;
+            final int candDecryptedF = candDecrypted;
+            final int returnedF = returned;
+
             rw.writeTable("Query " + (q + 1) + " Results (dim=" + dim + ")",
                     new String[]{
                             "QIndex0", "TopK", "Returned", "Ratio", "Precision", "RatioDenomSource",
@@ -1182,7 +1317,7 @@ public class ForwardSecureANNSystem {
                             "CandMetricsMode", "TokenKBase"
                     },
                     enriched.stream().map(er -> new String[]{
-                            String.valueOf(qIndex),
+                            String.valueOf(qIndexF),
                             String.valueOf(er.getTopKRequested()),
                             String.valueOf(er.getRetrieved()),
                             (Double.isNaN(er.getRatio()) ? "NaN" :
@@ -1193,10 +1328,10 @@ public class ForwardSecureANNSystem {
                             String.valueOf(er.getClientTimeMs()),
                             String.valueOf(Math.max(0, er.getClientTimeMs() - er.getTimeMs())),
                             String.valueOf(er.getInsertTimeMs()),
-                            String.valueOf(candTotal),
-                            String.valueOf(candKeptVersion),
-                            String.valueOf(candDecrypted),
-                            String.valueOf(returned),
+                            String.valueOf(candTotalF),
+                            String.valueOf(candKeptVersionF),
+                            String.valueOf(candDecryptedF),
+                            String.valueOf(returnedF),
                             String.valueOf(er.getTokenSizeBytes()),
                             String.valueOf(er.getTokenK()),
                             String.valueOf(er.getVectorDim()),
@@ -2011,14 +2146,16 @@ public class ForwardSecureANNSystem {
     }
 
     private int shardsToProbe() {
-        if (OVERRIDE_PROBE > 0) return OVERRIDE_PROBE;
-        try {
-            var m = indexService.getClass().getMethod("getNumShards");
-            Object v = m.invoke(indexService);
-            if (v instanceof Integer n && n > 0) return n;
-        } catch (Throwable ignore) {
+        int cfgVal = config.getLsh() != null ? config.getLsh().getProbeShards() : 0;
+        String prop = System.getProperty("probe.shards");
+        if (prop != null) {
+            try {
+                int v = Integer.parseInt(prop);
+                if (v > 0) return v;
+            } catch (NumberFormatException ignore) {}
         }
-        return Math.max(1, config.getNumShards());
+        if (cfgVal > 0) return cfgVal;
+        return Math.max(1, config.getNumShards() / 4); // or whatever baseline you like
     }
 
     private boolean sampleDimsOk(BaseVectorReader br) {
