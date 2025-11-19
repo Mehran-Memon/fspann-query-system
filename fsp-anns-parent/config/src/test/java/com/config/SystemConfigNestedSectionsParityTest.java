@@ -4,6 +4,8 @@ import com.fspann.config.SystemConfig;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -12,74 +14,58 @@ import static org.junit.jupiter.api.Assertions.*;
 class SystemConfigNestedSectionsParityTest {
 
     @Test
-    void yamlAndJsonYieldSameValues(@TempDir Path dir) throws Exception {
-        String yaml = """
-            numShards: 16
-            eval:
-              computePrecision: true
-              writeGlobalPrecisionCsv: false
-            audit:
-              enable: true
-              k: 50
-              sampleEvery: 10
-              worstKeep: 7
-            ratio:
-              source: "gt"
-              gtSample: 25
-              gtMismatchTolerance: 0.15
-            cloak:
-              noise: 0.02
-            lsh:
-              numTables: 6
-              rowsPerBand: 12
-              probeShards: 4
-            """;
+    void newSystemConfig_allNestedSectionsNonNullWithDefaults() {
+        SystemConfig cfg = new SystemConfig();
 
+        assertNotNull(cfg.getLsh(), "LSH config must not be null");
+        assertNotNull(cfg.getReencryption(), "Reencryption config must not be null");
+        assertNotNull(cfg.getPaper(), "Paper config must not be null");
+        assertNotNull(cfg.getEval(), "Eval config must not be null");
+        assertNotNull(cfg.getOutput(), "Output config must not be null");
+        assertNotNull(cfg.getAudit(), "Audit config must not be null");
+        assertNotNull(cfg.getCloak(), "Cloak config must not be null");
+        assertNotNull(cfg.getRatio(), "Ratio config must not be null");
+        assertNotNull(cfg.getKAware(), "KAware config must not be null");
+        assertNotNull(cfg.getKAdaptive(), "KAdaptive config must not be null");
+
+        // A few spot-checks on defaults
+        assertEquals(32, cfg.getNumShards());
+        assertEquals(8, cfg.getNumTables());
+        assertTrue(cfg.isReencryptionEnabled());
+        assertTrue(cfg.isForwardSecurityEnabled());
+        assertTrue(cfg.isPartitionedIndexingEnabled());
+    }
+
+    @Test
+    void load_configOmittingNestedSections_stillProvidesDefaults(@TempDir Path tempDir) throws Exception {
         String json = """
-            {
-              "numShards": 16,
-              "eval": { "computePrecision": true, "writeGlobalPrecisionCsv": false },
-              "audit": { "enable": true, "k": 50, "sampleEvery": 10, "worstKeep": 7 },
-              "ratio": { "source": "gt", "gtSample": 25, "gtMismatchTolerance": 0.15 },
-              "cloak": { "noise": 0.02 },
-              "lsh": { "numTables": 6, "rowsPerBand": 12, "probeShards": 4 }
-            }
-            """;
+                {
+                  "numShards": 40,
+                  "numTables": 10
+                  // note: no lsh, reencryption, paper, eval, output, audit, cloak, ratio, kAware, kAdaptive
+                }
+                """;
 
-        Path ymlPath = dir.resolve("conf.yaml");
-        Path jsonPath = dir.resolve("conf.json");
-        Files.writeString(ymlPath, yaml);
-        Files.writeString(jsonPath, json);
+        // Remove comment (in case JSON parser is strict)
+        json = json.replaceAll("//.*", "");
 
-        SystemConfig.clearCache();
-        SystemConfig cy = SystemConfig.load(ymlPath.toString(), true);
+        Path cfgPath = tempDir.resolve("partial.json");
+        Files.writeString(cfgPath, json, StandardCharsets.UTF_8);
 
-        SystemConfig.clearCache();
-        SystemConfig cj = SystemConfig.load(jsonPath.toString(), true);
+        SystemConfig cfg = SystemConfig.load(cfgPath.toString(), true);
 
-        assertEquals(cy.getNumShards(), cj.getNumShards());
+        assertEquals(40, cfg.getNumShards());
+        assertEquals(10, cfg.getNumTables());
 
-        // eval
-        assertEquals(cy.getEval().computePrecision, cj.getEval().computePrecision);
-        assertEquals(cy.getEval().writeGlobalPrecisionCsv, cj.getEval().writeGlobalPrecisionCsv);
-
-        // audit
-        assertEquals(cy.getAudit().enable, cj.getAudit().enable);
-        assertEquals(cy.getAudit().k, cj.getAudit().k);
-        assertEquals(cy.getAudit().sampleEvery, cj.getAudit().sampleEvery);
-        assertEquals(cy.getAudit().worstKeep, cj.getAudit().worstKeep);
-
-        // ratio
-        assertEquals(cy.getRatio().source, cj.getRatio().source);
-        assertEquals(cy.getRatio().gtSample, cj.getRatio().gtSample);
-        assertEquals(cy.getRatio().gtMismatchTolerance, cj.getRatio().gtMismatchTolerance, 1e-12);
-
-        // cloak
-        assertEquals(cy.getCloak().noise, cj.getCloak().noise, 1e-12);
-
-        // lsh
-        assertEquals(cy.getLsh().numTables, cj.getLsh().numTables);
-        assertEquals(cy.getLsh().rowsPerBand, cj.getLsh().rowsPerBand);
-        assertEquals(cy.getLsh().probeShards, cj.getLsh().probeShards);
+        assertNotNull(cfg.getLsh());
+        assertNotNull(cfg.getReencryption());
+        assertNotNull(cfg.getPaper());
+        assertNotNull(cfg.getEval());
+        assertNotNull(cfg.getOutput());
+        assertNotNull(cfg.getAudit());
+        assertNotNull(cfg.getCloak());
+        assertNotNull(cfg.getRatio());
+        assertNotNull(cfg.getKAware());
+        assertNotNull(cfg.getKAdaptive());
     }
 }

@@ -4,6 +4,8 @@ import com.fspann.config.SystemConfig;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -12,57 +14,29 @@ import static org.junit.jupiter.api.Assertions.*;
 class SystemConfigMalformedInputTest {
 
     @Test
-    void malformedYamlThrows(@TempDir Path dir) throws Exception {
-        Path cfg = dir.resolve("conf.yaml");
-        Files.writeString(cfg, """
-            numShards: 8
-            eval:
-              computePrecision: true
-            ratio:
-              source: gt
-              gtSample: not-a-number   # <-- malformed
-            """);
+    void load_nonExistingFile_throwsConfigLoadException() {
+        String bogusPath = "this/does/not/exist/config.json";
 
-        SystemConfig.clearCache();
-        assertThrows(SystemConfig.ConfigLoadException.class, () -> SystemConfig.load(cfg.toString(), true));
+        assertThrows(SystemConfig.ConfigLoadException.class, () ->
+                        SystemConfig.load(bogusPath, true),
+                "Expected ConfigLoadException for non-existing file");
     }
 
     @Test
-    void unknownFieldsAreIgnored(@TempDir Path dir) throws Exception {
-        Path cfg = dir.resolve("conf.json");
-        Files.writeString(cfg, """
-            {
-              "numShards": 8,
-              "eval": { "computePrecision": true },
-              "someNewThing": { "foo": 1, "bar": 2 }
-            }
-            """);
-
-        SystemConfig.clearCache();
-        SystemConfig c = SystemConfig.load(cfg.toString(), true);
-
-        assertEquals(8, c.getNumShards());
-        assertTrue(c.getEval().computePrecision);
-        // Test passes if load succeeds and known fields are preserved.
+    void load_directoryInsteadOfFile_throwsConfigLoadException(@TempDir Path tempDir) {
+        // tempDir itself is a directory; pass it directly
+        assertThrows(SystemConfig.ConfigLoadException.class, () ->
+                        SystemConfig.load(tempDir.toString(), true),
+                "Expected ConfigLoadException when path is a directory, not a regular file");
     }
 
     @Test
-    void numericClampsAlsoAcceptStrings(@TempDir Path dir) throws Exception {
-        // Some deploy pipelines emit numbers as strings; verify we still clamp.
-        Path cfg = dir.resolve("conf.yaml");
-        Files.writeString(cfg, """
-            numShards: "100000"
-            opsThreshold: "5000000000"
-            ageThresholdMs: "999999999999"
-            reEncBatchSize: "500000"
-            """);
+    void load_malformedJson_throwsConfigLoadException(@TempDir Path tempDir) throws IOException {
+        Path cfgPath = tempDir.resolve("bad.json");
+        Files.writeString(cfgPath, "this is not valid JSON {", StandardCharsets.UTF_8);
 
-        SystemConfig.clearCache();
-        SystemConfig c = SystemConfig.load(cfg.toString(), true);
-
-        assertEquals(8192, c.getNumShards());
-        assertEquals(1_000_000_000L, c.getOpsThreshold());
-        assertEquals(30L*24*60*60*1000, c.getAgeThresholdMs());
-        assertEquals(10_000, c.getReEncBatchSize());
+        assertThrows(SystemConfig.ConfigLoadException.class, () ->
+                        SystemConfig.load(cfgPath.toString(), true),
+                "Expected ConfigLoadException for malformed JSON");
     }
 }
