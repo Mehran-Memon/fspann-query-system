@@ -23,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class ForwardSecurityAdversarialTest {
+
     private static final int[] TEST_DIMENSIONS = {3, 128, 1024};
     private static final int NUM_POINTS = 1000;
     private static final int TOP_K = 20;
@@ -44,6 +45,13 @@ public class ForwardSecurityAdversarialTest {
         return sb.toString();
     }
 
+    /**
+     * Game 1 (Single-Compromise Forward Security):
+     *  - Adversary compromises the current key K_v.
+     *  - System rotates to K_{v+1} and re-encrypts existing points.
+     *  - Adversary tries to decrypt updated ciphertexts with K_v.
+     *  - Expected: all updated ciphertexts reject under K_v but decrypt under K_{v+1}.
+     */
     @Test
     void testForwardSecurityAgainstKeyCompromise(@TempDir Path tempRoot) throws Exception {
         for (int dim : TEST_DIMENSIONS) {
@@ -102,11 +110,12 @@ public class ForwardSecurityAdversarialTest {
 
                 system.flushAll();
 
+                // Compromise the current key (version v0)
                 SecretKey compromisedKey = KeyUtils.fromBytes(
                         keyService.getCurrentVersion().getKey().getEncoded()
                 );
 
-                // one manual rotation
+                // one manual rotation → v1
                 keyService.rotateKey();
                 ((SecureLSHIndexService) system.getIndexService()).clearCache();
                 system.flushAll(); // ensure persisted after rotation
@@ -163,6 +172,12 @@ public class ForwardSecurityAdversarialTest {
         }
     }
 
+    /**
+     * Game 2 (Cache-Resilient Queries After Rotation):
+     *  - Index a dataset and warm up the query cache.
+     *  - Rotate the key and clear the index cache.
+     *  - Ensure queries still succeed (no stale-key / cache corruption issues).
+     */
     @Test
     void testCacheHitUnderAdversarialConditions(@TempDir Path tempRoot) throws Exception {
         final int dim = 128;
@@ -234,6 +249,151 @@ public class ForwardSecurityAdversarialTest {
             List<QueryResult> results2 = system.query(rawVectors.get(0), TOP_K, dim);
             assertNotNull(results2, "Second query results must not be null");
             // We don't assert equality of lists after rotation—LSH may reorder
+        } finally {
+            system.shutdown();
+            try { Thread.sleep(100); } catch (InterruptedException ignored) { }
+        }
+    }
+
+    /**
+     * Game 3 (Multi-Rotation Epoch Chain):
+     *
+     *  Adversary model:
+     *    - Over time, the attacker compromises several old keys K_1, K_2, ..., K_{t-1}.
+     *    - The system runs multiple rotations and re-encrypts the corpus each time.
+     *    - At the end, all points are at version t with key K_t.
+     *
+     *  Goal:
+     *    - Show that NONE of the compromised older keys K_i (i < t) can decrypt the
+     *      final ciphertexts at version t, while K_t (current key) can.
+     *
+     *  This is a strictly stronger game than a single-compromise test and matches
+     *  a "ladder of epochs" argument that can be described in the paper.
+     */
+    @Test
+    void testMultipleRotationsOldKeysCannotDecryptFinalEpoch(@TempDir Path tempRoot) throws Exception {
+        final int dim = 128;
+        final int vectorCount = 300;
+        final int rotations = 3; // will end with finalVersion = initialVersion + rotations
+
+        Path runDir      = tempRoot.resolve("multi_rotation_run");
+        Path metadataDir = runDir.resolve("metadata");
+        Path pointsDir   = runDir.resolve("points");
+        Path keysDir     = runDir.resolve("keys");
+
+        Files.createDirectories(metadataDir);
+        Files.createDirectories(pointsDir);
+        Files.createDirectories(keysDir);
+
+        RocksDBMetadataManager metadata =
+                RocksDBMetadataManager.create(metadataDir.toString(), pointsDir.toString());
+
+        Path cfg = runDir.resolve("config.json");
+        Files.writeString(cfg, """
+            { "numShards": 32, "profilerEnabled": true, "opsThreshold": 999999, "ageThresholdMs": 999999 }
+        """);
+        Path data = runDir.resolve("dummy.csv");
+        Files.writeString(data, minimalDummyData(dim));
+
+        // Use a concrete keystore file
+        Path keystore = keysDir.resolve("keystore.blob");
+        Files.createDirectories(keystore.getParent());
+
+        KeyManager keyManager = new KeyManager(keystore.toString());
+        KeyRotationPolicy policy = new KeyRotationPolicy(999999, 999999);
+        KeyRotationServiceImpl keyService =
+                new KeyRotationServiceImpl(keyManager, policy, metadataDir.toString(), metadata, null);
+        CryptoService cryptoService =
+                new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadata);
+        keyService.setCryptoService(cryptoService);
+
+        ForwardSecureANNSystem system = new ForwardSecureANNSystem(
+                cfg.toString(), data.toString(), keystore.toString(),
+                List.of(dim), runDir, true, metadata, cryptoService, 128
+        );
+        system.setExitOnShutdown(false);
+        keyService.setIndexService(system.getIndexService());
+
+        // Track IDs so we can fetch EncryptedPoint later
+        List<String> ids = new ArrayList<>(vectorCount);
+
+        try {
+            // 1) Insert initial corpus under initial version v0
+            Random rnd = new Random(2025);
+            for (int i = 0; i < vectorCount; i++) {
+                String id = UUID.randomUUID().toString();
+                ids.add(id);
+                system.insert(id, rnd.doubles(dim).toArray(), dim);
+            }
+            system.flushAll();
+
+            // 2) Adversary successively compromises old keys K_v, then we rotate & re-encrypt.
+            //    We'll store SecretKey copies for each version before rotation.
+            Map<Integer, SecretKey> compromisedKeysByVersion = new HashMap<>();
+
+            // initial version
+            int initialVersion = keyService.getCurrentVersion().getVersion();
+            compromisedKeysByVersion.put(
+                    initialVersion,
+                    KeyUtils.fromBytes(keyService.getCurrentVersion().getKey().getEncoded())
+            );
+
+            for (int i = 0; i < rotations; i++) {
+                // Rotate to next version
+                keyService.rotateKey();
+                ((SecureLSHIndexService) system.getIndexService()).clearCache();
+                system.flushAll();
+
+                int curVersion = keyService.getCurrentVersion().getVersion();
+                // Attacker compromises the *previous* key as soon as it's "old"
+                compromisedKeysByVersion.put(
+                        curVersion,
+                        KeyUtils.fromBytes(keyService.getCurrentVersion().getKey().getEncoded())
+                );
+
+                // Optional: insert a few new points at each epoch to mimic a running system
+                for (int j = 0; j < 20; j++) {
+                    String id = UUID.randomUUID().toString();
+                    ids.add(id);
+                    system.insert(id, rnd.doubles(dim).toArray(), dim);
+                }
+                system.flushAll();
+            }
+
+            int finalVersion = keyService.getCurrentVersion().getVersion();
+
+            // 3) Now enforce the game condition:
+            //      For every encrypted point at finalVersion,
+            //      - All *older* keys K_i (i < finalVersion) MUST fail decryption.
+            //      - The current key K_finalVersion MUST succeed via CryptoService.
+            for (String id : ids) {
+                EncryptedPoint p = system.getIndexService().getEncryptedPoint(id);
+                assertEquals(finalVersion, p.getVersion(),
+                        "Point should have been advanced to final epoch");
+
+                // All previously compromised keys must fail on this final ciphertext
+                for (Map.Entry<Integer, SecretKey> e : compromisedKeysByVersion.entrySet()) {
+                    int v = e.getKey();
+                    SecretKey oldKey = e.getValue();
+                    if (v == finalVersion) {
+                        // skip the current epoch here; test it below with CryptoService
+                        continue;
+                    }
+                    assertTrue(
+                            KeyUtils.tryDecryptWithKeyOnly(p, oldKey).isEmpty(),
+                            () -> "Old key from version " + v + " should not decrypt final epoch ciphertext"
+                    );
+                }
+
+                // Current key must succeed (AAD-aware path)
+                SecretKey curKey = keyService.getVersion(p.getVersion()).getKey();
+                double[] pt = assertDoesNotThrow(
+                        () -> cryptoService.decryptFromPoint(p, curKey),
+                        "Final epoch key failed to decrypt"
+                );
+                assertNotNull(pt, "Plaintext from final epoch decryption must not be null");
+            }
+
         } finally {
             system.shutdown();
             try { Thread.sleep(100); } catch (InterruptedException ignored) { }

@@ -727,13 +727,9 @@ public class ForwardSecureANNSystem {
 
         Map<Integer, Long> globalMatches = new HashMap<>();
         Map<Integer, Long> globalReturned = new HashMap<>();
-        Map<Integer, Double> macroPrecisionSum = new HashMap<>();
-        Map<Integer, Double> macroReturnRateSum = new HashMap<>();
         for (int k : K_VARIANTS) {
             globalMatches.put(k, 0L);
             globalReturned.put(k, 0L);
-            macroPrecisionSum.put(k, 0.0);
-            macroReturnRateSum.put(k, 0.0);
         }
         final int queriesCount = queries.size();
 
@@ -878,8 +874,6 @@ public class ForwardSecureANNSystem {
 
                 globalMatches.put(k, globalMatches.get(k) + matches);
                 globalReturned.put(k, globalReturned.get(k) + upto);
-                macroPrecisionSum.put(k, macroPrecisionSum.get(k) + precAtK);
-                macroReturnRateSum.put(k, macroReturnRateSum.get(k) + (k > 0 ? ((double) upto / (double) k) : 0.0));
 
                 String candMode = (candTotal >= 0 && candKeptVersion >= 0 && candDecrypted >= 0 && returned >= 0)
                         ? "full" : "partial";
@@ -1003,8 +997,7 @@ public class ForwardSecureANNSystem {
         if (writeGlobalPrecisionCsv && computePrecision) {
             writeGlobalPrecisionCsv(
                     resultsDir, dim, K_VARIANTS,
-                    globalMatches, globalReturned,
-                    macroPrecisionSum, macroReturnRateSum, queriesCount
+                    globalMatches, globalReturned, queriesCount
             );
         }
 
@@ -1093,13 +1086,9 @@ public class ForwardSecureANNSystem {
 
         Map<Integer, Long> globalMatches = new HashMap<>();
         Map<Integer, Long> globalReturned = new HashMap<>();
-        Map<Integer, Double> macroPrecisionSum = new HashMap<>();
-        Map<Integer, Double> macroReturnRateSum = new HashMap<>();
         for (int k : K_VARIANTS) {
             globalMatches.put(k, 0L);
             globalReturned.put(k, 0L);
-            macroPrecisionSum.put(k, 0.0);
-            macroReturnRateSum.put(k, 0.0);
         }
         final int queriesCount = queries.size();
 
@@ -1240,8 +1229,6 @@ public class ForwardSecureANNSystem {
 
                 globalMatches.put(k, globalMatches.get(k) + matches);
                 globalReturned.put(k, globalReturned.get(k) + upto);
-                macroPrecisionSum.put(k, macroPrecisionSum.get(k) + precAtK);
-                macroReturnRateSum.put(k, macroReturnRateSum.get(k) + (k > 0 ? ((double) upto / (double) k) : 0.0));
 
                 String candMode = (candTotal >= 0 && candKeptVersion >= 0 && candDecrypted >= 0 && returned >= 0)
                         ? "full" : "partial";
@@ -1367,8 +1354,7 @@ public class ForwardSecureANNSystem {
         if (writeGlobalPrecisionCsv && computePrecision) {
             writeGlobalPrecisionCsv(
                     resultsDir, dim, K_VARIANTS,
-                    globalMatches, globalReturned,
-                    macroPrecisionSum, macroReturnRateSum, queriesCount
+                    globalMatches, globalReturned, queriesCount
             );
         }
 
@@ -1951,15 +1937,13 @@ public class ForwardSecureANNSystem {
         }
     }
 
-    /** Append global micro/macro precision and return-rate to results/global_precision.csv */
+    /** Append global precision (single value) and return-rate to results/global_precision.csv */
     private static void writeGlobalPrecisionCsv(
             Path outDir,
             int dim,
             int[] kVariants,
             Map<Integer, Long> globalMatches,
             Map<Integer, Long> globalRetrieved,
-            Map<Integer, Double> macroPrecisionSum,
-            Map<Integer, Double> macroReturnRateSum,
             int queriesCount
     ) {
         try {
@@ -1967,33 +1951,36 @@ public class ForwardSecureANNSystem {
             Path p = outDir.resolve("global_precision.csv");
             if (!Files.exists(p)) {
                 Files.writeString(p,
-                        "dimension,topK,macro_precision,micro_precision,return_rate," +
-                                "matches_sum,returned_sum,queries\n",
+                        "dimension,topK,precision,return_rate,matches_sum,returned_sum,queries\n",
                         StandardOpenOption.CREATE, StandardOpenOption.APPEND);
             }
+
             try (var w = Files.newBufferedWriter(p, StandardOpenOption.CREATE, StandardOpenOption.APPEND)) {
                 for (int k : kVariants) {
                     long retrievedSum = globalRetrieved.getOrDefault(k, 0L);
                     long matchesSum = globalMatches.getOrDefault(k, 0L);
 
-                    double microP = (retrievedSum == 0) ? 0.0 : (double) matchesSum / (double) retrievedSum;
-                    double macroP = (queriesCount <= 0) ? 0.0
-                            : macroPrecisionSum.getOrDefault(k, 0.0) / (double) queriesCount;
+                    // Single global precision across all queries at this K:
+                    // precision = total matches / total retrieved (micro-style)
+                    double precision = (retrievedSum == 0L)
+                            ? 0.0
+                            : (double) matchesSum / (double) retrievedSum;
 
-                    double retRate = (queriesCount <= 0 || k <= 0) ? 0.0
+                    double returnRate = (queriesCount <= 0 || k <= 0)
+                            ? 0.0
                             : (double) retrievedSum / ((double) queriesCount * (double) k);
 
                     w.write(String.format(Locale.ROOT,
-                            "%d,%d,%.6f,%.6f,%.6f,%d,%d,%d%n",
-                            dim, k, macroP, microP, retRate, matchesSum, retrievedSum, queriesCount));
+                            "%d,%d,%.6f,%.6f,%d,%d,%d%n",
+                            dim, k, precision, returnRate, matchesSum, retrievedSum, queriesCount));
 
-                    logger.info("Global@K={} (dim={}): macroP={} microP={} returnRate={} [matches={}, returned={}, Q={}]",
+                    logger.info(
+                            "Global@K={} (dim={}): precision={} returnRate={} [matches={}, returned={}, Q={}]",
                             k, dim,
-                            String.format(Locale.ROOT, "%.6f", macroP),
-                            String.format(Locale.ROOT, "%.6f", microP),
-                            String.format(Locale.ROOT, "%.6f", retRate),
-                            matchesSum, retrievedSum, queriesCount);
-
+                            String.format(Locale.ROOT, "%.6f", precision),
+                            String.format(Locale.ROOT, "%.6f", returnRate),
+                            matchesSum, retrievedSum, queriesCount
+                    );
                 }
             }
         } catch (IOException ioe) {

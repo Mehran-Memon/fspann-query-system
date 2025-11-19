@@ -179,7 +179,8 @@ class ForwardSecureANNSystemPrecisionAndReencTest {
             String line = rlines.get(i);
             if (line.startsWith("SUMMARY,")) {
                 String[] cols = line.split(",", -1);
-                // QueryID,TargetVersion,Mode,Touched,TouchedUniqueSoFar,TouchedCumulativeUnique,Reencrypted,AlreadyCurrent,Retried,TimeMs,BytesDelta,BytesAfter
+                // QueryID,TargetVersion,Mode,Touched,TouchedUniqueSoFar,TouchedCumulativeUnique,
+                // Reencrypted,AlreadyCurrent,Retried,TimeMs,BytesDelta,BytesAfter
                 assertEquals("end", cols[2], "Mode should be 'end' for end-only re-encryption");
                 assertTrue(Long.parseLong(cols[3]) >= 0, "Touched should be >= 0");
                 assertTrue(Long.parseLong(cols[11]) >= 0, "BytesAfter should be >= 0");
