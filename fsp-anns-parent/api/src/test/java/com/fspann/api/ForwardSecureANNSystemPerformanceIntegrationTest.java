@@ -4,6 +4,7 @@ import com.fspann.common.QueryResult;
 import com.fspann.common.RocksDBMetadataManager;
 import com.fspann.crypto.AesGcmCryptoService;
 import com.fspann.crypto.CryptoService;
+import com.fspann.index.service.SecureLSHIndexService;
 import com.fspann.key.KeyManager;
 import com.fspann.key.KeyRotationPolicy;
 import com.fspann.key.KeyRotationServiceImpl;
@@ -21,13 +22,14 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class ForwardSecureANNSystemPerformanceIntegrationTest {
+
     private static final Logger logger = LoggerFactory.getLogger(ForwardSecureANNSystemPerformanceIntegrationTest.class);
 
     private ForwardSecureANNSystem sys;
     private List<double[]> dataset;
     private static final int DIMS = 10;
     private static final int VECTOR_COUNT = 1000;
-    private static final double MAX_INSERT_MS = 1_000.0; // per vector
+    private static final double MAX_INSERT_MS = 1_000.0; // per vector (very relaxed)
     private static final double MAX_QUERY_MS  =   500.0; // average
 
     private RocksDBMetadataManager metadataManager;
@@ -173,7 +175,7 @@ public class ForwardSecureANNSystemPerformanceIntegrationTest {
 
         // Clear any internal caches in the index if available
         try {
-            ((com.fspann.index.service.SecureLSHIndexService) sys.getIndexService()).clearCache();
+            ((SecureLSHIndexService) sys.getIndexService()).clearCache();
         } catch (Throwable ignore) { /* best-effort */ }
 
         // 1 miss
