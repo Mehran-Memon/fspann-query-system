@@ -33,6 +33,9 @@ public class PartitionedIndexService implements PaperSearchEngine {
 
     private static final int MAX_ALL_CANDIDATES = Integer.getInteger("paper.maxCandidatesAllDivs", -1);
 
+    // Upper bound for per-division target after probe.shards scaling
+    private static final int MAX_PER_DIV = Integer.getInteger("paper.maxPerDiv", 65_536);
+
     // dimension -> state
     private final Map<Integer, DimensionState> dims = new ConcurrentHashMap<>();
     private final Map<String, Integer> idToDim = new ConcurrentHashMap<>();
@@ -181,7 +184,7 @@ public class PartitionedIndexService implements PaperSearchEngine {
 
         // We rely only on client-supplied codes in partitioned mode.
         final BitSet[] codesFromClient = token.getCodes();
-        final int globalCap = MAX_ALL_CANDIDATES > 0 ? MAX_ALL_CANDIDATES : Integer.MAX_VALUE;
+        final int globalCap = resolveGlobalCap();
 
         for (int divIdx = 0; divIdx < S.divisions.size(); divIdx++) {
             if (cands.size() >= globalCap) break;
@@ -212,10 +215,16 @@ public class PartitionedIndexService implements PaperSearchEngine {
             if (hits.isEmpty()) continue;
 
             final int currentSize = getVectorCountForDimension(S.d);
-            final int targetPerDiv = Math.max(
+
+            // Base target (paper α rule)
+            int baseTargetPerDiv = Math.max(
                     1,
                     (int) Math.ceil(PAPER_W_ALPHA * currentSize / (double) this.divisions)
             );
+
+            // Apply probe.shards-based scaling (K-adaptive widening)
+            int targetPerDiv = applyProbeScaling(baseTargetPerDiv);
+
             int gatheredThisDiv = 0;
             final boolean[] visited = new boolean[div.I.size()];
 
@@ -487,5 +496,78 @@ public class PartitionedIndexService implements PaperSearchEngine {
                 }
             }
         }
+    }
+
+    // --------------------------------------------------------------------
+    // probe.shards integration helpers
+    // --------------------------------------------------------------------
+
+    /**
+     * Global cap for candidates across all divisions.
+     * Priority:
+     *   1) paper.maxCandidatesAllDivs (if > 0)
+     *   2) probe.shards (if > 0)
+     *   3) Integer.MAX_VALUE
+     */
+    private int resolveGlobalCap() {
+        if (MAX_ALL_CANDIDATES > 0) {
+            return MAX_ALL_CANDIDATES;
+        }
+        String prop = System.getProperty("probe.shards");
+        if (prop != null) {
+            try {
+                int v = Integer.parseInt(prop.trim());
+                if (v > 0) {
+                    // defensive clamp
+                    int cap = Math.min(v, 1_000_000_000);
+                    logger.trace("resolveGlobalCap: using probe.shards={} -> globalCap={}", v, cap);
+                    return cap;
+                }
+            } catch (NumberFormatException ignore) {
+            }
+        }
+        return Integer.MAX_VALUE;
+    }
+
+    /**
+     * Scale baseTargetPerDiv based on probe.shards (K-adaptive widening).
+     *
+     * Mapping:
+     *   - If probe.shards is absent/invalid/<=0 → factor = 1 (no change).
+     *   - Else factor ≈ log2(probe.shards), clamped to [1, 64].
+     *
+     * So each doubling of probe.shards increases per-division fanout linearly,
+     * without exploding too fast. Final result is clamped by paper.maxPerDiv.
+     */
+    private int applyProbeScaling(int baseTargetPerDiv) {
+        String prop = System.getProperty("probe.shards");
+        if (prop == null) {
+            return baseTargetPerDiv;
+        }
+        int v;
+        try {
+            v = Integer.parseInt(prop.trim());
+        } catch (NumberFormatException e) {
+            return baseTargetPerDiv;
+        }
+        if (v <= 0) return baseTargetPerDiv;
+
+        // log2-based factor: 1,2,3,... as probe.shards grows
+        int factor = (int) Math.round(Math.log(v) / Math.log(2.0));
+        if (factor < 1) factor = 1;
+        if (factor > 64) factor = 64;
+
+        long scaled = (long) baseTargetPerDiv * (long) factor;
+        int result;
+        if (scaled > MAX_PER_DIV) {
+            result = MAX_PER_DIV;
+        } else {
+            result = (int) scaled;
+        }
+
+        logger.trace("applyProbeScaling: baseTargetPerDiv={} probe.shards={} factor={} -> targetPerDiv={} (maxPerDiv={})",
+                baseTargetPerDiv, v, factor, result, MAX_PER_DIV);
+
+        return result;
     }
 }

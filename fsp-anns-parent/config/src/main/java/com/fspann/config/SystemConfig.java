@@ -225,6 +225,11 @@ public class SystemConfig {
         public int getNumTables() {
             return clamp(numTables, 1, MAX_TABLES);
         }
+        public int getProbeShards() {
+            // 0 means "use default" at higher level; otherwise clamp
+            if (probeShards <= 0) return 0;
+            return clamp(probeShards, 1, MAX_SHARDS);
+        }
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -405,6 +410,32 @@ public class SystemConfig {
         if (v > max) return max;
         return v;
     }
+    @JsonProperty("kAdaptive")
+    private KAdaptiveConfig kAdaptive = new KAdaptiveConfig();
+    public KAdaptiveConfig getKAdaptive() { return kAdaptive; }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class KAdaptiveConfig {
+        @JsonProperty("enabled")
+        public boolean enabled = false;
+
+        // maximum times to widen for a single query
+        @JsonProperty("maxRounds")
+        public int maxRounds = 3;
+
+        // target minimum return-rate at Kmax (e.g. 0.8 → 80%)
+        @JsonProperty("targetReturnRate")
+        public double targetReturnRate = 0.80;
+
+        // guard to avoid insane work
+        @JsonProperty("maxFanout")
+        public double maxFanout = 4000.0;
+
+        // how aggressively to widen probes / tables per round
+        @JsonProperty("probeFactor")
+        public double probeFactor = 1.5;
+    }
+
 
     /* ======================== Exception type ======================== */
 
