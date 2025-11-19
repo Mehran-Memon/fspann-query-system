@@ -1,4 +1,3 @@
-// File: src/test/java/com/fspann/common/ProfilerTest.java
 package com.fspann.common;
 
 import org.junit.jupiter.api.Test;
