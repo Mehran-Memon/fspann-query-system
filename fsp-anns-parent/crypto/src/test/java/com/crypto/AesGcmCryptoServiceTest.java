@@ -49,7 +49,8 @@ class AesGcmCryptoServiceTest {
         // Stored encryption binds AAD (id, version, dim) and writes metadata (version + dim)
         EncryptedPoint pt = crypto.encrypt("v123", vec);
         assertEquals(1, pt.getVersion());
-        verify(meta).updateVectorMetadata(eq("v123"), eq(Map.of("version", "1", "dim", String.valueOf(vec.length))));
+        verify(meta).updateVectorMetadata(eq("v123"),
+                eq(Map.of("version", "1", "dim", String.valueOf(vec.length))));
 
         double[] out = crypto.decryptFromPoint(pt, keyV1);
         assertArrayEquals(vec, out, 1e-12);
@@ -66,14 +67,30 @@ class AesGcmCryptoServiceTest {
     }
 
     @Test
+    void decryptQuery_roundTripWithEncryptionUtils() throws Exception {
+        // This test pins the contract used by QueryServiceImpl:
+        // decryptQuery(ciphertext, iv, key) must successfully decrypt a blob
+        // that was produced by EncryptionUtils.encryptVector with the same key/iv.
+        double[] vec = { 1.5, -2.0, 3.25 };
+
+        byte[] iv = EncryptionUtils.generateIV();
+        byte[] ct = EncryptionUtils.encryptVector(vec, iv, keyV1);
+
+        double[] out = crypto.decryptQuery(ct, iv, keyV1);
+        assertArrayEquals(vec, out, 1e-12);
+
+        // Wrong key must fail with the service-level CryptoException
+        assertThrows(AesGcmCryptoService.CryptoException.class, () ->
+                crypto.decryptQuery(ct, iv, keyV2));
+    }
+
+    @Test
     void reEncrypt_usesOldAndNewKeys_andUpdatesVersion() {
-        // original with v1 (create via service so AAD matches)
         double[] vec = new double[]{7.0, 8.0};
 
         when(keySvc.getCurrentVersion()).thenReturn(new KeyVersion(1, keyV1));
         EncryptedPoint original = crypto.encrypt("z1", vec);
 
-        // now current is v2, and v1 must still be retrievable for re-encryption
         when(keySvc.getVersion(1)).thenReturn(new KeyVersion(1, keyV1));
         when(keySvc.getCurrentVersion()).thenReturn(new KeyVersion(2, keyV2));
 
@@ -84,12 +101,14 @@ class AesGcmCryptoServiceTest {
         double[] round = crypto.decryptFromPoint(upd, keyV2);
         assertArrayEquals(vec, round, 1e-12);
 
-        verify(meta).updateVectorMetadata(eq("z1"), eq(Map.of("version", "2", "dim", String.valueOf(vec.length))));
+        verify(meta).updateVectorMetadata(eq("z1"),
+                eq(Map.of("version", "2", "dim", String.valueOf(vec.length))));
     }
 
     @Test
     void encrypt_rejectsNaN() {
-        assertThrows(IllegalArgumentException.class, () -> crypto.encrypt("bad", new double[]{Double.NaN}));
+        assertThrows(IllegalArgumentException.class,
+                () -> crypto.encrypt("bad", new double[]{Double.NaN}));
     }
 
     @Test
@@ -124,7 +143,6 @@ class AesGcmCryptoServiceTest {
                 crypto.decryptFromPoint(tampered, keyV1));
     }
 
-
     @Test
     void decrypt_failsOnCiphertextTamper() {
         double[] vec = { 0.25, -0.75, 9.5 };
@@ -150,10 +168,11 @@ class AesGcmCryptoServiceTest {
         assertEquals(12, a.getIv().length, "IV must be 96 bits (12 bytes)");
         assertEquals(12, b.getIv().length, "IV must be 96 bits (12 bytes)");
 
-        // Practically guaranteed to differ when generated securely.
-        assertNotEquals(java.util.Arrays.toString(a.getIv()),
+        assertNotEquals(
+                java.util.Arrays.toString(a.getIv()),
                 java.util.Arrays.toString(b.getIv()),
-                "IVs should differ between encryptions");
+                "IVs should differ between encryptions"
+        );
     }
 
     @Test
@@ -172,7 +191,6 @@ class AesGcmCryptoServiceTest {
                 crypto.decryptFromPoint(tampered, keyV1));
     }
 
-
     @Test
     void reEncrypt_changesIvAndRejectsOldKey() {
         double[] vec = { 2.0, 4.0 };
@@ -188,9 +206,11 @@ class AesGcmCryptoServiceTest {
 
         assertEquals(2, upd.getVersion());
         assertArrayEquals(vec, crypto.decryptFromPoint(upd, keyV2), 1e-12);
-        assertNotEquals(java.util.Arrays.toString(original.getIv()),
+        assertNotEquals(
+                java.util.Arrays.toString(original.getIv()),
                 java.util.Arrays.toString(upd.getIv()),
-                "Re-encrypt should use a different IV");
+                "Re-encrypt should use a different IV"
+        );
 
         // Old key must not decrypt the new blob
         assertThrows(AesGcmCryptoService.CryptoException.class, () ->
@@ -209,10 +229,8 @@ class AesGcmCryptoServiceTest {
     }
 
     @Test
-    void encrypt_zeroLengthVectorIsRejectedOrAcceptedByContract() {
-        // If your code rejects:
+    void encrypt_zeroLengthVectorIsRejectedOrContractPinned() {
+        // Current contract: reject empty vectors
         assertThrows(IllegalArgumentException.class, () -> crypto.encrypt("empty", new double[]{}));
-        // If you instead allow zero-length, change this test to assert a round-trip works.
     }
-
 }

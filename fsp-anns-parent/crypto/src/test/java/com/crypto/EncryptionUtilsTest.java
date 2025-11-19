@@ -5,7 +5,7 @@ import org.junit.jupiter.api.Test;
 
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
-import java.security.GeneralSecurityException;   // <-- add this import
+import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -23,6 +23,13 @@ class EncryptionUtilsTest {
         byte[] ct = EncryptionUtils.encryptVector(in, iv, k);
         double[] out = EncryptionUtils.decryptVector(ct, iv, k);
         assertArrayEquals(in, out, 1e-12);
+    }
+
+    @Test
+    void generateIV_returns96Bits() {
+        byte[] iv = EncryptionUtils.generateIV();
+        assertNotNull(iv);
+        assertEquals(12, iv.length, "AES-GCM IV must be 96 bits (12 bytes)");
     }
 
     @Test
@@ -48,6 +55,17 @@ class EncryptionUtilsTest {
     }
 
     @Test
+    void vectorWithInfinityThrows() throws Exception {
+        KeyGenerator kg = KeyGenerator.getInstance("AES");
+        kg.init(256);
+        SecretKey k = kg.generateKey();
+        byte[] iv = EncryptionUtils.generateIV();
+
+        assertThrows(IllegalArgumentException.class, () ->
+                EncryptionUtils.encryptVector(new double[]{1.0, Double.POSITIVE_INFINITY}, iv, k));
+    }
+
+    @Test
     void decryptFailsWithWrongIvOrKey() throws Exception {
         KeyGenerator kg = KeyGenerator.getInstance("AES");
         kg.init(256, SecureRandom.getInstanceStrong());
@@ -65,16 +83,5 @@ class EncryptionUtilsTest {
         // Wrong IV -> GeneralSecurityException (e.g., AEADBadTagException)
         byte[] otherIv = EncryptionUtils.generateIV();
         assertThrows(GeneralSecurityException.class, () -> EncryptionUtils.decryptVector(ct, otherIv, k1));
-    }
-
-    @Test
-    void vectorWithInfinityThrows() throws Exception {
-        KeyGenerator kg = KeyGenerator.getInstance("AES");
-        kg.init(256);
-        SecretKey k = kg.generateKey();
-        byte[] iv = EncryptionUtils.generateIV();
-
-        assertThrows(IllegalArgumentException.class, () ->
-                EncryptionUtils.encryptVector(new double[]{1.0, Double.POSITIVE_INFINITY}, iv, k));
     }
 }
