@@ -14,6 +14,7 @@ import org.mockito.MockitoAnnotations;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import java.util.Arrays;
+import java.util.BitSet;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -21,6 +22,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class QueryTokenFactoryTest {
+
     @Mock private CryptoService cryptoService;
     @Mock private KeyLifeCycleService keyService;
     @Mock private EvenLSH lsh;
@@ -43,14 +45,20 @@ class QueryTokenFactoryTest {
                         Arrays.asList(7, 8, 9)
                 ));
 
-        // Legacy/multiprobe path safeguard (not used when getBucketsForAllTables responds)
+        // Legacy/multiprobe path safeguard (used when getBucketsForAllTables returns null/mismatch)
         lenient().when(lsh.getBuckets(any(double[].class), anyInt(), anyInt()))
                 .thenReturn(List.of(1, 2, 3));
 
-        // New ctor: (crypto, key, lsh, numTables, divisions(ℓ), m, seedBase)
-        // Use divisions=2, m=3, seedBase=13 for deterministic code shape
-        factory = new QueryTokenFactory(cryptoService, keyService, lsh,
-                /*numTables*/ 3, /*divisions*/ 2, /*m*/ 3, /*seedBase*/ 13L);
+        // New ctor: (crypto, keySvc, lsh, numTables, divisions(ℓ), m, seedBase)
+        factory = new QueryTokenFactory(
+                cryptoService,
+                keyService,
+                lsh,
+                /*numTables*/ 3,
+                /*divisions*/ 2,
+                /*m*/ 3,
+                /*seedBase*/ 13L
+        );
     }
 
     @Test
@@ -73,21 +81,27 @@ class QueryTokenFactoryTest {
         assertNotNull(token.getCodes());
         assertEquals(2, token.getCodes().length);
 
-        // Plaintext is intentionally NOT embedded in paper mode
-        assertNull(token.getPlaintextQuery());
-
+        // Top-level fields
         assertEquals(5, token.getTopK());
         assertEquals(String.format("epoch_%d_dim_%d", 7, vector.length), token.getEncryptionContext());
         assertEquals(vector.length, token.getDimension());
-        assertNotNull(token.getIv());
-        assertNotNull(token.getEncryptedQuery());
+        assertArrayEquals(iv, token.getIv());
+        assertArrayEquals(ciphertext, token.getEncryptedQuery());
+        assertEquals(7, token.getVersion());
     }
 
     @Test
     void testCreateTokenWithDifferentNumTables() {
         // For numTables = 5, change factory and mock
-        factory = new QueryTokenFactory(cryptoService, keyService, lsh,
-                /*numTables*/ 5, /*divisions*/ 2, /*m*/ 3, /*seedBase*/ 13L);
+        factory = new QueryTokenFactory(
+                cryptoService,
+                keyService,
+                lsh,
+                /*numTables*/ 5,
+                /*divisions*/ 2,
+                /*m*/ 3,
+                /*seedBase*/ 13L
+        );
 
         when(lsh.getBucketsForAllTables(any(double[].class), anyInt(), eq(5)))
                 .thenReturn(List.of(
@@ -103,6 +117,69 @@ class QueryTokenFactoryTest {
         // Codes still present with same divisions
         assertNotNull(token.getCodes());
         assertEquals(2, token.getCodes().length);
+    }
+
+    @Test
+    void testCreateTokenFallsBackToLegacyBucketsWhenAllTablesReturnNull() {
+        // Force getBucketsForAllTables to return null → fallback path
+        when(lsh.getBucketsForAllTables(any(double[].class), anyInt(), eq(3)))
+                .thenReturn(null);
+
+        when(cryptoService.encryptToPoint(eq("query"), any(double[].class), any()))
+                .thenReturn(new EncryptedPoint("query", 0, new byte[12], new byte[32], 7, 2, List.of(0)));
+
+        double[] v = {0.5, -1.0};
+        QueryToken token = factory.create(v, 7);
+
+        assertEquals(3, token.getNumTables());
+        assertEquals(3, token.getTableBuckets().size());
+        assertTrue(token.getTableBuckets().stream().allMatch(l -> !l.isEmpty()));
+
+        // Should have called legacy getBuckets once per table
+        verify(lsh, atLeast(3)).getBuckets(any(double[].class), eq(7), anyInt());
+    }
+
+    @Test
+    void testDeriveReusesCiphertextBucketsAndCodesByValue() {
+        double[] vector = {1.0, 2.0};
+        byte[] iv = new byte[12];
+        byte[] ciphertext = new byte[32];
+
+        when(cryptoService.encryptToPoint(eq("query"), eq(vector), any()))
+                .thenReturn(new EncryptedPoint("query", 0, iv, ciphertext, 7, vector.length, List.of(0)));
+
+        QueryToken base = factory.create(vector, 5);
+        QueryToken widened = factory.derive(base, 20);
+
+        assertEquals(5, base.getTopK());
+        assertEquals(20, widened.getTopK());
+
+        // Same per-table expansions logically
+        assertEquals(base.getTableBuckets(), widened.getTableBuckets());
+
+        // Codes copied by value (BitSets equal but not necessarily same reference)
+        BitSet[] baseCodes = base.getCodes();
+        BitSet[] widenedCodes = widened.getCodes();
+        assertNotNull(baseCodes);
+        assertNotNull(widenedCodes);
+        assertEquals(baseCodes.length, widenedCodes.length);
+        for (int i = 0; i < baseCodes.length; i++) {
+            BitSet bc = baseCodes[i];
+            BitSet wc = widenedCodes[i];
+            if (bc == null || wc == null) {
+                assertEquals(bc, wc);
+            } else {
+                assertNotSame(bc, wc);
+                assertEquals(bc, wc);
+            }
+        }
+
+        // IV and ciphertext equal by content
+        assertArrayEquals(base.getIv(), widened.getIv());
+        assertArrayEquals(base.getEncryptedQuery(), widened.getEncryptedQuery());
+        assertEquals(base.getEncryptionContext(), widened.getEncryptionContext());
+        assertEquals(base.getDimension(), widened.getDimension());
+        assertEquals(base.getVersion(), widened.getVersion());
     }
 
     @Test

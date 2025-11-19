@@ -2,8 +2,8 @@ package com.fspann.query.service;
 
 import com.fspann.common.*;
 import com.fspann.crypto.CryptoService;
-import com.fspann.index.service.SecureLSHIndexService;
 import com.fspann.index.paper.PartitionedIndexService;
+import com.fspann.index.service.SecureLSHIndexService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -11,6 +11,7 @@ import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.BitSet;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -22,7 +23,6 @@ import static org.mockito.Mockito.*;
  */
 class QueryEndToEndPaperModeTest {
 
-    // Core deps (some real, some mocked)
     private SecureLSHIndexService indexService;
     private QueryServiceImpl queryService;
 
@@ -54,7 +54,6 @@ class QueryEndToEndPaperModeTest {
 
     @BeforeEach
     void setup() throws Exception {
-        // ---- Mocks for system services we don't want to hit on disk/network
         crypto = mock(CryptoService.class);
         keys   = mock(KeyLifeCycleService.class);
         meta   = mock(RocksDBMetadataManager.class);
@@ -63,13 +62,12 @@ class QueryEndToEndPaperModeTest {
         when(keys.getCurrentVersion()).thenReturn(KV1);
         when(keys.getVersion(anyInt())).thenReturn(KV1);
 
-        // encrypt(id, vec) → EncryptedPoint and remember the plaintext for decryptFromPoint
+        // encrypt(id, vec) → EncryptedPoint and remember the plaintext
         when(crypto.encrypt(anyString(), any(double[].class))).thenAnswer(inv -> {
             String id = inv.getArgument(0, String.class);
             double[] v = inv.getArgument(1, double[].class);
             plaintextById.put(id, v.clone());
-            // dummy iv/ciphertext; version=1; perTable=null
-            return new EncryptedPoint(id, /*shard*/0, new byte[12], new byte[32], 1, v.length, null);
+            return new EncryptedPoint(id, 0, new byte[12], new byte[32], 1, v.length, null);
         });
 
         // encryptToPoint("query", vec, key) for token build
@@ -87,37 +85,37 @@ class QueryEndToEndPaperModeTest {
                     return (v != null) ? v.clone() : new double[0];
                 });
 
-        // metadata/buffer just need to be callable
         when(meta.getPointsBaseDir()).thenReturn("in-mem");
 
-        // ---- Real paper engine: tiny params; build immediately
-        // m=8 projections, λ=4 bits/proj, ℓ=3 divisions, seed=13, buildThreshold=1 (build as we insert)
-        paper = new PartitionedIndexService(8, 4, 3, 13L, /*buildThreshold*/1, /*maxCandidates*/-1);
-
-        // ---- Index service in 'partitioned' mode (paper engine present)
-        // One shard; let paper tables be the only "tables" notion here
-        indexService = new SecureLSHIndexService(
-                crypto, keys, meta, paper,
-                /*legacyIndex*/ null, /*legacyLsh*/ null,
-                buffer, /*numTables (legacy path, unused)*/ 3, /*numShards*/ 1
+        // Real paper engine
+        paper = new PartitionedIndexService(
+                8, 4, 3, 13L,
+                /*buildThreshold*/ 1,
+                /*maxCandidates*/ -1
         );
 
-        // ---- Query service (uses same index + crypto + keys)
+        indexService = new SecureLSHIndexService(
+                crypto, keys, meta, paper,
+                buffer
+        );
+
         queryService = new QueryServiceImpl(indexService, crypto, keys, /*tokenFactory*/ null);
 
-        // ---- Insert tiny dataset
+        // Insert tiny dataset
         for (int i = 0; i < points.length; i++) {
             String id = String.valueOf(i);
             indexService.insert(id, points[i]);
         }
     }
 
-    private String trueNearestId(double[] q) {
-        double best = Double.POSITIVE_INFINITY;
+    private String argminAmongReturned(double[] q, List<QueryResult> res) {
         String bestId = null;
-        for (var e : plaintextById.entrySet()) {
-            double d = l2sq(q, e.getValue());
-            if (d < best) { best = d; bestId = e.getKey(); }
+        double best = Double.POSITIVE_INFINITY;
+        for (QueryResult r : res) {
+            double[] v = plaintextById.get(r.getId());
+            if (v == null) continue;
+            double d = l2sq(q, v);
+            if (d < best) { best = d; bestId = r.getId(); }
         }
         return bestId;
     }
@@ -128,18 +126,6 @@ class QueryEndToEndPaperModeTest {
         return s;
     }
 
-    private String argminAmongReturned(double[] q, List<QueryResult> res) {
-        String bestId = null;
-        double best = Double.POSITIVE_INFINITY;
-        for (QueryResult r : res) {
-            double[] v = plaintextById.get(r.getId());
-            if (v == null) continue; // shouldn't happen in this test
-            double d = l2sq(q, v);
-            if (d < best) { best = d; bestId = r.getId(); }
-        }
-        return bestId;
-    }
-
     private void assertMonotoneDistances(List<QueryResult> res) {
         double prev = -1;
         for (QueryResult r : res) {
@@ -148,11 +134,10 @@ class QueryEndToEndPaperModeTest {
         }
     }
 
-
     @Test
     void nearest_from_dense_cluster_is_returned_first() {
         double[] q = {5.05, 5.0};
-        QueryToken token = buildPaperToken(q, /*topK*/ 3);
+        QueryToken token = buildPaperToken(q, 3);
         when(crypto.decryptQuery(any(), any(), any())).thenReturn(q.clone());
 
         var results = queryService.search(token);
@@ -162,14 +147,13 @@ class QueryEndToEndPaperModeTest {
         assertMonotoneDistances(results);
 
         String expectedFirst = argminAmongReturned(q, results);
-        assertEquals(expectedFirst, results.get(0).getId(),
-                "first must be the nearest among the returned candidates");
+        assertEquals(expectedFirst, results.get(0).getId());
     }
 
     @Test
     void far_query_returns_far_cluster() {
         double[] q = {10.05, 10.0};
-        QueryToken token = buildPaperToken(q, /*topK*/ 2);
+        QueryToken token = buildPaperToken(q, 2);
         when(crypto.decryptQuery(any(), any(), any())).thenReturn(q.clone());
 
         var results = queryService.search(token);
@@ -178,11 +162,8 @@ class QueryEndToEndPaperModeTest {
         assertMonotoneDistances(results);
 
         String expectedFirst = argminAmongReturned(q, results);
-        assertEquals(expectedFirst, results.get(0).getId(),
-                "first must be the nearest among the returned candidates");
+        assertEquals(expectedFirst, results.get(0).getId());
     }
-
-
 
     @Test
     void metrics_are_populated() {
@@ -220,7 +201,6 @@ class QueryEndToEndPaperModeTest {
             throw new IllegalStateException("Paper codes are empty");
         }
 
-        // perTable must align with codes.length and contain correct bucket ids
         int numTables = codes.length;
         int lambda = 4;
         List<List<Integer>> perTable = new ArrayList<>(numTables);
@@ -231,14 +211,13 @@ class QueryEndToEndPaperModeTest {
 
         KeyVersion kv = keys.getCurrentVersion();
         EncryptedPoint ep = crypto.encryptToPoint("query", q, kv.getKey());
-        String ctx = "epoch_" + kv.getVersion() + "_dim_" + q.length; // informational
+        String ctx = "epoch_" + kv.getVersion() + "_dim_" + q.length;
 
         return new QueryToken(
                 perTable,
                 codes,
                 ep.getIv(),
                 ep.getCiphertext(),
-                null,
                 topK,
                 numTables,
                 ctx,
@@ -246,6 +225,4 @@ class QueryEndToEndPaperModeTest {
                 kv.getVersion()
         );
     }
-
-
 }

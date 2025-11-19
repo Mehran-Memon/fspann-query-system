@@ -25,7 +25,6 @@ class QueryServiceImplRatioIsDeferredTest {
 
         QueryServiceImpl svc = new QueryServiceImpl(index, crypto, keySvc);
 
-        // Buffer stats (if consulted)
         EncryptedPointBuffer buf = mock(EncryptedPointBuffer.class);
         when(buf.getLastBatchInsertTimeMs()).thenReturn(0L);
         when(buf.getTotalFlushedPoints()).thenReturn(0);
@@ -42,27 +41,33 @@ class QueryServiceImplRatioIsDeferredTest {
         when(keySvc.getCurrentVersion()).thenReturn(new KeyVersion(1, k));
         when(crypto.decryptQuery(enc, iv, k)).thenReturn(q);
 
-        // Two retrieved ids: 0 and 1
         when(index.lookup(any())).thenReturn(List.of(
                 new EncryptedPoint("0", 0, iv, enc, 1, 2, List.of()),
                 new EncryptedPoint("1", 0, iv, enc, 1, 2, List.of())
         ));
         when(crypto.decryptFromPoint(any(), eq(k))).thenReturn(new double[]{0.0, 0.0});
 
-        // GT has id 0 as the only relevant at k=1
         when(gt.getGroundtruth(eq(0), anyInt())).thenReturn(new int[]{0});
 
         QueryToken token = new QueryToken(
                 List.of(List.of(1)),
-                iv, enc, q, 1, 1, ctx, 2, 1
+                null,
+                iv,
+                enc,
+                1,
+                1,
+                ctx,
+                2,
+                1
         );
 
         List<QueryEvaluationResult> res = svc.searchWithTopKVariants(token, 0, gt);
-        QueryEvaluationResult k1 = res.stream().filter(r -> r.getTopKRequested() == 1).findFirst().orElseThrow();
+        QueryEvaluationResult k1 = res.stream()
+                .filter(r -> r.getTopKRequested() == 1)
+                .findFirst()
+                .orElseThrow();
 
-        // Ratio is computed higher up (ForwardSecureANNSystem) → NaN here
         assertTrue(Double.isNaN(k1.getRatio()));
-        // Precision@1 stored in 'precision' is 1.0 (id 0 retrieved among the top1)
         assertEquals(1.0, k1.getPrecision(), 1e-9);
     }
 }

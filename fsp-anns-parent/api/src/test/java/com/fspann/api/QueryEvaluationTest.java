@@ -97,13 +97,18 @@ class QueryEvaluationTest {
 
         Path configFile = tempDir.resolve("config.json");
         Files.writeString(configFile, """
-            {
-              "numShards": 4,
-              "profilerEnabled": true,
-              "opsThreshold": 2147483647,
-              "ageThresholdMs": 9223372036854775807
-            }
-        """);
+{
+  "numShards": 4,
+  "profilerEnabled": true,
+  "opsThreshold": 2147483647,
+  "ageThresholdMs": 9223372036854775807,
+  "lsh": { "numTables": 2, "rowsPerBand": 2, "probeShards": 1 },
+  "eval": { "computePrecision": true, "writeGlobalPrecisionCsv": false, "kVariants": [1,3] },
+  "cloak": { "noise": 0.0 },
+  "ratio": { "source": "base", "gtSample": 0, "gtMismatchTolerance": 1.0 },
+  "output": { "resultsDir": "results", "exportArtifacts": false }
+}
+""");
 
         // keys & metadata dirs
         Path keysDir = tempDir.resolve("keys");
