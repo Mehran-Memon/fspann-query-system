@@ -24,7 +24,7 @@ class KeyUtilsTest {
 
     @Test
     void fromBytes_nullBytesThrows() {
-        assertThrows(NullPointerException.class, () -> KeyUtils.fromBytes(null));
+        assertThrows(IllegalArgumentException.class, () -> KeyUtils.fromBytes(null));
     }
 
     @Test

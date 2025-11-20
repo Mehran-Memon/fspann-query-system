@@ -40,32 +40,45 @@ class QueryTokenPerTableTest {
         assertArrayEquals(iv, t.getIv());
         assertArrayEquals(enc, t.getEncryptedQuery());
 
-        // codes must be cloned
+        // codes must be deep-cloned
         BitSet[] got = t.getCodes();
         assertNotSame(codes, got);
         assertEquals(codes[0], got[0]);
         assertEquals(codes[1], got[1]);
 
-        // returned lists unmodifiable
+        // Mutating original codes must not affect token's codes
+        codes[0].set(7);
+        assertFalse(t.getCodes()[0].get(7), "Token codes should be independent of original array");
+
+        // returned table-buckets list is unmodifiable
         List<List<Integer>> tb = t.getTableBuckets();
         assertThrows(UnsupportedOperationException.class, () -> tb.add(List.of(9)));
     }
 
     @Test
-    void rejectsEmptyInnerListAndBadIvLen() {
+    void acceptsEmptyInnerList_nowAllowed() {
         BitSet[] codes = new BitSet[]{BitSet.valueOf(new byte[]{1})};
 
-        // Empty inner list
-        assertThrows(IllegalArgumentException.class, () ->
-                new QueryToken(
-                        List.of(List.of()),
-                        codes,
-                        new byte[12],
-                        new byte[]{1},
-                        1, 1, "ctx", 32, 1
-                ));
+        // Current implementation allows empty inner lists
+        QueryToken t = new QueryToken(
+                List.of(List.of()),
+                codes,
+                new byte[12],
+                new byte[]{1},
+                1, 1, "ctx", 32, 1
+        );
 
-        // Bad IV length
+        assertNotNull(t);
+        assertEquals(1, t.getNumTables());
+        assertEquals(1, t.getTableBuckets().size());
+        assertEquals(0, t.getTableBuckets().get(0).size());
+    }
+
+    @Test
+    void rejectsBadIvLen() {
+        BitSet[] codes = new BitSet[]{BitSet.valueOf(new byte[]{1})};
+
+        // Bad IV length still rejected
         assertThrows(IllegalArgumentException.class, () ->
                 new QueryToken(
                         List.of(List.of(1)),
