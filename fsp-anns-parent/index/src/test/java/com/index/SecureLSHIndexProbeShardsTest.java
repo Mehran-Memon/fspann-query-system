@@ -26,6 +26,8 @@ class SecureLSHIndexProbeShardsTest {
 
     private CryptoService crypto;
     private KeyLifeCycleService keySvc;
+    private RocksDBMetadataManager metadataManager;
+    private EncryptedPointBuffer buffer;
     private SecureLSHIndexService svc;
 
     private PartitionedIndexService paper;
@@ -34,12 +36,16 @@ class SecureLSHIndexProbeShardsTest {
     void setup() {
         crypto = mock(CryptoService.class);
         keySvc = mock(KeyLifeCycleService.class);
+        metadataManager = mock(RocksDBMetadataManager.class);
+        buffer = mock(EncryptedPointBuffer.class);
 
-        // Stable mock key
+        when(metadataManager.getPointsBaseDir())
+                .thenReturn(System.getProperty("java.io.tmpdir") + "/probe-points");
+
         when(keySvc.getCurrentVersion())
                 .thenReturn(new KeyVersion(1, new SecretKeySpec(new byte[32], "AES")));
 
-        // Pure paper-index (no real RocksDB, just mocks)
+        // Pure paper-index (no Rocks scan in tests)
         paper = new PartitionedIndexService(
                 /*m*/ 12,
                 /*lambda*/ 6,
@@ -49,17 +55,10 @@ class SecureLSHIndexProbeShardsTest {
                 /*maxCandidates*/ -1
         );
 
-        RocksDBMetadataManager meta = mock(RocksDBMetadataManager.class);
-        EncryptedPointBuffer buffer = mock(EncryptedPointBuffer.class);
-
-        when(meta.getPointsBaseDir())
-                .thenReturn(System.getProperty("java.io.tmpdir") + "/points");
-
-        // SecureLSHIndexService in paper-mode only with mocks
         svc = new SecureLSHIndexService(
                 crypto,
                 keySvc,
-                meta,
+                metadataManager,
                 paper,
                 buffer
         );
@@ -97,7 +96,6 @@ class SecureLSHIndexProbeShardsTest {
                 4, 1
         );
 
-        // No override → PartitionedIndexService should behave normally
         var out = svc.lookup(token);
         assertFalse(out.isEmpty(), "Lookup should work with default probing");
     }
@@ -107,7 +105,6 @@ class SecureLSHIndexProbeShardsTest {
         double[] vec = {0.2, -0.1, 0.4, 0.8};
         paper.insert(pt("p1", 4), vec);
 
-        // Force wider probing on the server side
         System.setProperty("probe.shards", "999");
 
         QueryToken token = new QueryToken(
@@ -166,11 +163,9 @@ class SecureLSHIndexProbeShardsTest {
                 4, 1
         );
 
-        // First, widen
         System.setProperty("probe.shards", "500");
         int widened = svc.lookup(token).size();
 
-        // Remove override
         System.clearProperty("probe.shards");
         int restored = svc.lookup(token).size();
 
