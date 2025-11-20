@@ -1,11 +1,12 @@
 package com.index;
 
 import com.fspann.common.EncryptedPoint;
+import com.fspann.common.EncryptedPointBuffer;
 import com.fspann.common.KeyLifeCycleService;
 import com.fspann.common.KeyVersion;
 import com.fspann.common.QueryToken;
+import com.fspann.common.RocksDBMetadataManager;
 import com.fspann.crypto.CryptoService;
-import com.fspann.index.paper.EvenLSH;
 import com.fspann.index.paper.PartitionedIndexService;
 import com.fspann.index.service.SecureLSHIndexService;
 
@@ -18,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 /**
- * Ensures the probe.shards system property correctly influences
+ * Ensures the probe-shards system property correctly influences
  * bucket selection & widening logic used by SecureLSHIndexService.
  */
 class SecureLSHIndexProbeShardsTest {
@@ -38,7 +39,7 @@ class SecureLSHIndexProbeShardsTest {
         when(keySvc.getCurrentVersion())
                 .thenReturn(new KeyVersion(1, new SecretKeySpec(new byte[32], "AES")));
 
-        // Pure paper-index (no RocksDB, no legacy paths)
+        // Pure paper-index (no real RocksDB, just mocks)
         paper = new PartitionedIndexService(
                 /*m*/ 12,
                 /*lambda*/ 6,
@@ -48,13 +49,19 @@ class SecureLSHIndexProbeShardsTest {
                 /*maxCandidates*/ -1
         );
 
-        // SecureLSHIndexService in paper-mode only
+        RocksDBMetadataManager meta = mock(RocksDBMetadataManager.class);
+        EncryptedPointBuffer buffer = mock(EncryptedPointBuffer.class);
+
+        when(meta.getPointsBaseDir())
+                .thenReturn(System.getProperty("java.io.tmpdir") + "/points");
+
+        // SecureLSHIndexService in paper-mode only with mocks
         svc = new SecureLSHIndexService(
                 crypto,
                 keySvc,
-                /*meta*/ null,
-                /*paper*/ paper,
-                /*buffer*/ null
+                meta,
+                paper,
+                buffer
         );
     }
 

@@ -321,13 +321,22 @@ public class PartitionedIndexService implements PaperSearchEngine {
         DimensionState S = dims.get(dimension);
         if (S == null) return 0;
         synchronized (S) {
-            int built = 0;
-            for (DivisionState div : S.divisions) {
-                for (List<EncryptedPoint> subset : div.tagToSubset.values()) built += subset.size();
-            }
+            // Collect unique ids from staged points
             Set<String> ids = new HashSet<>();
-            for (EncryptedPoint p : S.staged) ids.add(p.getId());
-            return Math.max(built, ids.size());
+            for (EncryptedPoint p : S.staged) {
+                ids.add(p.getId());
+            }
+
+            // Collect unique ids from all built divisions / subsets
+            for (DivisionState div : S.divisions) {
+                for (List<EncryptedPoint> subset : div.tagToSubset.values()) {
+                    for (EncryptedPoint p : subset) {
+                        ids.add(p.getId());
+                    }
+                }
+            }
+
+            return ids.size();
         }
     }
 
