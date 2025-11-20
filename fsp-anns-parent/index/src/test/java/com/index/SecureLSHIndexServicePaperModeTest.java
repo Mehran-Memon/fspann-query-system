@@ -34,24 +34,20 @@ class SecureLSHIndexServicePaperModeTest {
     private SecureLSHIndexService svc;
 
     @BeforeEach
-    void setup() throws IOException, ClassNotFoundException {
+    void setup() {
         crypto = mock(CryptoService.class);
         keySvc = mock(KeyLifeCycleService.class);
         meta   = mock(RocksDBMetadataManager.class);
         paper  = mock(SecureLSHIndexService.PaperSearchEngine.class);
         buffer = mock(EncryptedPointBuffer.class);
 
-        // Provide a stable key version for metadata
+        // Provide a stable key version for metadata (even if not used heavily here)
         SecretKey sk = new SecretKeySpec(new byte[32], "AES");
         when(keySvc.getCurrentVersion()).thenReturn(new KeyVersion(1, sk));
 
         when(meta.getPointsBaseDir())
                 .thenReturn(System.getProperty("java.io.tmpdir") + "/points");
 
-        // loadEncryptedPoint returns null by default, so we exercise the in-memory cache
-        when(meta.loadEncryptedPoint(anyString())).thenReturn(null);
-
-        // Construct service explicitly in "paper" shape (paper engine present)
         svc = new SecureLSHIndexService(
                 crypto, keySvc, meta,
                 paper,
@@ -59,10 +55,7 @@ class SecureLSHIndexServicePaperModeTest {
         );
     }
 
-    // ---------------------------- Helpers ----------------------------
-
     private static QueryToken simpleToken(int topK, int dim) {
-        // Minimal 1-table token; codes unused in this test since we mock paper engine
         List<List<Integer>> tableBuckets = List.of(List.of(1));
         BitSet[] codes = new BitSet[0];
 
@@ -72,14 +65,12 @@ class SecureLSHIndexServicePaperModeTest {
                 new byte[12],
                 new byte[32],
                 topK,
-                1,                          // numTables
+                1,
                 "epoch_1_dim_" + dim,
                 dim,
-                1                           // version
+                1
         );
     }
-
-    // ---------------------------- Tests ----------------------------
 
     @Test
     void insert_encrypts_persists_buffers_then_throws_without_codes_engine() throws IOException {
@@ -88,21 +79,19 @@ class SecureLSHIndexServicePaperModeTest {
 
         EncryptedPoint enc = new EncryptedPoint(
                 id,
-                /*shard*/ 0,
+                0,
                 new byte[12],
                 new byte[32],
                 1,
                 vec.length,
-                /*perTable*/ null
+                null
         );
         when(crypto.encrypt(eq(id), eq(vec))).thenReturn(enc);
 
         UnsupportedOperationException ex =
                 assertThrows(UnsupportedOperationException.class, () -> svc.insert(id, vec));
-        assertTrue(ex.getMessage().toLowerCase().contains("precomputed"),
-                "Exception message should mention that precomputed codes are required");
+        assertTrue(ex.getMessage().contains("precomputed codes"));
 
-        // Work that happens before the guarded throw:
         verify(crypto).encrypt(eq(id), eq(vec));
 
         @SuppressWarnings("unchecked")
@@ -112,21 +101,19 @@ class SecureLSHIndexServicePaperModeTest {
         assertTrue(md.containsKey(id));
         assertEquals("1", md.get(id).get("version"));
         assertEquals(String.valueOf(vec.length), md.get(id).get("dim"));
-        // Paper mode must not persist legacy per-table bucket metadata
-        assertTrue(md.get(id).keySet().stream().noneMatch(k -> k.startsWith("b")));
+        assertTrue(md.get(id).keySet().stream().noneMatch(k -> k.startsWith("b")),
+                "Paper mode must not persist legacy per-table bucket metadata");
 
         verify(meta).saveEncryptedPoint(eq(enc));
         verify(keySvc).incrementOperation();
         verify(buffer).add(eq(enc));
 
-        // The guarded handoff prevents calling paper.insert(...).
         verify(paper, never()).insert(any(EncryptedPoint.class), any(double[].class));
         verify(paper, never()).insert(any(EncryptedPoint.class));
     }
 
     @Test
     void batchInsert_encrypts_persists_each_then_throws_on_first_handoff_without_codes_engine() throws IOException {
-        // Prepare two ids/vectors
         List<String> ids = List.of("0", "1");
         List<double[]> vecs = List.of(new double[]{0.1, 0.2}, new double[]{0.3, 0.4});
 
@@ -137,9 +124,8 @@ class SecureLSHIndexServicePaperModeTest {
 
         UnsupportedOperationException ex =
                 assertThrows(UnsupportedOperationException.class, () -> svc.batchInsert(ids, vecs));
-        assertTrue(ex.getMessage().toLowerCase().contains("precomputed"));
+        assertTrue(ex.getMessage().contains("precomputed codes"));
 
-        // We still expect pre-handoff work for the first element
         verify(crypto).encrypt("0", vecs.get(0));
 
         @SuppressWarnings("unchecked")
@@ -154,14 +140,13 @@ class SecureLSHIndexServicePaperModeTest {
         verify(keySvc).incrementOperation();
         verify(buffer).add(eq(enc0));
 
-        // No paper calls (guarded)
         verify(paper, never()).insert(any(EncryptedPoint.class), any(double[].class));
         verify(paper, never()).insert(any(EncryptedPoint.class));
     }
 
     @Test
     void lookup_delegates_to_paper() {
-        QueryToken t = simpleToken(/*topK*/ 5, /*dim*/ 2);
+        QueryToken t = simpleToken(5, 2);
 
         List<EncryptedPoint> canned = List.of(
                 new EncryptedPoint("a", 0, new byte[12], new byte[32], 1, 2, List.of()),
@@ -188,7 +173,7 @@ class SecureLSHIndexServicePaperModeTest {
     }
 
     @Test
-    void updateCachedPoint_isRemembered() {
+    void updateCachedPoint_isRemembered() throws Exception {
         EncryptedPoint ep = new EncryptedPoint(
                 "cached",
                 0,
@@ -199,11 +184,11 @@ class SecureLSHIndexServicePaperModeTest {
                 List.of()
         );
 
-        // Exercise updateCachedPoint: it should store in local cache and persist
-        svc.updateCachedPoint(ep);
+        when(meta.loadEncryptedPoint("cached")).thenReturn(ep);
 
+        svc.updateCachedPoint(ep);
         EncryptedPoint again = svc.getEncryptedPoint("cached");
-        assertNotNull(again, "Cached point should be returned by getEncryptedPoint");
+        assertNotNull(again);
         assertEquals("cached", again.getId());
     }
 }

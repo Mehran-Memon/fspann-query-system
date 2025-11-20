@@ -8,12 +8,13 @@ import com.fspann.crypto.CryptoService;
 import com.fspann.index.service.SecureLSHIndexService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.Mockito;
 
 import java.util.Collections;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 class SecureLSHIndexServiceTest {
@@ -21,13 +22,10 @@ class SecureLSHIndexServiceTest {
     private CryptoService crypto;
     private KeyLifeCycleService keyService;
     private RocksDBMetadataManager metadataManager;
-    private SecureLSHIndexService indexService;
-    private EncryptedPointBuffer buffer;
     private SecureLSHIndexService.PaperSearchEngine paper;
-    @BeforeEach
-    void setUp() {
-        crypto = mock(CryptoService.class);
-    }
+    private EncryptedPointBuffer buffer;
+    private SecureLSHIndexService indexService;
+
     @BeforeEach
     void setup() {
         crypto = mock(CryptoService.class);
@@ -43,12 +41,10 @@ class SecureLSHIndexServiceTest {
                 crypto,
                 keyService,
                 metadataManager,
-                paper,
+                paper,      // non-Partitioned mock → "no codes engine" branch
                 buffer
-
         );
     }
-
 
     @Test
     void insert_VectorIsEncryptedAndMetadataPersisted() throws Exception {
@@ -56,7 +52,6 @@ class SecureLSHIndexServiceTest {
         double[] vector = {1.0, 2.0};
         int dimension = vector.length;
 
-        // Crypto returns IV/cipher only; service computes buckets itself
         EncryptedPoint enc = new EncryptedPoint(
                 id,
                 0,
@@ -68,7 +63,15 @@ class SecureLSHIndexServiceTest {
         );
         when(crypto.encrypt(eq(id), eq(vector))).thenReturn(enc);
 
-        indexService.insert(id, vector);
+        UnsupportedOperationException ex = assertThrows(
+                UnsupportedOperationException.class,
+                () -> indexService.insert(id, vector),
+                "Paper mode must reject plaintext insert(id, vector)"
+        );
+        assertTrue(ex.getMessage().contains("precomputed codes"));
+
+        // We still expect pre-handoff work to have happened:
+        verify(crypto).encrypt(eq(id), eq(vector));
 
         verify(metadataManager).batchUpdateVectorMetadata(argThat(map -> {
             Map<String, String> m = map.get(id);
@@ -77,7 +80,13 @@ class SecureLSHIndexServiceTest {
                     && String.valueOf(dimension).equals(m.get("dim"));
         }));
 
-        verify(metadataManager).saveEncryptedPoint(any(EncryptedPoint.class));
+        verify(metadataManager).saveEncryptedPoint(eq(enc));
+        verify(keyService).incrementOperation();
+        verify(buffer).add(eq(enc));
+
+        // And absolutely no handoff to paper engine
+        verify(paper, never()).insert(any(EncryptedPoint.class), any(double[].class));
+        verify(paper, never()).insert(any(EncryptedPoint.class));
     }
 
     @Test

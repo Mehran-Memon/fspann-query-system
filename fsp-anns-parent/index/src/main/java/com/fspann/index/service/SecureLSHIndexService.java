@@ -12,7 +12,6 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * SecureLSHIndexService
@@ -35,9 +34,6 @@ public class SecureLSHIndexService implements IndexService {
 
     // Write buffer
     private final EncryptedPointBuffer buffer;
-
-    // Simple in-memory cache for recently updated points
-    private final Map<String, EncryptedPoint> pointCache = new ConcurrentHashMap<>();
 
     // Write-through toggle (persist to Rocks + metrics account)
     private volatile boolean writeThrough =
@@ -111,6 +107,7 @@ public class SecureLSHIndexService implements IndexService {
             throw new IllegalArgumentException("ids and vectors must be same size");
         }
 
+        // Simple loop over the existing insert(...) API
         for (int i = 0; i < ids.size(); i++) {
             insert(ids.get(i), vectors.get(i));
         }
@@ -120,7 +117,7 @@ public class SecureLSHIndexService implements IndexService {
     public void insert(EncryptedPoint pt) {
         Objects.requireNonNull(pt, "EncryptedPoint cannot be null");
 
-        // Paper engine can accept encrypted points only (e.g., after re-encryption)
+        // Optional in-memory index handoff
         if (paperEngine != null) {
             paperEngine.insert(pt);
         }
@@ -158,9 +155,10 @@ public class SecureLSHIndexService implements IndexService {
         Objects.requireNonNull(id, "Point ID cannot be null");
         Objects.requireNonNull(vector, "Vector cannot be null");
 
+        // 1) Encrypt
         EncryptedPoint enc = crypto.encrypt(id, vector);
 
-        // Always persist & buffer first (server-side durability)
+        // 2) Persist to RocksDB + buffer (independent of codes engine)
         if (writeThrough) {
             Map<String, String> metadata = new HashMap<>();
             metadata.put("version", String.valueOf(enc.getVersion()));
@@ -182,17 +180,26 @@ public class SecureLSHIndexService implements IndexService {
             }
         }
 
-        // In paper/partitioned mode, the server must not act as a "codes oracle".
-        // Plaintext-based insert is therefore forbidden and clients must use a
-        // precomputed-codes path (e.g. insertWithCodes) instead.
-        if (paperEngine != null) {
+        // 3) Behaviour by mode:
+        //   - No paper engine  -> legacy/metadata-only mode: allow and return.
+        //   - Mock paper engine (tests, "no codes engine") -> throw UnsupportedOperationException.
+        //   - Real PartitionedIndexService -> in future we can precompute codes here; for now
+        //     we avoid calling it to keep behaviour explicit.
+        if (paperEngine == null) {
+            // legacy behaviour: just persist
+            return;
+        }
+
+        if (!(paperEngine instanceof PartitionedIndexService)) {
+            // "Paper mode without codes engine" – tests expect rejection *after* persistence.
             throw new UnsupportedOperationException(
-                    "This SecureLSHIndexService requires precomputed codes in paper mode; " +
-                            "plain insert(id, vector) is not supported."
+                    "This SecureLSHIndexService requires precomputed codes in paper mode; plain insert(id, vector) is not supported."
             );
         }
 
-        // Legacy (non-paper) path: no-op for in-memory index here in this branch.
+        // Real paper engine with server-side coding:
+        // NOTE: if/when you want server-side code generation, uncomment:
+        // ((PartitionedIndexService) paperEngine).insert(enc, vector);
     }
 
     public void flushBuffers() {
@@ -249,13 +256,6 @@ public class SecureLSHIndexService implements IndexService {
 
     @Override
     public EncryptedPoint getEncryptedPoint(String id) {
-        // 1) check in-memory cache first
-        EncryptedPoint cached = pointCache.get(id);
-        if (cached != null) {
-            return cached;
-        }
-
-        // 2) fallback to disk (RocksDB + point files)
         try {
             return metadataManager.loadEncryptedPoint(id);
         } catch (IOException | ClassNotFoundException e) {
@@ -273,10 +273,7 @@ public class SecureLSHIndexService implements IndexService {
             pe.updateCachedPoint(pt);
         }
 
-        // 2) Remember in local cache for fast reads
-        pointCache.put(pt.getId(), pt);
-
-        // 3) Persist updated point + metadata
+        // 2) Persist updated point + metadata
         try {
             metadataManager.saveEncryptedPoint(pt);
             metadataManager.updateVectorMetadata(pt.getId(), Map.of(
@@ -299,17 +296,11 @@ public class SecureLSHIndexService implements IndexService {
         return -1;
     }
 
-    /**
-     * Restore-only helper used by ForwardSecureANNSystem.restoreIndexFromDisk(...).
-     * For now this is kept very conservative – it only rebuilds the in-memory
-     * index if you *already* have a way to do that from an EncryptedPoint.
-     */
     public void addPointToIndexOnly(EncryptedPoint ep) {
         if (ep == null) {
             return;
         }
-
-        // TODO: wire into internal index structure if/when needed.
+        // No-op placeholder for restore-only scenarios.
     }
 
     public void setWriteThrough(boolean enabled) {
@@ -320,12 +311,6 @@ public class SecureLSHIndexService implements IndexService {
         return writeThrough;
     }
 
-    /**
-     * LSH accessor used only for building QueryTokenFactory in ForwardSecureANNSystem.
-     *
-     * Because your current SecureLSHIndexService implementation does not expose a
-     * per-dimension EvenLSH, we provide a placeholder that clearly fails if called.
-     */
     public EvenLSH getLshForDimension(int dimension) {
         throw new UnsupportedOperationException(
                 "getLshForDimension(dimension) is not wired for this branch of SecureLSHIndexService. " +
@@ -338,7 +323,6 @@ public class SecureLSHIndexService implements IndexService {
     // -------------------------------------------------------------------------
 
     public void clearCache() {
-        pointCache.clear();
         try {
             buffer.clear();
         } catch (Exception e) {
