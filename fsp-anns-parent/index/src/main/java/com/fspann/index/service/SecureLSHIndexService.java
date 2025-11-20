@@ -12,6 +12,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * SecureLSHIndexService
@@ -34,6 +35,9 @@ public class SecureLSHIndexService implements IndexService {
 
     // Write buffer
     private final EncryptedPointBuffer buffer;
+
+    // Simple in-memory cache for recently updated points
+    private final Map<String, EncryptedPoint> pointCache = new ConcurrentHashMap<>();
 
     // Write-through toggle (persist to Rocks + metrics account)
     private volatile boolean writeThrough =
@@ -107,7 +111,6 @@ public class SecureLSHIndexService implements IndexService {
             throw new IllegalArgumentException("ids and vectors must be same size");
         }
 
-        // Simple loop over the existing insert(...) API
         for (int i = 0; i < ids.size(); i++) {
             insert(ids.get(i), vectors.get(i));
         }
@@ -117,6 +120,7 @@ public class SecureLSHIndexService implements IndexService {
     public void insert(EncryptedPoint pt) {
         Objects.requireNonNull(pt, "EncryptedPoint cannot be null");
 
+        // Paper engine can accept encrypted points only (e.g., after re-encryption)
         if (paperEngine != null) {
             paperEngine.insert(pt);
         }
@@ -156,12 +160,7 @@ public class SecureLSHIndexService implements IndexService {
 
         EncryptedPoint enc = crypto.encrypt(id, vector);
 
-        if (paperEngine != null) {
-            // In a full implementation you’d pass (enc, plaintext) to precompute codes
-            // Here we keep the simple encrypted-only path, assuming client pre-computes codes.
-            paperEngine.insert(enc);
-        }
-
+        // Always persist & buffer first (server-side durability)
         if (writeThrough) {
             Map<String, String> metadata = new HashMap<>();
             metadata.put("version", String.valueOf(enc.getVersion()));
@@ -182,12 +181,23 @@ public class SecureLSHIndexService implements IndexService {
                 logger.warn("Buffered write failed for {}", enc.getId(), e);
             }
         }
+
+        // In paper/partitioned mode, the server must not act as a "codes oracle".
+        // Plaintext-based insert is therefore forbidden and clients must use a
+        // precomputed-codes path (e.g. insertWithCodes) instead.
+        if (paperEngine != null) {
+            throw new UnsupportedOperationException(
+                    "This SecureLSHIndexService requires precomputed codes in paper mode; " +
+                            "plain insert(id, vector) is not supported."
+            );
+        }
+
+        // Legacy (non-paper) path: no-op for in-memory index here in this branch.
     }
 
     public void flushBuffers() {
         buffer.flushAll();
     }
-
 
     @Override
     public List<EncryptedPoint> lookup(QueryToken token) {
@@ -239,6 +249,13 @@ public class SecureLSHIndexService implements IndexService {
 
     @Override
     public EncryptedPoint getEncryptedPoint(String id) {
+        // 1) check in-memory cache first
+        EncryptedPoint cached = pointCache.get(id);
+        if (cached != null) {
+            return cached;
+        }
+
+        // 2) fallback to disk (RocksDB + point files)
         try {
             return metadataManager.loadEncryptedPoint(id);
         } catch (IOException | ClassNotFoundException e) {
@@ -256,7 +273,10 @@ public class SecureLSHIndexService implements IndexService {
             pe.updateCachedPoint(pt);
         }
 
-        // 2) Persist updated point + metadata
+        // 2) Remember in local cache for fast reads
+        pointCache.put(pt.getId(), pt);
+
+        // 3) Persist updated point + metadata
         try {
             metadataManager.saveEncryptedPoint(pt);
             metadataManager.updateVectorMetadata(pt.getId(), Map.of(
@@ -283,20 +303,13 @@ public class SecureLSHIndexService implements IndexService {
      * Restore-only helper used by ForwardSecureANNSystem.restoreIndexFromDisk(...).
      * For now this is kept very conservative – it only rebuilds the in-memory
      * index if you *already* have a way to do that from an EncryptedPoint.
-     *
-     * If you don’t yet have such logic, this is a safe no-op and will still
-     * let things compile; you can later wire it into your real index structure.
      */
     public void addPointToIndexOnly(EncryptedPoint ep) {
         if (ep == null) {
             return;
         }
 
-        // TODO (optional – if you have an internal index that accepts EncryptedPoint):
-        //   myIndex.addPoint(ep);
-        //
-        // For now we leave it as a no-op to avoid touching internals that are not
-        // present in this branch.
+        // TODO: wire into internal index structure if/when needed.
     }
 
     public void setWriteThrough(boolean enabled) {
@@ -312,9 +325,6 @@ public class SecureLSHIndexService implements IndexService {
      *
      * Because your current SecureLSHIndexService implementation does not expose a
      * per-dimension EvenLSH, we provide a placeholder that clearly fails if called.
-     *
-     * Once you know which EvenLSH instance you use internally for a given dimension,
-     * replace the body of this method to return it.
      */
     public EvenLSH getLshForDimension(int dimension) {
         throw new UnsupportedOperationException(
@@ -323,13 +333,12 @@ public class SecureLSHIndexService implements IndexService {
                         " in your internal index structure.");
     }
 
-
     // -------------------------------------------------------------------------
     // Extra helpers for lifecycle
     // -------------------------------------------------------------------------
 
     public void clearCache() {
-        // Clears in-memory write buffer only (not RocksDB)
+        pointCache.clear();
         try {
             buffer.clear();
         } catch (Exception e) {
@@ -346,7 +355,6 @@ public class SecureLSHIndexService implements IndexService {
         // Metadata manager close is handled at system level (ForwardSecureANNSystem)
     }
 
-
     // -------------------------------------------------------------------------
     // Paper-aligned engine contract (Partitioned Indexing)
     // -------------------------------------------------------------------------
@@ -356,6 +364,5 @@ public class SecureLSHIndexService implements IndexService {
         List<EncryptedPoint> lookup(QueryToken token);             // encrypted candidates (subset union)
         void delete(String id);
         int getVectorCountForDimension(int dimension);
-
     }
 }
