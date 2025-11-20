@@ -36,3 +36,6 @@ data/
 # Result & Evaluation Outputs
 # ===========================================
 Results/
+.tmp
+*.class
+api/dependency-reduced-pom.xml

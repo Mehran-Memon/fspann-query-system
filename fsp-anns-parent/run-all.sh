@@ -194,8 +194,8 @@ fi
 # If Dim is "", it will be auto-detected from base file header.
 # Format: Name::Base::Query::GT::Dim
 DATASETS=(
-  "Enron::/mnt/data/mehran/Datasets/Enron/enron_base.fvecs::/mnt/data/mehran/Datasets/Enron/enron_query.fvecs::/mnt/data/mehran/Datasets/Enron/enron_groundtruth.ivecs::1369"
-  "audio::/mnt/data/mehran/Datasets/audio/audio_base.fvecs::/mnt/data/mehran/Datasets/audio/audio_query.fvecs::/mnt/data/mehran/Datasets/audio/audio_groundtruth.ivecs::192"
+#  "Enron::/mnt/data/mehran/Datasets/Enron/enron_base.fvecs::/mnt/data/mehran/Datasets/Enron/enron_query.fvecs::/mnt/data/mehran/Datasets/Enron/enron_groundtruth.ivecs::1369"
+#  "audio::/mnt/data/mehran/Datasets/audio/audio_base.fvecs::/mnt/data/mehran/Datasets/audio/audio_query.fvecs::/mnt/data/mehran/Datasets/audio/audio_groundtruth.ivecs::192"
   "SIFT1M::/mnt/data/mehran/Datasets/SIFT1M/sift_base.fvecs::/mnt/data/mehran/Datasets/SIFT1M/sift_query.fvecs::/mnt/data/mehran/Datasets/SIFT1M/sift_query_groundtruth.ivecs::128"
   "synthetic_128::/mnt/data/mehran/Datasets/synthetic_128/base.fvecs::/mnt/data/mehran/Datasets/synthetic_128/query.fvecs::/mnt/data/mehran/Datasets/synthetic_128/groundtruth.ivecs::128"
   "synthetic_256::/mnt/data/mehran/Datasets/synthetic_256/base.fvecs::/mnt/data/mehran/Datasets/synthetic_256/query.fvecs::/mnt/data/mehran/Datasets/synthetic_256/groundtruth.ivecs::256"
