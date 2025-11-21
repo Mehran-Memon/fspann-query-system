@@ -292,12 +292,6 @@ public class QueryServiceImpl implements QueryService {
         lastTouchedCumulativeUnique = GLOBAL_TOUCHED.size();
     }
 
-    public long getLastQueryDurationNs()   { return lastQueryDurationNs; }
-    public int  getLastCandTotal()         { return lastCandTotal; }
-    public int  getLastCandKeptVersion()   { return lastCandKeptVersion; }
-    public int  getLastCandDecrypted()     { return lastCandDecrypted; }
-    public int  getLastReturned()          { return lastReturned; }
-
     public long getLastQueryDurationNsCappedTo(long clientWindowNs) {
         if (clientWindowNs <= 0L) return Math.max(0L, lastQueryDurationNs);
         return Math.min(Math.max(0L, lastQueryDurationNs), clientWindowNs);
@@ -307,4 +301,11 @@ public class QueryServiceImpl implements QueryService {
         return (lastCandIds == null) ? java.util.Collections.emptyList()
                 : java.util.Collections.unmodifiableList(lastCandIds);
     }
+
+    public long getLastQueryDurationNs()   { return lastQueryDurationNs; }
+    public int  getLastCandTotal()         { return lastCandTotal; }
+    public int  getLastCandKeptVersion()   { return lastCandKeptVersion; }
+    public int  getLastCandDecrypted()     { return lastCandDecrypted; }
+    public int  getLastReturned()          { return lastReturned; }
+
 }

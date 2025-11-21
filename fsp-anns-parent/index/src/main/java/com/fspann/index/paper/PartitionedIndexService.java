@@ -507,6 +507,26 @@ public class PartitionedIndexService implements PaperSearchEngine {
         }
     }
 
+    private int computeBucket(BitSet code) {
+        if (code == null) return 0;
+
+        int bucket = 0;
+        for (int i = 0; i < lambda; i++) {
+            if (code.get(i)) {
+                bucket |= (1 << i);
+            }
+        }
+        return bucket;
+    }
+
+    public int[] getBucketsForCodes(BitSet[] codes) {
+        int[] buckets = new int[codes.length];
+        for (int t = 0; t < codes.length; t++) {
+            buckets[t] = computeBucket(codes[t]);
+        }
+        return buckets;
+    }
+
     // --------------------------------------------------------------------
     // probe.shards integration helpers
     // --------------------------------------------------------------------
