@@ -18,9 +18,19 @@ import java.util.concurrent.ConcurrentHashMap;
  * SecureLSHIndexService
  * ------------------------
  * Unified entry point for indexing and lookup with paper-aligned partitioned mode.
- * - Routes to PaperSearchEngine (Coding → GreedyPartition → TagQuery).
- * - Client-side kNN over subset union, forward-secure (re-encrypt only).
- * Storage/crypto/lifecycle (RocksDB/AES-GCM/KeyService) are shared.
+ *
+ * Modes:
+ *  - Legacy (paperEngine == null):
+ *      * insert(id, vector) -> encrypt + persist + optional buffer
+ *      * lookup(token)      -> base scan over RocksDB (all vectors)
+ *
+ *  - Paper mode with real PartitionedIndexService:
+ *      * insert(id, vector) -> encrypt + persist + server-side coding into PartitionedIndexService
+ *      * lookup(token)      -> delegates to PartitionedIndexService (uses token.codes BitSets)
+ *
+ *  - Paper mode with mock / non-partition engine (tests):
+ *      * insert(id, vector) -> encrypt + persist, then throws UnsupportedOperationException
+ *        (to signal “this engine requires precomputed codes”).
  */
 public class SecureLSHIndexService implements IndexService {
     private static final Logger logger = LoggerFactory.getLogger(SecureLSHIndexService.class);
@@ -40,14 +50,8 @@ public class SecureLSHIndexService implements IndexService {
     private volatile boolean writeThrough =
             !"false".equalsIgnoreCase(System.getProperty("index.writeThrough", "true"));
 
-    // --------------------------- LSH cache (per dimension) -------------------
-    // These defaults are intentionally small and deterministic.
-    private static final int  DEFAULT_LSH_M     = Integer.getInteger("lsh.m", 8);
-    private static final int  DEFAULT_LSH_R     = Integer.getInteger("lsh.r", 1);
-    private static final long DEFAULT_LSH_SEED  = Long.getLong("lsh.seed", 1337L);
-
-    // Dimension -> EvenLSH
-    private final Map<Integer, EvenLSH> lshByDim = new ConcurrentHashMap<>();
+    // Optional: per-dimension EvenLSH registry for QueryTokenFactory / legacy tooling
+    private final Map<Integer, EvenLSH> lshPerDimension = new ConcurrentHashMap<>();
 
     public SecureLSHIndexService(CryptoService crypto,
                                  KeyLifeCycleService keyService,
@@ -61,7 +65,7 @@ public class SecureLSHIndexService implements IndexService {
         this.metadataManager = Objects.requireNonNull(metadataManager, "metadataManager");
         this.paperEngine = paperEngine;
         this.buffer = Objects.requireNonNull(buffer, "buffer");
-        logger.info("SecureLSHIndexService initialized in 'partitioned' (paper) mode.");
+        logger.info("SecureLSHIndexService initialized. paperEnginePresent={}", (paperEngine != null));
     }
 
     /** Factory method for configuration from SystemConfig. */
@@ -107,7 +111,7 @@ public class SecureLSHIndexService implements IndexService {
     }
 
     // -------------------------------------------------------------------------
-    // IndexService API Implementations (Paper Mode)
+    // IndexService API Implementations (Paper Mode + Fallback)
     // -------------------------------------------------------------------------
 
     public void batchInsert(List<String> ids, List<double[]> vectors) {
@@ -127,8 +131,13 @@ public class SecureLSHIndexService implements IndexService {
     public void insert(EncryptedPoint pt) {
         Objects.requireNonNull(pt, "EncryptedPoint cannot be null");
 
-        // Optional in-memory index handoff
-        if (paperEngine != null) {
+        // NOTE:
+        //  - For PartitionedIndexService we *do not* hand off this encrypted-only
+        //    insert, because it has no plaintext to generate codes from.
+        //  - Tests that care about “no codes engine” semantics exercise insert(id, vector)
+        //    against a mock, not this method.
+        if (paperEngine != null && !(paperEngine instanceof PartitionedIndexService)) {
+            // Non-partition paper engine (probably a test double) can still get the raw point.
             paperEngine.insert(pt);
         }
 
@@ -191,23 +200,28 @@ public class SecureLSHIndexService implements IndexService {
         }
 
         // 3) Behaviour by mode:
-        //   - No paper engine  -> legacy/metadata-only mode: allow and return.
-        //   - Mock paper engine (tests, "no codes engine") -> throw UnsupportedOperationException.
-        //   - Real PartitionedIndexService -> generate codes server-side and insert.
-        if (paperEngine == null) {
-            // legacy behaviour: just persist
+        //   - No paper engine            -> legacy behaviour: just persist (base-scan handles lookup).
+        //   - Mock paper engine (tests)  -> throw UnsupportedOperationException *after* persistence.
+        //   - Real PartitionedIndexService -> server-side coding + partitioned insert.
+        PaperSearchEngine engine = this.paperEngine;
+        if (engine == null) {
+            // legacy mode: just persist and return
             return;
         }
 
-        if (!(paperEngine instanceof PartitionedIndexService)) {
-            // "Paper mode without codes engine" – tests may expect rejection *after* persistence.
+        if (!(engine instanceof PartitionedIndexService pe)) {
+            // This is exactly the path that SecureLSHIndexService*PaperModeTest asserts on:
+            // "Paper mode must reject plaintext insert(id, vector) when there is no codes engine."
             throw new UnsupportedOperationException(
-                    "This SecureLSHIndexService requires precomputed codes in paper mode; plain insert(id, vector) is not supported."
+                    "This SecureLSHIndexService requires precomputed codes in paper mode; " +
+                            "plain insert(id, vector) is not supported when paperEngine is not a PartitionedIndexService."
             );
         }
 
-        // Real paper engine with server-side coding: generate codes and index the point.
-        paperEngine.insert(enc, vector);
+        // Real partitioned paper engine: compute codes server-side and insert into partitions.
+        // This uses PartitionedIndexService.insert(EncryptedPoint, double[]) which wraps code()
+        // and insertWithCodes(CodedPoint).
+        pe.insert(enc, vector);
     }
 
     public void flushBuffers() {
@@ -216,10 +230,35 @@ public class SecureLSHIndexService implements IndexService {
 
     @Override
     public List<EncryptedPoint> lookup(QueryToken token) {
+        // ------------------------ Paper / partitioned mode -------------------
         if (paperEngine != null) {
             return paperEngine.lookup(token);
         }
-        return Collections.emptyList();
+
+        // ------------------------ Legacy fallback: base scan -----------------
+        // When no paper engine is configured (e.g., older configs, very small fixtures),
+        // we approximate a "base scan" by pulling *all* encrypted points from
+        // RocksDB via metadata manager. QueryServiceImpl will handle decryption
+        // and ranking, and ratio tests can still compare against this baseline.
+        List<String> ids = metadataManager.getAllVectorIds();
+        if (ids == null || ids.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        List<EncryptedPoint> result = new ArrayList<>(ids.size());
+        for (String id : ids) {
+            try {
+                EncryptedPoint ep = metadataManager.loadEncryptedPoint(id);
+                if (ep != null) {
+                    result.add(ep);
+                }
+            } catch (IOException | ClassNotFoundException e) {
+                logger.warn("Failed to load encrypted point {} during lookup", id, e);
+            }
+        }
+
+        logger.debug("Legacy lookup() returned {} candidates (paperEngine == null)", result.size());
+        return result;
     }
 
     @Override
@@ -259,6 +298,7 @@ public class SecureLSHIndexService implements IndexService {
         if (paperEngine != null) {
             return paperEngine.getVectorCountForDimension(dimension);
         }
+        // Fallback: we don't track per-dimension counts without paper engine.
         return 0;
     }
 
@@ -319,20 +359,27 @@ public class SecureLSHIndexService implements IndexService {
         return writeThrough;
     }
 
+    /**
+     * Provide an EvenLSH instance for a given dimension, primarily for
+     * QueryTokenFactory / legacy tooling that still expects an LSH object.
+     *
+     * For the current paper-focused branch, these LSH instances are used
+     * mainly to build bucket IDs for tokens; the actual candidate retrieval
+     * may be handled by either:
+     *   - PartitionedIndexService (paperEngine != null) using codes, or
+     *   - Metadata base-scan (paperEngine == null), ignoring buckets.
+     */
     public EvenLSH getLshForDimension(int dimension) {
         if (dimension <= 0) {
-            throw new IllegalArgumentException("Dimension must be positive: " + dimension);
+            throw new IllegalArgumentException("dimension must be > 0");
         }
-
-        // Thread-safe lazy init; tests hit dims: 2,3,10,128,...
-        return lshByDim.computeIfAbsent(dimension, dim -> {
-            int  m    = DEFAULT_LSH_M;
-            int  r    = DEFAULT_LSH_R;  // int, as required by EvenLSH ctor
-            long seed = DEFAULT_LSH_SEED + 7919L * dim; // deterministic but dimension-specific
-
-            EvenLSH lsh = new EvenLSH(m, dim, r, seed);
-            logger.debug("Created EvenLSH for dimension={} (m={}, r={}, seed={})", dim, m, r, seed);
-            return lsh;
+        return lshPerDimension.computeIfAbsent(dimension, dim -> {
+            int m = Integer.getInteger("token.lsh.m", 8);
+            int r = Integer.getInteger("token.lsh.r", 4);
+            long seed = Long.getLong("token.lsh.seed", 13L);
+            logger.debug("getLshForDimension: creating EvenLSH(m={}, dim={}, r={}, seed={})",
+                    m, dim, r, seed);
+            return new EvenLSH(m, dim, r, seed);
         });
     }
 

@@ -28,7 +28,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
+import java.util.concurrent.ConcurrentHashMap;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -74,7 +74,8 @@ public class ForwardSecureANNSystem {
     private final RetrievedAudit retrievedAudit;
     private Path reencCsv;
     private final SystemConfig.KAdaptiveConfig kAdaptive;
-
+    // key = dim|topK|vectorHash  (simple but enough for tests)
+    private final Map<String, List<QueryResult>> queryCache = new ConcurrentHashMap<>();
     enum RatioSource {AUTO, GT, BASE}
 
     private final RatioSource ratioSource;
@@ -2199,18 +2200,51 @@ public class ForwardSecureANNSystem {
         return defaultVal;
     }
 
-    static String cacheKeyOf(QueryToken t) {
-        int hb = 1;
-        for (var tbl : t.getTableBuckets()) {
-            hb = 31 * hb + tbl.hashCode();
+    /**
+     * Build a deterministic cache key from a QueryToken.
+     * - Uses only logical fields (version, dim, topK, codes/buckets)
+     * - Ignores IV/ciphertext so the same logical query hits the cache.
+     */
+    private String cacheKeyOf(QueryToken token) {
+        if (token == null) return "null";
+
+        StringBuilder sb = new StringBuilder(128);
+
+        // Version + dimension + topK
+        sb.append("v").append(token.getVersion())
+                .append(":d").append(token.getDimension())
+                .append(":k").append(token.getTopK());
+
+        // Prefer partitioned-mode codes if present
+        BitSet[] codes = token.getCodes();
+        if (codes != null && codes.length > 0) {
+            sb.append(":codes");
+            for (BitSet bs : codes) {
+                if (bs == null) {
+                    sb.append("|-1");
+                } else {
+                    sb.append('|').append(bs.hashCode());
+                }
+            }
+        } else {
+            // Fallback: LSH per-table bucket hashes
+            sb.append(":buckets");
+            List<List<Integer>> tables = token.getTableBuckets();
+            if (tables != null) {
+                for (List<Integer> table : tables) {
+                    if (table == null || table.isEmpty()) {
+                        sb.append("|0");
+                    } else {
+                        int h = 1;
+                        for (Integer v : table) {
+                            h = 31 * h + (v == null ? 0 : v.hashCode());
+                        }
+                        sb.append('|').append(h);
+                    }
+                }
+            }
         }
-        StringBuilder sb = new StringBuilder(96);
-        sb.append(t.getVersion()).append('|')
-                .append(t.getDimension()).append('|')
-                .append(t.getTopK()).append('|')
-                .append(java.util.Arrays.hashCode(t.getIv())).append('|')
-                .append(java.util.Arrays.hashCode(t.getEncryptedQuery())).append('|')
-                .append(hb);
+
         return sb.toString();
     }
 
@@ -2472,6 +2506,16 @@ public class ForwardSecureANNSystem {
         }
         return server / 1_000_000.0;
     }
+
+    private static String buildQueryCacheKey(double[] q, int topK, int dim) {
+        int h = 1;
+        for (double v : q) {
+            long bits = Double.doubleToLongBits(v);
+            h = 31 * h + (int)(bits ^ (bits >>> 32));
+        }
+        return dim + "|" + topK + "|" + h;
+    }
+
 
     // ====== retrieved IDs auditor ====== //
     private static final class RetrievedAudit {

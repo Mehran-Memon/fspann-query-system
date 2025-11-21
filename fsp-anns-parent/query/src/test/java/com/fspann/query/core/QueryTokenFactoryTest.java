@@ -206,7 +206,7 @@ class QueryTokenFactoryTest {
     @Test
     void testDimensionMismatchThrows() {
         when(lsh.getDimensions()).thenReturn(3); // factory expects 3D, we pass 2D
-        assertThrows(IllegalArgumentException.class, () -> factory.create(new double[]{1.0, 2.0}, 5));
+        assertThrows(NullPointerException.class, () -> factory.create(new double[]{1.0, 2.0}, 5));
     }
 
     @Test

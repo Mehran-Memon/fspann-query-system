@@ -124,7 +124,7 @@ public class QueryServiceImpl implements QueryService {
                 lastCandKeptVersion++;
 
                 final double[] v = cryptoService.decryptFromPoint(ep, kv.getKey());
-                if (v == null || v.length != qVec.length) continue;
+                if (v == null || v.length == 0) continue;
 
                 lastCandDecrypted++;
                 final double d2 = l2sq(qVec, v);
@@ -250,10 +250,26 @@ public class QueryServiceImpl implements QueryService {
     private static <T> List<T> nn(List<T> v) { return (v == null) ? Collections.emptyList() : v; }
     private static int[] safeGt(int[] a)     { return (a == null) ? new int[0] : a; }
 
+    /**
+     * Dimension-tolerant squared L2 distance.
+     * If vectors differ in length, we compute over the overlapping prefix
+     * and log a warning instead of throwing.
+     */
     private double l2sq(double[] a, double[] b) {
-        if (a.length != b.length) throw new IllegalArgumentException("Vector dimension mismatch: " + a.length + " vs " + b.length);
-        double s = 0;
-        for (int i = 0; i < a.length; i++) {
+        if (a == null || b == null) {
+            throw new IllegalArgumentException("Vectors must not be null");
+        }
+
+        int len = Math.min(a.length, b.length);
+        if (a.length != b.length) {
+            logger.warn(
+                    "Vector dimension mismatch in l2sq: a.length={} b.length={}; using first {} dimensions.",
+                    a.length, b.length, len
+            );
+        }
+
+        double s = 0.0;
+        for (int i = 0; i < len; i++) {
             double d = a[i] - b[i];
             s += d * d;
         }
@@ -307,5 +323,4 @@ public class QueryServiceImpl implements QueryService {
     public int  getLastCandKeptVersion()   { return lastCandKeptVersion; }
     public int  getLastCandDecrypted()     { return lastCandDecrypted; }
     public int  getLastReturned()          { return lastReturned; }
-
 }

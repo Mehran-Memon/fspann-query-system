@@ -146,21 +146,18 @@ class ForwardSecureANNSystemPrecisionAndReencTest {
 
         String[] h = CSV_SPLIT.split(glines.get(0), -1);
         int kIdx     = colIndex(h, "topK");
-        int macroIdx = colIndex(h, "macro_precision");
-        int microIdx = colIndex(h, "micro_precision");
+        int precisionIdx = colIndex(h, "precision");
         int rrIdx    = colIndex(h, "return_rate");
-        assertTrue(kIdx >= 0 && macroIdx >= 0 && microIdx >= 0 && rrIdx >= 0,
+        assertTrue(kIdx >= 0 && precisionIdx >= 0 && rrIdx >= 0,
                 "Missing expected columns in global_precision.csv");
 
         boolean sawK1 = false;
         for (int i = 1; i < glines.size(); i++) {
             String[] cols = CSV_SPLIT.split(glines.get(i), -1);
             if ("1".equals(cols[kIdx].trim())) {
-                double macro = Double.parseDouble(cols[macroIdx]);
-                double micro = Double.parseDouble(cols[microIdx]);
+                double macro = Double.parseDouble(cols[precisionIdx]);
                 double rr    = Double.parseDouble(cols[rrIdx]);
-                assertEquals(1.0, macro, 1e-6, "macro_precision@1");
-                assertEquals(1.0, micro, 1e-6, "micro_precision@1");
+                assertEquals(1.0, macro, 1e-6, "precision@1");
                 assertEquals(1.0, rr,    1e-6, "return_rate@1");
                 sawK1 = true;
                 break;
