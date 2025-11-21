@@ -12,6 +12,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * SecureLSHIndexService
@@ -38,6 +39,15 @@ public class SecureLSHIndexService implements IndexService {
     // Write-through toggle (persist to Rocks + metrics account)
     private volatile boolean writeThrough =
             !"false".equalsIgnoreCase(System.getProperty("index.writeThrough", "true"));
+
+    // --------------------------- LSH cache (per dimension) -------------------
+    // These defaults are intentionally small and deterministic.
+    private static final int  DEFAULT_LSH_M     = Integer.getInteger("lsh.m", 8);
+    private static final int  DEFAULT_LSH_R     = Integer.getInteger("lsh.r", 1);
+    private static final long DEFAULT_LSH_SEED  = Long.getLong("lsh.seed", 1337L);
+
+    // Dimension -> EvenLSH
+    private final Map<Integer, EvenLSH> lshByDim = new ConcurrentHashMap<>();
 
     public SecureLSHIndexService(CryptoService crypto,
                                  KeyLifeCycleService keyService,
@@ -183,23 +193,21 @@ public class SecureLSHIndexService implements IndexService {
         // 3) Behaviour by mode:
         //   - No paper engine  -> legacy/metadata-only mode: allow and return.
         //   - Mock paper engine (tests, "no codes engine") -> throw UnsupportedOperationException.
-        //   - Real PartitionedIndexService -> in future we can precompute codes here; for now
-        //     we avoid calling it to keep behaviour explicit.
+        //   - Real PartitionedIndexService -> generate codes server-side and insert.
         if (paperEngine == null) {
             // legacy behaviour: just persist
             return;
         }
 
         if (!(paperEngine instanceof PartitionedIndexService)) {
-            // "Paper mode without codes engine" – tests expect rejection *after* persistence.
+            // "Paper mode without codes engine" – tests may expect rejection *after* persistence.
             throw new UnsupportedOperationException(
                     "This SecureLSHIndexService requires precomputed codes in paper mode; plain insert(id, vector) is not supported."
             );
         }
 
-        // Real paper engine with server-side coding:
-        // NOTE: if/when you want server-side code generation, uncomment:
-        // ((PartitionedIndexService) paperEngine).insert(enc, vector);
+        // Real paper engine with server-side coding: generate codes and index the point.
+        paperEngine.insert(enc, vector);
     }
 
     public void flushBuffers() {
@@ -312,10 +320,20 @@ public class SecureLSHIndexService implements IndexService {
     }
 
     public EvenLSH getLshForDimension(int dimension) {
-        throw new UnsupportedOperationException(
-                "getLshForDimension(dimension) is not wired for this branch of SecureLSHIndexService. " +
-                        "You must implement this to return the EvenLSH used for dimension " + dimension +
-                        " in your internal index structure.");
+        if (dimension <= 0) {
+            throw new IllegalArgumentException("Dimension must be positive: " + dimension);
+        }
+
+        // Thread-safe lazy init; tests hit dims: 2,3,10,128,...
+        return lshByDim.computeIfAbsent(dimension, dim -> {
+            int  m    = DEFAULT_LSH_M;
+            int  r    = DEFAULT_LSH_R;  // int, as required by EvenLSH ctor
+            long seed = DEFAULT_LSH_SEED + 7919L * dim; // deterministic but dimension-specific
+
+            EvenLSH lsh = new EvenLSH(m, dim, r, seed);
+            logger.debug("Created EvenLSH for dimension={} (m={}, r={}, seed={})", dim, m, r, seed);
+            return lsh;
+        });
     }
 
     // -------------------------------------------------------------------------
