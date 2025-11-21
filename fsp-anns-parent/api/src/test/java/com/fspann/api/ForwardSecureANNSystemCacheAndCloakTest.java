@@ -74,8 +74,8 @@ class ForwardSecureANNSystemCacheAndCloakTest {
             MicrometerProfiler mp = (MicrometerProfiler) p;
             Path qmCsv = tempDir.resolve("query_metrics.csv");
             mp.exportQueryMetricsCSV(qmCsv.toString());
-
             String csv = Files.readString(qmCsv);
+
             // One row for Q_3 (miss) and one for Q_cache_3 (hit)
             assertTrue(csv.contains("Q_3,"), "Should contain a Q_3 row");
             assertTrue(csv.contains("Q_cache_3,"), "Should contain a Q_cache_3 row");

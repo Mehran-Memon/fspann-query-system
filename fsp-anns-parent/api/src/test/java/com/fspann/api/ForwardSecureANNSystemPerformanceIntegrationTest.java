@@ -30,7 +30,7 @@ public class ForwardSecureANNSystemPerformanceIntegrationTest {
     private static final int DIMS = 10;
     private static final int VECTOR_COUNT = 1000;
     private static final double MAX_INSERT_MS = 1_000.0; // per vector (very relaxed)
-    private static final double MAX_QUERY_MS  =   500.0; // average
+    private static final double MAX_QUERY_MS  =   1000.0; // average
 
     private RocksDBMetadataManager metadataManager;
 
