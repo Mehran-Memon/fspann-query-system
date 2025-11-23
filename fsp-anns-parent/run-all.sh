@@ -11,8 +11,8 @@ IFS=$'\n\t'
 
 # ---- required paths ----
 JarPath="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/api/target/api-0.0.1-SNAPSHOT-jar-with-dependencies.jar"
-ConfigPath="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/config/src/main/resources/config.json"
-OutRoot="/mnt/data/mehran/fsp-ann"
+ConfigPath="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/config/src/main/resources/fine_config.json"
+OutRoot="/mnt/data/mehran/fsp-ann-finetune"
 
 # ---- alpha and JVM system props ----
 Alpha="0.1"

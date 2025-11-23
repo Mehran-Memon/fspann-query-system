@@ -1,0 +1,57 @@
+{
+  "base":
+  {
+    "paper":  {
+      "enabled": true, "m": 25, "lambda": 2, "divisions": 9, "seed": 13
+    },
+    "lsh":
+    {
+      "numTables": 0, "rowsPerBand": 0, "probeShards": 0
+    },
+    "numShards": 1,
+    "opsThreshold": 10000000,
+    "ageThresholdMs": 6048000000,
+    "eval":
+    {
+      "computePrecision": true,
+      "writeGlobalPrecisionCsv": true,
+      "kVariants": [1, 5, 10, 20, 40, 60, 80, 100]
+    },
+    "output":
+    {
+      "exportArtifacts": true,
+      "suppressLegacyMetrics": true
+    },
+    "cloak":
+    {
+      "noise": 0.0
+    },
+    "audit":
+    {
+      "enable": false, "k": 100, "sampleEvery": 250, "worstKeep": 25
+    },
+    "ratio":
+    {
+      "source": "gt",
+      "gtSample": 10000,
+      "gtMismatchTolerance": 0.0,
+      "autoComputeGT": false,
+      "allowComputeIfMissing": false
+    }
+  },
+  "profiles": [
+    { "name": "FP_01_m14_l2",        "overrides": { "paper": { "m": 14, "lambda": 2, "divisions": 2 } } },
+    { "name": "FP_02_m15_l2",        "overrides": { "paper": { "m":15, "lambda": 2, "divisions": 2 } } },
+    { "name": "FP_03_m16_l2",     "overrides": { "paper": { "m": 16, "lambda": 2, "divisions": 2 } } },
+    { "name": "FP_04_m17_l2",     "overrides": { "paper": { "m": 17, "lambda": 3, "divisions": 2 } } },
+    { "name": "FP_05_m18_l2",     "overrides": { "paper": { "m": 18, "lambda": 2, "divisions": 2 } } },
+    { "name": "FP_06_m18_l2",     "overrides": { "paper": { "m": 19, "lambda": 2, "divisions": 2 } } },
+
+    { "name": "FP_01_m14_l3",        "overrides": { "paper": { "m": 14, "lambda": 2, "divisions": 3 } } },
+    { "name": "FP_02_m15_l3",        "overrides": { "paper": { "m":15, "lambda": 2, "divisions": 3} } },
+    { "name": "FP_03_m16_l3",     "overrides": { "paper": { "m": 16, "lambda": 2, "divisions": 3 } } },
+    { "name": "FP_04_m17_l3",     "overrides": { "paper": { "m": 17, "lambda": 3, "divisions": 3 } } },
+    { "name": "FP_05_m18_l3",     "overrides": { "paper": { "m": 18, "lambda": 2, "divisions": 3 } } },
+    { "name": "FP_06_m18_l3",     "overrides": { "paper": { "m": 19, "lambda": 2, "divisions": 3 } } }
+    ]
+}

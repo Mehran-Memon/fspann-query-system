@@ -84,7 +84,6 @@ public class ForwardSecureANNSystem {
 
     private final int BATCH_SIZE;
     private long totalIndexingTimeNs = 0L;
-    private long totalQueryTimeNs    = 0L;
     private int totalInserted = 0;
     private final java.util.concurrent.atomic.AtomicInteger indexedCount = new java.util.concurrent.atomic.AtomicInteger();
     private final java.util.concurrent.atomic.AtomicLong fileOrdinal = new java.util.concurrent.atomic.AtomicLong(0);
@@ -571,7 +570,6 @@ public class ForwardSecureANNSystem {
         List<QueryResult> cached = cache.get(ckey);
         if (cached != null) {
             long ns = Math.max(0L, System.nanoTime() - start);
-            totalQueryTimeNs += ns;  // accumulate client time (cache hit)
             if (profiler != null) profiler.recordQueryMetric("Q_cache_" + topK, 0.0, ns / 1e6, 0.0);
             return cached;
         }
@@ -582,7 +580,6 @@ public class ForwardSecureANNSystem {
         cache.put(ckey, results);
 
         long clientNs = Math.max(0L, end - start);
-        totalQueryTimeNs += clientNs;  // accumulate client time (cache miss)
 
         if (profiler != null) {
             QueryServiceImpl qs = (QueryServiceImpl) queryService;
@@ -612,7 +609,6 @@ public class ForwardSecureANNSystem {
         List<QueryResult> cached = cache.get(ckey);
         if (cached != null) {
             long clientNs = Math.max(0L, System.nanoTime() - start);
-            totalQueryTimeNs += clientNs; // accumulate client time (cache hit)
             if (profiler != null) profiler.recordQueryMetric("Q_cache_" + topK, 0.0, clientNs / 1_000_000.0, 0.0);
             return cached;
         }
@@ -622,7 +618,6 @@ public class ForwardSecureANNSystem {
         cache.put(ckey, results);
 
         long clientNs = Math.max(0L, end - start);
-        totalQueryTimeNs += clientNs; // accumulate client time (cache miss)
 
         if (profiler != null) {
             QueryServiceImpl qs = (QueryServiceImpl) queryService;
@@ -887,7 +882,6 @@ public class ForwardSecureANNSystem {
                     .findFirst().orElseGet(() -> enriched.get(enriched.size() - 1));
 
             if (profiler != null) profiler.recordQueryMetric("Q" + q, serverMs, clientMs, atK.getRatio());
-            totalQueryTimeNs += Math.max(0L, clientEnd - clientStart); // nanoseconds
 
 
             if (q < 3 && !baseReturned.isEmpty() && baseReader != null) {
@@ -1186,7 +1180,6 @@ public class ForwardSecureANNSystem {
                     .findFirst().orElseGet(() -> enriched.get(enriched.size() - 1));
 
             if (profiler != null) profiler.recordQueryMetric("Q" + q, serverMs, clientMs, atK.getRatio());
-            totalQueryTimeNs += Math.max(0L, clientEnd - clientStart); // nanoseconds
 
             if (q < 3 && !baseReturned.isEmpty() && baseReader != null) {
                 int topId = -1;
@@ -2347,9 +2340,7 @@ public class ForwardSecureANNSystem {
 
     public void shutdown() {
         long idxMs = Math.round(totalIndexingTimeNs / 1_000_000.0);
-        long qryMs = Math.round(totalQueryTimeNs / 1_000_000.0);
         System.out.println("Total indexing time: " + idxMs + " ms");
-        System.out.println("Total query time: " + qryMs + " ms");
         try {
 //            logger.info("Shutdown sequence started");
 //            logger.info("Performing final flushAll()");
