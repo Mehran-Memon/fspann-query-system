@@ -8,38 +8,53 @@ import com.fspann.crypto.CryptoService;
 import com.fspann.index.paper.EvenLSH;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import java.util.*;
+
 import javax.crypto.SecretKey;
-import java.util.ArrayList;
-import java.util.BitSet;
-import java.util.List;
-import java.util.Objects;
+import java.util.*;
 
 /**
  * Builds QueryToken with:
- *  - per-table LSH bucket expansions (for legacy multiprobe path)
+ *  - per-table LSH bucket expansions (for legacy multiprobe path; optional)
  *  - paper codes: one BitSet per division (REQUIRED for partitioned mode)
  *
  * This factory runs on the trusted side (client / orchestrator) and
  * never embeds the plaintext vector in the token: only IV + ciphertext + codes.
+ *
+ * NOTE:
+ *  - EvenLSH may be null in pure paper mode; in that case, we:
+ *      * skip LSH bucket computation
+ *      * emit empty bucket lists (size numTables, or empty if numTables==0)
+ *      * still attach paper codes, which PartitionedIndexService uses.
  */
 public class QueryTokenFactory {
     private static final Logger logger = LoggerFactory.getLogger(QueryTokenFactory.class);
 
     private final CryptoService cryptoService;
     private final KeyLifeCycleService keyService;
+
+    /** May be null in pure paper mode. */
     private final EvenLSH lsh;
 
-    // Multiprobe knobs
-    private final int numTables;
+    // Multiprobe knobs (legacy LSH path)
+    private final int numTables;       // can be 0 in paper-only mode
     @SuppressWarnings("unused")
-    private final int expansionRange;
+    private final int expansionRange;  // unused in current paper mode
 
     // Paper knobs (must MATCH server's PartitionedIndexService)
     private final int divisions;  // ℓ
     private final int m;          // projections per division
     private final long seedBase;  // same seed used by server
 
+    // ---------------------------------------------------------------------
+    // Constructors
+    // ---------------------------------------------------------------------
+
+    /**
+     * Config-driven constructor.
+     *
+     * @param lsh may be null in pure paper mode
+     * @param numTables may be 0 (no LSH tables, paper-only)
+     */
     public QueryTokenFactory(CryptoService cryptoService,
                              KeyLifeCycleService keyService,
                              EvenLSH lsh,
@@ -47,10 +62,14 @@ public class QueryTokenFactory {
                              int numTables) {
         this.cryptoService = Objects.requireNonNull(cryptoService, "CryptoService must not be null");
         this.keyService    = Objects.requireNonNull(keyService, "KeyService must not be null");
-        this.lsh           = Objects.requireNonNull(lsh, "EvenLSH must not be null");
+        this.lsh           = lsh;  // may be null in paper-only configs
 
-        if (numTables <= 0) throw new IllegalArgumentException("numTables must be positive");
-        if (expansionRange < 0) throw new IllegalArgumentException("expansionRange must be >= 0");
+        if (numTables < 0) {
+            throw new IllegalArgumentException("numTables must be >= 0");
+        }
+        if (expansionRange < 0) {
+            throw new IllegalArgumentException("expansionRange must be >= 0");
+        }
 
         this.numTables      = numTables;
         this.expansionRange = expansionRange;
@@ -60,11 +79,21 @@ public class QueryTokenFactory {
         this.m         = Math.max(1, Integer.getInteger("paper.m", 25));
         this.seedBase  = Long.getLong("paper.seed", 13L);
 
-        logger.info("TokenFactory created: dim={} divisions(ℓ)={} m={} numTables={} expansionRange={}",
-                lsh.getDimensions(), divisions, m, numTables, expansionRange);
+        int dimLog = (lsh != null ? lsh.getDimensions() : -1);
+        String lshInfo = (lsh != null ? ("dim=" + dimLog) : "no-LSH");
+        logger.info(
+                "TokenFactory created: LSH[{}] divisions(ℓ)={} m={} numTables={} expansionRange={}",
+                lshInfo, divisions, m, numTables, expansionRange
+        );
     }
 
-    /** Convenience ctor: expansionRange defaults to 0. */
+    /**
+     * Convenience ctor: expansionRange defaults to 0.
+     * Allows explicitly wiring paper params & optional LSH.
+     *
+     * @param lsh may be null in pure paper mode
+     * @param numTables may be 0
+     */
     public QueryTokenFactory(CryptoService cryptoService,
                              KeyLifeCycleService keyService,
                              EvenLSH lsh,
@@ -74,11 +103,17 @@ public class QueryTokenFactory {
                              long seedBase) {
         this.cryptoService = Objects.requireNonNull(cryptoService, "CryptoService must not be null");
         this.keyService    = Objects.requireNonNull(keyService, "KeyService must not be null");
-        this.lsh           = Objects.requireNonNull(lsh, "EvenLSH must not be null");
+        this.lsh           = lsh;  // may be null
 
-        if (numTables <= 0) throw new IllegalArgumentException("numTables must be positive");
-        if (divisions  <= 0) throw new IllegalArgumentException("divisions must be > 0");
-        if (m          <= 0) throw new IllegalArgumentException("m must be > 0");
+        if (numTables < 0) {
+            throw new IllegalArgumentException("numTables must be >= 0");
+        }
+        if (divisions  <= 0) {
+            throw new IllegalArgumentException("divisions must be > 0");
+        }
+        if (m          <= 0) {
+            throw new IllegalArgumentException("m must be > 0");
+        }
 
         this.numTables      = numTables;
         this.expansionRange = 0; // unused in paper mode
@@ -87,9 +122,17 @@ public class QueryTokenFactory {
         this.m         = m;
         this.seedBase  = seedBase;
 
-        logger.info("TokenFactory created: dim={} divisions(ℓ)={} m={} numTables={} expansionRange={}",
-                lsh.getDimensions(), divisions, m, numTables, expansionRange);
+        int dimLog = (lsh != null ? lsh.getDimensions() : -1);
+        String lshInfo = (lsh != null ? ("dim=" + dimLog) : "no-LSH");
+        logger.info(
+                "TokenFactory created: LSH[{}] divisions(ℓ)={} m={} numTables={} expansionRange={}",
+                lshInfo, divisions, m, numTables, expansionRange
+        );
     }
+
+    // ---------------------------------------------------------------------
+    // Core API
+    // ---------------------------------------------------------------------
 
     /** Build a fresh token for a plaintext query vector. */
     public QueryToken create(double[] vector, int topK) {
@@ -102,28 +145,19 @@ public class QueryTokenFactory {
         }
 
         final int queryDim = vector.length;
+        final int lshDim   = (lsh != null ? lsh.getDimensions() : 0);
 
-        // If LSH is disabled (ideal-system partitioned mode), skip LSH entirely.
-        boolean useLshBuckets = (lsh != null);
+        // Use LSH buckets only if we actually have an LSH and tables > 0
+        boolean useLshBuckets = (lsh != null && numTables > 0);
 
-        int lshDim = -1;
-        if (lsh != null) {
-            try {
-                lshDim = lsh.getDimensions();
-                if (lshDim != queryDim) {
-                    logger.warn(
-                            "QueryTokenFactory.create: LSH dimension mismatch (lshDim={} vs queryDim={}); " +
-                                    "LSH bucket computation disabled. Partitioned codes (ℓ={}) only.",
-                            lshDim, queryDim, divisions
-                    );
-                    useLshBuckets = false;
-                }
-            } catch (Throwable t) {
-                logger.warn("QueryTokenFactory.create: LSH is present but unusable, disabling it.", t);
-                useLshBuckets = false;
-            }
-        } else {
-            logger.debug("QueryTokenFactory.create: LSH is null → ideal-system mode (codes only).");
+        // If LSH dimension is known and mismatched, DO NOT throw – log and fall back.
+        if (useLshBuckets && lshDim > 0 && lshDim != queryDim) {
+            logger.warn(
+                    "QueryTokenFactory.create: LSH dimension mismatch (lshDim={} vs queryDim={}); " +
+                            "skipping LSH bucket computation and using dummy buckets. Partitioned codes (ℓ={}) still attached.",
+                    lshDim, queryDim, divisions
+            );
+            useLshBuckets = false;
         }
 
         // -----------------------------
@@ -137,17 +171,18 @@ public class QueryTokenFactory {
         EncryptedPoint ep = cryptoService.encryptToPoint("query", vector, key);
 
         // -----------------------------
-        // 2) Per-table bucket expansions (legacy LSH multiprobe path)
+        // 2) Per-table bucket expansions (legacy LSH multiprobe path; optional)
         // -----------------------------
-        final List<List<Integer>> tableBuckets;
         final int probeHint = resolveProbeHint(topK);
+        final List<List<Integer>> tableBuckets;
 
-        if (useLshBuckets && lsh != null) {
-            // Normal legacy LSH path
+        if (useLshBuckets) {
+            // Normal path: use LSH to compute per-table buckets
             List<List<Integer>> perTable = lsh.getBucketsForAllTables(vector, probeHint, numTables);
             List<List<Integer>> copy = new ArrayList<>(numTables);
 
             if (perTable == null || perTable.size() != numTables) {
+                // Fallback: per-table buckets from basic API if multi-table helper not available
                 for (int t = 0; t < numTables; t++) {
                     copy.add(new ArrayList<>(lsh.getBuckets(vector, topK, t)));
                 }
@@ -157,20 +192,26 @@ public class QueryTokenFactory {
                 }
             }
             tableBuckets = copy;
-
         } else {
-            // LSH disabled → ideal-system partitioned mode
-            List<List<Integer>> dummy = new ArrayList<>(numTables);
-            for (int t = 0; t < numTables; t++) {
-                dummy.add(Collections.emptyList());
+            // No usable LSH (pure paper mode or dimension mismatch):
+            // Provide deterministic dummy structure:
+            //  - if numTables == 0: empty list
+            //  - else: one empty list per table
+            if (numTables <= 0) {
+                tableBuckets = Collections.emptyList();
+            } else {
+                List<List<Integer>> dummy = new ArrayList<>(numTables);
+                for (int t = 0; t < numTables; t++) {
+                    dummy.add(Collections.emptyList());
+                }
+                tableBuckets = dummy;
             }
-            tableBuckets = dummy;
         }
 
         // -----------------------------
         // 3) REQUIRED for partitioned mode: attach codes (one BitSet per division)
         // -----------------------------
-        BitSet[] codes = code(vector); // this is partitioned-paper coding; uses true dimension
+        BitSet[] codes = code(vector); // partitioned-paper coding; uses true dimension
 
         int totalProbes = tableBuckets.stream().mapToInt(List::size).sum();
         logger.debug(
@@ -182,14 +223,14 @@ public class QueryTokenFactory {
         // 4) Build final token
         // -----------------------------
         return new QueryToken(
-                tableBuckets,          // per-table buckets
+                tableBuckets,          // per-table buckets (may be empty)
                 codes,                 // paper codes (ℓ BitSets)
                 ep.getIv(),            // IV
                 ep.getCiphertext(),    // encrypted query
                 topK,
                 numTables,
                 encCtx,
-                queryDim,              // <--- actual vector dimension
+                queryDim,              // actual vector dimension
                 version
         );
     }
@@ -223,7 +264,9 @@ public class QueryTokenFactory {
         );
     }
 
-    /* ----------------------- probe.shards support ----------------------- */
+    // ---------------------------------------------------------------------
+    // probe.shards support
+    // ---------------------------------------------------------------------
 
     /**
      * Resolve the effective probe hint for multiprobe LSH.
@@ -235,6 +278,9 @@ public class QueryTokenFactory {
      * We clamp to a reasonable range to avoid pathological values:
      *  - At least max(numTables, topK)
      *  - At most 8192 (defensive upper bound)
+     *
+     * NOTE: Even if we end up not using LSH (pure paper mode), we still
+     * compute this for logging consistency; it has no functional effect.
      */
     private int resolveProbeHint(int topK) {
         int fromProp = -1;
@@ -257,12 +303,14 @@ public class QueryTokenFactory {
         }
 
         // Fallback to original heuristic if no system property is set
-        int fallback = Math.min(256, Math.max(32, numTables * 2));
+        int fallback = Math.min(256, Math.max(32, Math.max(1, numTables * 2)));
         logger.trace("resolveProbeHint: no valid probe.shards; using fallback={}", fallback);
         return fallback;
     }
 
-    /* ----------------------- paper coding ----------------------- */
+    // ---------------------------------------------------------------------
+    // paper coding
+    // ---------------------------------------------------------------------
 
     /**
      * Deterministic coding; MUST match PartitionedIndexService.code(...).

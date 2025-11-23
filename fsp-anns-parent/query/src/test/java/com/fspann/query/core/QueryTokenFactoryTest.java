@@ -204,29 +204,48 @@ class QueryTokenFactoryTest {
     }
 
     @Test
-    void testDimensionMismatchThrows() {
+    void testDimensionMismatchUsesDummyBucketsButKeepsCodes() {
+        // Now we EXPECT no exception; we just log a warning and produce dummy buckets.
         when(lsh.getDimensions()).thenReturn(3); // factory expects 3D, we pass 2D
-        assertThrows(NullPointerException.class, () -> factory.create(new double[]{1.0, 2.0}, 5));
+
+        when(cryptoService.encryptToPoint(eq("query"), any(double[].class), any()))
+                .thenReturn(new EncryptedPoint("query", 0, new byte[12], new byte[32], 7, 2, List.of(0)));
+
+        double[] query = {1.0, 2.0};
+        QueryToken token = factory.create(query, 5);
+
+        // Still reports 3 tables, but all with empty bucket lists (dummy structure)
+        assertEquals(3, token.getNumTables());
+        assertEquals(3, token.getTableBuckets().size());
+        assertTrue(token.getTableBuckets().stream().allMatch(List::isEmpty));
+
+        // Paper codes must still be attached
+        assertNotNull(token.getCodes());
+        assertEquals(2, token.getCodes().length);
     }
 
     @Test
     void testInvalidConstructorThrowsException() {
-        // numTables <= 0
+        // numTables < 0 is invalid
         assertThrows(IllegalArgumentException.class, () ->
-                new QueryTokenFactory(cryptoService, keyService, lsh, 0, 2, 3, 13L));
-        // divisions <= 0
+                new QueryTokenFactory(cryptoService, keyService, lsh, -1, 2, 3, 13L));
+
+        // divisions <= 0 is invalid
         assertThrows(IllegalArgumentException.class, () ->
                 new QueryTokenFactory(cryptoService, keyService, lsh, 3, 0, 3, 13L));
-        // m <= 0
+
+        // m <= 0 is invalid
         assertThrows(IllegalArgumentException.class, () ->
                 new QueryTokenFactory(cryptoService, keyService, lsh, 3, 2, 0, 13L));
 
-        // null deps
+        // null deps still invalid
         assertThrows(NullPointerException.class, () ->
                 new QueryTokenFactory(null, keyService, lsh, 3, 2, 3, 13L));
         assertThrows(NullPointerException.class, () ->
                 new QueryTokenFactory(cryptoService, null, lsh, 3, 2, 3, 13L));
-        assertThrows(NullPointerException.class, () ->
+
+        // lsh may now be null in pure paper mode → should NOT throw
+        assertDoesNotThrow(() ->
                 new QueryTokenFactory(cryptoService, keyService, null, 3, 2, 3, 13L));
     }
 }
