@@ -125,15 +125,22 @@ function Combine-CSV {
         [Parameter(Mandatory=$true)][string[]]$Files,
         [Parameter(Mandatory=$true)][string]$OutCsv
     )
-    if ($Files.Count -eq 0) { return }
+
+    # Handle $null or empty list safely under StrictMode
+    if (-not $Files -or $Files.Count -eq 0) { return }
+
     $headerWritten = $false
     $outDir = Split-Path -Parent $OutCsv
-    if ($outDir) { New-Item -ItemType Directory -Force -Path $outDir | Out-Null }
+    if ($outDir) {
+        New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+    }
     Remove-Item -LiteralPath $OutCsv -ErrorAction SilentlyContinue
+
     foreach ($f in $Files) {
         if (-not (Test-Path -LiteralPath $f)) { continue }
         $lines = Get-Content -LiteralPath $f
         if (-not $lines) { continue }
+
         if (-not $headerWritten) {
             $lines | Set-Content -LiteralPath $OutCsv -Encoding UTF8
             $headerWritten = $true
@@ -220,10 +227,15 @@ foreach ($ds in $Datasets) {
 
     foreach ($p in $profiles) {
         $pHT = To-Hashtable $p
-        if (-not $pHT.ContainsKey('name')) { continue }
-        $label = [string]$pHT['name']
-        $ovr = if ($pHT.ContainsKey('overrides')) { $pHT['overrides'] } else { @{} }
+        if (-not $pHT.ContainsKey('id')) { continue }
+        $label = [string]$pHT['id']
 
+        $ovr = @{}
+        foreach ($k in $pHT.Keys) {
+            if ($k -ne 'id') {
+                $ovr[$k] = $pHT[$k]
+            }
+        }
         $runDir = Join-Path $datasetRoot $label
         New-Item -ItemType Directory -Force -Path $runDir | Out-Null
         if ($CleanPerRun) { Clean-RunMetadata -RunDir $runDir }
@@ -337,15 +349,22 @@ foreach ($ds in $Datasets) {
     }
 
     # ---- per-dataset merges ----
-    $resultsGlob    = Get-ChildItem -Path (Join-Path $datasetRoot "*\results\results_table.csv")     -File -ErrorAction SilentlyContinue
-    $precisionGlob  = Get-ChildItem -Path (Join-Path $datasetRoot "*\results\global_precision.csv")  -File -ErrorAction SilentlyContinue
-    $topkGlob       = Get-ChildItem -Path (Join-Path $datasetRoot "*\results\topk_evaluation.csv")   -File -ErrorAction SilentlyContinue
+    $resultsGlob   = Get-ChildItem -Path (Join-Path $datasetRoot "*\results\results_table.csv")    -File -ErrorAction SilentlyContinue
+    $precisionGlob = Get-ChildItem -Path (Join-Path $datasetRoot "*\results\global_precision.csv") -File -ErrorAction SilentlyContinue
+    $topkGlob      = Get-ChildItem -Path (Join-Path $datasetRoot "*\results\topk_evaluation.csv")  -File -ErrorAction SilentlyContinue
 
-    $combinedResults    = Join-Path $datasetRoot "combined_results.csv"
-    $combinedPrecision  = Join-Path $datasetRoot "combined_precision.csv"
-    $combinedTopk       = Join-Path $datasetRoot "combined_evaluation.csv"
+    $combinedResults   = Join-Path $datasetRoot "combined_results.csv"
+    $combinedPrecision = Join-Path $datasetRoot "combined_precision.csv"
+    $combinedTopk      = Join-Path $datasetRoot "combined_evaluation.csv"
 
-    Combine-CSV -Files ($resultsGlob.FullName)   -OutCsv $combinedResults
-    Combine-CSV -Files ($precisionGlob.FullName) -OutCsv $combinedPrecision
-    Combine-CSV -Files ($topkGlob.FullName)      -OutCsv $combinedTopk
+    if ($resultsGlob) {
+        Combine-CSV -Files ($resultsGlob | Select-Object -ExpandProperty FullName) -OutCsv $combinedResults
+    }
+    if ($precisionGlob) {
+        Combine-CSV -Files ($precisionGlob | Select-Object -ExpandProperty FullName) -OutCsv $combinedPrecision
+    }
+    if ($topkGlob) {
+        Combine-CSV -Files ($topkGlob | Select-Object -ExpandProperty FullName) -OutCsv $combinedTopk
+    }
+
 }
