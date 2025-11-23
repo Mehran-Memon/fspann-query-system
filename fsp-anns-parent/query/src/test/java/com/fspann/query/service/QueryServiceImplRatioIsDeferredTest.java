@@ -4,6 +4,7 @@ import com.fspann.common.*;
 import com.fspann.crypto.CryptoService;
 import com.fspann.loader.GroundtruthManager;
 import com.fspann.query.core.QueryEvaluationResult;
+import com.fspann.query.core.QueryTokenFactory;
 import org.junit.jupiter.api.Test;
 
 import javax.crypto.SecretKey;
@@ -22,8 +23,8 @@ class QueryServiceImplRatioIsDeferredTest {
         CryptoService crypto = mock(CryptoService.class);
         KeyLifeCycleService keySvc = mock(KeyLifeCycleService.class);
         GroundtruthManager gt = mock(GroundtruthManager.class);
-
-        QueryServiceImpl svc = new QueryServiceImpl(index, crypto, keySvc);
+        QueryTokenFactory tokenFactory = mock(QueryTokenFactory.class);
+        QueryServiceImpl svc = new QueryServiceImpl(index, crypto, keySvc, tokenFactory);
 
         EncryptedPointBuffer buf = mock(EncryptedPointBuffer.class);
         when(buf.getLastBatchInsertTimeMs()).thenReturn(0L);

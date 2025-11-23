@@ -4,6 +4,7 @@ import com.fspann.common.*;
 import com.fspann.crypto.CryptoService;
 import com.fspann.loader.GroundtruthManager;
 import com.fspann.query.core.QueryEvaluationResult;
+import com.fspann.query.core.QueryTokenFactory;
 import org.junit.jupiter.api.*;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
@@ -21,7 +22,7 @@ class QueryServiceImplTest {
     @Mock private CryptoService cryptoService;
     @Mock private KeyLifeCycleService keyService;
     @Mock private GroundtruthManager groundtruthManager;
-
+    @Mock private QueryTokenFactory queryTokenFactory;
     private QueryServiceImpl service;
 
     @Mock private EncryptedPointBuffer pointBuffer;
@@ -35,7 +36,7 @@ class QueryServiceImplTest {
         when(pointBuffer.getTotalFlushedPoints()).thenReturn(100);
         when(pointBuffer.getFlushThreshold()).thenReturn(1000);
 
-        service = new QueryServiceImpl(indexService, cryptoService, keyService);
+        service = new QueryServiceImpl(indexService, cryptoService, keyService, queryTokenFactory);
     }
 
     @AfterEach

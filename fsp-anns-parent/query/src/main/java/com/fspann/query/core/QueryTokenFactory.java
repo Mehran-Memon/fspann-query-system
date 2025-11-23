@@ -102,17 +102,28 @@ public class QueryTokenFactory {
         }
 
         final int queryDim = vector.length;
-        final int lshDim   = lsh.getDimensions(); // may be 0 or stale (e.g., 8)
 
-        // If LSH dimension is known and mismatched, DO NOT throw – log and fall back.
-        boolean useLshBuckets = true;
-        if (lshDim > 0 && lshDim != queryDim) {
-            logger.warn(
-                    "QueryTokenFactory.create: LSH dimension mismatch (lshDim={} vs queryDim={}); " +
-                            "skipping LSH bucket computation and using dummy buckets. Partitioned codes (ℓ={}) still attached.",
-                    lshDim, queryDim, divisions
-            );
-            useLshBuckets = false;
+        // If LSH is disabled (ideal-system partitioned mode), skip LSH entirely.
+        boolean useLshBuckets = (lsh != null);
+
+        int lshDim = -1;
+        if (lsh != null) {
+            try {
+                lshDim = lsh.getDimensions();
+                if (lshDim != queryDim) {
+                    logger.warn(
+                            "QueryTokenFactory.create: LSH dimension mismatch (lshDim={} vs queryDim={}); " +
+                                    "LSH bucket computation disabled. Partitioned codes (ℓ={}) only.",
+                            lshDim, queryDim, divisions
+                    );
+                    useLshBuckets = false;
+                }
+            } catch (Throwable t) {
+                logger.warn("QueryTokenFactory.create: LSH is present but unusable, disabling it.", t);
+                useLshBuckets = false;
+            }
+        } else {
+            logger.debug("QueryTokenFactory.create: LSH is null → ideal-system mode (codes only).");
         }
 
         // -----------------------------
@@ -131,13 +142,12 @@ public class QueryTokenFactory {
         final List<List<Integer>> tableBuckets;
         final int probeHint = resolveProbeHint(topK);
 
-        if (useLshBuckets) {
-            // Normal path: use LSH to compute per-table buckets
+        if (useLshBuckets && lsh != null) {
+            // Normal legacy LSH path
             List<List<Integer>> perTable = lsh.getBucketsForAllTables(vector, probeHint, numTables);
             List<List<Integer>> copy = new ArrayList<>(numTables);
 
             if (perTable == null || perTable.size() != numTables) {
-                // Fallback: per-table buckets from basic API if multi-table helper not available
                 for (int t = 0; t < numTables; t++) {
                     copy.add(new ArrayList<>(lsh.getBuckets(vector, topK, t)));
                 }
@@ -147,10 +157,9 @@ public class QueryTokenFactory {
                 }
             }
             tableBuckets = copy;
+
         } else {
-            // Dimension mismatch – we can't trust LSH buckets.
-            // Provide a deterministic dummy structure (one empty list per table),
-            // so downstream code can still rely on tableBuckets.size()==numTables.
+            // LSH disabled → ideal-system partitioned mode
             List<List<Integer>> dummy = new ArrayList<>(numTables);
             for (int t = 0; t < numTables; t++) {
                 dummy.add(Collections.emptyList());

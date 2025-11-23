@@ -13,33 +13,37 @@ import java.util.*;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+/**
+ * QueryServiceImpl (Ideal System Version)
+ * ---------------------------------------
+ * - Partitioned-paper mode only (no LSH multiprobe)
+ * - Supports K-adaptive query expansion
+ * - Selective REENCRYPTION tracking (forward security)
+ * - Dimension-safe L2
+ */
 public class QueryServiceImpl implements QueryService {
     private static final Logger logger = LoggerFactory.getLogger(QueryServiceImpl.class);
     private static final Pattern VERSION_PATTERN = Pattern.compile("epoch_(\\d+)_dim_(\\d+)$");
-    private static final int MAX_BUCKETS = 100;
 
     private final IndexService indexService;
     private final CryptoService cryptoService;
     private final KeyLifeCycleService keyService;
-    private final QueryTokenFactory tokenFactory; // may be null (kept for future use if needed)
+    private final QueryTokenFactory tokenFactory;
 
-    // last-query metrics (visible to callers)
+    // Last-query metrics
     private volatile long lastQueryDurationNs = 0;
-    private volatile int lastCandTotal = 0;        // candidates before version filter (subset union size)
-    private volatile int lastCandKeptVersion = 0;  // candidates after forward-secure version filter
-    private volatile int lastCandDecrypted = 0;    // successfully decrypted
-    private volatile int lastReturned = 0;         // returned results (<= topK)
-    private volatile ReencryptionTracker reencTracker;
+    private volatile int lastCandTotal = 0;
+    private volatile int lastCandKeptVersion = 0;
+    private volatile int lastCandDecrypted = 0;
+    private volatile int lastReturned = 0;
 
     // unfiltered candidate IDs (subset union, pre-version filter)
     private volatile List<String> lastCandIds = java.util.Collections.emptyList();
+    private volatile ReencryptionTracker reencTracker;
 
-    /** If ever need true L2 in the returned results, flip RETURN_SQRT to true. */
-    private static final boolean RETURN_SQRT = false; // keep false to minimize server time
-
-    // ---- NEW: global de-dup tracking for touched IDs across the run ----
+    // global touched IDs
     private static final Set<String> GLOBAL_TOUCHED =
-            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+            Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
 
     private volatile int lastTouchedUniqueSoFar = 0;
     private volatile int lastTouchedCumulativeUnique = 0;
@@ -47,133 +51,108 @@ public class QueryServiceImpl implements QueryService {
     public int getLastTouchedUniqueSoFar() { return lastTouchedUniqueSoFar; }
     public int getLastTouchedCumulativeUnique() { return lastTouchedCumulativeUnique; }
 
-    public void setReencryptionTracker(ReencryptionTracker tracker) {
-        this.reencTracker = tracker;
-    }
-
-    // ---- CTORS ----
-    public QueryServiceImpl(IndexService indexService,
-                            CryptoService cryptoService,
-                            KeyLifeCycleService keyService) {
-        this(indexService, cryptoService, keyService, null);
-    }
 
     public QueryServiceImpl(IndexService indexService,
                             CryptoService cryptoService,
                             KeyLifeCycleService keyService,
                             QueryTokenFactory tokenFactory) {
-        this.indexService   = Objects.requireNonNull(indexService);
-        this.cryptoService  = Objects.requireNonNull(cryptoService);
-        this.keyService     = Objects.requireNonNull(keyService);
-        this.tokenFactory   = tokenFactory; // may be null
+        this.indexService = Objects.requireNonNull(indexService);
+        this.cryptoService = Objects.requireNonNull(cryptoService);
+        this.keyService = Objects.requireNonNull(keyService);
+        this.tokenFactory = tokenFactory;
     }
 
+    public void setReencryptionTracker(ReencryptionTracker tracker) {
+        this.reencTracker = tracker;
+    }
+
+    /** FULL K-ADAPTIVE SEARCH ENTRY POINT **/
     @Override
     public List<QueryResult> search(QueryToken token) {
-        if (token == null) {
-            logger.warn("search() called with null token; returning empty result.");
-            return Collections.emptyList();
-        }
-
+        if (token == null) return Collections.emptyList();
         clearLastMetrics();
 
-        final QueryToken tok = token; // no more upgrade / plaintext path
-
+        // Get key version
         KeyVersion kv;
         try {
-            kv = keyService.getVersion(tok.getVersion());
-        } catch (RuntimeException ex) {
-            // Fallback: current key (in case token version is missing)
+            kv = keyService.getVersion(token.getVersion());
+        } catch (Throwable t) {
             kv = keyService.getCurrentVersion();
-            try { indexService.lookup(tok); } catch (Throwable ignore) {}
         }
 
-        // Encrypted-only design: we require iv + encryptedQuery
-        if (tok.getEncryptedQuery() == null || tok.getIv() == null) {
-            throw new IllegalArgumentException("QueryToken must have encryptedQuery + iv; plaintext is not supported.");
-        }
-
+        // Decrypt query
         final double[] qVec = cryptoService.decryptQuery(
-                tok.getEncryptedQuery(),
-                tok.getIv(),
+                token.getEncryptedQuery(),
+                token.getIv(),
                 kv.getKey()
         );
 
-        final long tCore0 = System.nanoTime();
-        try {
-            List<EncryptedPoint> raw;
-            try {
-                raw = indexService.lookup(tok);
-            } catch (Throwable t) {
-                raw = Collections.emptyList();
-            }
+        final long tStart = System.nanoTime();
 
-            // De-dup stable
-            final Map<String, EncryptedPoint> uniq = new LinkedHashMap<>(Math.max(16, raw.size()));
-            for (EncryptedPoint ep : raw) {
+        try {
+            // 1) INITIAL CANDIDATES FROM PARTITIONED INDEX
+            List<EncryptedPoint> initialRaw;
+            try { initialRaw = indexService.lookup(token); }
+            catch (Throwable t) { initialRaw = Collections.emptyList(); }
+
+            final LinkedHashMap<String, EncryptedPoint> uniq = new LinkedHashMap<>();
+            for (EncryptedPoint ep : initialRaw)
                 if (ep != null) uniq.putIfAbsent(ep.getId(), ep);
-            }
 
-            // record unfiltered candidate ids and total
-            lastCandIds = new ArrayList<>(uniq.keySet());
             lastCandTotal = uniq.size();
+            List<QueryScored> scored = decryptAndScore(uniq, qVec, kv);
 
-            final List<QueryScored> scored = new ArrayList<>(uniq.size());
-            for (EncryptedPoint ep : uniq.values()) {
-                if (ep.getVersion() != kv.getVersion()) continue;
-                lastCandKeptVersion++;
-
-                final double[] v = cryptoService.decryptFromPoint(ep, kv.getKey());
-                if (v == null || v.length == 0) continue;
-
-                lastCandDecrypted++;
-                final double d2 = l2sq(qVec, v);
-                scored.add(new QueryScored(ep.getId(), d2));
-            }
-
+            // 2) SORT CURRENT CANDIDATES
             scored.sort(Comparator.comparingDouble(QueryScored::dist));
-            final int k = calculateOptimalTopK(tok, scored.size());
-            if (k <= 0) {
-                logger.warn("No candidates available for topK={} (adjusting search strategy).", k);
-                lastReturned = 0;
-                return Collections.emptyList();
+
+            // 3) ADAPTIVE K LOOP
+            int requestedK = token.getTopK();
+            List<QueryScored> finalScored =
+                    kAdaptiveExpand(scored, uniq, token, qVec, kv);
+
+            // final result: top-K from finalScored
+            int kEff = Math.min(requestedK, finalScored.size());
+            lastReturned = kEff;
+
+            List<QueryResult> out = new ArrayList<>(kEff);
+            for (int i = 0; i < kEff; i++) {
+                QueryScored qs = finalScored.get(i);
+                out.add(new QueryResult(qs.id(), qs.dist()));
             }
 
-            final int validTopK = Math.min(k, scored.size());
-            final List<QueryResult> out = new ArrayList<>(validTopK);
-            for (int i = 0; i < validTopK; i++) {
-                final QueryScored s = scored.get(i);
-                final double d = RETURN_SQRT ? Math.sqrt(s.dist()) : s.dist();
-                out.add(new QueryResult(s.id(), d));
-            }
-
-            lastReturned = out.size();
             return out;
+
         } finally {
-            lastQueryDurationNs = Math.max(0L, System.nanoTime() - tCore0);
+            lastQueryDurationNs = Math.max(0L, System.nanoTime() - tStart);
         }
     }
 
-    // Optimized candidate retrieval method based on topK (currently unused but kept)
-    private List<EncryptedPoint> fetchCandidatesBasedOnTopK(QueryToken token) {
-        List<EncryptedPoint> raw;
-        try {
-            raw = indexService.lookup(token);
-            int topK = token.getTopK();
-            if (raw.size() > topK) {
-                raw = raw.subList(0, topK);
+    /** Decrypt + distance score + forward-security touch **/
+    private List<QueryScored> decryptAndScore(Map<String, EncryptedPoint> uniq,
+                                              double[] qVec,
+                                              KeyVersion kv) {
+        List<QueryScored> scored = new ArrayList<>(uniq.size());
+
+        for (EncryptedPoint ep : uniq.values()) {
+            if (ep.getVersion() != kv.getVersion()) continue;
+            lastCandKeptVersion++;
+
+            // selective re-encryption hit
+            if (reencTracker != null) {
+                reencTracker.touch(ep.getId());
             }
-        } catch (Throwable t) {
-            raw = Collections.emptyList();
-        }
-        return raw;
-    }
+            GLOBAL_TOUCHED.add(ep.getId());
 
-    // New method to calculate optimal TopK based on dynamic fetching and ART optimization
-    private int calculateOptimalTopK(QueryToken token, int fetchedSize) {
-        final int requestedTopK = Math.max(1, token.getTopK());
-        if (fetchedSize <= 0) return 0;
-        return Math.min(requestedTopK, fetchedSize);
+            double[] v = cryptoService.decryptFromPoint(ep, kv.getKey());
+            if (v == null || v.length == 0) continue;
+
+            lastCandDecrypted++;
+            scored.add(new QueryScored(ep.getId(), l2sq(qVec, v)));
+        }
+
+        lastTouchedUniqueSoFar = uniq.size();
+        lastTouchedCumulativeUnique = GLOBAL_TOUCHED.size();
+        return scored;
     }
 
     @Override
@@ -243,39 +222,92 @@ public class QueryServiceImpl implements QueryService {
         return out;
     }
 
-    /* -------------------- helpers -------------------- */
+    // ------------------------- K-ADAPTIVE CORE -------------------------
+
+    private List<QueryScored> kAdaptiveExpand(List<QueryScored> scored,
+                                              LinkedHashMap<String, EncryptedPoint> uniq,
+                                              QueryToken token,
+                                              double[] qVec,
+                                              KeyVersion kv) {
+        // Read config knobs from System properties
+        boolean enabled = Boolean.getBoolean("kadaptive.enabled");
+        if (!enabled) return scored;
+
+        int minCandidates = Integer.getInteger("kadaptive.minCandidates", 128);
+        int maxCandidates = Integer.getInteger("kadaptive.maxCandidates", 8192);
+        int batch = Integer.getInteger("kadaptive.batchSize", 128);
+
+        double lowReturnThresh = Double.parseDouble(
+                System.getProperty("kadaptive.lowReturnRateThreshold", "0.5")
+        );
+        double boostFactor = Double.parseDouble(
+                System.getProperty("kadaptive.boostFactorOnLowReturn", "2.0")
+        );
+
+        int requestedK = token.getTopK();
+
+        while (true) {
+            // compute returnRate
+            double returnRate = (scored.isEmpty() ? 0.0 : Math.min(1.0,
+                    ((double) requestedK) / (double) Math.max(1,scored.size())
+            ));
+
+            // stop if high returnRate
+            if (returnRate >= lowReturnThresh) {
+                logger.debug("K-adaptive: stopping – returnRate={}", returnRate);
+                break;
+            }
+
+            // need more candidates
+            int need = (int) (scored.size() * boostFactor);
+            if (need < minCandidates) need = minCandidates;
+            if (need > maxCandidates) need = maxCandidates;
+
+            if (need <= scored.size()) break;
+
+            // fetch more candidates (paper engine union semantics)
+            List<EncryptedPoint> more = fetchMoreCandidates(token, uniq, need);
+            if (more.isEmpty()) break;
+
+            // decrypt & add new scores
+            List<QueryScored> moreScored = decryptAndScore(uniq, qVec, kv);
+            scored.addAll(moreScored);
+            scored.sort(Comparator.comparingDouble(QueryScored::dist));
+
+            if (scored.size() >= maxCandidates) break;
+        }
+
+        return scored;
+    }
+
+    private List<EncryptedPoint> fetchMoreCandidates(QueryToken tok,
+                                                     LinkedHashMap<String, EncryptedPoint> uniq,
+                                                     int target) {
+        try {
+            List<EncryptedPoint> extra = indexService.lookup(tok);
+            int before = uniq.size();
+            for (EncryptedPoint ep : extra)
+                if (ep != null) uniq.putIfAbsent(ep.getId(), ep);
+            return extra.subList(before, uniq.size());
+        } catch (Throwable t) {
+            return Collections.emptyList();
+        }
+    }
+
+    // ------------------------- Utility -------------------------
 
     private record QueryScored(String id, double dist) {}
-
     private static <T> List<T> nn(List<T> v) { return (v == null) ? Collections.emptyList() : v; }
     private static int[] safeGt(int[] a)     { return (a == null) ? new int[0] : a; }
-
-    /**
-     * Dimension-tolerant squared L2 distance.
-     * If vectors differ in length, we compute over the overlapping prefix
-     * and log a warning instead of throwing.
-     */
     private double l2sq(double[] a, double[] b) {
-        if (a == null || b == null) {
-            throw new IllegalArgumentException("Vectors must not be null");
-        }
-
         int len = Math.min(a.length, b.length);
-        if (a.length != b.length) {
-            logger.warn(
-                    "Vector dimension mismatch in l2sq: a.length={} b.length={}; using first {} dimensions.",
-                    a.length, b.length, len
-            );
-        }
-
         double s = 0.0;
         for (int i = 0; i < len; i++) {
             double d = a[i] - b[i];
             s += d * d;
         }
-        return s; // squared L2 distance
+        return s;
     }
-
     public static int estimateTokenSizeBytes(QueryToken t) {
         int bytes = 0;
         if (t.getIv() != null) bytes += t.getIv().length;
@@ -296,18 +328,13 @@ public class QueryServiceImpl implements QueryService {
         }
         return bytes;
     }
-
     private void clearLastMetrics() {
         lastQueryDurationNs = 0L;
         lastCandTotal = 0;
         lastCandKeptVersion = 0;
         lastCandDecrypted = 0;
         lastReturned = 0;
-        lastCandIds = java.util.Collections.emptyList();
-        lastTouchedUniqueSoFar = 0;
-        lastTouchedCumulativeUnique = GLOBAL_TOUCHED.size();
     }
-
     public long getLastQueryDurationNsCappedTo(long clientWindowNs) {
         if (clientWindowNs <= 0L) return Math.max(0L, lastQueryDurationNs);
         return Math.min(Math.max(0L, lastQueryDurationNs), clientWindowNs);
@@ -317,10 +344,9 @@ public class QueryServiceImpl implements QueryService {
         return (lastCandIds == null) ? java.util.Collections.emptyList()
                 : java.util.Collections.unmodifiableList(lastCandIds);
     }
-
-    public long getLastQueryDurationNs()   { return lastQueryDurationNs; }
-    public int  getLastCandTotal()         { return lastCandTotal; }
-    public int  getLastCandKeptVersion()   { return lastCandKeptVersion; }
-    public int  getLastCandDecrypted()     { return lastCandDecrypted; }
-    public int  getLastReturned()          { return lastReturned; }
+    public long getLastQueryDurationNs() { return lastQueryDurationNs; }
+    public int getLastCandTotal() { return lastCandTotal; }
+    public int getLastCandKeptVersion() { return lastCandKeptVersion; }
+    public int getLastCandDecrypted() { return lastCandDecrypted; }
+    public int getLastReturned() { return lastReturned; }
 }
