@@ -2634,6 +2634,7 @@ public class ForwardSecureANNSystem {
         long idxMs = Math.round(totalIndexingTimeNs / 1_000_000.0);
         long qryMs = Math.round(totalQueryTimeNs / 1_000_000.0);
         System.out.println("Total indexing time: " + idxMs + " ms");
+        System.out.println("Total indexing time: " + qryMs + " ms");
         try {
             flushAll();
 
