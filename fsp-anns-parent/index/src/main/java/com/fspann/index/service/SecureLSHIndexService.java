@@ -374,19 +374,25 @@ public class SecureLSHIndexService implements IndexService {
             throw new IllegalArgumentException("dimension must be > 0");
         }
 
+        // IDEAL SYSTEM: When partitioned mode active, do NOT provide LSH
+        if (paperEngine != null) {
+            // PartitionedIndexService = ideal-system mode → LSH forbidden
+            if (paperEngine instanceof PartitionedIndexService) {
+                logger.debug("getLshForDimension(dim={}): partitioned mode -> returning null (no LSH)", dimension);
+                return null;
+            }
+        }
+
+        // LEGACY PATH (unchanged)
         return lshPerDimension.computeIfAbsent(dimension, dim -> {
-            // Tunable knobs (kept for compatibility / tests)
             int m = Integer.getInteger("token.lsh.m", 8);
             int r = Integer.getInteger("token.lsh.r", 4);
             long seed = Long.getLong("token.lsh.seed", 13L);
 
-            // NOTE: EvenLSH ctor is (dimensions, numTables, maxBuckets, baseSeed)
-            //       so we MUST pass the real vector dimension as the first argument.
             logger.debug(
                     "getLshForDimension: creating EvenLSH(dim={}, m={}, r={}, seed={})",
                     dim, m, r, seed
             );
-
             return new EvenLSH(dim, m, r, seed);
         });
     }
@@ -411,6 +417,15 @@ public class SecureLSHIndexService implements IndexService {
         }
         // Metadata manager close is handled at system level (ForwardSecureANNSystem)
     }
+
+    // ---------------------------------------------------------------------
+    // Ideal-system toggle: disable all LSH instances (partitioned mode)
+    // ---------------------------------------------------------------------
+    public void disableLSHForAllDimensions() {
+        logger.warn("Disabling all LSH (ideal-system partitioned mode).");
+        lshPerDimension.clear();
+    }
+
 
     // -------------------------------------------------------------------------
     // Paper-aligned engine contract (Partitioned Indexing)

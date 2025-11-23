@@ -7,15 +7,28 @@ import org.slf4j.LoggerFactory;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ConcurrentMap;
 
 /**
  * PartitionedIndexService
  * -----------------------
- * Implements the partitioning scheme with multi-table LSH and forward-secure indexing.
- * This engine:
- *   - Builds multiple LSH partitions using G_m and divides data into smaller, locality-aware subregions.
- *   - Supports forward security by implementing key evolution and selective re-encryption.
- *   - Provides fast query retrieval while maintaining secure storage of metadata and vectors.
+ * Implements the partitioning scheme with multi-division codes and forward-secure indexing.
+ *
+ * Core ideas:
+ *  - Index is per-dimension (d) -> DimensionState.
+ *  - Each dimension has ℓ divisions. Each division:
+ *      * Has a CodeFamily (G) and SubsetBounds index I (ordered in code-space).
+ *      * Maps subset tags -> lists of EncryptedPoint.
+ *  - Insert path uses precomputed codes from the client (CodedPoint).
+ *  - Lookup path uses ONLY client codes (token.getCodes()) for privacy.
+ *
+ * K-Adaptive:
+ *  - PAPER_W_ALPHA controls the base per-division fanout:
+ *        w_div ≈ α * |D| / ℓ
+ *  - System property `probe.shards` rescales w_div via applyProbeScaling().
+ *  - Global candidate cap is derived from:
+ *        paper.maxCandidatesAllDivs  OR  probe.shards  OR  Integer.MAX_VALUE
  */
 public class PartitionedIndexService implements PaperSearchEngine {
 
@@ -25,21 +38,31 @@ public class PartitionedIndexService implements PaperSearchEngine {
     private final int divisions;        // ℓ (number of divisions)
     private final long seedBase;        // base seed to derive per-division seeds
     private final int buildThreshold;   // min items per dimension to build partitions
-    private final int maxCandidates;    // safety cap for re-rank set size
+    private final int maxCandidates;    // optional upper bound (currently unused directly)
 
+    private static final Logger logger = LoggerFactory.getLogger(PartitionedIndexService.class);
+
+    // paper.alpha (0.5%–10% clamp)
     private static final double PAPER_W_ALPHA = clampAlpha(
             Double.parseDouble(System.getProperty("paper.alpha", "0.02"))
     );
 
-    private static final int MAX_ALL_CANDIDATES = Integer.getInteger("paper.maxCandidatesAllDivs", -1);
+    /**
+     * Hard global cap across all divisions if > 0.
+     * Otherwise, we fall back to probe.shards or Integer.MAX_VALUE.
+     */
+    private static final int MAX_ALL_CANDIDATES =
+            Integer.getInteger("paper.maxCandidatesAllDivs", -1);
 
-    // Upper bound for per-division target after probe.shards scaling
-    private static final int MAX_PER_DIV = Integer.getInteger("paper.maxPerDiv", 65_536);
+    /**
+     * Upper bound for per-division fanout after probe.shards scaling.
+     */
+    private static final int MAX_PER_DIV =
+            Integer.getInteger("paper.maxPerDiv", 65_536);
 
     // dimension -> state
-    private final Map<Integer, DimensionState> dims = new ConcurrentHashMap<>();
-    private final Map<String, Integer> idToDim = new ConcurrentHashMap<>();
-    private static final Logger logger = LoggerFactory.getLogger(PartitionedIndexService.class);
+    private final ConcurrentMap<Integer, DimensionState> dims = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Integer> idToDim = new ConcurrentHashMap<>();
 
     public PartitionedIndexService(int m, int lambda, int divisions, long seedBase) {
         this(m, lambda, divisions, seedBase,
@@ -68,6 +91,10 @@ public class PartitionedIndexService implements PaperSearchEngine {
         return x;
     }
 
+    // --------------------------------------------------------------------
+    // Coding: must match QueryTokenFactory.code(...)
+    // --------------------------------------------------------------------
+
     public BitSet[] code(double[] vec) {
         Objects.requireNonNull(vec, "vec");
         final BitSet[] out = new BitSet[divisions];
@@ -75,14 +102,16 @@ public class PartitionedIndexService implements PaperSearchEngine {
             final BitSet bits = new BitSet(m);
             for (int proj = 0; proj < m; proj++) {
                 long seed = mix64(seedBase
-                        ^ (long) div * 0x9E3779B97F4A7C15L
-                        ^ (long) proj * 0xBF58476D1CE4E5B9L);
+                        ^ ((long) div * 0x9E3779B97F4A7C15L)
+                        ^ ((long) proj * 0xBF58476D1CE4E5B9L));
                 double dot = 0.0;
                 long s = seed;
                 for (double v : vec) {
+                    // xorshift-ish update
                     s ^= (s << 21);
                     s ^= (s >>> 35);
                     s ^= (s << 4);
+                    // map to [-1, 1]
                     double r = ((s & 0x3fffffffL) / (double) 0x3fffffffL) * 2.0 - 1.0;
                     dot += v * r;
                 }
@@ -94,11 +123,30 @@ public class PartitionedIndexService implements PaperSearchEngine {
     }
 
     /** Only returns a GFunction if already present; we don’t rebuild from GMeta here. */
+    @SuppressWarnings("unused")
     private static Coding.GFunction toLegacyGFunction(Coding.CodeFamily g) {
         if (g instanceof Coding.GFunction gf) {
             return gf;
         }
         return null;
+    }
+
+    private static long mix64(long z) {
+        z = (z ^ (z >>> 33)) * 0xff51afd7ed558ccdl;
+        z = (z ^ (z >>> 33)) * 0xc4ceb9fe1a85ec53l;
+        return z ^ (z >>> 33);
+    }
+
+    private static long mix(long seedBase, int d, int m, int lambda, int division) {
+        long x = seedBase;
+        x ^= ((long) d * 0xBF58476D1CE4E5B9L);
+        x ^= ((long) m * 0x94D049BB133111EBL);
+        x ^= ((long) lambda * 0x2545F4914F6CDD1DL);
+        x ^= ((long) division * 0xD1342543DE82EF95L);
+        x ^= (x >>> 33); x *= 0xff51afd7ed558ccdl;
+        x ^= (x >>> 33); x *= 0xc4ceb9fe1a85ec53l;
+        x ^= (x >>> 33);
+        return x;
     }
 
     // ------------------------- In-memory state --------------------------
@@ -107,7 +155,8 @@ public class PartitionedIndexService implements PaperSearchEngine {
         final Coding.CodeFamily G;  // LSH function family descriptor
         List<GreedyPartitioner.SubsetBounds> I = Collections.emptyList(); // sorted
         Map<String, List<EncryptedPoint>> tagToSubset = new ConcurrentHashMap<>();
-        int w = 0;
+        int w = 0; // base per-division paper-w target
+
         DivisionState(Coding.CodeFamily g) { this.G = g; }
     }
 
@@ -137,6 +186,9 @@ public class PartitionedIndexService implements PaperSearchEngine {
         insertWithCodes(new CodedPoint(pt, codes, this.divisions));
     }
 
+    /**
+     * Main insert path: server receives EncryptedPoint + codes (for all ℓ divisions).
+     */
     public void insertWithCodes(CodedPoint cp) {
         if (cp == null || cp.pt == null || cp.codes == null || cp.codes.length != divisions) {
             throw new IllegalArgumentException("CodedPoint must provide codes for all divisions.");
@@ -146,17 +198,19 @@ public class PartitionedIndexService implements PaperSearchEngine {
         final DimensionState S = dims.computeIfAbsent(d, DimensionState::new);
         synchronized (S) {
             if (isBuilt(S)) {
+                // Already partitioned: insert into appropriate subsets immediately
                 for (int divIdx = 0; divIdx < divisions; divIdx++) {
                     final DivisionState div = S.divisions.get(divIdx);
                     final BitSet code = cp.codes[divIdx];
                     for (int idx : findCoveringIntervals(code, div.I)) {
-                        final var sb = div.I.get(idx);
+                        final GreedyPartitioner.SubsetBounds sb = div.I.get(idx);
                         div.tagToSubset
-                                .computeIfAbsent(sb.tag, k -> new java.util.concurrent.CopyOnWriteArrayList<>())
+                                .computeIfAbsent(sb.tag, k -> new CopyOnWriteArrayList<>())
                                 .add(cp.pt);
                     }
                 }
             } else {
+                // Still staging: buffer for later build
                 S.staged.add(cp.pt);
                 S.stagedCodes.add(cp.codes);
             }
@@ -164,15 +218,9 @@ public class PartitionedIndexService implements PaperSearchEngine {
         }
     }
 
-    private static long mix64(long z) {
-        z = (z ^ (z >>> 33)) * 0xff51afd7ed558ccdl;
-        z = (z ^ (z >>> 33)) * 0xc4ceb9fe1a85ec53l;
-        return z ^ (z >>> 33);
-    }
-
     @Override
     public List<EncryptedPoint> lookup(com.fspann.common.QueryToken token) {
-        Objects.requireNonNull(token, "QueryToken");
+        Objects.requireNonNull(token, "QueryToken must not be null");
         final int d = token.getDimension();
         final DimensionState S = dims.get(d);
         if (S == null) return Collections.emptyList();
@@ -201,10 +249,8 @@ public class PartitionedIndexService implements PaperSearchEngine {
                 }
             }
 
-            // If no code is supplied for this division, we skip it (privacy-preserving).
-            if (Cq == null) {
-                continue;
-            }
+            // If no code is supplied for this division, skip (privacy-preserving).
+            if (Cq == null) continue;
 
             // Seed intervals that cover Cq; fallback to nearest interval
             List<Integer> hits = findCoveringIntervals(Cq, div.I);
@@ -216,7 +262,7 @@ public class PartitionedIndexService implements PaperSearchEngine {
 
             final int currentSize = getVectorCountForDimension(S.d);
 
-            // Base target (paper α rule)
+            // Base target per division (paper α rule)
             int baseTargetPerDiv = Math.max(
                     1,
                     (int) Math.ceil(PAPER_W_ALPHA * currentSize / (double) this.divisions)
@@ -228,7 +274,7 @@ public class PartitionedIndexService implements PaperSearchEngine {
             int gatheredThisDiv = 0;
             final boolean[] visited = new boolean[div.I.size()];
 
-            // 1) anchors
+            // 1) Anchors
             for (int idx : hits) {
                 if (idx < 0 || idx >= div.I.size() || visited[idx]) continue;
                 GreedyPartitioner.SubsetBounds sb = div.I.get(idx);
@@ -247,7 +293,7 @@ public class PartitionedIndexService implements PaperSearchEngine {
             }
             if (gatheredThisDiv >= targetPerDiv || cands.size() >= globalCap) continue;
 
-            // 2) symmetric widening around anchors
+            // 2) Symmetric widening around anchors
             for (int radius = 1; gatheredThisDiv < targetPerDiv && radius < div.I.size(); radius++) {
                 for (int anchor : hits) {
                     if (cands.size() >= globalCap) break;
@@ -344,38 +390,18 @@ public class PartitionedIndexService implements PaperSearchEngine {
         return !S.divisions.isEmpty() && !S.divisions.get(0).I.isEmpty();
     }
 
-    private List<Integer> findCoveringIntervals(BitSet code, List<GreedyPartitioner.SubsetBounds> I) {
-        if (I.isEmpty()) return Collections.emptyList();
-        GreedyPartitioner.CodeComparator cmp = new GreedyPartitioner.CodeComparator(I.get(0).codeBits);
-        int lo = 0, hi = I.size() - 1, ans = -1;
-
-        while (lo <= hi) {
-            int mid = (lo + hi) >>> 1;
-            if (cmp.compare(I.get(mid).lower, code) <= 0) { ans = mid; lo = mid + 1; }
-            else { hi = mid - 1; }
+    private void maybeBuild(DimensionState S) {
+        if (isBuilt(S)) return;
+        if (S.staged.size() >= buildThreshold) {
+            buildAllDivisions(S);
         }
-
-        if (ans < 0) return Collections.emptyList();
-
-        List<Integer> hits = new ArrayList<>();
-        for (int j = Math.max(0, ans - 1); j <= Math.min(I.size() - 1, ans + 1); j++) {
-            if (cmp.compare(I.get(j).lower, code) <= 0 && cmp.compare(code, I.get(j).upper) <= 0) {
-                hits.add(j);
-            }
-        }
-        return hits.isEmpty() ? List.of(Math.max(0, Math.min(ans, I.size() - 1))) : hits;
     }
 
-    private static long mix(long seedBase, int d, int m, int lambda, int division) {
-        long x = seedBase;
-        x ^= ((long) d * 0xBF58476D1CE4E5B9L);
-        x ^= ((long) m * 0x94D049BB133111EBL);
-        x ^= ((long) lambda * 0x2545F4914F6CDD1DL);
-        x ^= ((long) division * 0xD1342543DE82EF95L);
-        x ^= (x >>> 33); x *= 0xff51afd7ed558ccdl;
-        x ^= (x >>> 33); x *= 0xc4ceb9fe1a85ec53l;
-        x ^= (x >>> 33);
-        return x;
+    private void ensureBuilt(DimensionState S) {
+        if (isBuilt(S)) return;
+        synchronized (S) {
+            if (!isBuilt(S)) buildAllDivisions(S);
+        }
     }
 
     private void buildAllDivisions(DimensionState S) {
@@ -413,7 +439,7 @@ public class PartitionedIndexService implements PaperSearchEngine {
 
             Map<String, List<EncryptedPoint>> safe = new ConcurrentHashMap<>();
             for (var e : br.tagToSubset.entrySet()) {
-                safe.put(e.getKey(), new java.util.concurrent.CopyOnWriteArrayList<>(e.getValue()));
+                safe.put(e.getKey(), new CopyOnWriteArrayList<>(e.getValue()));
             }
             D.tagToSubset = safe;
 
@@ -429,18 +455,27 @@ public class PartitionedIndexService implements PaperSearchEngine {
         S.stagedCodes.clear();
     }
 
-    private void maybeBuild(DimensionState S) {
-        if (isBuilt(S)) return;
-        if (S.staged.size() >= buildThreshold) {
-            buildAllDivisions(S);
-        }
-    }
+    private List<Integer> findCoveringIntervals(BitSet code, List<GreedyPartitioner.SubsetBounds> I) {
+        if (I.isEmpty()) return Collections.emptyList();
+        GreedyPartitioner.CodeComparator cmp = new GreedyPartitioner.CodeComparator(I.get(0).codeBits);
+        int lo = 0, hi = I.size() - 1, ans = -1;
 
-    private void ensureBuilt(DimensionState S) {
-        if (isBuilt(S)) return;
-        synchronized (S) {
-            if (!isBuilt(S)) buildAllDivisions(S);
+        // rightmost lower <= code
+        while (lo <= hi) {
+            int mid = (lo + hi) >>> 1;
+            if (cmp.compare(I.get(mid).lower, code) <= 0) { ans = mid; lo = mid + 1; }
+            else { hi = mid - 1; }
         }
+
+        if (ans < 0) return Collections.emptyList();
+
+        List<Integer> hits = new ArrayList<>();
+        for (int j = Math.max(0, ans - 1); j <= Math.min(I.size() - 1, ans + 1); j++) {
+            if (cmp.compare(I.get(j).lower, code) <= 0 && cmp.compare(code, I.get(j).upper) <= 0) {
+                hits.add(j);
+            }
+        }
+        return hits.isEmpty() ? List.of(Math.max(0, Math.min(ans, I.size() - 1))) : hits;
     }
 
     private int nearestIdx(BitSet Cq, List<GreedyPartitioner.SubsetBounds> I) {
@@ -507,6 +542,10 @@ public class PartitionedIndexService implements PaperSearchEngine {
         }
     }
 
+    // --------------------------------------------------------------------
+    // Legacy bucket helpers (if you ever need bucket IDs for logging)
+    // --------------------------------------------------------------------
+
     private int computeBucket(BitSet code) {
         if (code == null) return 0;
 
@@ -528,7 +567,7 @@ public class PartitionedIndexService implements PaperSearchEngine {
     }
 
     // --------------------------------------------------------------------
-    // probe.shards integration helpers
+    // probe.shards integration helpers (K-adaptive hook)
     // --------------------------------------------------------------------
 
     /**
@@ -553,6 +592,7 @@ public class PartitionedIndexService implements PaperSearchEngine {
                     return cap;
                 }
             } catch (NumberFormatException ignore) {
+                // fall through
             }
         }
         return Integer.MAX_VALUE;
@@ -565,7 +605,7 @@ public class PartitionedIndexService implements PaperSearchEngine {
      *   - If probe.shards is absent/invalid/<=0 → factor = 1 (no change).
      *   - Else factor ≈ log2(probe.shards), clamped to [1, 64].
      *
-     * So each doubling of probe.shards increases per-division fanout linearly,
+     * Each doubling of probe.shards increases per-division fanout linearly,
      * without exploding too fast. Final result is clamped by paper.maxPerDiv.
      */
     private int applyProbeScaling(int baseTargetPerDiv) {

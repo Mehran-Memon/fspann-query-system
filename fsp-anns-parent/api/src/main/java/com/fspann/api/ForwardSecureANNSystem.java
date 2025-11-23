@@ -28,6 +28,8 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.lang.reflect.Field;
 import java.util.concurrent.ConcurrentHashMap;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -319,6 +321,12 @@ public class ForwardSecureANNSystem {
 
         // Build index service
         this.indexService = SecureLSHIndexService.fromConfig(cryptoService, keyService, metadataManager, config);
+        if (config.getPaper() != null && config.getPaper().enabled) {
+            logger.info("Ideal-system partitioned mode: disabling LSH in index service.");
+            indexService.disableLSHForAllDimensions();
+        }
+
+
 
         if (keyService instanceof KeyRotationServiceImpl kr) {
             kr.setIndexService(indexService);
@@ -385,6 +393,10 @@ public class ForwardSecureANNSystem {
         this.queryService = new QueryServiceImpl(indexService, cryptoService, keyService, qtf);
 
         this.reencTracker = new ReencryptionTracker();
+        // Ensure QS continues marking touches even without LSH
+        if (this.queryService instanceof QueryServiceImpl qs) {
+            qs.setReencryptionTracker(this.reencTracker);
+        }
         this.reencCoordinator = new SelectiveReencCoordinator(
                 this.indexService,
                 this.cryptoService,
@@ -532,88 +544,50 @@ public class ForwardSecureANNSystem {
     /* ---------------------- Query API ---------------------- */
 
     private QueryTokenFactory factoryForDim(int dim) {
-        if (dim <= 0) {
-            throw new IllegalArgumentException("Dimension must be positive");
-        }
+        if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
 
-        return tokenFactories.computeIfAbsent(dim, d -> {
-            // 1) Ask the index for its LSH (may be null or have wrong dim)
-            EvenLSH lshFromIndex = indexService.getLshForDimension(d);
+        boolean partitioned = (config.getPaper() != null && config.getPaper().enabled);
+        if (partitioned) {
+            // NEW SYSTEM / IDEAL-SYSTEM: LSH is forbidden.
+            var pc = config.getPaper();
+            int ell = Math.max(1, pc.divisions);
+            int m = Math.max(1, pc.m);
+            long seed = pc.seed;
 
-            int lshDim = -1;
-            if (lshFromIndex != null) {
-                try {
-                    lshDim = lshFromIndex.getDimensions();
-                } catch (Throwable ignore) {
-                    // Should not happen for EvenLSH, but be defensive
-                    lshDim = -1;
-                }
-            }
-
-            // 2) Decide how many tables to use (same logic as before)
-            int tables;
-            if (OVERRIDE_TABLES > 0) {
-                tables = OVERRIDE_TABLES;
-            } else if (lshFromIndex != null) {
-                // Try to infer from the original LSH, if any
-                tables = numTablesFor(lshFromIndex, config);
-            } else {
-                // Fallback if nothing is available
-                tables = numTablesFor(new EvenLSH(d), config);
-            }
-
-            boolean partitionedMode =
-                    (config != null && config.getPaper() != null && config.getPaper().enabled);
-
-            int ell = 1;
-            int m = 1;
-            long seedBase = 13L;
-
-            if (partitionedMode) {
-                var pc = config.getPaper();
-                ell = Math.max(1, pc.divisions);
-                m = Math.max(1, pc.m);
-                seedBase = pc.seed;
-            }
-
-            // 3) Ensure we end up with an LSH whose internal dimension matches `dim`
-            EvenLSH lshForTokens;
-
-            if (lshFromIndex == null) {
-                // No LSH from index: build a per-dimension EvenLSH for tokens only
-                logger.warn("No LSH found for dim={}; constructing EvenLSH(dim={}) for QueryTokenFactory",
-                        d, d);
-                lshForTokens = new EvenLSH(d, Math.max(1, tables), seedBase);
-            } else if (lshDim != d) {
-                // Mismatch like lshDim=8 vs dim=128 -> fix it here
-                logger.warn("LSH dimension mismatch for dim={}: lshDim={} – " +
-                                "constructing EvenLSH(dim={}) for QueryTokenFactory only " +
-                                "(server uses partitioned codes, so buckets are token-side hints).",
-                        d, lshDim, d);
-                lshForTokens = new EvenLSH(d, Math.max(1, tables), seedBase);
-            } else {
-                // Happy path: index LSH dimension matches the dataset/query dim
-                lshForTokens = lshFromIndex;
-            }
-
-            int shards = shardsToProbe();
-
-            if (partitionedMode) {
-                logger.info("TokenFactory (lazy): dim={} divisions (ℓ)={} m={} seedBase={} shardsToProbe={}",
-                        d, ell, m, seedBase, shards);
-            } else {
-                logger.info("TokenFactory (lazy): dim={} LSH tables (L)={} shardsToProbe={}",
-                        d, tables, shards);
-            }
+            logger.info("TokenFactory (ideal/partitioned): dim={} ell={} m={} seed={}", dim, ell, m, seed);
 
             return new QueryTokenFactory(
                     cryptoService,
                     keyService,
-                    lshForTokens,
+                    null,          // << NO LSH
+                    0,             // numTables = unused
+                    ell,
+                    m,
+                    seed
+            );
+        }
+
+        // Legacy multiprobe path (kept intact because you said: DO NOT BREAK OLD SYSTEM)
+        return tokenFactories.computeIfAbsent(dim, d -> {
+            EvenLSH lsh = indexService.getLshForDimension(d);
+            int tables = (OVERRIDE_TABLES > 0)
+                    ? OVERRIDE_TABLES
+                    : numTablesFor(lsh, config);
+
+            int ell = 1;
+            int m = 1;
+            long seed = 13L;
+
+            logger.info("TokenFactory (legacy multiprobe): dim={} LSH tables={} m={} seed={}", d, tables, m, seed);
+
+            return new QueryTokenFactory(
+                    cryptoService,
+                    keyService,
+                    lsh,
                     tables,
                     ell,
                     m,
-                    seedBase
+                    seed
             );
         });
     }
@@ -653,7 +627,8 @@ public class ForwardSecureANNSystem {
         cache.put(ckey, results);
 
         long clientNs = Math.max(0L, end - start);
-        totalQueryTimeNs += clientNs;  // accumulate client time (cache miss)
+        long serverNs = ((QueryServiceImpl)queryService).getLastQueryDurationNs();
+        totalQueryTimeNs += Math.max(0L, clientNs + serverNs);
 
         if (profiler != null && queryService instanceof QueryServiceImpl qs) {
             double serverMs = boundedServerMs(qs, start, end);
@@ -682,7 +657,8 @@ public class ForwardSecureANNSystem {
         List<QueryResult> cached = cache.get(ckey);
         if (cached != null) {
             long clientNs = Math.max(0L, System.nanoTime() - start);
-            totalQueryTimeNs += clientNs; // accumulate client time (cache hit)
+            long serverNs = ((QueryServiceImpl)queryService).getLastQueryDurationNs();
+            totalQueryTimeNs += Math.max(0L, clientNs + serverNs);
             if (profiler != null) profiler.recordQueryMetric("Q_cache_" + topK, 0.0, clientNs / 1_000_000.0, 0.0);
             return cached;
         }
@@ -692,7 +668,8 @@ public class ForwardSecureANNSystem {
         cache.put(ckey, results);
 
         long clientNs = Math.max(0L, end - start);
-        totalQueryTimeNs += clientNs; // accumulate client time (cache miss)
+        long serverNs = ((QueryServiceImpl)queryService).getLastQueryDurationNs();
+        totalQueryTimeNs += Math.max(0L, clientNs + serverNs);
 
         if (profiler != null && queryService instanceof QueryServiceImpl qs) {
             double serverMs = boundedServerMs(qs, start, end);
@@ -1039,7 +1016,8 @@ public class ForwardSecureANNSystem {
                     .findFirst().orElseGet(() -> enriched.get(enriched.size() - 1));
 
             if (profiler != null) profiler.recordQueryMetric("Q" + q, serverMs, clientMs, atK.getRatio());
-            totalQueryTimeNs += Math.max(0L, clientEnd - clientStart);
+            long serverNs = ((QueryServiceImpl)queryService).getLastQueryDurationNs();
+            totalQueryTimeNs += Math.max(0L, clientEnd - clientStart + serverNs);
 
             if (q < 3 && !baseReturned.isEmpty() && baseReader != null) {
                 int topId = -1;
@@ -2555,6 +2533,15 @@ public class ForwardSecureANNSystem {
             this.cumulativeUnique = cumulativeUnique;
             this.rep = rep;
         }
+    }
+
+    public void disableLSHForAllDimensions() {
+        try {
+            Field f = this.getClass().getDeclaredField("lshPerDim");
+            f.setAccessible(true);
+            Map<Integer, EvenLSH> map = (Map<Integer, EvenLSH>) f.get(this);
+            if (map != null) map.clear();
+        } catch (Throwable ignore) {}
     }
 
     /** Server ms, gently bounded to the client window. */
