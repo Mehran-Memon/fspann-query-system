@@ -2,9 +2,9 @@
   "base": {
     "paper": {
       "enabled": true,
-      "m": 25,
+      "m": 14,
       "lambda": 2,
-      "divisions": 9,
+      "divisions": 2,
       "seed": 13
     },
 
@@ -50,126 +50,27 @@
 
     "search": {
       "mode": "paper",
-
       "kAdaptive": {
-        "enabled": true,
-
-        "strategy": "sqrt",
-
-        "baseFactor": 4.0,
-
-        "minCandidates": 128,
-        "maxCandidates": 8192,
-
-        "lowReturnRateThreshold": 0.5,
-        "boostFactorOnLowReturn": 2.0
+        "enabled": false
       }
     }
   },
 
   "profiles": [
-    {
-      "name": "P01_baseline_l9",
-      "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 9 } }
-    },
+    { "id": "F01_m12_l2", "paper": { "enabled": true, "m": 12, "lambda": 2, "divisions": 2, "seed": 13 } },
+    { "id": "F02_m14_l2", "paper": { "enabled": true, "m": 14, "lambda": 2, "divisions": 2, "seed": 13 } },
+    { "id": "F03_m16_l2", "paper": { "enabled": true, "m": 16, "lambda": 2, "divisions": 2, "seed": 13 } },
+    { "id": "F04_m18_l2", "paper": { "enabled": true, "m": 18, "lambda": 2, "divisions": 2, "seed": 13 } },
 
-    {
-      "name": "P02_l2",
-      "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 2 } }
-    },
-    {
-      "name": "P03_l3",
-      "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 3 } }
-    },
-    {
-      "name": "P04_l4",
-      "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 4 } }
-    },
-    {
-      "name": "P05_l6",
-      "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 6 } }
-    },
+    { "id": "F05_m12_l3", "paper": { "enabled": true, "m": 12, "lambda": 2, "divisions": 3, "seed": 13 } },
+    { "id": "F06_m14_l3", "paper": { "enabled": true, "m": 14, "lambda": 2, "divisions": 3, "seed": 13 } },
+    { "id": "F07_m16_l3", "paper": { "enabled": true, "m": 16, "lambda": 2, "divisions": 3, "seed": 13 } },
+    { "id": "F08_m18_l3", "paper": { "enabled": true, "m": 18, "lambda": 2, "divisions": 3, "seed": 13 } },
 
-    {
-      "name": "P06_m10_l3",
-      "overrides": { "paper": { "m": 10, "lambda": 2, "divisions": 3 } }
-    },
-    {
-      "name": "P07_m15_l3",
-      "overrides": { "paper": { "m": 15, "lambda": 2, "divisions": 3 } }
-    },
-    {
-      "name": "P08_m20_l3",
-      "overrides": { "paper": { "m": 20, "lambda": 2, "divisions": 3 } }
-    },
-    {
-      "name": "P09_m25_l3",
-      "overrides": { "paper": { "m": 25, "lambda": 2, "divisions": 3 } }
-    },
+    { "id": "F09_m20_l2", "paper": { "enabled": true, "m": 20, "lambda": 2, "divisions": 2, "seed": 13 } },
+    { "id": "F10_m22_l2", "paper": { "enabled": true, "m": 22, "lambda": 2, "divisions": 2, "seed": 13 } },
+    { "id": "F11_m25_l2", "paper": { "enabled": true, "m": 25, "lambda": 2, "divisions": 2, "seed": 13 } },
 
-    {
-      "name": "P10_lambda1_l3",
-      "overrides": { "paper": { "m": 25, "lambda": 1, "divisions": 3 } }
-    },
-    {
-      "name": "P11_lambda3_l3",
-      "overrides": { "paper": { "m": 25, "lambda": 3, "divisions": 3 } }
-    },
-    {
-      "name": "P12_lambda4_l3",
-      "overrides": { "paper": { "m": 25, "lambda": 4, "divisions": 3 } }
-    },
-
-    {
-      "name": "P13_fast_l2_m20",
-      "overrides": {
-        "paper": { "m": 20, "lambda": 2, "divisions": 2 },
-        "search": {
-          "kAdaptive": {
-            "enabled": true,
-            "strategy": "sqrt",
-            "baseFactor": 2.0,
-            "minCandidates": 64,
-            "maxCandidates": 4096,
-            "lowReturnRateThreshold": 0.4,
-            "boostFactorOnLowReturn": 2.0
-          }
-        }
-      }
-    },
-    {
-      "name": "P14_balanced_l3_m25",
-      "overrides": {
-        "paper": { "m": 25, "lambda": 2, "divisions": 3 },
-        "search": {
-          "kAdaptive": {
-            "enabled": true,
-            "strategy": "sqrt",
-            "baseFactor": 4.0,
-            "minCandidates": 128,
-            "maxCandidates": 8192,
-            "lowReturnRateThreshold": 0.5,
-            "boostFactorOnLowReturn": 2.0
-          }
-        }
-      }
-    },
-    {
-      "name": "P15_highrecall_l4_m30",
-      "overrides": {
-        "paper": { "m": 30, "lambda": 3, "divisions": 4 },
-        "search": {
-          "kAdaptive": {
-            "enabled": true,
-            "strategy": "linear",
-            "baseFactor": 3.0,
-            "minCandidates": 256,
-            "maxCandidates": 16384,
-            "lowReturnRateThreshold": 0.7,
-            "boostFactorOnLowReturn": 1.5
-          }
-        }
-      }
-    }
+    { "id": "F12_control_noAdaptive", "paper": { "enabled": true, "m": 14, "lambda": 2, "divisions": 2, "seed": 13 }, "kAdaptive": { "enabled": false } }
   ]
 }

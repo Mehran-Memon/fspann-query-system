@@ -373,13 +373,21 @@ public class SecureLSHIndexService implements IndexService {
         if (dimension <= 0) {
             throw new IllegalArgumentException("dimension must be > 0");
         }
+
         return lshPerDimension.computeIfAbsent(dimension, dim -> {
+            // Tunable knobs (kept for compatibility / tests)
             int m = Integer.getInteger("token.lsh.m", 8);
             int r = Integer.getInteger("token.lsh.r", 4);
             long seed = Long.getLong("token.lsh.seed", 13L);
-            logger.debug("getLshForDimension: creating EvenLSH(m={}, dim={}, r={}, seed={})",
-                    m, dim, r, seed);
-            return new EvenLSH(m, dim, r, seed);
+
+            // NOTE: EvenLSH ctor is (dimensions, numTables, maxBuckets, baseSeed)
+            //       so we MUST pass the real vector dimension as the first argument.
+            logger.debug(
+                    "getLshForDimension: creating EvenLSH(dim={}, m={}, r={}, seed={})",
+                    dim, m, r, seed
+            );
+
+            return new EvenLSH(dim, m, r, seed);
         });
     }
 
