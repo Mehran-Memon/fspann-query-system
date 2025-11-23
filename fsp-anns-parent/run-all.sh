@@ -194,8 +194,6 @@ fi
 # If Dim is "", it will be auto-detected from base file header.
 # Format: Name::Base::Query::GT::Dim
 DATASETS=(
-#  "Enron::/mnt/data/mehran/Datasets/Enron/enron_base.fvecs::/mnt/data/mehran/Datasets/Enron/enron_query.fvecs::/mnt/data/mehran/Datasets/Enron/enron_groundtruth.ivecs::1369"
-#  "audio::/mnt/data/mehran/Datasets/audio/audio_base.fvecs::/mnt/data/mehran/Datasets/audio/audio_query.fvecs::/mnt/data/mehran/Datasets/audio/audio_groundtruth.ivecs::192"
   "SIFT1M::/mnt/data/mehran/Datasets/SIFT1M/sift_base.fvecs::/mnt/data/mehran/Datasets/SIFT1M/sift_query.fvecs::/mnt/data/mehran/Datasets/SIFT1M/sift_query_groundtruth.ivecs::128"
   "synthetic_128::/mnt/data/mehran/Datasets/synthetic_128/base.fvecs::/mnt/data/mehran/Datasets/synthetic_128/query.fvecs::/mnt/data/mehran/Datasets/synthetic_128/groundtruth.ivecs::128"
   "synthetic_256::/mnt/data/mehran/Datasets/synthetic_256/base.fvecs::/mnt/data/mehran/Datasets/synthetic_256/query.fvecs::/mnt/data/mehran/Datasets/synthetic_256/groundtruth.ivecs::256"
@@ -206,12 +204,12 @@ DATASETS=(
 
 # ---------- MAIN LOOP: datasets x profiles ----------
 for ds in "${DATASETS[@]}"; do
-# robust split on "::<exactly>"
-Name="$(awk -F '::' '{print $1}' <<<"$ds")"
-Base="$(awk -F '::' '{print $2}' <<<"$ds")"
-Query="$(awk -F '::' '{print $3}' <<<"$ds")"
-GT="$(awk -F '::' '{print $4}' <<<"$ds")"
-Dim="$(awk -F '::' '{print $5}' <<<"$ds")"
+  # robust split on "::<exactly>"
+  Name="$(awk -F '::' '{print $1}' <<<"$ds")"
+  Base="$(awk -F '::' '{print $2}' <<<"$ds")"
+  Query="$(awk -F '::' '{print $3}' <<<"$ds")"
+  GT="$(awk -F '::' '{print $4}' <<<"$ds")"
+  Dim="$(awk -F '::' '{print $5}' <<<"$ds")"
 
   if [[ -z "$Dim" ]]; then
     [[ -f "$Base" ]] || { echo "Skipping $Name (missing base)"; continue; }
@@ -229,7 +227,8 @@ Dim="$(awk -F '::' '{print $5}' <<<"$ds")"
 
   # Iterate profiles from config.json
   while IFS= read -r profile; do
-    label="$(jq -r '.name // empty' <<<"$profile")"
+    # 🔹 Use "id" from config.json
+    label="$(jq -r '.id // empty' <<<"$profile")"
     [[ -n "$label" ]] || continue
 
     # Apply filter if provided
@@ -247,8 +246,8 @@ Dim="$(awk -F '::' '{print $5}' <<<"$ds")"
       clean_run_metadata "$runDir"
     fi
 
-    # Merge base + overrides
-    ovr_json="$(jq -c '.overrides // {}' <<<"$profile")"
+    # 🔹 Overrides: entire profile minus "id"
+    ovr_json="$(jq -c 'del(.id)' <<<"$profile")"
     final_json="$(json_merge_with_overrides "$base_json" "$ovr_json")"
 
     # Ensure output/eval/cloak exist and set fields
@@ -295,41 +294,40 @@ Dim="$(awk -F '::' '{print $5}' <<<"$ds")"
     tmpConf="${runDir}/config.json"
     echo "$final_json" > "$tmpConf"
 
-# args
-keysFile="${runDir}/keystore.blob"
-gtArg="$(safe_resolve "$GT")" # ignored when gtPath provided & compute disabled
-dataArg="$Base"
-queryArg="$Query"
+    # args
+    keysFile="${runDir}/keystore.blob"
+    gtArg="$(safe_resolve "$GT")" # ignored when gtPath provided & compute disabled
+    dataArg="$Base"
+    queryArg="$Query"
 
-declare -a restoreFlags=()   # <— add declare to ensure array exists
+    declare -a restoreFlags=()
 
-if [[ "$QueryOnly" == "true" ]]; then
-  dataArg="POINTS_ONLY"
-  restoreFlags+=("-Dquery.only=true")
-  if [[ -n "${RestoreVersion}" ]]; then
-    restoreFlags+=("-Drestore.version=${RestoreVersion}")
-  fi
-fi
+    if [[ "$QueryOnly" == "true" ]]; then
+      dataArg="POINTS_ONLY"
+      restoreFlags+=("-Dquery.only=true")
+      if [[ -n "${RestoreVersion}" ]]; then
+        restoreFlags+=("-Drestore.version=${RestoreVersion}")
+      fi
+    fi
 
-# Build java arg list (order preserved)
-argList=()
-argList+=("${JvmArgs[@]}")
+    # Build java arg list (order preserved)
+    argList=()
+    argList+=("${JvmArgs[@]}")
 
-# add restoreFlags only if non-empty (avoids unbound expansion with set -u)
-if ((${#restoreFlags[@]})); then
-  argList+=("${restoreFlags[@]}")
-fi
+    if ((${#restoreFlags[@]})); then
+      argList+=("${restoreFlags[@]}")
+    fi
 
-argList+=("-Dbase.path=$(safe_resolve "$Base" true)")
-argList+=("-jar" "$(safe_resolve "$JarPath")")
-argList+=("$(safe_resolve "$tmpConf")")
-argList+=("$(safe_resolve "$dataArg" true)")
-argList+=("$(safe_resolve "$queryArg" true)")
-argList+=("$(safe_resolve "$keysFile" true)")
-argList+=("${Dim}")
-argList+=("$(safe_resolve "$runDir")")
-argList+=("$(safe_resolve "$gtArg")")
-argList+=("${Batch}")
+    argList+=("-Dbase.path=$(safe_resolve "$Base" true)")
+    argList+=("-jar" "$(safe_resolve "$JarPath")")
+    argList+=("$(safe_resolve "$tmpConf")")
+    argList+=("$(safe_resolve "$dataArg" true)")
+    argList+=("$(safe_resolve "$queryArg" true)")
+    argList+=("$(safe_resolve "$keysFile" true)")
+    argList+=("${Dim}")
+    argList+=("$(safe_resolve "$runDir")")
+    argList+=("$(safe_resolve "$gtArg")")
+    argList+=("${Batch}")
 
     # Manifest
     manifest_json="$(jq -n -c \

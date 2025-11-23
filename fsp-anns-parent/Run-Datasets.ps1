@@ -122,34 +122,88 @@ function Save-Manifest([string]$RunDir, [hashtable]$Manifest) {
 }
 function Combine-CSV {
     param(
-        [Parameter(Mandatory=$true)][string[]]$Files,
-        [Parameter(Mandatory=$true)][string]$OutCsv
+        [Parameter(Mandatory=$true)]
+        $Files,
+
+        [Parameter(Mandatory=$true)]
+        [string] $OutCsv
     )
 
-    # Handle $null or empty list safely under StrictMode
+    # Normalize to always be an array
+    $Files = @([string[]]$Files)
     if (-not $Files -or $Files.Count -eq 0) { return }
 
-    $headerWritten = $false
     $outDir = Split-Path -Parent $OutCsv
     if ($outDir) {
         New-Item -ItemType Directory -Force -Path $outDir | Out-Null
     }
     Remove-Item -LiteralPath $OutCsv -ErrorAction SilentlyContinue
 
+    $headerWritten = $false
+
     foreach ($f in $Files) {
+
         if (-not (Test-Path -LiteralPath $f)) { continue }
+
         $lines = Get-Content -LiteralPath $f
-        if (-not $lines) { continue }
+        if (-not $lines -or $lines.Count -eq 0) { continue }
+
+        $resultsDir = Split-Path -LiteralPath $f -Parent
+        $profileDir = Split-Path -LiteralPath $resultsDir -Parent
+        $profile    = Split-Path -LiteralPath $profileDir -Leaf
+
+        $header = $lines[0]
+        $rows = @()
+        if ($lines.Count -gt 1) {
+            $rows = $lines | Select-Object -Skip 1
+        }
 
         if (-not $headerWritten) {
-            $lines | Set-Content -LiteralPath $OutCsv -Encoding UTF8
+            "profile,$header" | Set-Content -LiteralPath $OutCsv -Encoding UTF8
+            foreach ($row in $rows) {
+                if ([string]::IsNullOrWhiteSpace($row)) { continue }
+                "$profile,$row" | Add-Content -LiteralPath $OutCsv -Encoding UTF8
+            }
             $headerWritten = $true
-        } else {
-            $lines | Select-Object -Skip 1 | Add-Content -LiteralPath $OutCsv -Encoding UTF8
+        }
+        else {
+            foreach ($row in $rows) {
+                if ([string]::IsNullOrWhiteSpace($row)) { continue }
+                "$profile,$row" | Add-Content -LiteralPath $OutCsv -Encoding UTF8
+            }
         }
     }
 }
+function Combine-TxtWithProfile {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]] $Files,
+        [Parameter(Mandatory = $true)]
+        [string]  $OutTxt
+    )
 
+    $Files = @([string[]]$Files)
+    if ($Files.Count -eq 0) { return }
+
+    $outDir = Split-Path -Parent $OutTxt
+    if ($outDir) {
+        New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+    }
+    Remove-Item -LiteralPath $OutTxt -ErrorAction SilentlyContinue
+
+    foreach ($f in $Files) {
+        if (-not (Test-Path -LiteralPath $f)) { continue }
+
+        # ...\<dataset>\<profile>\results\<file>
+        $resultsDir = Split-Path -LiteralPath $f -Parent
+        $profileDir = Split-Path -LiteralPath $resultsDir -Parent
+        $profile    = Split-Path -LiteralPath $profileDir -Leaf
+
+        "===== PROFILE: $profile =====" | Add-Content -LiteralPath $OutTxt -Encoding UTF8
+        Get-Content -LiteralPath $f | Add-Content -LiteralPath $OutTxt -Encoding UTF8
+        "" | Add-Content -LiteralPath $OutTxt -Encoding UTF8
+    }
+}
 function Detect-FvecsDim([string]$Path) {
     # Reads first 4 bytes little-endian as Int32
     $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
@@ -164,9 +218,9 @@ function Detect-FvecsDim([string]$Path) {
 # ---------- dataset matrix ----------
 # If Dim is $null, it will be auto-detected from base file header.
 $Datasets = @(
-    @{ Name="SIFT1M";       Base="E:\Research Work\Datasets\SIFT1M\sift_base.fvecs";          Query="E:\Research Work\Datasets\SIFT1M\sift_query.fvecs";          GT="E:\Research Work\Datasets\SIFT1M\sift_query_groundtruth.ivecs"; Dim=128 },
     @{ Name="Enron";        Base="E:\Research Work\Datasets\Enron\enron_base.fvecs";          Query="E:\Research Work\Datasets\Enron\enron_query.fvecs";          GT="E:\Research Work\Datasets\Enron\enron_groundtruth.ivecs";       Dim=1369 },
     @{ Name="audio";        Base="E:\Research Work\Datasets\audio\audio_base.fvecs";          Query="E:\Research Work\Datasets\audio\audio_query.fvecs";          GT="E:\Research Work\Datasets\audio\audio_groundtruth.ivecs";       Dim=192 },
+    @{ Name="SIFT1M";       Base="E:\Research Work\Datasets\SIFT1M\sift_base.fvecs";          Query="E:\Research Work\Datasets\SIFT1M\sift_query.fvecs";          GT="E:\Research Work\Datasets\SIFT1M\sift_query_groundtruth.ivecs"; Dim=128 },
     @{ Name="glove-100";    Base="E:\Research Work\Datasets\glove-100\glove-100_base.fvecs";  Query="E:\Research Work\Datasets\glove-100\glove-100_query.fvecs";  GT="E:\Research Work\Datasets\glove-100\glove-100_groundtruth.ivecs"; Dim=100 },
     @{ Name="synthetic_128";   Base="E:\Research Work\Datasets\synthetic_128\base.fvecs";     Query="E:\Research Work\Datasets\synthetic_128\query.fvecs";        GT="E:\Research Work\Datasets\synthetic_128\groundtruth.ivecs";     Dim=128 },
     @{ Name="synthetic_256";   Base="E:\Research Work\Datasets\synthetic_256\base.fvecs";     Query="E:\Research Work\Datasets\synthetic_256\query.fvecs";        GT="E:\Research Work\Datasets\synthetic_256\groundtruth.ivecs";     Dim=256 },
@@ -229,13 +283,8 @@ foreach ($ds in $Datasets) {
         $pHT = To-Hashtable $p
         if (-not $pHT.ContainsKey('id')) { continue }
         $label = [string]$pHT['id']
+        $ovr = if ($pHT.ContainsKey('overrides')) { $pHT['overrides'] } else { @{} }
 
-        $ovr = @{}
-        foreach ($k in $pHT.Keys) {
-            if ($k -ne 'id') {
-                $ovr[$k] = $pHT[$k]
-            }
-        }
         $runDir = Join-Path $datasetRoot $label
         New-Item -ItemType Directory -Force -Path $runDir | Out-Null
         if ($CleanPerRun) { Clean-RunMetadata -RunDir $runDir }
@@ -349,13 +398,26 @@ foreach ($ds in $Datasets) {
     }
 
     # ---- per-dataset merges ----
-    $resultsGlob   = Get-ChildItem -Path (Join-Path $datasetRoot "*\results\results_table.csv")    -File -ErrorAction SilentlyContinue
-    $precisionGlob = Get-ChildItem -Path (Join-Path $datasetRoot "*\results\global_precision.csv") -File -ErrorAction SilentlyContinue
-    $topkGlob      = Get-ChildItem -Path (Join-Path $datasetRoot "*\results\topk_evaluation.csv")  -File -ErrorAction SilentlyContinue
+    $resultsGlob   = Get-ChildItem -Path (Join-Path $datasetRoot "*\results\results_table.csv")          -File -ErrorAction SilentlyContinue
+    $precisionGlob = Get-ChildItem -Path (Join-Path $datasetRoot "*\results\global_precision.csv")       -File -ErrorAction SilentlyContinue
+    $topkGlob      = Get-ChildItem -Path (Join-Path $datasetRoot "*\results\topk_evaluation.csv")        -File -ErrorAction SilentlyContinue
+    $reencGlob     = Get-ChildItem -Path (Join-Path $datasetRoot "*\results\reencrypt_metrics.csv")      -File -ErrorAction SilentlyContinue
+    $samplesGlob   = Get-ChildItem -Path (Join-Path $datasetRoot "*\results\retrieved_samples.csv")      -File -ErrorAction SilentlyContinue
+    $worstGlob     = Get-ChildItem -Path (Join-Path $datasetRoot "*\results\retrieved_worst.csv")        -File -ErrorAction SilentlyContinue
+    $storSumGlob   = Get-ChildItem -Path (Join-Path $datasetRoot "*\results\storage_summary.csv")        -File -ErrorAction SilentlyContinue
+    $metricsTxtGlob= Get-ChildItem -Path (Join-Path $datasetRoot "*\results\metrics_summary.txt")        -File -ErrorAction SilentlyContinue
+    $storBrkGlob   = Get-ChildItem -Path (Join-Path $datasetRoot "*\results\storage_breakdown.txt")      -File -ErrorAction SilentlyContinue
+    $readmeGlob    = Get-ChildItem -Path (Join-Path $datasetRoot "*\results\README_results_columns.txt") -File -ErrorAction SilentlyContinue
 
-    $combinedResults   = Join-Path $datasetRoot "combined_results.csv"
-    $combinedPrecision = Join-Path $datasetRoot "combined_precision.csv"
-    $combinedTopk      = Join-Path $datasetRoot "combined_evaluation.csv"
+    $combinedResults       = Join-Path $datasetRoot "combined_results.csv"
+    $combinedPrecision     = Join-Path $datasetRoot "combined_precision.csv"
+    $combinedTopk          = Join-Path $datasetRoot "combined_evaluation.csv"
+    $combinedReenc         = Join-Path $datasetRoot "combined_reencrypt_metrics.csv"
+    $combinedSamples       = Join-Path $datasetRoot "combined_retrieved_samples.csv"
+    $combinedWorst         = Join-Path $datasetRoot "combined_retrieved_worst.csv"
+    $combinedStorSummary   = Join-Path $datasetRoot "combined_storage_summary.csv"
+    $combinedMetricsTxt    = Join-Path $datasetRoot "combined_metrics_summary.txt"
+    $combinedStorBreakdown = Join-Path $datasetRoot "combined_storage_breakdown.txt"
 
     if ($resultsGlob) {
         Combine-CSV -Files ($resultsGlob | Select-Object -ExpandProperty FullName) -OutCsv $combinedResults
@@ -365,6 +427,33 @@ foreach ($ds in $Datasets) {
     }
     if ($topkGlob) {
         Combine-CSV -Files ($topkGlob | Select-Object -ExpandProperty FullName) -OutCsv $combinedTopk
+    }
+    if ($reencGlob) {
+        Combine-CSV -Files ($reencGlob | Select-Object -ExpandProperty FullName) -OutCsv $combinedReenc
+    }
+    if ($samplesGlob) {
+        Combine-CSV -Files ($samplesGlob | Select-Object -ExpandProperty FullName) -OutCsv $combinedSamples
+    }
+    if ($worstGlob) {
+        Combine-CSV -Files ($worstGlob | Select-Object -ExpandProperty FullName) -OutCsv $combinedWorst
+    }
+    if ($storSumGlob) {
+        Combine-CSV -Files ($storSumGlob | Select-Object -ExpandProperty FullName) -OutCsv $combinedStorSummary
+    }
+    if ($metricsTxtGlob) {
+        Combine-TxtWithProfile -Files ($metricsTxtGlob | Select-Object -ExpandProperty FullName) -OutTxt $combinedMetricsTxt
+    }
+    if ($storBrkGlob) {
+        Combine-TxtWithProfile -Files ($storBrkGlob | Select-Object -ExpandProperty FullName) -OutTxt $combinedStorBreakdown
+    }
+
+    # Copy README_results_columns.txt once per dataset, like bash script
+    if ($readmeGlob) {
+        $readmeDir = Join-Path $datasetRoot "results_readme"
+        New-Item -ItemType Directory -Force -Path $readmeDir | Out-Null
+        # Take the first one as canonical
+        $firstReadme = ($readmeGlob | Select-Object -First 1).FullName
+        Copy-Item -LiteralPath $firstReadme -Destination (Join-Path $readmeDir "README_results_columns.txt") -Force -ErrorAction SilentlyContinue
     }
 
 }
