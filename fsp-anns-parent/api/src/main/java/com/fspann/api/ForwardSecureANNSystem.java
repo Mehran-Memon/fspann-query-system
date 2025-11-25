@@ -554,7 +554,7 @@ public class ForwardSecureANNSystem {
             int m = Math.max(1, pc.m);
             long seed = pc.seed;
 
-            logger.info("TokenFactory (ideal/partitioned): dim={} ell={} m={} seed={}", dim, ell, m, seed);
+//            logger.info("TokenFactory (ideal/partitioned): dim={} ell={} m={} seed={}", dim, ell, m, seed);
 
             return new QueryTokenFactory(
                     cryptoService,
@@ -2456,10 +2456,6 @@ public class ForwardSecureANNSystem {
         StringBuilder sb = new StringBuilder(a.length * 2);
         for (byte b : a) sb.append(String.format("%02x", b));
         return sb.toString();
-    }
-
-    private static double erToDoubleMs(long ms) {
-        return (double) ms;
     }
 
     private static long tryGetLong(Object o, String fieldName) {
