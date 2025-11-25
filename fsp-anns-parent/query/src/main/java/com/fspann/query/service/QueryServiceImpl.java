@@ -10,6 +10,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -41,9 +42,7 @@ public class QueryServiceImpl implements QueryService {
     private volatile List<String> lastCandIds = java.util.Collections.emptyList();
     private volatile ReencryptionTracker reencTracker;
 
-    // global touched IDs
-    private static final Set<String> GLOBAL_TOUCHED =
-            Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+    private final Set<String> touchedThisSession = ConcurrentHashMap.newKeySet();
 
     private volatile int lastTouchedUniqueSoFar = 0;
     private volatile int lastTouchedCumulativeUnique = 0;
@@ -100,6 +99,10 @@ public class QueryServiceImpl implements QueryService {
                 if (ep != null) uniq.putIfAbsent(ep.getId(), ep);
 
             lastCandTotal = uniq.size();
+
+            // *** CAPTURE CANDIDATE IDs FOR RE-ENCRYPTION TRACKING ***
+            lastCandIds = new ArrayList<>(uniq.keySet());
+
             List<QueryScored> scored = decryptAndScore(uniq, qVec, kv);
 
             // 2) SORT CURRENT CANDIDATES
@@ -141,7 +144,7 @@ public class QueryServiceImpl implements QueryService {
             if (reencTracker != null) {
                 reencTracker.touch(ep.getId());
             }
-            GLOBAL_TOUCHED.add(ep.getId());
+            touchedThisSession.add(ep.getId());  // ← FIXED: Use instance field
 
             double[] v = cryptoService.decryptFromPoint(ep, kv.getKey());
             if (v == null || v.length == 0) continue;
@@ -150,8 +153,9 @@ public class QueryServiceImpl implements QueryService {
             scored.add(new QueryScored(ep.getId(), l2sq(qVec, v)));
         }
 
+        // Update touch metrics
         lastTouchedUniqueSoFar = uniq.size();
-        lastTouchedCumulativeUnique = GLOBAL_TOUCHED.size();
+        lastTouchedCumulativeUnique = touchedThisSession.size();
         return scored;
     }
 
@@ -249,7 +253,7 @@ public class QueryServiceImpl implements QueryService {
         while (true) {
             // compute returnRate
             double returnRate = (scored.isEmpty() ? 0.0 : Math.min(1.0,
-                    ((double) requestedK) / (double) Math.max(1,scored.size())
+                    ((double) requestedK) / (double) Math.max(1, scored.size())
             ));
 
             // stop if high returnRate
@@ -268,6 +272,12 @@ public class QueryServiceImpl implements QueryService {
             // fetch more candidates (paper engine union semantics)
             List<EncryptedPoint> more = fetchMoreCandidates(token, uniq, need);
             if (more.isEmpty()) break;
+
+            // *** UPDATE CANDIDATE IDs AFTER EXPANSION ***
+            lastCandIds = new ArrayList<>(uniq.keySet());
+
+            // Update total candidate count metric
+            lastCandTotal = uniq.size();
 
             // decrypt & add new scores
             List<QueryScored> moreScored = decryptAndScore(uniq, qVec, kv);

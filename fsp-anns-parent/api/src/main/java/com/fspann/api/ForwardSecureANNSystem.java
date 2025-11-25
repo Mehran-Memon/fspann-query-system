@@ -407,11 +407,6 @@ public class ForwardSecureANNSystem {
                 () -> dirSize(this.pointsPath)   // StorageSizer: bytes on disk for points
         );
 
-        // Let the query layer mark touches
-        if (this.queryService instanceof QueryServiceImpl qs) {
-            qs.setReencryptionTracker(this.reencTracker);
-        }
-
         String basePathProp = System.getProperty("base.path", "").trim();
         if (!basePathProp.isEmpty()) {
             Path basePath = Paths.get(basePathProp);
@@ -800,8 +795,16 @@ public class ForwardSecureANNSystem {
             while (true) {
                 baseToken = factoryForDim(dim).create(queryVec, baseKForToken);
                 baseReturned = queryService.search(baseToken);
-                clientEnd = System.nanoTime();
 
+                // *** CAPTURE CANDIDATES AFTER EACH ITERATION ***
+                var iterCandIds = qs.getLastCandidateIds();
+                if (iterCandIds != null && !iterCandIds.isEmpty()) {
+                    touchedGlobal.addAll(iterCandIds);
+                    logger.trace("q{} k-adaptive round {}: added {} candidates (touchedGlobal now: {})",
+                            qIndex, round, iterCandIds.size(), touchedGlobal.size());
+                }
+
+                clientEnd = System.nanoTime();
                 clientMs = (clientEnd - clientStart) / 1_000_000.0;
                 serverMs = boundedServerMs(qs, clientStart, clientEnd);
 
@@ -876,10 +879,18 @@ public class ForwardSecureANNSystem {
                 logger.debug("q{} touch-set divergence: svc={} sys={}", qIndex, svcCum, rep.cumulativeUnique);
             }
 
-            int touchedCount = (qs.getLastCandidateIds() != null) ? qs.getLastCandidateIds().size() : 0;
+            // *** VALIDATE AND CAPTURE CANDIDATE IDs ***
             var last = qs.getLastCandidateIds();
-            if (last != null && !last.isEmpty()) {
+            int touchedCount = 0;
+
+            if (last == null || last.isEmpty()) {
+                logger.warn("q{} getLastCandidateIds() returned empty! Candidate tracking failed. " +
+                        "Check QueryServiceImpl.search() - lastCandIds may not be updated.", qIndex);
+            } else {
+                touchedCount = last.size();
                 touchedGlobal.addAll(last);
+                logger.trace("q{} added {} candidate IDs to touchedGlobal (total now: {})",
+                        qIndex, last.size(), touchedGlobal.size());
             }
 
             com.fspann.common.EncryptedPointBuffer buf = indexService.getPointBuffer();
@@ -1209,10 +1220,18 @@ public class ForwardSecureANNSystem {
             if (svcCum != rep.cumulativeUnique) {
                 logger.debug("q{} touch-set divergence: svc={} sys={}", qIndex, svcCum, rep.cumulativeUnique);
             }
-            int touchedCount = (qs.getLastCandidateIds() != null) ? qs.getLastCandidateIds().size() : 0;
+            // *** VALIDATE AND CAPTURE CANDIDATE IDs ***
             var last = qs.getLastCandidateIds();
-            if (last != null && !last.isEmpty()) {
+            int touchedCount = 0;
+
+            if (last == null || last.isEmpty()) {
+                logger.warn("q{} getLastCandidateIds() returned empty! Candidate tracking failed. " +
+                        "Check QueryServiceImpl.search() - lastCandIds may not be updated.", qIndex);
+            } else {
+                touchedCount = last.size();
                 touchedGlobal.addAll(last);
+                logger.trace("q{} added {} candidate IDs to touchedGlobal (total now: {})",
+                        qIndex, last.size(), touchedGlobal.size());
             }
             com.fspann.common.EncryptedPointBuffer buf = indexService.getPointBuffer();
             long insertTimeMs = buf != null ? buf.getLastBatchInsertTimeMs() : 0;
@@ -2378,6 +2397,11 @@ public class ForwardSecureANNSystem {
         }
 
         if (uniqueCount == 0) {
+            logger.error("finalizeReencryptionAtEnd: touchedGlobal is EMPTY! " +
+                    "This indicates candidate tracking failed. " +
+                    "Check QueryServiceImpl.getLastCandidateIds() and ensure " +
+                    "lastCandIds is populated in search().");
+
             appendReencCsv(reencCsv, "SUMMARY",
                     keyService.getCurrentVersion().getVersion(),
                     reencMode,
@@ -2613,6 +2637,11 @@ public class ForwardSecureANNSystem {
                     qIndex, k, ratio, precision, joinIds(retrieved), joinInts(truth));
             Files.writeString(worstCsv, line, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
         }
+    }
+
+    public void clearTouchedGlobal() {
+        touchedGlobal.clear();
+        logger.info("Cleared touchedGlobal set for new run");
     }
 
     public void flushAll() throws IOException {
