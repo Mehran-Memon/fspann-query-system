@@ -38,7 +38,7 @@ $Batch = 100000
 # - "" => all
 # - exact name => that profile only
 # - wildcard => pattern (e.g., "*ell3*")
-$OnlyProfile = ""
+$OnlyProfile = "F11_m25_l2"
 
 # ---- toggles ----
 $CleanPerRun = $true
@@ -68,15 +68,20 @@ foreach ($k in $h.Keys) {
 }
 return $out
 }
-function Apply-Overrides { param([hashtable]$base,[hashtable]$ovr)
-$result = Copy-Hashtable $base
-foreach($k in $ovr.Keys){
-    $ov = $ovr[$k]
-    if ($result.ContainsKey($k) -and ($result[$k] -is [hashtable]) -and ($ov -is [hashtable])) {
-        foreach($sub in $ov.Keys){ $result[$k][$sub] = $ov[$sub] }
-    } else { $result[$k] = $ov }
-}
-return $result
+function Apply-Overrides {
+    param([hashtable]$base, [hashtable]$ovr)
+    $result = Copy-Hashtable $base
+    foreach ($k in $ovr.Keys){
+        $ov = $ovr[$k]
+        if ($result.ContainsKey($k) -and ($result[$k] -is [hashtable]) -and ($ov -is [hashtable])) {
+            foreach($sub in $ov.Keys){
+                $result[$k][$sub] = $ov[$sub]
+            }
+        } else {
+            $result[$k] = $ov
+        }
+    }
+    return $result
 }
 function Ensure-Files { param([string]$base,[string]$query,[string]$gt)
 $ok = $true
@@ -249,9 +254,9 @@ New-Item -ItemType Directory -Force -Path $OutRoot | Out-Null
 if ($OnlyProfile -and $OnlyProfile.Trim().Length -gt 0) {
     $needle = $OnlyProfile.Trim()
     if ($needle.Contains("*") -or $needle.Contains("?")) {
-        $profiles = @($profiles | Where-Object { $_.name -like $needle })
+        $profiles = @($profiles | Where-Object { $_.id -like $needle })
     } else {
-        $profiles = @($profiles | Where-Object { $_.name -eq $needle })
+        $profiles = @($profiles | Where-Object { $_.id -eq $needle })
     }
     if ($profiles.Count -eq 0) { throw "Profile filter '$needle' matched nothing in config.json" }
 }
@@ -283,7 +288,15 @@ foreach ($ds in $Datasets) {
         $pHT = To-Hashtable $p
         if (-not $pHT.ContainsKey('id')) { continue }
         $label = [string]$pHT['id']
-        $ovr = if ($pHT.ContainsKey('overrides')) { $pHT['overrides'] } else { @{} }
+
+        # If profile has explicit 'overrides', use that.
+        # Otherwise treat all keys except 'id' as overrides (e.g. 'paper', 'kAdaptive', etc.).
+        if ($pHT.ContainsKey('overrides')) {
+            $ovr = To-Hashtable $pHT['overrides']
+        } else {
+            $ovr = Copy-Hashtable $pHT
+            $ovr.Remove('id')
+        }
 
         $runDir = Join-Path $datasetRoot $label
         New-Item -ItemType Directory -Force -Path $runDir | Out-Null
