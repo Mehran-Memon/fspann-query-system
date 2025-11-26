@@ -852,6 +852,13 @@ public class ForwardSecureANNSystem {
             }
             // --- end K-adaptive query execution ---
 
+//            // Every 1000 queries, re-encrypt touched points
+//            if ((q + 1) % 1000 == 0) {
+//                logger.info("Checkpoint re-encryption at query {}", q);
+//                finalizeReencryptionAtEnd(); // Re-encrypt accumulated touches
+//                touchedGlobal.clear();       // Reset for next batch
+//            }
+//
             // Post-query invariants and guards
             guardCandidateInvariants(qIndex, candTotal, candKeptVersion, candDecrypted, returned);
 

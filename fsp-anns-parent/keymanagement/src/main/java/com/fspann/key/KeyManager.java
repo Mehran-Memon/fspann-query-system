@@ -16,6 +16,7 @@ import java.nio.file.*;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -125,19 +126,21 @@ public class KeyManager {
     public SecretKey getSessionKey(int version) { return sessionKeys.get(version); }
 
     /** Synchronized so concurrent calls produce strictly increasing versions (no lost updates). */
-    public synchronized KeyVersion rotateKey() {
+    public synchronized KeyVersion rotateKey() throws NoSuchAlgorithmException, InvalidKeyException {
         int next = currentVersion + 1;
-        SecretKey nextKey;
-        try {
-            nextKey = deriveSessionKey(next);
-        } catch (NoSuchAlgorithmException | InvalidKeyException e) {
-            throw new RuntimeException("Key derivation failed", e);
-        }
+        SecretKey nextKey = deriveSessionKey(next);
         sessionKeys.put(next, nextKey);
-        currentVersion = next;
 
-        persistSync(); // atomic persist to avoid partial reads
-        logger.info("Rotated key: v{}", currentVersion);
+        // ✅ DELETE old session key (true forward security)
+        if (currentVersion > 1) {
+            SecretKey oldKey = sessionKeys.remove(currentVersion - 1);
+            if (oldKey != null) {
+                // Overwrite key material before GC
+                Arrays.fill(oldKey.getEncoded(), (byte) 0);
+            }
+        }
+        currentVersion = next;
+        persistSync(); // Only persist K_master + K_current
         return new KeyVersion(currentVersion, nextKey);
     }
 
@@ -189,6 +192,7 @@ public class KeyManager {
     private static SecretKey toSpec(SecretKey k) {
         return new SecretKeySpec(Objects.requireNonNull(k, "key").getEncoded(), KEY_ALGO);
     }
+    
     private static ConcurrentMap<Integer, SecretKey> toSpecMap(Map<Integer, SecretKey> in) {
         ConcurrentMap<Integer, SecretKey> out = new ConcurrentHashMap<>();
         for (Map.Entry<Integer, SecretKey> e : in.entrySet()) out.put(e.getKey(), toSpec(e.getValue()));
