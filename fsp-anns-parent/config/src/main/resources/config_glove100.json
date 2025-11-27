@@ -1,0 +1,60 @@
+{
+  "base": {
+    "paper": { "enabled": true, "m": 12, "lambda": 1, "divisions": 1, "seed": 13 },
+
+    "lsh": { "numTables": 0, "rowsPerBand": 0, "probeShards": 0 },
+
+    "numShards": 1,
+    "opsThreshold": 10000000,
+    "ageThresholdMs": 6048000000,
+
+    "eval": {
+      "computePrecision": true,
+      "writeGlobalPrecisionCsv": true,
+      "kVariants": [1, 5, 10, 20, 40, 60, 80, 100]
+    },
+
+    "output": { "exportArtifacts": true, "suppressLegacyMetrics": true },
+
+    "cloak": { "noise": 0.0 },
+
+    "audit": {
+      "enable": false,
+      "k": 100,
+      "sampleEvery": 250,
+      "worstKeep": 25
+    },
+
+    "ratio": {
+      "source": "gt",
+      "gtSample": 5000,
+      "gtMismatchTolerance": 0.0,
+      "autoComputeGT": false,
+      "allowComputeIfMissing": false
+    },
+
+    "search": {
+      "mode": "paper",
+
+      "kAdaptive": {
+        "enabled": true,
+        "strategy": "sqrt",
+        "targetRatioMin": 1.00,
+        "targetRatioMax": 1.01,
+        "baseFactor": 2.0,
+        "minCandidates": 64,
+        "maxCandidates": 2048,
+        "lowReturnRateThreshold": 0.4,
+        "boostFactorOnLowReturn": 1.5
+      }
+    }
+  },
+
+  "profiles": [
+    { "id": "GLOVEm10", "paper": { "m": 10, "lambda": 1, "divisions": 1 } },
+    { "id": "GLOVEm12", "paper": { "m": 12, "lambda": 1, "divisions": 1 } },
+    { "id": "GLOVEm14", "paper": { "m": 14, "lambda": 1, "divisions": 1 } },
+    { "id": "GLOVEm16", "paper": { "m": 16, "lambda": 1, "divisions": 1 } },
+    { "id": "GLOVEm18", "paper": { "m": 18, "lambda": 1, "divisions": 1 } }
+  ]
+}

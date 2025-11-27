@@ -1,0 +1,70 @@
+{
+  "base": {
+    "paper": { "enabled": true, "m": 16, "lambda": 2, "divisions": 2, "seed": 13 },
+
+    "lsh": { "numTables": 0, "rowsPerBand": 0, "probeShards": 0 },
+
+    "numShards": 1,
+    "opsThreshold": 10000000,
+    "ageThresholdMs": 6048000000,
+
+    "eval": {
+      "computePrecision": true,
+      "writeGlobalPrecisionCsv": true,
+      "kVariants": [1, 5, 10, 20, 40, 60, 80, 100]
+    },
+
+    "output": { "exportArtifacts": true, "suppressLegacyMetrics": true },
+
+    "cloak": { "noise": 0.0 },
+
+    "audit": {
+      "enable": false,
+      "k": 100,
+      "sampleEvery": 250,
+      "worstKeep": 25
+    },
+
+    "ratio": {
+      "source": "gt",
+      "gtSample": 5000,
+      "gtMismatchTolerance": 0.0,
+      "autoComputeGT": false,
+      "allowComputeIfMissing": false
+    },
+
+    "search": {
+      "mode": "paper",
+
+      "kAdaptive": {
+        "enabled": true,
+        "strategy": "sqrt",
+        "targetRatioMin": 1.01,
+        "targetRatioMax": 1.03,
+        "baseFactor": 4.5,
+        "minCandidates": 512,
+        "maxCandidates": 16384,
+        "lowReturnRateThreshold": 0.45,
+        "boostFactorOnLowReturn": 1.8
+      }
+    }
+  },
+
+  "profiles": [
+    { "id": "RC_m16_l2", "paper": { "m": 16, "lambda": 2, "divisions": 2 } },
+    { "id": "RC_m18_l2", "paper": { "m": 18, "lambda": 2, "divisions": 2 } },
+    { "id": "RC_m20_l2", "paper": { "m": 20, "lambda": 2, "divisions": 2 } },
+    { "id": "RC_m22_l2", "paper": { "m": 22, "lambda": 2, "divisions": 2 } },
+    { "id": "RC_m25_l2", "paper": { "m": 25, "lambda": 2, "divisions": 2 } },
+    { "id": "RC_m28_l2", "paper": { "m": 28, "lambda": 2, "divisions": 2 } },
+    { "id": "RC_m30_l2", "paper": { "m": 30, "lambda": 2, "divisions": 2 } },
+
+    { "id": "RC_m16_l3", "paper": { "m": 16, "lambda": 2, "divisions": 3 } },
+    { "id": "RC_m18_l3", "paper": { "m": 18, "lambda": 2, "divisions": 3 } },
+    { "id": "RC_m20_l3", "paper": { "m": 20, "lambda": 2, "divisions": 3 } },
+    { "id": "RC_m22_l3", "paper": { "m": 22, "lambda": 2, "divisions": 3 } },
+    { "id": "RC_m25_l3", "paper": { "m": 25, "lambda": 2, "divisions": 3 } },
+    { "id": "RC_m28_l3", "paper": { "m": 28, "lambda": 2, "divisions": 3 } },
+    { "id": "RC_m30_l3", "paper": { "m": 30, "lambda": 2, "divisions": 3 } }
+  ]
+}
