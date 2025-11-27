@@ -26,13 +26,14 @@ public class BackgroundReencryptionScheduler {
     private final CryptoService cryptoService;
     private final IndexService indexService;
     private final RocksDBMetadataManager metadataManager;
+    private final SelectiveReencryptor reencryptor;
 
     // Rate limiting: max points/sec to re-encrypt
     private final int maxReencryptRatePerSec;
 
     // Query load threshold: pause if query rate exceeds this
     private final int queryLoadThreshold;
-    private volatile int recentQueryCount = 0;
+    private final AtomicInteger recentQueryCount = new AtomicInteger(0);
 
     // Stats
     private final AtomicInteger totalReencrypted = new AtomicInteger(0);
@@ -48,6 +49,14 @@ public class BackgroundReencryptionScheduler {
         this.indexService = indexService;
         this.metadataManager = metadataManager;
 
+        if (!(keyService instanceof SelectiveReencryptor sr)) {
+            throw new IllegalStateException(
+                    "KeyService must implement SelectiveReencryptor in ideal-system mode"
+            );
+        }
+        this.reencryptor = sr;
+
+        // Initialize required final fields
         this.maxReencryptRatePerSec = Integer.getInteger(
                 "reenc.background.rateLimit", 1000);
         this.queryLoadThreshold = Integer.getInteger(
@@ -56,7 +65,7 @@ public class BackgroundReencryptionScheduler {
         this.scheduler = Executors.newScheduledThreadPool(1, r -> {
             Thread t = new Thread(r, "background-reencrypt");
             t.setDaemon(true);
-            t.setPriority(Thread.MIN_PRIORITY); // Low priority
+            t.setPriority(Thread.MIN_PRIORITY);
             return t;
         });
 
@@ -64,6 +73,7 @@ public class BackgroundReencryptionScheduler {
                         "rateLimit={}/sec, queryThreshold={}",
                 maxReencryptRatePerSec, queryLoadThreshold);
     }
+
 
     /**
      * Start periodic background re-encryption.
@@ -86,7 +96,7 @@ public class BackgroundReencryptionScheduler {
      * Called from query thread to track load.
      */
     public void recordQuery() {
-        recentQueryCount++;
+        recentQueryCount.incrementAndGet();
     }
 
     /**
@@ -94,36 +104,32 @@ public class BackgroundReencryptionScheduler {
      */
     private void reencryptCycle() {
         try {
-            // Check query load: skip if system is busy
-            int qps = recentQueryCount; // snapshot
-            recentQueryCount = 0; // reset counter
-
+            int qps = recentQueryCount.getAndSet(0);
             if (qps > queryLoadThreshold) {
-                logger.debug("Skipping re-encryption cycle: high query load (qps={})",
-                        qps);
+                logger.debug("Skipping re-encryption cycle: high query load (qps={})", qps);
                 return;
             }
 
-            // Get current key version
             int targetVersion = keyService.getCurrentVersion().getVersion();
 
-            // Find candidates needing re-encryption
             List<String> candidates = findReencryptionCandidates(targetVersion);
-
             if (candidates.isEmpty()) {
-                logger.debug("No re-encryption candidates found");
+                logger.debug("No background re-encryption candidates");
                 return;
             }
 
-            logger.info("Starting background re-encryption: {} candidates, " +
-                    "targetVersion=v{}", candidates.size(), targetVersion);
+            logger.info("Background re-encryption: {} candidates for v{}",
+                    candidates.size(), targetVersion);
 
-            int reencrypted = reencryptBatch(candidates, targetVersion);
-            totalReencrypted.addAndGet(reencrypted);
+            ReencryptReport rep = reencryptor.reencryptTouched(
+                    new LinkedHashSet<>(candidates),
+                    targetVersion,
+                    () -> metadataManager.sizePointsDir()
+            );
 
-            logger.info("Background re-encryption complete: {}/{} points, " +
-                            "totalReencrypted={}",
-                    reencrypted, candidates.size(), totalReencrypted.get());
+            totalReencrypted.addAndGet(rep.reencryptedCount());
+            logger.info("Background re-encryption complete: {} / {} updated",
+                    rep.reencryptedCount(), candidates.size());
 
         } catch (Exception e) {
             logger.error("Background re-encryption cycle failed", e);
@@ -134,76 +140,21 @@ public class BackgroundReencryptionScheduler {
      * Find points needing re-encryption (old versions).
      */
     private List<String> findReencryptionCandidates(int targetVersion) {
-        List<String> candidates = new ArrayList<>();
+        List<String> all = metadataManager.getAllVectorIds();
+        Collections.shuffle(all);
 
-        // Sample metadata to find old versions (avoid full scan)
-        List<String> allIds = metadataManager.getAllVectorIds();
-        int sampleSize = Math.min(1000, allIds.size()); // Sample only
-        Collections.shuffle(allIds);
+        int sample = Math.min(2000, all.size());
+        List<String> out = new ArrayList<>();
 
-        for (int i = 0; i < sampleSize; i++) {
-            String id = allIds.get(i);
-            Map<String, String> meta = metadataManager.getVectorMetadata(id);
+        for (int i = 0; i < sample; i++) {
+            String id = all.get(i);
+            int ver = metadataManager.getVersionOfVector(id);
 
-            if (meta.isEmpty() || !meta.containsKey("version")) {
-                continue;
-            }
-
-            try {
-                int version = Integer.parseInt(meta.get("version"));
-                if (version < targetVersion) {
-                    candidates.add(id);
-                }
-            } catch (NumberFormatException ignore) {}
-        }
-
-        return candidates;
-    }
-
-    /**
-     * Re-encrypt a batch with rate limiting.
-     */
-    private int reencryptBatch(List<String> ids, int targetVersion) {
-        int reencrypted = 0;
-        long startTime = System.currentTimeMillis();
-
-        for (String id : ids) {
-            try {
-                // Rate limiting: sleep if we're going too fast
-                if (reencrypted > 0 && reencrypted % 100 == 0) {
-                    long elapsed = System.currentTimeMillis() - startTime;
-                    long expectedTime = (reencrypted * 1000L) / maxReencryptRatePerSec;
-
-                    if (elapsed < expectedTime) {
-                        Thread.sleep(expectedTime - elapsed);
-                    }
-                }
-
-                // Load point
-                EncryptedPoint pt = metadataManager.loadEncryptedPoint(id);
-                if (pt == null || pt.getVersion() >= targetVersion) {
-                    continue;
-                }
-
-                // Decrypt with old key
-                KeyVersion oldVer = keyService.getVersion(pt.getVersion());
-                double[] plaintext = cryptoService.decryptFromPoint(pt, oldVer.getKey());
-
-                // Re-encrypt with current key
-                EncryptedPoint updated = cryptoService.encrypt(id, plaintext);
-
-                // Persist
-                metadataManager.saveEncryptedPoint(updated);
-                indexService.updateCachedPoint(updated);
-
-                reencrypted++;
-
-            } catch (Exception e) {
-                logger.debug("Failed to re-encrypt point {}", id, e);
+            if (ver < targetVersion) {
+                out.add(id);
             }
         }
-
-        return reencrypted;
+        return out;
     }
 
     public void shutdown() {

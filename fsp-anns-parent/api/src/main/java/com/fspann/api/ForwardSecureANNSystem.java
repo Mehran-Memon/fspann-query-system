@@ -970,14 +970,15 @@ public class ForwardSecureANNSystem {
                 logger.debug("q{} touch-set divergence: svc={} sys={}", qIndex, svcCum, rep.cumulativeUnique);
             }
 
-            // *** VALIDATE AND CAPTURE CANDIDATE IDs ***
-            var last = qs.getLastCandidateIds();
+            List<String> last = qs.getLastCandidateIds();
             int touchedCount = 0;
 
             if (last == null || last.isEmpty()) {
-                logger.warn("q{} getLastCandidateIds() returned empty! Candidate tracking failed. " +
-                        "Check QueryServiceImpl.search() - lastCandIds may not be updated.", qIndex);
-            } else {
+                logger.warn("q{} WARN: lastCandIds unexpectedly empty.", qIndex);
+                last = Collections.emptyList();    // safest ideal-system fallback
+            }
+
+            else {
                 touchedCount = last.size();
                 touchedGlobal.addAll(last);
                 logger.trace("q{} added {} candidate IDs to touchedGlobal (total now: {})",
@@ -2428,18 +2429,19 @@ public class ForwardSecureANNSystem {
     // Per-query hook: accumulate touched IDs; optionally do "immediate" re-encryption if requested.
     private ReencOutcome maybeReencryptTouched(String label, QueryServiceImpl qs) {
         boolean live = "live".equalsIgnoreCase(System.getProperty("reenc.mode", "end"));
+
         int touchedUnique = reencTracker.uniqueCount();
         ReencReport rep = ReencReport.empty();
 
+        // Live mode = do not re-encrypt here
         if (live && !reencRan.get()
                 && touchedUnique >= Integer.getInteger("reenc.minTouched", 10_000)) {
 
-            long t0 = System.nanoTime();
-            reencCoordinator.runOnceIfNeeded();    // drains tracker; meters record counts
-            long ms = (System.nanoTime() - t0) / 1_000_000L;
+            logger.info("[{}] Live-mode selective re-encryption threshold reached ({} touched).",
+                    label, touchedUnique);
 
+            // Mark so we don’t trigger again
             reencRan.set(true);
-            rep = rep.withTimeMs(ms);
         }
 
         return new ReencOutcome(touchedUnique, rep);
@@ -2475,43 +2477,82 @@ public class ForwardSecureANNSystem {
         final int uniqueCount = allTouchedUnique.size();
 
         final KeyRotationServiceImpl kr =
-                (keyService instanceof KeyRotationServiceImpl) ? (KeyRotationServiceImpl) keyService : null;
+                (keyService instanceof KeyRotationServiceImpl)
+                        ? (KeyRotationServiceImpl) keyService
+                        : null;
 
         if (!enabled || kr == null) {
-            appendReencCsv(reencCsv, "SUMMARY",
+            appendReencCsv(
+                    reencCsv, "SUMMARY",
                     (keyService != null && keyService.getCurrentVersion() != null)
-                            ? keyService.getCurrentVersion().getVersion() : -1,
+                            ? keyService.getCurrentVersion().getVersion()
+                            : -1,
                     reencMode,
                     uniqueCount, 0, uniqueCount,
-                    new ReencryptReport(0, 0, 0L, 0L, 0L));
+                    new ReencryptReport(0, 0, 0L, 0L, 0L)
+            );
             return;
         }
 
         if (uniqueCount == 0) {
-            logger.error("finalizeReencryptionAtEnd: touchedGlobal is EMPTY! " +
-                    "This indicates candidate tracking failed. " +
-                    "Check QueryServiceImpl.getLastCandidateIds() and ensure " +
-                    "lastCandIds is populated in search().");
+            logger.error(
+                    "finalizeReencryptionAtEnd: touchedGlobal is EMPTY! " +
+                            "This indicates candidate tracking failed. " +
+                            "Check QueryServiceImpl.getLastCandidateIds() and ensure " +
+                            "lastCandIds is populated in search()."
+            );
 
-            appendReencCsv(reencCsv, "SUMMARY",
+            appendReencCsv(
+                    reencCsv, "SUMMARY",
                     keyService.getCurrentVersion().getVersion(),
                     reencMode,
                     0, 0, 0,
-                    new ReencryptReport(0, 0, 0L, 0L, 0L));
+                    new ReencryptReport(0, 0, 0L, 0L, 0L)
+            );
             return;
         }
 
-        kr.forceRotateNow();
-        final int targetVer = keyService.getCurrentVersion().getVersion();
+        // ----------------------------
+        // BEGIN RE-ENCRYPTION PIPELINE
+        // ----------------------------
 
-        com.fspann.common.StorageSizer sizer = () -> dirSize(pointsPath);
-        ReencryptReport rep = kr.reencryptTouched(allTouchedUnique, targetVer, sizer);
+        kr.freezeRotation(true);
 
-        appendReencCsv(reencCsv, "SUMMARY", targetVer, reencMode,
-                uniqueCount, 0, uniqueCount, rep);
+        final ReencryptReport rep;
+        final int targetVer;
+
+        try {
+            // 1. New version (NO pruning)
+            kr.forceRotateNow();
+            targetVer = keyService.getCurrentVersion().getVersion();
+
+            // 2. Selective re-encryption
+            StorageSizer sizer = () -> dirSize(pointsPath);
+            rep = kr.reencryptTouched(allTouchedUnique, targetVer, sizer);
+
+            // 3. Log summary
+            appendReencCsv(
+                    reencCsv, "SUMMARY",
+                    targetVer, reencMode,
+                    uniqueCount, 0, uniqueCount,
+                    rep
+            );
+
+            // 4. Finalize deletion of old keys
+            finalizeRotation(targetVer);
+
+        } finally {
+            // 5. Always unfreeze
+            kr.freezeRotation(false);
+        }
+
+        // ----------------------------
+        // BEGIN VERIFICATION BLOCK
+        // ----------------------------
 
         boolean ok = true;
         long measuredBytesAfter = dirSize(pointsPath);
+
         if (rep.reencryptedCount() < 0) ok = false;
         if (rep.bytesAfter() != measuredBytesAfter) ok = false;
         if (rep.touchedCount() != uniqueCount) ok = false;
@@ -2519,20 +2560,54 @@ public class ForwardSecureANNSystem {
         if (!ok) {
             try {
                 synchronized (REENC_CSV_LOCK) {
-                    String line = String.format(Locale.ROOT,
+                    String line = String.format(
+                            Locale.ROOT,
                             "SUMMARY_CHECK,%d,%s,%d,%d,%d,%d,%d,%d,%d,%d,%d%n",
-                            targetVer, reencMode,
+                            targetVer,
+                            reencMode,
                             uniqueCount, 0, uniqueCount,
                             rep.reencryptedCount(),
                             tryGetLong(rep, "alreadyCurrentCount"),
                             tryGetLong(rep, "retriedCount"),
-                            rep.timeMs(), rep.bytesDelta(), measuredBytesAfter
+                            rep.timeMs(),
+                            rep.bytesDelta(),
+                            measuredBytesAfter
                     );
-                    Files.writeString(reencCsv, line, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+                    Files.writeString(
+                            reencCsv,
+                            line,
+                            StandardOpenOption.CREATE,
+                            StandardOpenOption.APPEND
+                    );
                 }
             } catch (IOException e) {
                 logger.warn("Failed to append SUMMARY_CHECK", e);
             }
+        }
+    }
+
+    /**
+     * Final phase of key rotation: delete all keys older than the target version.
+     * This must be called ONLY after complete re-encryption.
+     */
+    private void finalizeRotation(int targetVersion) {
+        if (!(keyService instanceof KeyRotationServiceImpl kr)) return;
+
+        try {
+            var kmGetter = kr.getClass().getDeclaredMethod("getKeyManager");
+            kmGetter.setAccessible(true);
+            Object kmObj = kmGetter.invoke(kr);
+            if (!(kmObj instanceof com.fspann.key.KeyManager km)) {
+                logger.error("finalizeRotation: keyManager unavailable");
+                return;
+            }
+
+            // SAFELY delete all keys older than the target version
+            km.deleteKeysOlderThan(targetVersion);
+            logger.info("Key rotation finalized: deleted all keys older than v{}", targetVersion);
+
+        } catch (Exception e) {
+            logger.error("finalizeRotation(v{}) failed", targetVersion, e);
         }
     }
 

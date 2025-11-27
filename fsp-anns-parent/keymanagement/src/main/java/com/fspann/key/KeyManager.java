@@ -31,9 +31,9 @@ public class KeyManager {
     private static final String KDF_ALGO = "HmacSHA256";
     private static final int KEY_BITS = 256;
 
-    // Keep only N most recent keys (configurable)
+    // Retain enough keys to always support selective + full re-encryption
     private static final int MAX_RETAINED_KEYS =
-            Integer.getInteger("key.retention.max", 3);
+            Integer.getInteger("key.retention.max", 5);
 
     private final Path storeFile;
     private volatile int currentVersion = 1;
@@ -141,16 +141,18 @@ public class KeyManager {
         keyCreationTimes.put(next, System.currentTimeMillis());
         currentVersion = next;
 
-        // Enforce retention policy: delete old keys
-        pruneOldKeys();
+        // IMPORTANT:
+        // DO NOT prune old keys here.
+        // Deletion now happens ONLY inside KeyRotationServiceImpl.finalizeRotation().
 
         persistSync();
-        logger.info("Rotated key: v{}, retained={}", currentVersion, sessionKeys.size());
+        logger.info("Rotated key: v{}, retained temporarily={}", currentVersion, sessionKeys.size());
         return new KeyVersion(currentVersion, nextKey);
     }
 
     /**
-     * Securely delete keys older than MAX_RETAINED_KEYS versions.
+     * Securely delete keys older than the configured retention threshold.
+     * NOTE: This must NOT be called during rotation — only for background cleanup.
      */
     private void pruneOldKeys() {
         if (sessionKeys.size() <= MAX_RETAINED_KEYS) {
@@ -255,6 +257,44 @@ public class KeyManager {
         }
         return out;
     }
+
+    /**
+     * Delete all keys strictly older than keepVersion.
+     * Uses secure deletion and updates all auxiliary maps.
+     */
+    public synchronized void deleteKeysOlderThan(int keepVersion) {
+        try {
+            List<Integer> toDelete = new ArrayList<>();
+            for (Integer v : sessionKeys.keySet()) {
+                if (v < keepVersion) {
+                    toDelete.add(v);
+                }
+            }
+            Collections.sort(toDelete);
+
+            for (Integer v : toDelete) {
+                SecretKey old = sessionKeys.remove(v);
+                derived.remove(v);
+                keyCreationTimes.remove(v);
+
+                if (v == 1) {
+                    // Do not delete v1 if it is the original seed of the KDF.
+                    // Its value is used to derive all other session keys.
+                    continue;
+                }
+
+                if (old != null) {
+                    SecureKeyDeletion.wipeKey(old);
+                    logger.info("Securely deleted key v{} (explicit deleteKeysOlderThan)", v);
+                }
+            }
+
+            persistSync();
+        } catch (Exception e) {
+            logger.error("deleteKeysOlderThan({}) failed", keepVersion, e);
+        }
+    }
+
 
     private static class KeyStoreBlob implements java.io.Serializable {
         private static final long serialVersionUID = 1L;

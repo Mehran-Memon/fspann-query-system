@@ -38,27 +38,26 @@ public class QueryServiceImpl implements QueryService {
     private volatile int lastCandDecrypted = 0;
     private volatile int lastReturned = 0;
 
-    // unfiltered candidate IDs (subset union, pre-version filter)
+    // Unfiltered candidate IDs (union, pre-version filter)
     private volatile List<String> lastCandIds = java.util.Collections.emptyList();
     private volatile ReencryptionTracker reencTracker;
 
+    // Forward-security touch tracking (per service instance)
     private final Set<String> touchedThisSession = ConcurrentHashMap.newKeySet();
-
     private volatile int lastTouchedUniqueSoFar = 0;
     private volatile int lastTouchedCumulativeUnique = 0;
 
-    public int getLastTouchedUniqueSoFar() { return lastTouchedUniqueSoFar; }
+    public int getLastTouchedUniqueSoFar()      { return lastTouchedUniqueSoFar; }
     public int getLastTouchedCumulativeUnique() { return lastTouchedCumulativeUnique; }
-
 
     public QueryServiceImpl(IndexService indexService,
                             CryptoService cryptoService,
                             KeyLifeCycleService keyService,
                             QueryTokenFactory tokenFactory) {
-        this.indexService = Objects.requireNonNull(indexService);
-        this.cryptoService = Objects.requireNonNull(cryptoService);
-        this.keyService = Objects.requireNonNull(keyService);
-        this.tokenFactory = tokenFactory;
+        this.indexService   = Objects.requireNonNull(indexService);
+        this.cryptoService  = Objects.requireNonNull(cryptoService);
+        this.keyService     = Objects.requireNonNull(keyService);
+        this.tokenFactory   = tokenFactory;
     }
 
     public void setReencryptionTracker(ReencryptionTracker tracker) {
@@ -87,21 +86,26 @@ public class QueryServiceImpl implements QueryService {
         );
 
         final long tStart = System.nanoTime();
+        lastCandIds = new ArrayList<>();
 
         try {
             // 1) INITIAL CANDIDATES FROM PARTITIONED INDEX
             List<EncryptedPoint> initialRaw;
-            try { initialRaw = indexService.lookup(token); }
-            catch (Throwable t) { initialRaw = Collections.emptyList(); }
+            try {
+                initialRaw = indexService.lookup(token);
+            } catch (Throwable t) {
+                logger.warn("Index lookup failed", t);
+                initialRaw = Collections.emptyList();
+            }
 
             final LinkedHashMap<String, EncryptedPoint> uniq = new LinkedHashMap<>();
-            for (EncryptedPoint ep : initialRaw)
-                if (ep != null) uniq.putIfAbsent(ep.getId(), ep);
-
+            for (EncryptedPoint ep : initialRaw) {
+                if (ep != null) {
+                    uniq.putIfAbsent(ep.getId(), ep);
+                }
+            }
+            addCandidateIds(uniq.keySet());
             lastCandTotal = uniq.size();
-
-            // *** CAPTURE CANDIDATE IDs FOR RE-ENCRYPTION TRACKING ***
-            lastCandIds = new ArrayList<>(uniq.keySet());
 
             List<QueryScored> scored = decryptAndScore(uniq, qVec, kv);
 
@@ -121,6 +125,11 @@ public class QueryServiceImpl implements QueryService {
             for (int i = 0; i < kEff; i++) {
                 QueryScored qs = finalScored.get(i);
                 out.add(new QueryResult(qs.id(), qs.dist()));
+            }
+
+            // Safety: if somehow lastCandIds is still empty, fall back to uniq keys
+            if (lastCandIds == null || lastCandIds.isEmpty()) {
+                addCandidateIds(uniq.keySet());
             }
 
             return out;
@@ -144,7 +153,8 @@ public class QueryServiceImpl implements QueryService {
             if (reencTracker != null) {
                 reencTracker.touch(ep.getId());
             }
-            touchedThisSession.add(ep.getId());  // ← FIXED: Use instance field
+            touchedThisSession.add(ep.getId());
+            addCandidateIds(Collections.singleton(ep.getId()));
 
             double[] v = cryptoService.decryptFromPoint(ep, kv.getKey());
             if (v == null || v.length == 0) continue;
@@ -154,7 +164,7 @@ public class QueryServiceImpl implements QueryService {
         }
 
         // Update touch metrics
-        lastTouchedUniqueSoFar = uniq.size();
+        lastTouchedUniqueSoFar      = uniq.size();
         lastTouchedCumulativeUnique = touchedThisSession.size();
         return scored;
     }
@@ -168,16 +178,16 @@ public class QueryServiceImpl implements QueryService {
         final List<Integer> topKVariants = List.of(1, 5, 10, 20, 40, 60, 80, 100);
         final long clientStartNs = System.nanoTime();
         final List<QueryResult> baseResults = nn(search(baseToken));
-        final long clientEndNs = System.nanoTime();
+        final long clientEndNs   = System.nanoTime();
 
-        final long clientWindowNs = Math.max(0L, clientEndNs - clientStartNs);
-        final long serverNsBounded = getLastQueryDurationNsCappedTo(clientWindowNs);
-        final long queryDurationMs = Math.round(serverNsBounded / 1_000_000.0);
+        final long clientWindowNs   = Math.max(0L, clientEndNs - clientStartNs);
+        final long serverNsBounded  = getLastQueryDurationNsCappedTo(clientWindowNs);
+        final long queryDurationMs  = Math.round(serverNsBounded / 1_000_000.0);
 
-        final int candTotal        = getLastCandTotal();
-        final int candKeptVersion  = getLastCandKeptVersion();
-        final int candDecrypted    = getLastCandDecrypted();
-        final int returned         = getLastReturned();
+        final int candTotal       = getLastCandTotal();
+        final int candKeptVersion = getLastCandKeptVersion();
+        final int candDecrypted   = getLastCandDecrypted();
+        final int returned        = getLastReturned();
 
         final List<QueryEvaluationResult> out = new ArrayList<>(topKVariants.size());
         for (int k : topKVariants) {
@@ -201,12 +211,12 @@ public class QueryServiceImpl implements QueryService {
             out.add(new QueryEvaluationResult(
                     k,                  // topKRequested
                     upto,               // retrieved
-                    Double.NaN,         // ratio (computed elsewhere if needed)
+                    Double.NaN,         // ratio (computed elsewhere)
                     precision,          // precision
                     queryDurationMs,    // timeMs (server)
                     0,                  // insertTimeMs
                     candDecrypted,      // candDecrypted
-                    0,                  // tokenSizeBytes (can be set by caller if needed)
+                    0,                  // tokenSizeBytes
                     0,                  // vectorDim
                     0,                  // totalFlushedPoints
                     0,                  // flushThreshold
@@ -216,7 +226,7 @@ public class QueryServiceImpl implements QueryService {
                     0,                  // reencBytesDelta
                     0,                  // reencBytesAfter
                     "test",             // ratioDenomSource
-                    0,                  // clientTimeMs (if you want, pass Math.round(clientWindowNs/1e6))
+                    0,                  // clientTimeMs
                     k,                  // tokenK
                     k,                  // tokenKBase
                     0,                  // qIndexZeroBased
@@ -233,13 +243,12 @@ public class QueryServiceImpl implements QueryService {
                                               QueryToken token,
                                               double[] qVec,
                                               KeyVersion kv) {
-        // Read config knobs from System properties
         boolean enabled = Boolean.getBoolean("kadaptive.enabled");
         if (!enabled) return scored;
 
         int minCandidates = Integer.getInteger("kadaptive.minCandidates", 128);
         int maxCandidates = Integer.getInteger("kadaptive.maxCandidates", 8192);
-        int batch = Integer.getInteger("kadaptive.batchSize", 128);
+        int batch         = Integer.getInteger("kadaptive.batchSize", 128);
 
         double lowReturnThresh = Double.parseDouble(
                 System.getProperty("kadaptive.lowReturnRateThreshold", "0.5")
@@ -252,9 +261,11 @@ public class QueryServiceImpl implements QueryService {
 
         while (true) {
             // compute returnRate
-            double returnRate = (scored.isEmpty() ? 0.0 : Math.min(1.0,
-                    ((double) requestedK) / (double) Math.max(1, scored.size())
-            ));
+            double returnRate = (scored.isEmpty() ? 0.0 :
+                    Math.min(1.0,
+                            ((double) requestedK) /
+                                    (double) Math.max(1, scored.size())
+                    ));
 
             // stop if high returnRate
             if (returnRate >= lowReturnThresh) {
@@ -266,17 +277,17 @@ public class QueryServiceImpl implements QueryService {
             int need = (int) (scored.size() * boostFactor);
             if (need < minCandidates) need = minCandidates;
             if (need > maxCandidates) need = maxCandidates;
-
             if (need <= scored.size()) break;
 
             // fetch more candidates (paper engine union semantics)
             List<EncryptedPoint> more = fetchMoreCandidates(token, uniq, need);
             if (more.isEmpty()) break;
+            for (EncryptedPoint ep : more) {
+                if (ep != null) addCandidateIds(Collections.singletonList(ep.getId()));
+            }
 
-            // *** UPDATE CANDIDATE IDs AFTER EXPANSION ***
-            lastCandIds = new ArrayList<>(uniq.keySet());
-
-            // Update total candidate count metric
+            // Keep lastCandIds consistent with uniq
+            addCandidateIds(uniq.keySet());
             lastCandTotal = uniq.size();
 
             // decrypt & add new scores
@@ -307,8 +318,10 @@ public class QueryServiceImpl implements QueryService {
     // ------------------------- Utility -------------------------
 
     private record QueryScored(String id, double dist) {}
+
     private static <T> List<T> nn(List<T> v) { return (v == null) ? Collections.emptyList() : v; }
     private static int[] safeGt(int[] a)     { return (a == null) ? new int[0] : a; }
+
     private double l2sq(double[] a, double[] b) {
         int len = Math.min(a.length, b.length);
         double s = 0.0;
@@ -318,6 +331,7 @@ public class QueryServiceImpl implements QueryService {
         }
         return s;
     }
+
     public static int estimateTokenSizeBytes(QueryToken t) {
         int bytes = 0;
         if (t.getIv() != null) bytes += t.getIv().length;
@@ -338,25 +352,45 @@ public class QueryServiceImpl implements QueryService {
         }
         return bytes;
     }
+
     private void clearLastMetrics() {
         lastQueryDurationNs = 0L;
-        lastCandTotal = 0;
+        lastCandTotal       = 0;
         lastCandKeptVersion = 0;
-        lastCandDecrypted = 0;
-        lastReturned = 0;
+        lastCandDecrypted   = 0;
+        lastReturned        = 0;
     }
+
+    /**
+     * Centralized safe updater for lastCandIds.
+     * Ensures no overwrites, no empty states, and preserves insertion order.
+     */
+    private void addCandidateIds(Collection<String> ids) {
+        if (ids == null || ids.isEmpty()) return;
+        if (lastCandIds == null || lastCandIds.isEmpty()) {
+            lastCandIds = new ArrayList<>(ids);
+            return;
+        }
+        // Merge without duplicates
+        LinkedHashSet<String> merged = new LinkedHashSet<>(lastCandIds);
+        merged.addAll(ids);
+        lastCandIds = new ArrayList<>(merged);
+    }
+
     public long getLastQueryDurationNsCappedTo(long clientWindowNs) {
         if (clientWindowNs <= 0L) return Math.max(0L, lastQueryDurationNs);
         return Math.min(Math.max(0L, lastQueryDurationNs), clientWindowNs);
     }
 
     public List<String> getLastCandidateIds() {
-        return (lastCandIds == null) ? java.util.Collections.emptyList()
+        return (lastCandIds == null)
+                ? java.util.Collections.emptyList()
                 : java.util.Collections.unmodifiableList(lastCandIds);
     }
+
     public long getLastQueryDurationNs() { return lastQueryDurationNs; }
-    public int getLastCandTotal() { return lastCandTotal; }
-    public int getLastCandKeptVersion() { return lastCandKeptVersion; }
-    public int getLastCandDecrypted() { return lastCandDecrypted; }
-    public int getLastReturned() { return lastReturned; }
+    public int  getLastCandTotal()       { return lastCandTotal; }
+    public int  getLastCandKeptVersion() { return lastCandKeptVersion; }
+    public int  getLastCandDecrypted()   { return lastCandDecrypted; }
+    public int  getLastReturned()        { return lastReturned; }
 }

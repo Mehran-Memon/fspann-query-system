@@ -142,6 +142,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
             operationCount.set(0);
             logger.info("Manual key rotation complete: v{}", newVersion.getVersion());
             reEncryptAll();
+            finalizeRotation();
             return newVersion;
         } catch (Exception e) {
             logger.error("Manual key rotation failed", e);
@@ -234,28 +235,36 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
 
             try {
                 // Decrypt under its own stored version key
-                SecretKey srcKey = getVersion(ep.getVersion()).getKey();
+                SecretKey srcKey;
+                try {
+                    srcKey = getVersion(ep.getVersion()).getKey();
+                } catch (Exception missingOldKey) {
+                    // Forward-security rule: cannot decrypt old ciphertext → drop it
+                    logger.debug("Old key v{} missing for id={}, cannot re-encrypt", ep.getVersion(), id);
+                    continue;
+                }
                 double[] vec = cryptoService.decryptFromPoint(ep, srcKey);
 
-                // Re-encrypt under target key. We assume targetVersion == currentVersion.
+                //Explicitly create point with target version
                 EncryptedPoint ep2 = cryptoService.encrypt(id, vec);
+
+                // *** FORCE VERSION ALIGNMENT ***
                 if (ep2.getVersion() != targetVersion) {
                     ep2 = new EncryptedPoint(
                             ep2.getId(),
                             ep2.getShardId(),
                             ep2.getIv(),
                             ep2.getCiphertext(),
-                            targetVersion,
+                            targetVersion,  // ← CRITICAL: Must match target
                             ep2.getVectorLength(),
                             ep2.getBuckets()
                     );
                 }
 
-                // Persist & update cache; do NOT change index placement or tags here.
                 metadataManager.saveEncryptedPoint(ep2);
                 indexService.updateCachedPoint(ep2);
-
                 reenc++;
+
             } catch (Exception e) {
                 // best-effort: skip bad points
                 logger.debug("Selective re-encryption failed for id={}", id, e);
@@ -291,4 +300,28 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
         rotateKeyOnly();
         return true;
     }
+
+    /**
+     * Finalize key rotation: delete all keys older than currentVersion-1.
+     * Must be called only AFTER full/partial re-encryption is complete.
+     */
+    public synchronized void finalizeRotation() {
+        try {
+            KeyVersion curr = keyManager.getCurrentVersion();
+            int keepVersion = curr.getVersion();
+
+            // delete ALL versions < keepVersion
+            keyManager.deleteKeysOlderThan(keepVersion);
+
+            logger.info("Finalized rotation: deleted keys older than v{}", keepVersion);
+        } catch (Exception e) {
+            logger.error("Failed to finalize rotation / delete old keys", e);
+        }
+    }
+
+    public KeyManager getKeyManager() {
+        return this.keyManager;
+    }
+
+
 }
