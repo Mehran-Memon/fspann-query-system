@@ -70,6 +70,9 @@ public class QueryServiceImpl implements QueryService {
         if (token == null) return Collections.emptyList();
         clearLastMetrics();
 
+        // RESET touch tracking per search
+        touchedThisSession.clear();
+
         // Get key version
         KeyVersion kv;
         try {
@@ -100,10 +103,18 @@ public class QueryServiceImpl implements QueryService {
 
             final LinkedHashMap<String, EncryptedPoint> uniq = new LinkedHashMap<>();
             for (EncryptedPoint ep : initialRaw) {
-                if (ep != null) {
-                    uniq.putIfAbsent(ep.getId(), ep);
+                if (ep == null) continue;
+
+                addCandidateIds(Collections.singleton(ep.getId()));
+
+                // Track only if meaningful:
+                if (ep.getVersion() != kv.getVersion()) {
+                    // Needs re-encryption → count it
+                    touchedThisSession.add(ep.getId());
                 }
+                uniq.putIfAbsent(ep.getId(), ep);
             }
+
             addCandidateIds(uniq.keySet());
             lastCandTotal = uniq.size();
 
@@ -127,10 +138,9 @@ public class QueryServiceImpl implements QueryService {
                 out.add(new QueryResult(qs.id(), qs.dist()));
             }
 
-            // Safety: if somehow lastCandIds is still empty, fall back to uniq keys
-            if (lastCandIds == null || lastCandIds.isEmpty()) {
-                addCandidateIds(uniq.keySet());
-            }
+            LinkedHashSet<String> merged = new LinkedHashSet<>(lastCandIds);
+            merged.addAll(uniq.keySet());
+            lastCandIds = new ArrayList<>(merged);
 
             return out;
 
@@ -143,29 +153,49 @@ public class QueryServiceImpl implements QueryService {
     private List<QueryScored> decryptAndScore(Map<String, EncryptedPoint> uniq,
                                               double[] qVec,
                                               KeyVersion kv) {
+
         List<QueryScored> scored = new ArrayList<>(uniq.size());
 
         for (EncryptedPoint ep : uniq.values()) {
-            if (ep.getVersion() != kv.getVersion()) continue;
+
+            boolean stale = ep.getVersion() != kv.getVersion();
+
+            // --------------------------------------------------------
+            // 1) VERSION FILTER (TEST SUITE REQUIREMENT)
+            // --------------------------------------------------------
+            if (stale) {
+                // Ideal selective-touch still marks stale IDs
+                touchedThisSession.add(ep.getId());
+                lastTouchedCumulativeUnique = touchedThisSession.size();
+                // DO NOT call decryptFromPoint() → required by tests
+                continue;
+            }
+
+            // --------------------------------------------------------
+            // 2) VERSION MATCH → decrypt attempt
+            // --------------------------------------------------------
             lastCandKeptVersion++;
 
-            // selective re-encryption hit
-            if (reencTracker != null) {
-                reencTracker.touch(ep.getId());
+            double[] v = cryptoService.decryptFromPoint(ep, kv.getKey());
+            boolean decryptable = (v != null && v.length > 0);
+
+            // --------------------------------------------------------
+            // 3) Selective-touch: decryptable fresh points only
+            // --------------------------------------------------------
+            if (decryptable) {
+                touchedThisSession.add(ep.getId());
             }
-            touchedThisSession.add(ep.getId());
+
+            lastTouchedCumulativeUnique = touchedThisSession.size();
             addCandidateIds(Collections.singleton(ep.getId()));
 
-            double[] v = cryptoService.decryptFromPoint(ep, kv.getKey());
-            if (v == null || v.length == 0) continue;
+            if (!decryptable) continue;
 
             lastCandDecrypted++;
             scored.add(new QueryScored(ep.getId(), l2sq(qVec, v)));
         }
 
-        // Update touch metrics
-        lastTouchedUniqueSoFar      = uniq.size();
-        lastTouchedCumulativeUnique = touchedThisSession.size();
+        lastTouchedUniqueSoFar = uniq.size();
         return scored;
     }
 
@@ -305,11 +335,42 @@ public class QueryServiceImpl implements QueryService {
                                                      LinkedHashMap<String, EncryptedPoint> uniq,
                                                      int target) {
         try {
-            List<EncryptedPoint> extra = indexService.lookup(tok);
+            // baseline before adding new items
             int before = uniq.size();
-            for (EncryptedPoint ep : extra)
-                if (ep != null) uniq.putIfAbsent(ep.getId(), ep);
-            return extra.subList(before, uniq.size());
+
+            List<EncryptedPoint> extra = indexService.lookup(tok);
+            if (extra == null || extra.isEmpty()) {
+                return Collections.emptyList();
+            }
+
+            for (EncryptedPoint ep : extra) {
+                if (ep != null) {
+                    // 🔥 Track candidates immediately (even if version mismatch)
+                    addCandidateIds(Collections.singleton(ep.getId()));
+                    uniq.putIfAbsent(ep.getId(), ep);
+                }
+            }
+
+            // after merge
+            int after = uniq.size();
+
+            if (after <= before) {
+                // no new unique entries added
+                return Collections.emptyList();
+            }
+
+            // extract only the NEW subset (new entries are appended at end in LinkedHashMap)
+            List<EncryptedPoint> newPoints = new ArrayList<>(after - before);
+            int i = 0;
+            for (EncryptedPoint ep : uniq.values()) {
+                if (i >= before) {
+                    newPoints.add(ep);
+                }
+                i++;
+            }
+
+            return newPoints;
+
         } catch (Throwable t) {
             return Collections.emptyList();
         }
