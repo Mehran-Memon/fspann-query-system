@@ -8,6 +8,7 @@ import com.fspann.crypto.SelectiveReencCoordinator;
 import com.fspann.index.paper.EvenLSH;
 import com.fspann.index.service.SecureLSHIndexService;
 import com.fspann.common.KeyLifeCycleService;
+import com.fspann.key.BackgroundReencryptionScheduler;
 import com.fspann.key.KeyManager;
 import com.fspann.key.KeyRotationPolicy;
 import com.fspann.key.KeyRotationServiceImpl;
@@ -17,6 +18,7 @@ import com.fspann.loader.FormatLoader;
 import com.fspann.loader.GroundtruthManager;
 import com.fspann.loader.StreamingBatchLoader;
 import com.fspann.common.RocksDBMetadataManager;
+import com.fspann.query.core.DecoyQueryGenerator;
 import com.fspann.query.core.QueryEvaluationResult;
 import com.fspann.common.QueryToken;
 import com.fspann.query.core.QueryTokenFactory;
@@ -80,6 +82,18 @@ public class ForwardSecureANNSystem {
     // key = dim|topK|vectorHash  (simple but enough for tests)
     private final Map<String, List<QueryResult>> queryCache = new ConcurrentHashMap<>();
     enum RatioSource {AUTO, GT, BASE}
+    private final BackgroundReencryptionScheduler backgroundReencryptor;
+
+    // Optional: use sharded metadata for large-scale deployments
+    private final boolean useShardedMetadata = Boolean.parseBoolean(
+            System.getProperty("metadata.sharded", "false")
+    );
+
+    private final ShardedMetadataManager shardedMetadata;
+
+    // Decoy query support
+    private final DecoyQueryGenerator decoyGenerator;
+    private final boolean decoyEnabled;
 
     private final RatioSource ratioSource;
 
@@ -175,6 +189,29 @@ public class ForwardSecureANNSystem {
         this.kAdaptive = (config.getKAdaptive() != null)
                 ? config.getKAdaptive()
                 : new SystemConfig.KAdaptiveConfig();
+
+        this.decoyEnabled = Boolean.parseBoolean(
+                System.getProperty("decoy.enabled", "false")
+        );
+
+        if (decoyEnabled) {
+            double decoyRatio = Double.parseDouble(
+                    System.getProperty("decoy.ratio", "0.2")
+            );
+            String distStr = System.getProperty("decoy.distribution", "GAUSSIAN");
+            DecoyQueryGenerator.DecoyDistribution dist =
+                    DecoyQueryGenerator.DecoyDistribution.valueOf(distStr.toUpperCase());
+
+            this.decoyGenerator = new DecoyQueryGenerator(
+                    dimensions.get(0), // primary dimension
+                    decoyRatio,
+                    dist
+            );
+            logger.info("Decoy queries enabled: ratio={}, distribution={}",
+                    decoyRatio, dist);
+        } else {
+            this.decoyGenerator = null;
+        }
 
         // ---- Materialize commonly used settings from config ----
         boolean defaultComputePrecision =
@@ -276,9 +313,22 @@ public class ForwardSecureANNSystem {
         Files.createDirectories(pointsPath);
         Files.createDirectories(metaDBPath);
 
-        // Injected core services
+        // Initializing metadataManager based on the data scale
         this.metadataManager = Objects.requireNonNull(metadataManager, "MetadataManager cannot be null");
+        if (useShardedMetadata) {
+            int shardCount = Integer.getInteger("metadata.shards", 16);
+            this.shardedMetadata = new ShardedMetadataManager(
+                    metadataPath.resolve("sharded_metadata").toString(),
+                    shardCount,
+                    pointsPath.toString()
+            );
+            logger.info("Using sharded metadata: {} shards", shardCount);
+        } else {
+            this.shardedMetadata = null;
+        }
+
         this.cryptoService = Objects.requireNonNull(cryptoService, "CryptoService cannot be null");
+
 
         // Key service (also align FsPaths KEYSTORE_PROP)
         Path derivedKeyRoot = resolveKeyStorePath(keysFilePath, metadataPath);
@@ -326,10 +376,24 @@ public class ForwardSecureANNSystem {
             indexService.disableLSHForAllDimensions();
         }
 
-
-
         if (keyService instanceof KeyRotationServiceImpl kr) {
             kr.setIndexService(indexService);
+        }
+
+        if (Boolean.parseBoolean(System.getProperty("reenc.background.enabled", "false"))) {
+            this.backgroundReencryptor = new BackgroundReencryptionScheduler(
+                    (KeyRotationServiceImpl) keyService,
+                    cryptoService,
+                    indexService,
+                    metadataManager
+            );
+
+            int intervalMin = Integer.getInteger("reenc.background.intervalMin", 60);
+            backgroundReencryptor.start(intervalMin);
+
+            logger.info("Background re-encryption enabled: interval={}min", intervalMin);
+        } else {
+            this.backgroundReencryptor = null;
         }
 
         this.cache = new StringKeyedCache(config.getNumShards() * 1000);
@@ -601,6 +665,9 @@ public class ForwardSecureANNSystem {
         if (topK <= 0) throw new IllegalArgumentException("TopK must be positive");
         if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
         if (queryVector.length != dim) throw new IllegalArgumentException("Query vector length must match dimension");
+        if (backgroundReencryptor != null) {
+            backgroundReencryptor.recordQuery();
+        }
 
         final long start = System.nanoTime();
         final QueryToken token = factoryForDim(dim).create(queryVector, topK);
@@ -707,7 +774,24 @@ public class ForwardSecureANNSystem {
             if (batch == null || batch.isEmpty()) break;
             queries.addAll(batch);
         }
-        logger.info("Loaded {} queries (dim={})", queries.size(), dim);
+        logger.info("Loaded {} real queries (dim={})", queries.size(), dim);
+
+        // --- DECOY INJECTION ---
+        List<DecoyQueryGenerator.QueryWrapper> mixedQueries;
+        if (decoyEnabled && decoyGenerator != null) {
+            mixedQueries = decoyGenerator.interleaveDecoys(queries);
+            logger.info("Injected {} decoy queries (total queries: {})",
+                    mixedQueries.size() - queries.size(),
+                    mixedQueries.size());
+        } else {
+            // No decoys: wrap real queries
+            mixedQueries = new ArrayList<>(queries.size());
+            for (int i = 0; i < queries.size(); i++) {
+                mixedQueries.add(new DecoyQueryGenerator.QueryWrapper(
+                        queries.get(i), false, i
+                ));
+            }
+        }
 
         GroundtruthManager groundtruth = new GroundtruthManager();
         groundtruth.load(normalizePath(groundtruthPath));
@@ -2591,6 +2675,13 @@ public class ForwardSecureANNSystem {
         return dim + "|" + topK + "|" + h;
     }
 
+    // Delegate to sharded metadata when available:
+    private RocksDBMetadataManager getMetadataManager() {
+        // For now, keep using regular metadata
+        // Full migration would require wrapping ShardedMetadataManager
+        // to implement same interface as RocksDBMetadataManager
+        return this.metadataManager;
+    }
 
     // ====== retrieved IDs auditor ====== //
     private static final class RetrievedAudit {
@@ -2677,7 +2768,9 @@ public class ForwardSecureANNSystem {
                     logger.warn("finalizeReencryptionAtEnd failed", e);
                 }
             }
-
+            if (backgroundReencryptor != null) {
+                backgroundReencryptor.shutdown();
+            }
             if (indexService != null) {
                 indexService.flushBuffers();
                 indexService.shutdown();
