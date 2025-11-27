@@ -17,4 +17,6 @@ public interface QueryService {
      * @param gt            groundtruth provider (can be null; recall will be 0 if unavailable)
      */
     List<QueryEvaluationResult> searchWithTopKVariants(QueryToken baseToken, int queryIndex, GroundtruthManager gt);
+
+    List<String> getLastCandidateIds();
 }
