@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
+import java.security.SecureRandom;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -199,6 +200,48 @@ public class RocksDBMetadataManager implements AutoCloseable {
             try { Files.deleteIfExists(dst); } catch (IOException ignore) {}
             throw e;
         }
+
+        // SECURE DELETION OF OLD VERSION ***
+        try {
+            // Delete point files from older version directories (v1, v2, ...)
+            try (DirectoryStream<Path> dirs = Files.newDirectoryStream(Paths.get(baseDir))) {
+                for (Path dir : dirs) {
+                    if (!Files.isDirectory(dir)) continue;
+                    String name = dir.getFileName().toString();
+
+                    // Expecting version directories like "v1", "v2", "v3"
+                    if (!name.startsWith("v")) continue;
+
+                    int ver;
+                    try {
+                        ver = Integer.parseInt(name.substring(1));
+                    } catch (Exception ignore) {
+                        continue;
+                    }
+
+                    // Skip current version; only wipe older versions
+                    if (ver == pt.getVersion()) continue;
+
+                    Path old = dir.resolve(pt.getId() + ".point");
+                    if (!Files.exists(old)) continue;
+
+                    // Secure deletion: zeroize file contents before delete
+                    try {
+                        byte[] zero = new byte[(int) Files.size(old)];
+                        Arrays.fill(zero, (byte) 0);
+                        Files.write(old, zero, StandardOpenOption.WRITE);
+                    } catch (Throwable ignore) {
+                        // If overwrite fails, proceed to delete
+                    }
+
+                    // Delete old version file
+                    try { Files.deleteIfExists(old); } catch (IOException ignore) {}
+                }
+            }
+        } catch (IOException ignore) {
+            // Best effort
+        }
+
     }
 
     public void saveEncryptedPointsBatch(Collection<EncryptedPoint> points) throws IOException {
@@ -407,7 +450,6 @@ public class RocksDBMetadataManager implements AutoCloseable {
                 .collect(Collectors.joining(";"));
         return s.getBytes(StandardCharsets.UTF_8);
     }
-
     private Map<String, String> deserializeMetadata(byte[] data) {
         String s = new String(data, StandardCharsets.UTF_8);
         return Arrays.stream(s.split("(?<!\\\\);"))
@@ -418,7 +460,36 @@ public class RocksDBMetadataManager implements AutoCloseable {
                         kv -> unescape(kv[1])
                 ));
     }
+    /** Returns total size of all .point files in the points base directory. */
+    public long sizePointsDir() {
+        try (var walk = Files.walk(Paths.get(baseDir))) {
+            return walk
+                    .filter(Files::isRegularFile)
+                    .filter(p -> p.toString().endsWith(".point"))
+                    .mapToLong(p -> {
+                        try { return Files.size(p); }
+                        catch (IOException ignore) { return 0L; }
+                    })
+                    .sum();
+        } catch (IOException e) {
+            return 0L; // safe fallback
+        }
+    }
+    /** Returns the version number for a given vector ID (or -1 if missing). */
+    public int getVersionOfVector(String id) {
+        Map<String, String> meta = getVectorMetadata(id);
+        if (meta.isEmpty()) return -1;
 
+        String v = meta.get("version");
+        if (v == null) return -1;
+
+        try {
+            if (v.startsWith("v")) v = v.substring(1);
+            return Integer.parseInt(v);
+        } catch (Exception e) {
+            return -1;
+        }
+    }
     private String escape(String in)   { return in.replace("=", "\\=").replace(";", "\\;"); }
     private String unescape(String in) { return in.replace("\\=", "=").replace("\\;", ";"); }
 }
