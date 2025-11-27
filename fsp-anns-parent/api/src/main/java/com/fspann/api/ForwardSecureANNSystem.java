@@ -40,6 +40,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
+import java.util.Collections;
 
 public class ForwardSecureANNSystem {
     private static final Logger logger = LoggerFactory.getLogger(ForwardSecureANNSystem.class);
@@ -531,12 +532,38 @@ public class ForwardSecureANNSystem {
     /* ---------------------- Query API ---------------------- */
 
     private QueryTokenFactory factoryForDim(int dim) {
-        return tokenFactories.computeIfAbsent(dim, d -> {
-            EvenLSH lsh = indexService.getLshForDimension(d);
-            int tables = (OVERRIDE_TABLES > 0) ? OVERRIDE_TABLES : numTablesFor(lsh, config);
-            int shards = shardsToProbe();
+        if (dim <= 0) {
+            throw new IllegalArgumentException("Dimension must be positive");
+        }
 
-            boolean partitionedMode = (config != null && config.getPaper() != null && config.getPaper().enabled);
+        return tokenFactories.computeIfAbsent(dim, d -> {
+            // 1) Ask the index for its LSH (may be null or have wrong dim)
+            EvenLSH lshFromIndex = indexService.getLshForDimension(d);
+
+            int lshDim = -1;
+            if (lshFromIndex != null) {
+                try {
+                    lshDim = lshFromIndex.getDimensions();
+                } catch (Throwable ignore) {
+                    // Should not happen for EvenLSH, but be defensive
+                    lshDim = -1;
+                }
+            }
+
+            // 2) Decide how many tables to use (same logic as before)
+            int tables;
+            if (OVERRIDE_TABLES > 0) {
+                tables = OVERRIDE_TABLES;
+            } else if (lshFromIndex != null) {
+                // Try to infer from the original LSH, if any
+                tables = numTablesFor(lshFromIndex, config);
+            } else {
+                // Fallback if nothing is available
+                tables = numTablesFor(new EvenLSH(d), config);
+            }
+
+            boolean partitionedMode =
+                    (config != null && config.getPaper() != null && config.getPaper().enabled);
 
             int ell = 1;
             int m = 1;
@@ -547,13 +574,47 @@ public class ForwardSecureANNSystem {
                 ell = Math.max(1, pc.divisions);
                 m = Math.max(1, pc.m);
                 seedBase = pc.seed;
+            }
+
+            // 3) Ensure we end up with an LSH whose internal dimension matches `dim`
+            EvenLSH lshForTokens;
+
+            if (lshFromIndex == null) {
+                // No LSH from index: build a per-dimension EvenLSH for tokens only
+                logger.warn("No LSH found for dim={}; constructing EvenLSH(dim={}) for QueryTokenFactory",
+                        d, d);
+                lshForTokens = new EvenLSH(d, Math.max(1, tables), seedBase);
+            } else if (lshDim != d) {
+                // Mismatch like lshDim=8 vs dim=128 -> fix it here
+                logger.warn("LSH dimension mismatch for dim={}: lshDim={} – " +
+                                "constructing EvenLSH(dim={}) for QueryTokenFactory only " +
+                                "(server uses partitioned codes, so buckets are token-side hints).",
+                        d, lshDim, d);
+                lshForTokens = new EvenLSH(d, Math.max(1, tables), seedBase);
+            } else {
+                // Happy path: index LSH dimension matches the dataset/query dim
+                lshForTokens = lshFromIndex;
+            }
+
+            int shards = shardsToProbe();
+
+            if (partitionedMode) {
                 logger.info("TokenFactory (lazy): dim={} divisions (ℓ)={} m={} seedBase={} shardsToProbe={}",
                         d, ell, m, seedBase, shards);
             } else {
-                logger.info("TokenFactory (lazy): dim={} LSH tables (L)={} shardsToProbe={}", d, tables, shards);
+                logger.info("TokenFactory (lazy): dim={} LSH tables (L)={} shardsToProbe={}",
+                        d, tables, shards);
             }
 
-            return new QueryTokenFactory(cryptoService, keyService, lsh, tables, ell, m, seedBase);
+            return new QueryTokenFactory(
+                    cryptoService,
+                    keyService,
+                    lshForTokens,
+                    tables,
+                    ell,
+                    m,
+                    seedBase
+            );
         });
     }
 
@@ -2586,7 +2647,6 @@ public class ForwardSecureANNSystem {
         long idxMs = Math.round(totalIndexingTimeNs / 1_000_000.0);
         long qryMs = Math.round(totalQueryTimeNs / 1_000_000.0);
         System.out.println("Total indexing time: " + idxMs + " ms");
-        System.out.println("Total query time: " + qryMs + " ms");
         try {
             flushAll();
 

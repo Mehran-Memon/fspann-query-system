@@ -17,7 +17,7 @@ class ApiSystemConfigTest {
     @Test
     void loadValidConfigFile() throws Exception {
         // Create a minimal JSON file with realistic configuration
-        Path configFile = tempDir.resolve("config.json");
+        Path configFile = tempDir.resolve("config_fixedK.json");
         String configJson = """
             {
                 "numShards": 4,

@@ -102,86 +102,88 @@ public class QueryTokenFactory {
         }
 
         final int queryDim = vector.length;
-        final int lshDim   = (lsh != null) ? lsh.getDimensions() : 0;
+        final int lshDim   = lsh.getDimensions(); // may be 0 or stale (e.g., 8)
 
-        // We only use LSH buckets if the dimensions line up.
-        final boolean useLshBuckets = (lsh != null && lshDim > 0 && lshDim == queryDim);
-
+        // If LSH dimension is known and mismatched, DO NOT throw – log and fall back.
+        boolean useLshBuckets = true;
         if (lshDim > 0 && lshDim != queryDim) {
-            // In API tests (toy datasets, adversarial dims, etc.) this is normal.
-            // Partitioned / paper mode uses codes, not the tableBuckets, so we just
-            // skip calling lsh.getBuckets* and fall back to dummy buckets.
             logger.warn(
                     "QueryTokenFactory.create: LSH dimension mismatch (lshDim={} vs queryDim={}); " +
                             "skipping LSH bucket computation and using dummy buckets. Partitioned codes (ℓ={}) still attached.",
                     lshDim, queryDim, divisions
             );
+            useLshBuckets = false;
         }
 
-        // ---- Version/context + encrypt query ----
+        // -----------------------------
+        // 1) Version/context + encrypt query
+        // -----------------------------
         KeyVersion currentVersion = keyService.getCurrentVersion();
-        SecretKey key = currentVersion.getKey();
-        int version   = currentVersion.getVersion();
-        String encCtx = "epoch_" + version + "_dim_" + queryDim;
+        SecretKey key    = currentVersion.getKey();
+        int version      = currentVersion.getVersion();
+        String encCtx    = "epoch_" + version + "_dim_" + queryDim;
 
         EncryptedPoint ep = cryptoService.encryptToPoint("query", vector, key);
 
-        // ---- Per-table buckets ----
-        final List<List<Integer>> tableBuckets = new ArrayList<>(numTables);
-        int totalProbes = 0;
-        int probeHint   = 0;
+        // -----------------------------
+        // 2) Per-table bucket expansions (legacy LSH multiprobe path)
+        // -----------------------------
+        final List<List<Integer>> tableBuckets;
+        final int probeHint = resolveProbeHint(topK);
 
         if (useLshBuckets) {
-            // Normal LSH path: use real buckets
-            probeHint = resolveProbeHint(topK);
-            List<List<Integer>> perTable =
-                    lsh.getBucketsForAllTables(vector, probeHint, numTables);
+            // Normal path: use LSH to compute per-table buckets
+            List<List<Integer>> perTable = lsh.getBucketsForAllTables(vector, probeHint, numTables);
+            List<List<Integer>> copy = new ArrayList<>(numTables);
 
             if (perTable == null || perTable.size() != numTables) {
-                // Fallback to legacy single-table helper
+                // Fallback: per-table buckets from basic API if multi-table helper not available
                 for (int t = 0; t < numTables; t++) {
-                    List<Integer> buckets = new ArrayList<>(lsh.getBuckets(vector, topK, t));
-                    tableBuckets.add(buckets);
-                    totalProbes += buckets.size();
+                    copy.add(new ArrayList<>(lsh.getBuckets(vector, topK, t)));
                 }
             } else {
                 for (List<Integer> l : perTable) {
-                    List<Integer> buckets = new ArrayList<>(l);
-                    tableBuckets.add(buckets);
-                    totalProbes += buckets.size();
+                    copy.add(new ArrayList<>(l));
                 }
             }
+            tableBuckets = copy;
         } else {
-            // Dimension mismatch or no LSH configured:
-            // we build trivial dummy buckets [0] per table.
+            // Dimension mismatch – we can't trust LSH buckets.
+            // Provide a deterministic dummy structure (one empty list per table),
+            // so downstream code can still rely on tableBuckets.size()==numTables.
+            List<List<Integer>> dummy = new ArrayList<>(numTables);
             for (int t = 0; t < numTables; t++) {
-                tableBuckets.add(Collections.singletonList(0));
+                dummy.add(Collections.emptyList());
             }
-            totalProbes = numTables;  // one probe per table
-            probeHint   = 1;
+            tableBuckets = dummy;
         }
 
-        // ---- REQUIRED for partitioned mode: attach codes (one BitSet per division) ----
-        BitSet[] codes = code(vector);
+        // -----------------------------
+        // 3) REQUIRED for partitioned mode: attach codes (one BitSet per division)
+        // -----------------------------
+        BitSet[] codes = code(vector); // this is partitioned-paper coding; uses true dimension
 
+        int totalProbes = tableBuckets.stream().mapToInt(List::size).sum();
         logger.debug(
-                "Created token: dim={}, topK={}, tables={}, totalProbes={}, probeHint={}, hasCodes=true(ℓ={}), useLshBuckets={}",
-                queryDim, topK, numTables, totalProbes, probeHint, divisions, useLshBuckets
+                "Created token: dim={}, topK={}, tables={}, totalProbes={}, probeHint={}, hasCodes=true(ℓ={})",
+                queryDim, topK, numTables, totalProbes, probeHint, divisions
         );
 
+        // -----------------------------
+        // 4) Build final token
+        // -----------------------------
         return new QueryToken(
-                tableBuckets,          // per-table buckets (real or dummy)
+                tableBuckets,          // per-table buckets
                 codes,                 // paper codes (ℓ BitSets)
                 ep.getIv(),            // IV
                 ep.getCiphertext(),    // encrypted query
                 topK,
                 numTables,
                 encCtx,
-                queryDim,
+                queryDim,              // <--- actual vector dimension
                 version
         );
     }
-
 
     /**
      * Derive a new token with a different topK from an existing token.
