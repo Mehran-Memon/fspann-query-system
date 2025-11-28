@@ -37,7 +37,7 @@
       "mode": "paper",
 
       "kAdaptive": {
-        "enabled": true,
+        "enabled": false,
         "strategy": "sqrt",
         "targetRatioMin": 1.01,
         "targetRatioMax": 1.03,
