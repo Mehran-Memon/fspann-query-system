@@ -189,8 +189,12 @@ for cfg in "${CONFIGS[@]}"; do
     mkdir -p "$runDir"
     clean_run_metadata "$runDir"
 
-    ovr_json="$(jq -c 'del(.id)' <<<"$pr")"
-final_json="$(json_merge_with_overrides "$base_json" "$ovr_json")"
+ovr_json="$(jq -c 'del(.id)' <<<"$pr")"
+final_json="$(jq -c --argjson base "$base_json" --argjson ovr "$ovr_json" '
+  $base
+  | .paper = (.paper + $ovr.paper)
+' <<< "{}")"
+
 
     final_json="$(jq -c --arg rd "$runDir/results" --arg gtPath "$GT" '
       .output.resultsDir=$rd

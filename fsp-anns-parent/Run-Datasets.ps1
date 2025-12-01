@@ -27,7 +27,7 @@ $OutRoot    = "G:\fsp-run-new"
 # Dataset configs (Option A)
 $Config_SIFT1M  = "$ConfigDir\config_sift1m.json"
 $Config_GLOVE   = "$ConfigDir\config_glove100.json"
-$Config_REDCAPS = "$ConfigDir\config_compute.json"
+$Config_REDCAPS = "$ConfigDir\config_redcaps.json"
 $Config_DEEP1B  = "$ConfigDir\config_deep1b.json"
 $Config_GIST1B  = "$ConfigDir\config_gist1b.json"
 
@@ -39,9 +39,9 @@ $Datasets = @(
     @{
         Name = "RedCaps"
         Config = $Config_REDCAPS
-        Base = "E:\Datasets\RedCaps\redcaps_base.fvecs"
-        Query = "E:\Datasets\RedCaps\redcaps_query.fvecs"
-        GT = "E:\Datasets\RedCaps\redcaps_groundtruth.ivecs"
+        Base = "E:\Research Work\Datasets\redcaps\redcaps_base.fvecs"
+        Query = "E:\Research Work\Datasets\redcaps\redcaps_query.fvecs"
+        GT = "E:\Research Work\Datasets\redcaps\redcaps_groundtruth.ivecs"
         Dim = 512
     },
     @{
