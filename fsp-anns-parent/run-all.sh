@@ -9,7 +9,7 @@ IFS=$'\n\t'
 
 JarPath="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/api/target/api-0.0.1-SNAPSHOT-jar-with-dependencies.jar"
 ConfigDir="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/config/src/main/resources"
-OutRoot="/mnt/data/fsp-ann-results"
+OutRoot="/mnt/data/mehran/fsp-ann-results"
 
 Alpha="0.1"
 Batch="100000"
@@ -40,30 +40,30 @@ declare -A DATASET_QUERY
 declare -A DATASET_GT
 declare -A DATASET_DIM
 
-DATASET_BASE["sift1m"]="/mnt/data/Datasets/SIFT1M/sift_base.fvecs"
-DATASET_QUERY["sift1m"]="/mnt/data/Datasets/SIFT1M/sift_query.fvecs"
-DATASET_GT["sift1m"]="/mnt/data/Datasets/SIFT1M/sift_groundtruth.ivecs"
+DATASET_BASE["sift1m"]="/mnt/data/mehran/Datasets/SIFT1M/sift_base.fvecs"
+DATASET_QUERY["sift1m"]="/mnt/data/mehran/Datasets/SIFT1M/sift_query.fvecs"
+DATASET_GT["sift1m"]="/mnt/data/mehran/Datasets/SIFT1M/sift_query_groundtruth.ivecs"
 DATASET_DIM["sift1m"]="128"
 
-DATASET_BASE["glove100"]="/mnt/data/Datasets/glove-100/glove_base.fvecs"
-DATASET_QUERY["glove100"]="/mnt/data/Datasets/glove-100/glove_query.fvecs"
-DATASET_GT["glove100"]="/mnt/data/Datasets/glove-100/glove_groundtruth.ivecs"
+DATASET_BASE["glove100"]="/mnt/data/mehran/Datasets/glove-100/glove-100_base.fvecs"
+DATASET_QUERY["glove100"]="/mnt/data/mehran/Datasets/glove-100/glove-100_query.fvecs"
+DATASET_GT["glove100"]="/mnt/data/mehran/Datasets/glove-100/glove-100_groundtruth.ivecs"
 DATASET_DIM["glove100"]="100"
 
-DATASET_BASE["redcaps"]="/mnt/data/Datasets/redcaps/base.fvecs"
-DATASET_QUERY["redcaps"]="/mnt/data/Datasets/redcaps/query.fvecs"
-DATASET_GT["redcaps"]="/mnt/data/Datasets/redcaps/groundtruth.ivecs"
+DATASET_BASE["redcaps"]="/mnt/data/mehran/Datasets/redcaps/redcaps_base.fvecs"
+DATASET_QUERY["redcaps"]="/mnt/data/mehran/Datasets/redcaps/redcaps_query.fvecs"
+DATASET_GT["redcaps"]="/mnt/data/mehran/Datasets/redcaps/redcaps_query_groundtruth.ivecs"
 DATASET_DIM["redcaps"]="512"
 
-DATASET_BASE["deep1b"]="/mnt/data/Datasets/Deep1B/deep1b_base.fvecs"
-DATASET_QUERY["deep1b"]="/mnt/data/Datasets/Deep1B/deep1b_query.fvecs"
-DATASET_GT["deep1b"]="/mnt/data/Datasets/Deep1B/deep1b_groundtruth.ivecs"
-DATASET_DIM["deep1b"]="96"
-
-DATASET_BASE["gist1b"]="/mnt/data/Datasets/GIST1B/gist1b_base.fvecs"
-DATASET_QUERY["gist1b"]="/mnt/data/Datasets/GIST1B/gist1b_query.fvecs"
-DATASET_GT["gist1b"]="/mnt/data/Datasets/GIST1B/gist1b_groundtruth.ivecs"
-DATASET_DIM["gist1b"]="960"
+#DATASET_BASE["deep1b"]="/mnt/data/Datasets/Deep1B/deep1b_base.fvecs"
+#DATASET_QUERY["deep1b"]="/mnt/data/Datasets/Deep1B/deep1b_query.fvecs"
+#DATASET_GT["deep1b"]="/mnt/data/Datasets/Deep1B/deep1b_groundtruth.ivecs"
+#DATASET_DIM["deep1b"]="96"
+#
+#DATASET_BASE["gist1b"]="/mnt/data/Datasets/GIST1B/gist1b_base.fvecs"
+#DATASET_QUERY["gist1b"]="/mnt/data/Datasets/GIST1B/gist1b_query.fvecs"
+#DATASET_GT["gist1b"]="/mnt/data/Datasets/GIST1B/gist1b_groundtruth.ivecs"
+#DATASET_DIM["gist1b"]="960"
 
 # =================================
 # Helper Functions (unchanged)
@@ -129,6 +129,20 @@ concat_txt_with_profile() {
   done
 }
 
+json_merge_with_overrides() {
+  local base="$1" ovr="$2"
+  jq -c --argjson ovr "$ovr" '
+    def merge(a;b):
+      reduce (b|keys[]) as $k (a;
+        if (a[$k]|type=="object") and (b[$k]|type=="object")
+        then .[$k] = merge(a[$k]; b[$k])
+        else .[$k] = b[$k]
+        end
+      );
+    merge(.; $ovr)
+  ' <<< "$base"
+}
+
 # ====================================
 # MAIN EXECUTION LOOP
 # ====================================
@@ -176,7 +190,7 @@ for cfg in "${CONFIGS[@]}"; do
     clean_run_metadata "$runDir"
 
     ovr_json="$(jq -c 'del(.id)' <<<"$pr")"
-    final_json="$(jq -n --argjson base "$base_json" --argjson ovr "$ovr_json" '$base + $ovr')"
+final_json="$(json_merge_with_overrides "$base_json" "$ovr_json")"
 
     final_json="$(jq -c --arg rd "$runDir/results" --arg gtPath "$GT" '
       .output.resultsDir=$rd

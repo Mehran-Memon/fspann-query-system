@@ -2,7 +2,7 @@
   "base": {
     "paper": { "enabled": true, "m": 12, "lambda": 1, "divisions": 1, "seed": 13 },
 
-    "lsh": { "numTables": 0, "rowsPerBand": 0, "probeShards": 0 },
+    "lsh": { "numTables": 8, "rowsPerBand": 4, "probeShards": 32 },
 
     "numShards": 1,
     "opsThreshold": 10000000,
@@ -37,7 +37,7 @@
       "mode": "paper",
 
       "kAdaptive": {
-        "enabled": true,
+        "enabled": false,
         "strategy": "sqrt",
         "targetRatioMin": 1.00,
         "targetRatioMax": 1.01,
@@ -55,6 +55,15 @@
     { "id": "GLOVEm12", "paper": { "m": 12, "lambda": 1, "divisions": 1 } },
     { "id": "GLOVEm14", "paper": { "m": 14, "lambda": 1, "divisions": 1 } },
     { "id": "GLOVEm16", "paper": { "m": 16, "lambda": 1, "divisions": 1 } },
-    { "id": "GLOVEm18", "paper": { "m": 18, "lambda": 1, "divisions": 1 } }
+    { "id": "GLOVEm18", "paper": { "m": 18, "lambda": 1, "divisions": 1 } },
+    { "id": "GLOVEm20", "paper": { "m": 20, "lambda": 1, "divisions": 1 } },
+
+    { "id": "GLOVEm10_l2", "paper": { "m": 10, "lambda": 1, "divisions": 2 } },
+    { "id": "GLOVEm12_l2", "paper": { "m": 12, "lambda": 1, "divisions": 2 } },
+    { "id": "GLOVEm14_l2", "paper": { "m": 14, "lambda": 1, "divisions": 2 } },
+    { "id": "GLOVEm16_l2", "paper": { "m": 16, "lambda": 1, "divisions": 2 } },
+    { "id": "GLOVEm18_l2", "paper": { "m": 18, "lambda": 1, "divisions": 2 } },
+    { "id": "GLOVEm20_l2", "paper": { "m": 20, "lambda": 1, "divisions": 2 } }
+
   ]
 }

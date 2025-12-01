@@ -2,7 +2,7 @@
   "base": {
     "paper": { "enabled": true, "m": 16, "lambda": 2, "divisions": 2, "seed": 13 },
 
-    "lsh": { "numTables": 0, "rowsPerBand": 0, "probeShards": 0 },
+    "lsh": { "numTables": 8, "rowsPerBand": 4, "probeShards": 32 },
 
     "numShards": 1,
     "opsThreshold": 10000000,
