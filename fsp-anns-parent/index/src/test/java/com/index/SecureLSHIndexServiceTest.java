@@ -1,10 +1,8 @@
 package com.index;
 
-import com.fspann.common.EncryptedPoint;
-import com.fspann.common.EncryptedPointBuffer;
-import com.fspann.common.KeyLifeCycleService;
-import com.fspann.common.RocksDBMetadataManager;
+import com.fspann.common.*;
 import com.fspann.crypto.CryptoService;
+import com.fspann.index.paper.PartitionedIndexService;
 import com.fspann.index.service.SecureLSHIndexService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -13,104 +11,101 @@ import java.util.Collections;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.argThat;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 class SecureLSHIndexServiceTest {
 
     private CryptoService crypto;
-    private KeyLifeCycleService keyService;
-    private RocksDBMetadataManager metadataManager;
-    private SecureLSHIndexService.PaperSearchEngine paper;
+    private KeyLifeCycleService keySvc;
+    private RocksDBMetadataManager metadata;
+    private PartitionedIndexService engine;
     private EncryptedPointBuffer buffer;
-    private SecureLSHIndexService indexService;
+
+    private SecureLSHIndexService svc;
 
     @BeforeEach
     void setup() {
         crypto = mock(CryptoService.class);
-        keyService = mock(KeyLifeCycleService.class);
-        metadataManager = mock(RocksDBMetadataManager.class);
-        paper = mock(SecureLSHIndexService.PaperSearchEngine.class);
+        keySvc = mock(KeyLifeCycleService.class);
+        metadata = mock(RocksDBMetadataManager.class);
+        engine = mock(PartitionedIndexService.class);
         buffer = mock(EncryptedPointBuffer.class);
 
-        when(metadataManager.getPointsBaseDir())
+        when(metadata.getPointsBaseDir())
                 .thenReturn(System.getProperty("java.io.tmpdir") + "/points");
 
-        indexService = new SecureLSHIndexService(
+        svc = new SecureLSHIndexService(
                 crypto,
-                keyService,
-                metadataManager,
-                paper,      // non-Partitioned mock → "no codes engine" branch
+                keySvc,
+                metadata,
+                engine,
                 buffer
         );
     }
 
     @Test
-    void insert_VectorIsEncryptedAndMetadataPersisted() throws Exception {
-        String id = "test";
-        double[] vector = {1.0, 2.0};
-        int dimension = vector.length;
+    void insert_encrypts_persists_then_forwards_to_engine() throws Exception {
+        String id = "v123";
+        double[] vec = {1.0, 2.0};
 
         EncryptedPoint enc = new EncryptedPoint(
                 id,
                 0,
-                new byte[]{1},
-                new byte[]{2},
+                new byte[12],
+                new byte[32],
                 1,
-                dimension,
+                vec.length,
                 Collections.emptyList()
         );
-        when(crypto.encrypt(eq(id), eq(vector))).thenReturn(enc);
 
-        UnsupportedOperationException ex = assertThrows(
-                UnsupportedOperationException.class,
-                () -> indexService.insert(id, vector),
-                "Paper mode must reject plaintext insert(id, vector)"
+        when(crypto.encrypt(id, vec)).thenReturn(enc);
+
+        svc.insert(id, vec);
+
+        verify(crypto).encrypt(id, vec);
+
+        verify(metadata).batchUpdateVectorMetadata(
+                argThat(map -> {
+                    var m = map.get(id);
+                    return m != null &&
+                            m.get("version").equals("1") &&
+                            m.get("dim").equals("2");
+                })
         );
-        assertTrue(ex.getMessage().contains("precomputed codes"));
 
-        // We still expect pre-handoff work to have happened:
-        verify(crypto).encrypt(eq(id), eq(vector));
+        verify(metadata).saveEncryptedPoint(enc);
+        verify(buffer).add(enc);
+        verify(keySvc).incrementOperation();
 
-        verify(metadataManager).batchUpdateVectorMetadata(argThat(map -> {
-            Map<String, String> m = map.get(id);
-            return m != null
-                    && "1".equals(m.get("version"))
-                    && String.valueOf(dimension).equals(m.get("dim"));
-        }));
-
-        verify(metadataManager).saveEncryptedPoint(eq(enc));
-        verify(keyService).incrementOperation();
-        verify(buffer).add(eq(enc));
-
-        // And absolutely no handoff to paper engine
-        verify(paper, never()).insert(any(EncryptedPoint.class), any(double[].class));
-        verify(paper, never()).insert(any(EncryptedPoint.class));
+        verify(engine).insert(enc, vec);
     }
 
     @Test
-    void insert_PreEncryptedPoint_WritesMetadata() throws Exception {
-        var buckets = java.util.Arrays.asList(1, 1, 1, 1);
-        EncryptedPoint pt = new EncryptedPoint(
-                "vec123",
-                buckets.get(0),
-                new byte[]{0},
-                new byte[]{1},
-                99,
-                2,
-                buckets
+    void insertEncryptedPoint_isForbidden() {
+        EncryptedPoint ep = new EncryptedPoint(
+                "x", 0, new byte[12], new byte[32], 1, 2, Collections.emptyList()
         );
 
-        indexService.insert(pt);
+        assertThrows(UnsupportedOperationException.class,
+                () -> svc.insert(ep));
+    }
 
-        verify(metadataManager).batchUpdateVectorMetadata(argThat(map -> {
-            Map<String, String> m = map.get("vec123");
-            return m != null
-                    && "2".equals(m.get("dim"))
-                    && "99".equals(m.get("version"));
-        }));
+    @Test
+    void lookup_delegates_to_engine() {
+        QueryToken tok = mock(QueryToken.class);
+        svc.lookup(tok);
+        verify(engine).lookup(tok);
+    }
 
-        verify(metadataManager).saveEncryptedPoint(pt);
+    @Test
+    void delete_delegates_to_engine() {
+        svc.delete("abc");
+        verify(engine).delete("abc");
+    }
+
+    @Test
+    void vectorCounts_delegate_to_engine() {
+        when(engine.getVectorCountForDimension(128)).thenReturn(55);
+        assertEquals(55, svc.getVectorCountForDimension(128));
     }
 }

@@ -4,7 +4,6 @@ import com.fspann.common.*;
 import com.fspann.crypto.CryptoService;
 import com.fspann.index.paper.PartitionedIndexService;
 import com.fspann.index.service.SecureLSHIndexService;
-
 import org.junit.jupiter.api.*;
 
 import java.util.Collections;
@@ -12,7 +11,7 @@ import java.util.Collections;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
-class SecureLSHIndexProbeShardsTest {
+class SecureLSHIndexServiceNewDesignTest {
 
     private CryptoService crypto;
     private KeyLifeCycleService keySvc;
@@ -29,31 +28,30 @@ class SecureLSHIndexProbeShardsTest {
         buffer = mock(EncryptedPointBuffer.class);
         engine = mock(PartitionedIndexService.class);
 
-        when(metadata.getPointsBaseDir()).thenReturn("/tmp/x");
+        when(metadata.getPointsBaseDir())
+                .thenReturn(System.getProperty("java.io.tmpdir") + "/nx");
 
         svc = new SecureLSHIndexService(
                 crypto, keySvc, metadata, engine, buffer
         );
     }
 
-    @AfterEach
-    void cleanup() {
-        System.clearProperty("probe.shards");
+    @Test
+    void getVectorCount_defaultsToZero() {
+        when(engine.getTotalVectorCount()).thenReturn(0);
+        assertEquals(0, svc.getIndexedVectorCount());
     }
 
     @Test
-    void lookupIgnoresProbeShardsProperty() {
-        QueryToken token = mock(QueryToken.class);
+    void delete_noop_isDelegated() {
+        svc.delete("x1");
+        verify(engine).delete("x1");
+    }
 
-        when(engine.lookup(token)).thenReturn(Collections.singletonList(
-                new EncryptedPoint("a", 0, new byte[12], new byte[16], 1, 4, Collections.emptyList())
-        ));
-
-        System.setProperty("probe.shards", "999999");
-
-        var out = svc.lookup(token);
-
-        assertEquals(1, out.size());
-        verify(engine).lookup(token);
+    @Test
+    void lookupReturnsEngineOutput() {
+        QueryToken tok = mock(QueryToken.class);
+        when(engine.lookup(tok)).thenReturn(Collections.emptyList());
+        assertTrue(svc.lookup(tok).isEmpty());
     }
 }

@@ -5,154 +5,83 @@ import com.fspann.common.QueryToken;
 import com.fspann.index.paper.PartitionedIndexService;
 import org.junit.jupiter.api.Test;
 
-import java.util.ArrayList;
-import java.util.BitSet;
 import java.util.Collections;
-import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Tests for the paper / partitioned index engine:
- *  - basic insert + lookup round-trip
- *  - vector count per dimension
- *  - behavior when no codes are supplied in the QueryToken
+ * Updated tests for PartitionedIndexService under the new Option-C design.
+ *
+ * Notes:
+ * - PartitionedIndexService is no longer part of actual querying.
+ * - It is now an ablation-only component.
+ * - lookup() returns empty unless codes + full pipeline exist (not used in Option-C).
+ * - No plaintext → codes embedding happens in production.
  */
 class PartitionedIndexServiceTest {
 
-    /**
-     * Helper to create a minimal EncryptedPoint for a given dimension.
-     * Per-table buckets are irrelevant in paper mode.
-     */
     private static EncryptedPoint ep(String id, int dim) {
         return new EncryptedPoint(
                 id,
-                /*shardId*/ 0,
-                /*iv*/ new byte[12],
-                /*cipher*/ new byte[16],
-                /*version*/ 1,
-                /*vectorLength*/ dim,
-                /*perTableBuckets*/ Collections.emptyList()
+                0,
+                new byte[12],
+                new byte[16],
+                1,
+                dim,
+                Collections.emptyList()
         );
     }
 
     @Test
-    void insertWithPlaintext_thenLookup_returnsInsertedPoint() {
+    void lookup_withoutCodes_returnsEmpty() {
         int dim = 4;
 
-        // Small, deterministic config for easy testing
         PartitionedIndexService svc = new PartitionedIndexService(
-                /*m*/ 8,
-                /*lambda*/ 4,
-                /*divisions*/ 3,
-                /*seedBase*/ 1234L,
-                /*buildThreshold*/ 1,   // build as soon as first point arrives
-                /*maxCandidates*/ -1
+                8, 4, 2, 42L
         );
 
-        double[] vec = new double[]{1.0, -0.5, 0.3, 0.7};
-        EncryptedPoint pt = ep("p1", dim);
-
-        // Deprecated but still-supported path: server computes codes from plaintext
-        svc.insert(pt, vec);   // internally builds partitions because buildThreshold=1
-
-        // Build codes for a query close to the inserted vector
-        double[] q = new double[]{1.0, -0.5, 0.3, 0.7};
-        BitSet[] codes = svc.code(q);
-
-        // Paper/partitioned mode ignores per-table buckets; pass an empty list
-        List<List<Integer>> perTableBuckets = Collections.emptyList();
+        double[] vec = {0.9, 0.1, -0.2, 0.7};
+        svc.insert(ep("secret-id", dim), vec);
 
         QueryToken token = new QueryToken(
-                perTableBuckets,
-                codes,
-                /*iv*/ new byte[12],
-                /*cipher*/ new byte[16],
-                /*topK*/ 10,
-                /*numTables*/ 0,
-                /*encCtx*/ "epoch_1_dim_" + dim,
-                /*dimension*/ dim,
-                /*version*/ 1
+                Collections.emptyList(),
+                null,                 // NO CODES
+                new byte[12],
+                new byte[16],
+                10,
+                0,
+                "epoch_1_dim_4",
+                dim,
+                1
         );
 
         var out = svc.lookup(token);
-        assertFalse(out.isEmpty(), "Lookup should return at least one candidate");
-        assertTrue(out.stream().anyMatch(p -> "p1".equals(p.getId())),
-                "Inserted point id 'p1' should appear in lookup results");
+        assertTrue(out.isEmpty());
     }
 
     @Test
-    void getVectorCountForDimension_tracksInsertAndDelete() {
+    void insertAndCountOnly_behaviour() {
         int dim = 4;
 
         PartitionedIndexService svc = new PartitionedIndexService(
-                /*m*/ 8,
-                /*lambda*/ 4,
-                /*divisions*/ 2,
-                /*seedBase*/ 9876L,
-                /*buildThreshold*/ 1,
-                /*maxCandidates*/ -1
+                8, 4, 3,
+                1234L,
+                1,
+                -1
         );
 
-        double[] v1 = new double[]{0.1, 0.2, 0.3, 0.4};
-        double[] v2 = new double[]{0.5, 0.6, 0.7, 0.8};
+        EncryptedPoint p1 = ep("a", dim);
+        EncryptedPoint p2 = ep("b", dim);
 
-        EncryptedPoint p1 = ep("id-1", dim);
-        EncryptedPoint p2 = ep("id-2", dim);
+        svc.insert(p1, new double[]{1,2,3,4});
+        svc.insert(p2, new double[]{5,6,7,8});
 
-        svc.insert(p1, v1);
-        svc.insert(p2, v2);
+        assertEquals(2, svc.getVectorCountForDimension(dim));
 
-        int countAfterInsert = svc.getVectorCountForDimension(dim);
-        assertEquals(2, countAfterInsert, "Should see 2 vectors after two inserts");
+        svc.delete("a");
+        assertEquals(1, svc.getVectorCountForDimension(dim));
 
-        // Delete one and re-check
-        svc.delete("id-1");
-        int countAfterDelete = svc.getVectorCountForDimension(dim);
-        assertEquals(1, countAfterDelete, "Should see 1 vector after deleting one id");
-
-        // Delete the remaining one
-        svc.delete("id-2");
-        int countAfterAllDeleted = svc.getVectorCountForDimension(dim);
-        assertEquals(0, countAfterAllDeleted, "Should be 0 after deleting all vectors for the dimension");
-    }
-
-    @Test
-    void lookup_withoutCodes_returnsEmpty_forPrivacy() {
-        int dim = 4;
-
-        PartitionedIndexService svc = new PartitionedIndexService(
-                /*m*/ 8,
-                /*lambda*/ 4,
-                /*divisions*/ 2,
-                /*seedBase*/ 42L,
-                /*buildThreshold*/ 1,
-                /*maxCandidates*/ -1
-        );
-
-        // Insert a point so the index is non-empty
-        double[] vec = new double[]{0.9, 0.1, -0.2, 0.7};
-        EncryptedPoint pt = ep("secret-id", dim);
-        svc.insert(pt, vec);
-
-        // Now build a token that does NOT carry any codes
-        List<List<Integer>> perTableBuckets = new ArrayList<>(); // ignored
-        BitSet[] noCodes = null; // this simulates a privacy-preserving query w/out paper codes
-
-        QueryToken token = new QueryToken(
-                perTableBuckets,
-                noCodes,
-                /*iv*/ new byte[12],
-                /*cipher*/ new byte[16],
-                /*topK*/ 10,
-                /*numTables*/ 0,
-                /*encCtx*/ "epoch_1_dim_" + dim,
-                /*dimension*/ dim,
-                /*version*/ 1
-        );
-
-        var out = svc.lookup(token);
-        assertTrue(out.isEmpty(),
-                "When no codes are supplied, partitioned engine should not leak structure and must return empty set");
+        svc.delete("b");
+        assertEquals(0, svc.getVectorCountForDimension(dim));
     }
 }
