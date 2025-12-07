@@ -97,4 +97,13 @@ public class QueryToken implements Serializable {
     public int getVersion() {
         return version;
     }
+
+    public int estimateSerializedSizeBytes() {
+        int sum = 0;
+        if (codes != null) {
+            for (BitSet bs : codes) sum += (bs == null ? 1 : (bs.toByteArray().length + 1));
+        }
+        return sum;
+    }
+
 }
