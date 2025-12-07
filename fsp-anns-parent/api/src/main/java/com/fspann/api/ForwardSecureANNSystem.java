@@ -18,11 +18,9 @@ import com.fspann.loader.FormatLoader;
 import com.fspann.loader.GroundtruthManager;
 import com.fspann.loader.StreamingBatchLoader;
 import com.fspann.common.RocksDBMetadataManager;
-import com.fspann.query.core.DecoyQueryGenerator;
+import com.fspann.query.core.*;
 import com.fspann.common.QueryToken;
-import com.fspann.query.core.QueryTokenFactory;
 import com.fspann.common.QueryResult;
-import com.fspann.query.core.TopKProfiler;
 import com.fspann.query.service.QueryService;
 import com.fspann.query.service.QueryServiceImpl;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -622,8 +620,6 @@ public class ForwardSecureANNSystem {
     /*      HELPERS FOR UNIFIED EVALUATION + PROFILER PIPELINE            */
     /* ====================================================================== */
 
-    private double toMs(long ns) { return ns <= 0 ? 0.0 : ns / 1_000_000.0; }
-
      /** Lightweight DTO for passing timing snapshots inside this class. */
     private static final class QueryTiming {
         final double serverMs, clientMs, runMs, decryptMs;
@@ -1104,50 +1100,100 @@ public class ForwardSecureANNSystem {
 
 
         /* ====================================================================== */
-        /*                      6. STORAGE SUMMARY (Option-C)                      */
+        /*                      6. STORAGE SUMMARY + PRINTER                      */
         /* ====================================================================== */
 
         try {
-            int version = keyService.getCurrentVersion().getVersion();
-            int N = Math.max(indexService.getIndexedVectorCount(), totalInserted);
+            Aggregates agg = Aggregates.fromProfiler(this.profiler);
 
-            int dim = tokenFactories.keySet().stream().findFirst().orElse(-1);
-
-            int ell = config.getPaper().divisions;
-            int mProj = config.getPaper().m;
-            int probeShards = shardsToProbe();
-
-            Path pointsVerDir = pointsPath.resolve("v" + version);
-
-            long bytesPoints = dirSize(pointsVerDir);
-            long bytesMeta   = dirSize(metaDBPath);
-            long bytesKeys   = Files.exists(keyStorePath)
-                    ? safeSize(keyStorePath)
-                    : dirSize(keyStorePath.getParent());
-
-            long totalBytes = bytesPoints + bytesMeta + bytesKeys;
-            double bytesPerPoint = N > 0 ? (double) totalBytes / (double) N : Double.NaN;
-            long vectorTerms = dim > 0 ? (long) N * (long) dim : -1;
-
-            Path csv = outDir.resolve("storage_summary.csv");
-            if (!Files.exists(csv)) {
-                Files.writeString(csv,
-                        "mode,version,N,dim,ell,m_proj,probe_shards," +
-                                "points_bytes,metadata_bytes,keystore_bytes," +
-                                "total_bytes,bytes_per_point,vector_terms_Nxd\n",
-                        StandardOpenOption.CREATE_NEW);
+            // -----------------------
+            // DATASET NAME (fallback)
+            // -----------------------
+            String dataset;
+            String cliDataset = System.getProperty("cli.dataset", "");
+            if (!cliDataset.isBlank()) {
+                dataset = cliDataset;
+            } else {
+                String baseProp = System.getProperty("base.path", "");
+                if (!baseProp.isBlank()) {
+                    dataset = Paths.get(baseProp).getFileName().toString();
+                } else {
+                    dataset = this.resultsDir.getFileName().toString();
+                }
             }
 
-            String row = String.format(Locale.ROOT,
-                    "partitioned,%d,%d,%d,%d,%d,%d,%d,%d,%d,%.6f,%d%n",
-                    version, N, dim, ell, mProj, probeShards,
-                    bytesPoints, bytesMeta, bytesKeys,
-                    bytesPerPoint, vectorTerms);
+            // -----------------------
+            // PROFILE NAME (fallback)
+            // -----------------------
+            String profile;
+            String cliProfile = System.getProperty("cli.profile", "");
+            if (!cliProfile.isBlank()) {
+                profile = cliProfile;
+            } else {
+                profile = "ideal-system";
+            }
 
-            Files.writeString(csv, row, StandardOpenOption.APPEND);
+            int m         = config.getPaper().m;
+            int lambda    = config.getPaper().lambda;
+            int divisions = config.getPaper().divisions;
+            long totalIndexMs = Math.round(totalIndexingTimeNs / 1_000_000.0);
+
+            Path summaryCsv = outDir.resolve("summary.csv");
+
+            EvaluationSummaryPrinter.printAndWriteCsv(
+                    dataset,
+                    profile,
+                    m,
+                    lambda,
+                    divisions,
+                    totalIndexMs,
+                    agg,
+                    summaryCsv
+            );
 
         } catch (Exception e) {
-            logger.warn("Failed to write storage summary", e);
+            logger.warn("EvaluationSummaryPrinter failed", e);
+        }
+
+        /* ====================================================================== */
+        /*                      7. EvaluationSummaryPrinter CSVs                  */
+        /* ====================================================================== */
+
+        try {
+            Aggregates agg = Aggregates.fromProfiler(this.profiler);
+
+            // dataset identification fallback
+            String dataset;
+            String baseProp = System.getProperty("base.path", "");
+            if (!baseProp.isBlank()) {
+                dataset = Paths.get(baseProp).getFileName().toString();
+            } else {
+                dataset = this.resultsDir.getFileName().toString();
+            }
+
+            // Option-C profile name
+            String profile = "ideal-system";
+
+            int m = config.getPaper().m;
+            int lambda = config.getPaper().lambda;
+            int divisions = config.getPaper().divisions;
+
+            long totalIndexMs = Math.round(totalIndexingTimeNs / 1_000_000.0);
+
+            Path summaryCsv = outDir.resolve("summary.csv");
+
+            EvaluationSummaryPrinter.printAndWriteCsv(
+                    dataset,
+                    profile,
+                    m,
+                    lambda,
+                    divisions,
+                    totalIndexMs,
+                    agg,
+                    summaryCsv
+            );
+        } catch (Exception e) {
+            logger.warn("Failed to run EvaluationSummaryPrinter", e);
         }
     }
 
