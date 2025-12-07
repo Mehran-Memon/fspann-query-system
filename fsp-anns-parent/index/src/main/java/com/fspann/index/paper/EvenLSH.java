@@ -44,16 +44,12 @@ public class EvenLSH {
         this.baseSeed = baseSeed;
     }
 
-    /**
-     * Convenience ctor with default maxBuckets.
-     */
+    /** Convenience ctor: only supply dim + numTables + seed, with default maxBuckets. */
     public EvenLSH(int dimensions, int numTables, long baseSeed) {
-        this(dimensions, numTables, 1_000_003, baseSeed); // prime-ish default
+        this(dimensions, numTables, 1_000_003, baseSeed);
     }
 
-    /**
-     * Very simple ctor if you just care about dim; other params default.
-     */
+    /** Very simple ctor if you only know dim. */
     public EvenLSH(int dimensions) {
         this(dimensions, 1, 1_000_003, 13L);
     }

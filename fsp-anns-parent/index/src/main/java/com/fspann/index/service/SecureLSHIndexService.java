@@ -15,322 +15,217 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * SecureLSHIndexService
- * ------------------------
- * Unified entry point for indexing and lookup with paper-aligned partitioned mode.
+ * SecureLSHIndexService – Option-C (Unified SANNP/mSANNP Architecture)
+ * --------------------------------------------------------------------
+ * Only one engine exists: PartitionedIndexService.
  *
- * Modes:
- *  - Legacy (paperEngine == null):
- *      * insert(id, vector) -> encrypt + persist + optional buffer
- *      * lookup(token)      -> base scan over RocksDB (all vectors)
+ * Key properties:
+ *  • No fallback legacy mode
+ *  • No LSH-based lookup inside the server
+ *  • Server-side coding for partitioned engine only
+ *  • No dimension mismatch fallback
+ *  • No dual-mode switch
+ *  • Designed for SANNP and mSANNP (λ, m, ℓ tunable)
  *
- *  - Paper mode with real PartitionedIndexService:
- *      * insert(id, vector) -> encrypt + persist + server-side coding into PartitionedIndexService
- *      * lookup(token)      -> delegates to PartitionedIndexService (uses token.codes BitSets)
- *
- *  - Paper mode with mock / non-partition engine (tests):
- *      * insert(id, vector) -> encrypt + persist, then throws UnsupportedOperationException
- *        (to signal “this engine requires precomputed codes”).
+ * The server:
+ *  • encrypts
+ *  • persists to RocksDB
+ *  • forwards (EncryptedPoint, vector[]) to PartitionedIndexService
+ *      → PartitionedIndexService computes codes and inserts
  */
-public class SecureLSHIndexService implements IndexService {
-    private static final Logger logger = LoggerFactory.getLogger(SecureLSHIndexService.class);
+public final class SecureLSHIndexService implements IndexService {
 
-    // --------------------------- Core dependencies ---------------------------
+    private static final Logger log =
+            LoggerFactory.getLogger(SecureLSHIndexService.class);
+
+    // ------------------------------------------------------------
+    // CORE DEPENDENCIES
+    // ------------------------------------------------------------
     private final CryptoService crypto;
     private final KeyLifeCycleService keyService;
-    private final RocksDBMetadataManager metadataManager;
+    private final RocksDBMetadataManager metadata;
 
-    // Paper-aligned engine (Partitioned indexing mode)
-    private volatile PaperSearchEngine paperEngine;
+    // Only engine allowed (Option-C)
+    private final PartitionedIndexService engine;
 
-    // Write buffer
+    // Write-through encrypted-point buffer
     private final EncryptedPointBuffer buffer;
 
-    // Write-through toggle (persist to Rocks + metrics account)
+    // writeThrough=true means encrypt+persist to RocksDB on insert
     private volatile boolean writeThrough =
             !"false".equalsIgnoreCase(System.getProperty("index.writeThrough", "true"));
 
-    // Optional: per-dimension EvenLSH registry for QueryTokenFactory / legacy tooling
-    private final Map<Integer, EvenLSH> lshPerDimension = new ConcurrentHashMap<>();
+    // LSH registry (only for QueryTokenFactory compatibility)
+    private final Map<Integer, EvenLSH> lshRegistry = new ConcurrentHashMap<>();
+
+    // ------------------------------------------------------------
+    // CONSTRUCTION
+    // ------------------------------------------------------------
 
     public SecureLSHIndexService(CryptoService crypto,
                                  KeyLifeCycleService keyService,
-                                 RocksDBMetadataManager metadataManager,
-                                 PaperSearchEngine paperEngine,
+                                 RocksDBMetadataManager metadata,
+                                 PartitionedIndexService engine,
                                  EncryptedPointBuffer buffer) {
+
         this.crypto = (crypto != null)
                 ? crypto
-                : new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
+                : new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadata);
+
         this.keyService = Objects.requireNonNull(keyService, "keyService");
-        this.metadataManager = Objects.requireNonNull(metadataManager, "metadataManager");
-        this.paperEngine = paperEngine;
+        this.metadata = Objects.requireNonNull(metadata, "metadata");
+        this.engine = Objects.requireNonNull(engine, "engine");
         this.buffer = Objects.requireNonNull(buffer, "buffer");
-        logger.info("SecureLSHIndexService initialized. paperEnginePresent={}", (paperEngine != null));
+
+        log.info("SecureLSHIndexService (Option-C) initialized: partitioned-engine ENABLED.");
     }
 
-    /** Factory method for configuration from SystemConfig. */
+    /** Factory from SystemConfig. Always builds PartitionedIndexService. */
     public static SecureLSHIndexService fromConfig(CryptoService crypto,
                                                    KeyLifeCycleService keyService,
                                                    RocksDBMetadataManager metadata,
                                                    SystemConfig cfg) {
-        EncryptedPointBuffer buf = createBufferFromManager(metadata);
-        SecureLSHIndexService svc = new SecureLSHIndexService(crypto, keyService, metadata, null, buf);
 
-        // Enable paper engine via config if requested
-        try {
-            var pc = cfg.getPaper();
-            if (pc != null && pc.isEnabled()) {
-                PartitionedIndexService pe = new PartitionedIndexService(
-                        pc.getM(), pc.getLambda(), pc.getDivisions(), pc.getSeed()
-                );
-                svc.setPaperEngine(pe);
-                logger.info("Paper engine enabled via config (m={}, λ={}, ℓ={}, seed={})",
-                        pc.getM(), pc.getLambda(), pc.getDivisions(), pc.getSeed());
-            }
-        } catch (Throwable t) {
-            logger.warn("Failed to initialize paper engine from config, continuing without it", t);
+        var pc = cfg.getPaper();
+        if (pc == null || !pc.isEnabled()) {
+            throw new IllegalStateException("Option-C requires paper.enabled=true in config.");
         }
-        return svc;
-    }
 
-    private static EncryptedPointBuffer createBufferFromManager(RocksDBMetadataManager manager) {
-        String pointsBase = Objects.requireNonNull(
-                manager.getPointsBaseDir(),
-                "metadataManager.getPointsBaseDir() returned null."
+        PartitionedIndexService engine = new PartitionedIndexService(
+                pc.getM(),
+                pc.getLambda(),
+                pc.getDivisions(),
+                pc.getSeed()
         );
+
+        EncryptedPointBuffer buf = createBuffer(metadata);
+
+        return new SecureLSHIndexService(crypto, keyService, metadata, engine, buf);
+    }
+
+    private static EncryptedPointBuffer createBuffer(RocksDBMetadataManager m) {
         try {
-            return new EncryptedPointBuffer(pointsBase, manager);
+            return new EncryptedPointBuffer(
+                    Objects.requireNonNull(m.getPointsBaseDir()),
+                    m
+            );
         } catch (IOException e) {
-            throw new RuntimeException("Failed to initialize EncryptedPointBuffer", e);
+            throw new RuntimeException("Failed creating EncryptedPointBuffer", e);
         }
     }
 
-    // Allow wiring/overriding paper engine
-    public void setPaperEngine(PaperSearchEngine engine) {
-        this.paperEngine = engine;
-    }
-
-    // -------------------------------------------------------------------------
-    // IndexService API Implementations (Paper Mode + Fallback)
-    // -------------------------------------------------------------------------
-
-    public void batchInsert(List<String> ids, List<double[]> vectors) {
-        Objects.requireNonNull(ids, "ids");
-        Objects.requireNonNull(vectors, "vectors");
-        if (ids.size() != vectors.size()) {
-            throw new IllegalArgumentException("ids and vectors must be same size");
-        }
-
-        // Simple loop over the existing insert(...) API
-        for (int i = 0; i < ids.size(); i++) {
-            insert(ids.get(i), vectors.get(i));
-        }
-    }
-
-    @Override
-    public void insert(EncryptedPoint pt) {
-        Objects.requireNonNull(pt, "EncryptedPoint cannot be null");
-
-        // NOTE:
-        //  - For PartitionedIndexService we *do not* hand off this encrypted-only
-        //    insert, because it has no plaintext to generate codes from.
-        //  - Tests that care about “no codes engine” semantics exercise insert(id, vector)
-        //    against a mock, not this method.
-        if (paperEngine != null && !(paperEngine instanceof PartitionedIndexService)) {
-            // Non-partition paper engine (probably a test double) can still get the raw point.
-            paperEngine.insert(pt);
-        }
-
-        if (writeThrough) {
-            Map<String, String> metadata = new HashMap<>();
-            metadata.put("version", String.valueOf(pt.getVersion()));
-            metadata.put("dim", String.valueOf(pt.getVectorLength()));
-            List<Integer> buckets = pt.getBuckets();
-            if (buckets != null) {
-                for (int t = 0; t < buckets.size(); t++) {
-                    metadata.put("b" + t, String.valueOf(buckets.get(t)));
-                }
-            }
-
-            try {
-                metadataManager.batchUpdateVectorMetadata(Collections.singletonMap(pt.getId(), metadata));
-                metadataManager.saveEncryptedPoint(pt);
-            } catch (IOException e) {
-                logger.error("Failed to persist encrypted point {}", pt.getId(), e);
-                return;
-            }
-            keyService.incrementOperation();
-
-            try {
-                buffer.add(pt);
-            } catch (Exception e) {
-                logger.warn("Buffered write failed for {}", pt.getId(), e);
-            }
-        }
-    }
+    // ------------------------------------------------------------
+    // INSERTION
+    // ------------------------------------------------------------
 
     @Override
     public void insert(String id, double[] vector) {
-        Objects.requireNonNull(id, "Point ID cannot be null");
-        Objects.requireNonNull(vector, "Vector cannot be null");
+        Objects.requireNonNull(id);
+        Objects.requireNonNull(vector);
 
         // 1) Encrypt
-        EncryptedPoint enc = crypto.encrypt(id, vector);
+        EncryptedPoint ep = crypto.encrypt(id, vector);
 
-        // 2) Persist to RocksDB + buffer (independent of codes engine)
+        // 2) Persist encrypted point
         if (writeThrough) {
-            Map<String, String> metadata = new HashMap<>();
-            metadata.put("version", String.valueOf(enc.getVersion()));
-            metadata.put("dim", String.valueOf(vector.length));
-
-            try {
-                metadataManager.batchUpdateVectorMetadata(Collections.singletonMap(enc.getId(), metadata));
-                metadataManager.saveEncryptedPoint(enc);
-            } catch (IOException e) {
-                logger.error("Failed to persist encrypted point {}", enc.getId(), e);
-                return;
-            }
-            keyService.incrementOperation();
-
-            try {
-                buffer.add(enc);
-            } catch (Exception e) {
-                logger.warn("Buffered write failed for {}", enc.getId(), e);
-            }
+            persistEncryptedPoint(ep, vector.length);
         }
 
-        // 3) Behaviour by mode:
-        //   - No paper engine            -> legacy behaviour: just persist (base-scan handles lookup).
-        //   - Mock paper engine (tests)  -> throw UnsupportedOperationException *after* persistence.
-        //   - Real PartitionedIndexService -> server-side coding + partitioned insert.
-        PaperSearchEngine engine = this.paperEngine;
-        if (engine == null) {
-            // legacy mode: just persist and return
-            return;
-        }
+        // 3) Forward to paper engine (PartitionedIndexService)
+        engine.insert(ep, vector);
+    }
 
-        if (!(engine instanceof PartitionedIndexService pe)) {
-            // This is exactly the path that SecureLSHIndexService*PaperModeTest asserts on:
-            // "Paper mode must reject plaintext insert(id, vector) when there is no codes engine."
-            throw new UnsupportedOperationException(
-                    "This SecureLSHIndexService requires precomputed codes in paper mode; " +
-                            "plain insert(id, vector) is not supported when paperEngine is not a PartitionedIndexService."
+    /** Direct EncryptedPoint insertion is forbidden under Option-C. */
+    @Override
+    public void insert(EncryptedPoint pt) {
+        throw new UnsupportedOperationException(
+                "Option-C forbids insert(EncryptedPoint). Always use insert(id, vector)."
+        );
+    }
+
+    private void persistEncryptedPoint(EncryptedPoint ep, int dim) {
+        try {
+            Map<String, String> meta = Map.of(
+                    "version", String.valueOf(ep.getVersion()),
+                    "dim", String.valueOf(dim)
             );
+
+            metadata.batchUpdateVectorMetadata(Collections.singletonMap(ep.getId(), meta));
+            metadata.saveEncryptedPoint(ep);
+            buffer.add(ep);
+
+            keyService.incrementOperation();
+        } catch (Exception e) {
+            log.error("Failed to persist {}", ep.getId(), e);
+            throw new RuntimeException(e);
         }
-
-        // Real partitioned paper engine: compute codes server-side and insert into partitions.
-        // This uses PartitionedIndexService.insert(EncryptedPoint, double[]) which wraps code()
-        // and insertWithCodes(CodedPoint).
-        pe.insert(enc, vector);
     }
 
-    public void flushBuffers() {
-        buffer.flushAll();
-    }
+    // ------------------------------------------------------------
+    // LOOKUP
+    // ------------------------------------------------------------
 
     @Override
     public List<EncryptedPoint> lookup(QueryToken token) {
-        // ------------------------ Paper / partitioned mode -------------------
-        if (paperEngine != null) {
-            return paperEngine.lookup(token);
-        }
-
-        // ------------------------ Legacy fallback: base scan -----------------
-        // When no paper engine is configured (e.g., older configs, very small fixtures),
-        // we approximate a "base scan" by pulling *all* encrypted points from
-        // RocksDB via metadata manager. QueryServiceImpl will handle decryption
-        // and ranking, and ratio tests can still compare against this baseline.
-        List<String> ids = metadataManager.getAllVectorIds();
-        if (ids == null || ids.isEmpty()) {
-            return Collections.emptyList();
-        }
-
-        List<EncryptedPoint> result = new ArrayList<>(ids.size());
-        for (String id : ids) {
-            try {
-                EncryptedPoint ep = metadataManager.loadEncryptedPoint(id);
-                if (ep != null) {
-                    result.add(ep);
-                }
-            } catch (IOException | ClassNotFoundException e) {
-                logger.warn("Failed to load encrypted point {} during lookup", id, e);
-            }
-        }
-
-        logger.debug("Legacy lookup() returned {} candidates (paperEngine == null)", result.size());
-        return result;
+        Objects.requireNonNull(token);
+        return engine.lookup(token);
     }
 
-    @Override
-    public void delete(String id) {
-        Objects.requireNonNull(id, "Point ID cannot be null");
-        if (paperEngine != null) {
-            paperEngine.delete(id);
-        }
-        // Metadata cleanup left to higher-level components if needed
-    }
+    // ------------------------------------------------------------
+    // METADATA + CACHE
+    // ------------------------------------------------------------
 
     @Override
-    public void markDirty(int shardId) {
-        // Legacy API; partitioned/paper mode has no explicit shards.
-        logger.debug("markDirty(shardId={}) called in paper mode; no-op.", shardId);
-    }
+    public void updateCachedPoint(EncryptedPoint pt) {
+        Objects.requireNonNull(pt);
 
-    @Override
-    public int getIndexedVectorCount() {
-        if (paperEngine instanceof PartitionedIndexService pe) {
-            return pe.getTotalVectorCount();
-        }
-        // Fallback: approximate via metadata entry count
-        return metadataManager.getAllVectorIds().size();
-    }
+        // Update engine
+        engine.updateCachedPoint(pt);
 
-    @Override
-    public Set<Integer> getRegisteredDimensions() {
-        if (paperEngine instanceof PartitionedIndexService pe) {
-            return pe.getRegisteredDimensions();
+        // Update RocksDB
+        try {
+            metadata.saveEncryptedPoint(pt);
+            metadata.updateVectorMetadata(pt.getId(), Map.of(
+                    "version", String.valueOf(pt.getVersion()),
+                    "dim", String.valueOf(pt.getVectorLength())
+            ));
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to update cached point", e);
         }
-        return Collections.emptySet();
-    }
-
-    @Override
-    public int getVectorCountForDimension(int dimension) {
-        if (paperEngine != null) {
-            return paperEngine.getVectorCountForDimension(dimension);
-        }
-        // Fallback: we don't track per-dimension counts without paper engine.
-        return 0;
     }
 
     @Override
     public EncryptedPoint getEncryptedPoint(String id) {
         try {
-            return metadataManager.loadEncryptedPoint(id);
-        } catch (IOException | ClassNotFoundException e) {
-            logger.error("Failed to load encrypted point {} from disk", id, e);
-            return null;
+            return metadata.loadEncryptedPoint(id);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to load point " + id, e);
         }
     }
 
     @Override
-    public void updateCachedPoint(EncryptedPoint pt) {
-        Objects.requireNonNull(pt, "EncryptedPoint cannot be null");
+    public void delete(String id) {
+        engine.delete(id);
+    }
 
-        // 1) Update in-memory index if it supports it
-        if (paperEngine instanceof PartitionedIndexService pe) {
-            pe.updateCachedPoint(pt);
-        }
+    @Override
+    public int getIndexedVectorCount() {
+        return engine.getTotalVectorCount();
+    }
 
-        // 2) Persist updated point + metadata
-        try {
-            metadataManager.saveEncryptedPoint(pt);
-            metadataManager.updateVectorMetadata(pt.getId(), Map.of(
-                    "version", String.valueOf(pt.getVersion()),
-                    "dim", String.valueOf(pt.getVectorLength())
-            ));
-        } catch (IOException e) {
-            logger.error("Failed to update cached point {}", pt.getId(), e);
-        }
+    @Override
+    public Set<Integer> getRegisteredDimensions() {
+        return engine.getRegisteredDimensions();
+    }
+
+    @Override
+    public int getVectorCountForDimension(int dim) {
+        return engine.getVectorCountForDimension(dim);
+    }
+
+    @Override
+    public int getShardIdForVector(double[] vector) {
+        return -1; // no shards exposed in Option-C
     }
 
     @Override
@@ -338,18 +233,37 @@ public class SecureLSHIndexService implements IndexService {
         return buffer;
     }
 
-    @Override
-    public int getShardIdForVector(double[] vector) {
-        // Partitioned/paper mode does not expose shard IDs; we return a sentinel.
-        return -1;
+    public void flushBuffers() {
+        buffer.flushAll();
     }
 
-    public void addPointToIndexOnly(EncryptedPoint ep) {
-        if (ep == null) {
-            return;
-        }
-        // No-op placeholder for restore-only scenarios.
+    public void clearCache() {
+        buffer.clear();
     }
+
+    public void shutdown() {
+        buffer.shutdown();
+    }
+
+    // ------------------------------------------------------------
+    // LSH REGISTRY (COMPATIBILITY ONLY)
+    // ------------------------------------------------------------
+
+    public EvenLSH getLshForDimension(int dimension) {
+        if (dimension <= 0) throw new IllegalArgumentException("dimension>0");
+
+        // Partitioned system does NOT use LSH for lookup
+        // but QueryTokenFactory may still require it
+        return lshRegistry.computeIfAbsent(dimension, dim -> {
+            int numTables = Integer.getInteger("token.lsh.tables", 8);
+            long seed = Long.getLong("token.lsh.seed", 13L);
+            return new EvenLSH(dim, numTables, seed);
+        });
+    }
+
+    // ------------------------------------------------------------
+    // WRITE-THROUGH TOGGLE
+    // ------------------------------------------------------------
 
     public void setWriteThrough(boolean enabled) {
         this.writeThrough = enabled;
@@ -358,83 +272,9 @@ public class SecureLSHIndexService implements IndexService {
     public boolean isWriteThrough() {
         return writeThrough;
     }
-
-    /**
-     * Provide an EvenLSH instance for a given dimension, primarily for
-     * QueryTokenFactory / legacy tooling that still expects an LSH object.
-     *
-     * For the current paper-focused branch, these LSH instances are used
-     * mainly to build bucket IDs for tokens; the actual candidate retrieval
-     * may be handled by either:
-     *   - PartitionedIndexService (paperEngine != null) using codes, or
-     *   - Metadata base-scan (paperEngine == null), ignoring buckets.
-     */
-    public EvenLSH getLshForDimension(int dimension) {
-        if (dimension <= 0) {
-            throw new IllegalArgumentException("dimension must be > 0");
-        }
-
-        // IDEAL SYSTEM: When partitioned mode active, do NOT provide LSH
-        if (paperEngine != null) {
-            // PartitionedIndexService = ideal-system mode → LSH forbidden
-            if (paperEngine instanceof PartitionedIndexService) {
-                logger.debug("getLshForDimension(dim={}): partitioned mode -> returning null (no LSH)", dimension);
-                return null;
-            }
-        }
-
-        // LEGACY PATH (unchanged)
-        return lshPerDimension.computeIfAbsent(dimension, dim -> {
-            int m = Integer.getInteger("token.lsh.m", 8);
-            int r = Integer.getInteger("token.lsh.r", 4);
-            long seed = Long.getLong("token.lsh.seed", 13L);
-
-            logger.debug(
-                    "getLshForDimension: creating EvenLSH(dim={}, m={}, r={}, seed={})",
-                    dim, m, r, seed
-            );
-            return new EvenLSH(dim, m, r, seed);
-        });
-    }
-
-    // -------------------------------------------------------------------------
-    // Extra helpers for lifecycle
-    // -------------------------------------------------------------------------
-
-    public void clearCache() {
-        try {
-            buffer.clear();
-        } catch (Exception e) {
-            logger.warn("Failed to clear EncryptedPointBuffer", e);
-        }
-    }
-
-    public void shutdown() {
-        try {
-            buffer.shutdown();
-        } catch (Exception e) {
-            logger.warn("Error during EncryptedPointBuffer shutdown", e);
-        }
-        // Metadata manager close is handled at system level (ForwardSecureANNSystem)
-    }
-
-    // ---------------------------------------------------------------------
-    // Ideal-system toggle: disable all LSH instances (partitioned mode)
-    // ---------------------------------------------------------------------
-    public void disableLSHForAllDimensions() {
-        logger.warn("Disabling all LSH (ideal-system partitioned mode).");
-        lshPerDimension.clear();
-    }
-
-
-    // -------------------------------------------------------------------------
-    // Paper-aligned engine contract (Partitioned Indexing)
-    // -------------------------------------------------------------------------
-    public interface PaperSearchEngine {
-        void insert(EncryptedPoint pt);                            // encrypted only
-        void insert(EncryptedPoint pt, double[] plaintextVector);  // with vector for coding
-        List<EncryptedPoint> lookup(QueryToken token);             // encrypted candidates (subset union)
-        void delete(String id);
-        int getVectorCountForDimension(int dimension);
+    @Override
+    public void markDirty(int shardId) {
+        // Option-C is pure partitioned mode → no legacy shards
+        // Implement as explicit NO-OP
     }
 }
