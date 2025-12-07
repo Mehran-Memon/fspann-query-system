@@ -1,63 +1,62 @@
 package com.index;
 
-import com.fspann.common.EncryptedPoint;
-import com.fspann.common.QueryToken;
+import com.fspann.common.*;
 import com.fspann.crypto.CryptoService;
-import com.fspann.common.KeyLifeCycleService;
+import com.fspann.index.paper.PartitionedIndexService;
 import com.fspann.index.service.SecureLSHIndexService;
 import org.junit.jupiter.api.*;
+import org.mockito.*;
 
-import java.util.List;
-
+import java.io.IOException;
+import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
-class SecureLSHIndexServicePureTest {
+public class SecureLSHIndexServicePureTest {
 
-    private CryptoService crypto;
-    private KeyLifeCycleService keys;
-    private SecureLSHIndexService index;
+    @Mock CryptoService crypto;
+    @Mock KeyLifeCycleService keys;
+    @Mock RocksDBMetadataManager meta;
+    @Mock
+    PartitionedIndexService engine;
+    @Mock EncryptedPointBuffer buffer;
+
+    SecureLSHIndexService svc;
 
     @BeforeEach
     void init() {
-        crypto = mock(CryptoService.class);
-        keys   = mock(KeyLifeCycleService.class);
-        index  = new SecureLSHIndexService(crypto, keys, null, null, null);
-    }
+        MockitoAnnotations.openMocks(this);
 
-    private QueryToken dummyToken() {
-        return new QueryToken(
-                List.of(),      // tables
-                null,           // codes
-                new byte[12],   // iv
-                new byte[16],   // enc query
-                5,              // topK
-                1,              // version
-                "ctx",
-                2,              // dim
-                1               // shard
-        );
+        when(meta.getPointsBaseDir()).thenReturn("tmpPoints");
+
+        svc = new SecureLSHIndexService(crypto, keys, meta, engine, buffer);
     }
 
     @Test
-    void insertAndLookup_returnsInsertedPoints() {
-        double[] v1 = {1,2};
-        double[] v2 = {3,4};
+    void insert_encrypts_persists_forwards() throws IOException {
+        double[] v = {1, 2};
 
-        index.insert("a", v1);
-        index.insert("b", v2);
+        EncryptedPoint ep = mock(EncryptedPoint.class);
+        when(ep.getId()).thenReturn("a");
+        when(ep.getVersion()).thenReturn(1);
+        when(ep.getVectorLength()).thenReturn(2);
 
-        QueryToken tok = dummyToken();
-        List<EncryptedPoint> pts = index.lookup(tok);
+        when(crypto.encrypt("a", v)).thenReturn(ep);
 
-        assertEquals(2, pts.size());
-        assertTrue(pts.stream().anyMatch(p -> p.getId().equals("a")));
-        assertTrue(pts.stream().anyMatch(p -> p.getId().equals("b")));
+        svc.insert("a", v);
+
+        verify(crypto).encrypt("a", v);
+        verify(meta).saveEncryptedPoint(ep);
+        verify(buffer).add(ep);
+        verify(engine).insert(ep, v);
     }
 
     @Test
-    void emptyIndex_returnsEmptyList() {
-        QueryToken tok = dummyToken();
-        assertTrue(index.lookup(tok).isEmpty());
+    void lookup_delegatesToEngine() {
+        QueryToken tok = mock(QueryToken.class);
+        List<EncryptedPoint> ps = List.of();
+        when(engine.lookup(tok)).thenReturn(ps);
+
+        assertSame(ps, svc.lookup(tok));
     }
 }
