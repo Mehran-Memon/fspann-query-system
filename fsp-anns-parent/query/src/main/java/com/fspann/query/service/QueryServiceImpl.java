@@ -382,7 +382,6 @@ public final class QueryServiceImpl implements QueryService {
         lastCandIds = Collections.emptyList();
     }
 
-
     private void addCandidateIds(Collection<String> ids) {
         if (ids == null || ids.isEmpty()) return;
 

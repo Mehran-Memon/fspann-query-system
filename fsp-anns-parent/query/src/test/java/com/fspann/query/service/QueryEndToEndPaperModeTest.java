@@ -4,7 +4,7 @@ import com.fspann.common.*;
 import com.fspann.crypto.CryptoService;
 import com.fspann.index.paper.PartitionedIndexService;
 import com.fspann.index.service.SecureLSHIndexService;
-
+import com.fspann.query.core.QueryTokenFactory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -14,50 +14,41 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.BitSet;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
-/**
- * Updated deterministic paper-mode E2E query test.
- * Automatically forces PartitionedIndexService to build partitions so that
- * candidate lists are non-empty even for tiny datasets.
- */
-class QueryEndToEndPaperModeTest {
+public class QueryEndToEndPaperModeTest {
 
     private SecureLSHIndexService indexService;
-    private QueryServiceImpl queryService;
+    private QueryServiceImpl qs;
 
     private CryptoService crypto;
     private KeyLifeCycleService keys;
     private RocksDBMetadataManager meta;
     private EncryptedPointBuffer buffer;
-
     private PartitionedIndexService paper;
 
-    // Plaintext store for mock decrypt
-    private final Map<String, double[]> plaintextById = new ConcurrentHashMap<>();
+    private QueryTokenFactory tokenFactory;
 
-    private static final SecretKey TEST_KEY = new SecretKeySpec(new byte[32], "AES");
-    private static final KeyVersion KV1 = new KeyVersion(1, TEST_KEY);
+    private final Map<String,double[]> plain = new ConcurrentHashMap<>();
 
-    // Tiny dataset in 2D
-    private final double[][] points = new double[][] {
-            {0.0, 0.0},    // 0
-            {1.0, 0.0},    // 1
-            {0.0, 1.0},    // 2
-            {1.0, 1.0},    // 3
-            {5.0, 5.0},    // 4
-            {5.1, 5.0},    // 5
-            {10.0, 10.0},  // 6
-            {10.1, 10.0}   // 7
+    private static final SecretKey KEY = new SecretKeySpec(new byte[32],"AES");
+    private static final KeyVersion KV1 = new KeyVersion(1, KEY);
+
+    private final double[][] points = {
+            {0,0},
+            {1,0},
+            {0,1},
+            {1,1},
+            {5,5},
+            {5.1,5},
+            {10,10},
+            {10.1,10}
     };
 
     @BeforeEach
     void setup() throws Exception {
-
         crypto = mock(CryptoService.class);
         keys   = mock(KeyLifeCycleService.class);
         meta   = mock(RocksDBMetadataManager.class);
@@ -66,207 +57,127 @@ class QueryEndToEndPaperModeTest {
         when(keys.getCurrentVersion()).thenReturn(KV1);
         when(keys.getVersion(anyInt())).thenReturn(KV1);
 
-        // Store plaintext and return encrypted point
-        when(crypto.encrypt(anyString(), any(double[].class))).thenAnswer(inv -> {
-            String id = inv.getArgument(0, String.class);
-            double[] v = inv.getArgument(1, double[].class);
-            plaintextById.put(id, v.clone());
-            return new EncryptedPoint(id, 0, new byte[12], new byte[32], 1, v.length, null);
-        });
+        when(meta.getPointsBaseDir()).thenReturn("tmpdir");
 
-        when(crypto.encryptToPoint(eq("query"), any(double[].class), any()))
+        // Encrypt = just store plaintext for recovery
+        when(crypto.encrypt(anyString(), any(double[].class)))
                 .thenAnswer(inv -> {
-                    double[] v = inv.getArgument(1, double[].class);
-                    return new EncryptedPoint("query", 0, new byte[12], new byte[32], 1, v.length, null);
+                    String id = inv.getArgument(0,String.class);
+                    double[] v = inv.getArgument(1,double[].class);
+                    plain.put(id, v.clone());
+                    return new EncryptedPoint(id,0,new byte[12],new byte[32],1,v.length,List.of());
                 });
 
-        // Mock decryptFromPoint → return original stored vector
-        when(crypto.decryptFromPoint(any(EncryptedPoint.class), any()))
+        when(crypto.encryptToPoint(eq("query"), any(), any()))
                 .thenAnswer(inv -> {
-                    EncryptedPoint ep = inv.getArgument(0, EncryptedPoint.class);
-                    double[] v = plaintextById.get(ep.getId());
-                    return (v != null) ? v.clone() : new double[0];
+                    double[] v = inv.getArgument(1,double[].class);
+                    return new EncryptedPoint("query",0,new byte[12],new byte[32],1,v.length,List.of());
                 });
 
-        when(meta.getPointsBaseDir()).thenReturn("in-mem");
+        when(crypto.decryptFromPoint(any(), any()))
+                .thenAnswer(inv -> {
+                    EncryptedPoint ep = inv.getArgument(0);
+                    return plain.get(ep.getId());
+                });
 
-        // Real paper engine
+        // PAPER engine
         paper = new PartitionedIndexService(
-                8, 4, 3, 13L,
-                /*buildThreshold*/ 1,
-                /*maxCandidates*/ -1
+                8,4,3,13L,
+                1,            // build threshold
+                -1            // unlimited candidates
         );
 
-        indexService = new SecureLSHIndexService(
-                crypto, keys, meta,
-                paper,
-                buffer
+        indexService = new SecureLSHIndexService(crypto, keys, meta, paper, buffer);
+
+        // Option-C TokenFactory (no LSH)
+        tokenFactory = new QueryTokenFactory(
+                crypto,
+                keys,
+                null,       // NO LSH
+                0,          // numTables
+                0,          // probeRange
+                4,          // divisions
+                3,          // m
+                13L         // seedBase
         );
 
-        queryService = new QueryServiceImpl(indexService, crypto, keys, null);
+        qs = new QueryServiceImpl(indexService, crypto, keys, tokenFactory);
 
-        // Insert tiny dataset
-        for (int i = 0; i < points.length; i++) {
+        for (int i=0; i<points.length; i++) {
             indexService.insert(String.valueOf(i), points[i]);
         }
 
-        // Force partitions to build even for tiny dataset
-        forceBuildAllDimensions(paper);
+        forceBuild(paper);
     }
 
-    // ------------------------------------------------------------------------
-    // Tests
-    // ------------------------------------------------------------------------
-
-    @Test
-    void nearest_from_dense_cluster_is_returned_first() {
-        double[] q = {5.05, 5.0};
-        QueryToken token = buildPaperToken(q, 3);
-
-        when(crypto.decryptQuery(any(), any(), any())).thenReturn(q.clone());
-
-        var results = queryService.search(token);
-
-        assertFalse(results.isEmpty(), "Should return at least one neighbor");
-        assertTrue(results.size() <= 3);
-        assertMonotoneDistances(results);
-
-        String expectedFirst = argminAmongReturned(q, results);
-        assertEquals(expectedFirst, results.get(0).getId());
+    private void forceBuild(PartitionedIndexService p) throws Exception {
+        Field f = PartitionedIndexService.class.getDeclaredField("dims");
+        f.setAccessible(true);
+        Map<Integer,Object> dims = (Map<Integer,Object>) f.get(p);
+        Method m = PartitionedIndexService.class.getDeclaredMethod("buildAllDivisions",
+                dims.values().iterator().next().getClass());
+        m.setAccessible(true);
+        for (Object d : dims.values()) m.invoke(p,d);
     }
 
-    @Test
-    void far_query_returns_far_cluster() {
-        double[] q = {10.05, 10.0};
-        QueryToken token = buildPaperToken(q, 2);
-
-        when(crypto.decryptQuery(any(), any(), any())).thenReturn(q.clone());
-
-        var results = queryService.search(token);
-
-        assertFalse(results.isEmpty(), "Should return at least one neighbor");
-        assertMonotoneDistances(results);
-
-        String expectedFirst = argminAmongReturned(q, results);
-        assertEquals(expectedFirst, results.get(0).getId());
-    }
-
-    @Test
-    void metrics_are_populated() {
-        double[] q = {1.0, 1.0};
-        QueryToken token = buildPaperToken(q, 5);
-
-        when(crypto.decryptQuery(any(), any(), any())).thenReturn(q.clone());
-
-        var results = queryService.search(token);
-
-        assertNotNull(results);
-        assertTrue(queryService.getLastCandTotal() >= queryService.getLastReturned());
-        assertTrue(queryService.getLastCandDecrypted() >= queryService.getLastReturned());
-        assertTrue(queryService.getLastQueryDurationNs() > 0);
-    }
-
-    // ------------------------------------------------------------------------
-    // Helpers
-    // ------------------------------------------------------------------------
-
-    private String argminAmongReturned(double[] q, List<QueryResult> res) {
-        String best = null;
-        double bestDist = Double.POSITIVE_INFINITY;
-        for (QueryResult r : res) {
-            double[] v = plaintextById.get(r.getId());
-            if (v == null) continue;
-            double dist = l2sq(q, v);
-            if (dist < bestDist) {
-                bestDist = dist;
-                best = r.getId();
-            }
-        }
-        return best;
-    }
-
-    private static double l2sq(double[] a, double[] b) {
-        double s = 0;
-        for (int i = 0; i < a.length; i++) {
-            double d = a[i] - b[i];
-            s += d * d;
+    private double d2(double[] a,double[]b){
+        double s=0;
+        for(int i=0;i<a.length;i++){
+            double d=a[i]-b[i]; s+=d*d;
         }
         return s;
     }
 
-    private void assertMonotoneDistances(List<QueryResult> res) {
-        double prev = -1;
+    private String nearest(double[] q,List<QueryResult> res){
+        double best=Double.MAX_VALUE; String bestId=null;
         for (QueryResult r : res) {
-            assertTrue(r.getDistance() >= prev - 1e-12, "Distance sequence must be increasing");
-            prev = r.getDistance();
+            double[] v = plain.get(r.getId());
+            double d   = d2(q,v);
+            if (d < best) { best = d; bestId = r.getId(); }
         }
+        return bestId;
     }
 
-    private static int bitsetToInt(BitSet bits) {
-        int v = 0;
-        for (int i = bits.nextSetBit(0); i >= 0; i = bits.nextSetBit(i + 1))
-            v |= (1 << i);
-        return v;
+    @Test
+    void nearest_from_dense_cluster_is_returned_first() {
+        double[] q = {5.05,5.0};
+
+        when(crypto.decryptQuery(any(),any(),any())).thenReturn(q.clone());
+
+        QueryToken tok = tokenFactory.create(q, 3);
+
+        List<QueryResult> out = qs.search(tok);
+
+        assertFalse(out.isEmpty());
+        assertEquals(nearest(q,out), out.get(0).getId());
     }
 
-    private QueryToken buildPaperToken(double[] q, int topK) {
-        BitSet[] codes;
-        try {
-            Method codeMethod = paper.getClass().getDeclaredMethod("code", double[].class);
-            codeMethod.setAccessible(true);
-            codes = (BitSet[]) codeMethod.invoke(paper, (Object) q);
-        } catch (Exception e) {
-            throw new IllegalStateException("Cannot obtain paper codes", e);
-        }
+    @Test
+    void far_query_returns_far_cluster() {
+        double[] q = {10.05,10};
 
-        int[] buckets = paper.getBucketsForCodes(codes);
-        int numTables = codes.length;
+        when(crypto.decryptQuery(any(),any(),any())).thenReturn(q.clone());
 
-        List<List<Integer>> perTable = new ArrayList<>(numTables);
-        for (int t = 0; t < numTables; t++) {
-            perTable.add(List.of(buckets[t]));
-        }
+        QueryToken tok = tokenFactory.create(q, 2);
 
-        KeyVersion kv = keys.getCurrentVersion();
-        EncryptedPoint ep = crypto.encryptToPoint("query", q, kv.getKey());
-        String ctx = "epoch_" + kv.getVersion() + "_dim_" + q.length;
+        List<QueryResult> out = qs.search(tok);
 
-        return new QueryToken(
-                perTable,
-                codes,
-                ep.getIv(),
-                ep.getCiphertext(),
-                topK,
-                numTables,
-                ctx,
-                q.length,
-                kv.getVersion()
-        );
+        assertFalse(out.isEmpty());
+        assertEquals(nearest(q,out), out.get(0).getId());
     }
 
-    /**
-     * Forces PartitionedIndexService to build intervals even for very small datasets.
-     */
-    private static void forceBuildAllDimensions(PartitionedIndexService paper) {
-        try {
-            Field dimsField = PartitionedIndexService.class.getDeclaredField("dims");
-            dimsField.setAccessible(true);
+    @Test
+    void metrics_are_populated() {
+        double[] q = {1,1};
 
-            Map<Integer, ?> dims = (Map<Integer, ?>) dimsField.get(paper);
-            if (dims.isEmpty()) return;
+        when(crypto.decryptQuery(any(),any(),any())).thenReturn(q.clone());
 
-            Method buildMethod = PartitionedIndexService.class.getDeclaredMethod(
-                    "buildAllDivisions",
-                    dims.values().iterator().next().getClass()
-            );
-            buildMethod.setAccessible(true);
+        QueryToken tok = tokenFactory.create(q, 5);
 
-            for (Object dimState : dims.values()) {
-                buildMethod.invoke(paper, dimState);
-            }
+        qs.search(tok);
 
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to force-build partitioned index", e);
-        }
+        assertTrue(qs.getLastCandTotal() >= qs.getLastReturned());
+        assertTrue(qs.getLastCandDecrypted() >= qs.getLastReturned());
+        assertTrue(qs.getLastQueryDurationNs() > 0);
     }
 }

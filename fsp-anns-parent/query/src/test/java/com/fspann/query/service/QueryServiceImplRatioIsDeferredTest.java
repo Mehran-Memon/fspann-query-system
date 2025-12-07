@@ -9,66 +9,54 @@ import org.junit.jupiter.api.Test;
 
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
-import java.util.List;
+import java.util.*;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
-class QueryServiceImplRatioIsDeferredTest {
+public class QueryServiceImplRatioIsDeferredTest {
 
     @Test
-    void ratioIsNaNButPrecisionIsComputed() throws Exception {
+    void ratioIsNaNButPrecisionIsComputed() {
+
         IndexService index = mock(IndexService.class);
         CryptoService crypto = mock(CryptoService.class);
-        KeyLifeCycleService keySvc = mock(KeyLifeCycleService.class);
+        KeyLifeCycleService keys = mock(KeyLifeCycleService.class);
         GroundtruthManager gt = mock(GroundtruthManager.class);
-        QueryTokenFactory tokenFactory = mock(QueryTokenFactory.class);
-        QueryServiceImpl svc = new QueryServiceImpl(index, crypto, keySvc, tokenFactory);
 
-        EncryptedPointBuffer buf = mock(EncryptedPointBuffer.class);
-        when(buf.getLastBatchInsertTimeMs()).thenReturn(0L);
-        when(buf.getTotalFlushedPoints()).thenReturn(0);
-        when(buf.getFlushThreshold()).thenReturn(0);
-        when(index.getPointBuffer()).thenReturn(buf);
+        QueryTokenFactory tf = new QueryTokenFactory(crypto, keys, null,0,0,2,3,13L);
+        QueryServiceImpl svc = new QueryServiceImpl(index, crypto, keys, tf);
+
+        when(index.getPointBuffer()).thenReturn(mock(EncryptedPointBuffer.class));
 
         byte[] iv = new byte[12];
         byte[] enc = new byte[32];
-        double[] q = new double[]{1.0, 2.0};
-        String ctx = "epoch_1_dim_2";
+        double[] q = {1,2};
 
-        SecretKey k = new SecretKeySpec(new byte[32], "AES");
-        when(keySvc.getVersion(1)).thenReturn(new KeyVersion(1, k));
-        when(keySvc.getCurrentVersion()).thenReturn(new KeyVersion(1, k));
-        when(crypto.decryptQuery(enc, iv, k)).thenReturn(q);
+        SecretKey k = new SecretKeySpec(new byte[32],"AES");
+        when(keys.getVersion(1)).thenReturn(new KeyVersion(1,k));
+        when(keys.getCurrentVersion()).thenReturn(new KeyVersion(1,k));
+        when(crypto.decryptQuery(enc,iv,k)).thenReturn(q);
 
-        when(index.lookup(any())).thenReturn(List.of(
-                new EncryptedPoint("0", 0, iv, enc, 1, 2, List.of()),
-                new EncryptedPoint("1", 0, iv, enc, 1, 2, List.of())
-        ));
-        when(crypto.decryptFromPoint(any(), eq(k))).thenReturn(new double[]{0.0, 0.0});
+        EncryptedPoint a = new EncryptedPoint("0",0,iv,enc,1,2,List.of());
+        EncryptedPoint b = new EncryptedPoint("1",0,iv,enc,1,2,List.of());
+        when(index.lookup(any())).thenReturn(List.of(a,b));
+
+        when(crypto.decryptFromPoint(any(), eq(k))).thenReturn(new double[]{0,0});
 
         when(gt.getGroundtruth(eq(0), anyInt())).thenReturn(new int[]{0});
 
-        QueryToken token = new QueryToken(
-                List.of(List.of(1)),
-                null,
-                iv,
-                enc,
-                1,
-                1,
-                ctx,
-                2,
-                1
-        );
+        QueryToken tok = new QueryToken(List.of(),
+                new BitSet[]{new BitSet()}, iv, enc,1,0,"dim_2_v1",2,1);
 
-        List<QueryEvaluationResult> res = svc.searchWithTopKVariants(token, 0, gt);
-        QueryEvaluationResult k1 = res.stream()
-                .filter(r -> r.getTopKRequested() == 1)
+        List<QueryEvaluationResult> out = svc.searchWithTopKVariants(tok, 0, gt);
+
+        QueryEvaluationResult k1 = out.stream()
+                .filter(r -> r.getTopKRequested()==1)
                 .findFirst()
                 .orElseThrow();
 
         assertTrue(Double.isNaN(k1.getRatio()));
-        assertEquals(1.0, k1.getPrecision(), 1e-9);
+        assertEquals(1.0, k1.getPrecision());
     }
 }
