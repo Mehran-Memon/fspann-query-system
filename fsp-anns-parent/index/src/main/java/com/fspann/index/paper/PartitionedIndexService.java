@@ -167,7 +167,14 @@ public final class PartitionedIndexService{
     // =====================================================================
 
     public List<EncryptedPoint> lookup(com.fspann.common.QueryToken tok) {
+
         Objects.requireNonNull(tok);
+
+        // SAFETY SHORT-CIRCUIT
+        BitSet[] qcodes = tok.getCodes();
+        if (qcodes == null || qcodes.length == 0) {
+            return Collections.emptyList();
+        }
 
         int dim = tok.getDimension();
         if (dim <= 0) return Collections.emptyList();
@@ -175,10 +182,6 @@ public final class PartitionedIndexService{
         if (S == null) return Collections.emptyList();
 
         ensureBuilt(S);
-
-        BitSet[] qcodes = tok.getCodes();
-        if (qcodes.length != divisions)
-            return Collections.emptyList();
 
         final Set<String> seen = new LinkedHashSet<>();
         final List<EncryptedPoint> out = new ArrayList<>();

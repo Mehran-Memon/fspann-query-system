@@ -218,7 +218,19 @@ public final class QueryTokenFactory {
     public boolean hasLSH() {
         return lsh != null;
     }
-
+    public QueryToken derive(QueryToken base, int newTopK) {
+        return new QueryToken(
+                base.getTableBuckets(),
+                base.getCodes(),
+                base.getIv(),
+                base.getEncryptedQuery(),
+                newTopK,
+                base.getNumTables(),
+                base.getEncryptionContext(),
+                base.getDimension(),
+                base.getVersion()
+        );
+    }
     private static long mix64(long z) {
         z = (z ^ (z >>> 33)) * 0xff51afd7ed558ccdL;
         z = (z ^ (z >>> 33)) * 0xc4ceb9fe1a85ec53L;
