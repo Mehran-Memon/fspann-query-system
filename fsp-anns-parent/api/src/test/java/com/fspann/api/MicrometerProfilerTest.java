@@ -35,7 +35,7 @@ class MicrometerProfilerTest {
 
         // Export to CSV
         Path csv = tempDir.resolve("profiler.csv");
-        prof.exportToCSV(csv.toString());
+        prof.recordQueryRow(csv.toString());
         assertTrue(Files.exists(csv), "CSV file should exist");
 
         // Verify CSV content
