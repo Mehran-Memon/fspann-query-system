@@ -1,68 +1,74 @@
 package com.fspann.query.core;
 
 /**
- * Immutable container for per-(query, K) evaluation metrics.
- *
- * It now supports:
- *  - Core ANN metrics: ratio@K, precision@K
- *  - Timing split: server, client, run, decrypt, insert
- *  - Candidate pipeline: candTotal, candKept, candDecrypted, candReturned
- *  - Storage / re-encryption metrics
- *  - Provenance: ratioDenomSource, tokenK, tokenKBase, qIndex, candMetricsMode
+ * Unified evaluation record for ANN search.
+ * Supports:
+ *  - SANNP ratio@K (GT-denominator)
+ *  - PP-ANN precision@K (hit-rate)
+ *  - Timing split: server/client/run/decrypt/insert
+ *  - Candidate pipeline: total / kept / decrypted / returned
+ *  - Re-encryption cost
+ *  - Token metadata
  */
 public final class QueryEvaluationResult {
 
-    // Core K metrics
+    // ---------------- Core K metrics ----------------
     private final int topKRequested;
     private final int retrieved;
     private final double ratio;
     private final double precision;
 
-    // Time metrics (ms)
-    private final long timeMs;        // server-side time
-    private final long clientTimeMs;  // client wall-clock
-    private final long runTimeMs;     // end-to-end run time (optional)
-    private final long decryptTimeMs; // pure decrypt/scoring time (optional)
-    private final long insertTimeMs;  // last insert/flush time (optional)
+    // ---------------- Timing (ms) ----------------
+    private final long timeMs;          // server-only
+    private final long clientTimeMs;    // outside-server
+    private final long runTimeMs;       // (optional) end-to-end
+    private final long decryptTimeMs;   // decrypt+score time
+    private final long insertTimeMs;    // flush time
 
-    // Candidate pipeline
-    private final int candTotal;      // total scanned candidates
-    private final int candKept;       // kept after version/filter
-    private final int candDecrypted;  // actually decrypted/scored
-    private final int candReturned;   // returned to caller
+    // ---------------- Candidate pipeline ----------------
+    private final int candTotal;        // scanned
+    private final int candKept;         // version-kept
+    private final int candDecrypted;    // AES-decrypted
+    private final int candReturned;     // top-K returned
 
-    // Token/vector metadata
+    // ---------------- Token/vector ----------------
     private final int tokenSizeBytes;
     private final int vectorDim;
-    private final int tokenK;
-    private final int tokenKBase;
+    private final int tokenK;           // logical K
+    private final int tokenKBase;       // original/base K
     private final int qIndexZeroBased;
-    private final String candMetricsMode; // "full" / "partial" / etc.
+    private final String candMetricsMode;
 
-    // Buffer / flush stats
+    // ---------------- Flush stats ----------------
     private final int totalFlushedPoints;
     private final int flushThreshold;
 
-    // Re-encryption / touch metrics
+    // ---------------- Re-encryption ----------------
     private final int touchedCount;
     private final int reencryptedCount;
     private final long reencTimeMs;
     private final long reencBytesDelta;
     private final long reencBytesAfter;
-    private final String ratioDenomSource; // "gt", "base", "gt(auto)", "base(auto)", etc.
+    private final String ratioDenomSource;
 
-    // ---------------------------------------------------------------------
-    // MAIN MODERN CTOR  (used by ForwardSecureANNSystem)
-    // ---------------------------------------------------------------------
+    // =============================================================
+    //          MAIN UNIFIED CONSTRUCTOR (FULL PIPELINE)
+    // =============================================================
 
     public QueryEvaluationResult(
             int topKRequested,
             int retrieved,
             double ratio,
             double precision,
-            long timeMs,              // server time
+            long timeMs,
+            long clientTimeMs,
+            long runTimeMs,
+            long decryptTimeMs,
             long insertTimeMs,
+            int candTotal,
+            int candKept,
             int candDecrypted,
+            int candReturned,
             int tokenSizeBytes,
             int vectorDim,
             int totalFlushedPoints,
@@ -73,46 +79,48 @@ public final class QueryEvaluationResult {
             long reencBytesDelta,
             long reencBytesAfter,
             String ratioDenomSource,
-            long clientTimeMs,
             int tokenK,
             int tokenKBase,
             int qIndexZeroBased,
             String candMetricsMode
     ) {
-        this.topKRequested   = topKRequested;
-        this.retrieved       = retrieved;
-        this.ratio           = ratio;
-        this.precision       = precision;
-        this.timeMs          = timeMs;
-        this.insertTimeMs    = insertTimeMs;
-        this.candDecrypted   = candDecrypted;
-        this.tokenSizeBytes  = tokenSizeBytes;
-        this.vectorDim       = vectorDim;
-        this.totalFlushedPoints = totalFlushedPoints;
-        this.flushThreshold  = flushThreshold;
-        this.touchedCount    = touchedCount;
-        this.reencryptedCount = reencryptedCount;
-        this.reencTimeMs     = reencTimeMs;
-        this.reencBytesDelta = reencBytesDelta;
-        this.reencBytesAfter = reencBytesAfter;
-        this.ratioDenomSource = ratioDenomSource;
-        this.clientTimeMs    = clientTimeMs;
-        this.tokenK          = tokenK;
-        this.tokenKBase      = tokenKBase;
+        this.topKRequested = topKRequested;
+        this.retrieved = retrieved;
+        this.ratio = ratio;
+        this.precision = precision;
+
+        this.timeMs = timeMs;
+        this.clientTimeMs = clientTimeMs;
+        this.runTimeMs = runTimeMs;
+        this.decryptTimeMs = decryptTimeMs;
+        this.insertTimeMs = insertTimeMs;
+
+        this.candTotal = candTotal;
+        this.candKept = candKept;
+        this.candDecrypted = candDecrypted;
+        this.candReturned = candReturned;
+
+        this.tokenSizeBytes = tokenSizeBytes;
+        this.vectorDim = vectorDim;
+        this.tokenK = tokenK;
+        this.tokenKBase = tokenKBase;
         this.qIndexZeroBased = qIndexZeroBased;
         this.candMetricsMode = candMetricsMode;
 
-        // Fields not supplied by this ctor get sensible defaults
-        this.candTotal       = -1;
-        this.candKept        = -1;
-        this.candReturned    = retrieved; // by default, returned == retrieved
-        this.runTimeMs       = -1L;
-        this.decryptTimeMs   = -1L;
+        this.totalFlushedPoints = totalFlushedPoints;
+        this.flushThreshold = flushThreshold;
+
+        this.touchedCount = touchedCount;
+        this.reencryptedCount = reencryptedCount;
+        this.reencTimeMs = reencTimeMs;
+        this.reencBytesDelta = reencBytesDelta;
+        this.reencBytesAfter = reencBytesAfter;
+        this.ratioDenomSource = ratioDenomSource;
     }
 
-    // ---------------------------------------------------------------------
-    // LEGACY CTOR  (16-arg version – used by your older runners)
-    // ---------------------------------------------------------------------
+    // =============================================================
+    //        LEGACY COMPATIBILITY CONSTRUCTOR (NO BREAKAGE)
+    // =============================================================
 
     public QueryEvaluationResult(
             int topKRequested,
@@ -132,82 +140,70 @@ public final class QueryEvaluationResult {
             long reencBytesDelta,
             long reencBytesAfter
     ) {
-        // Delegate to the main ctor with reasonable defaults
-        this.topKRequested   = topKRequested;
-        this.retrieved       = retrieved;
-        this.ratio           = ratio;
-        this.precision       = precision;
-        this.timeMs          = timeMs;
-        this.insertTimeMs    = insertTimeMs;
-        this.candDecrypted   = candDecrypted;
-        this.tokenSizeBytes  = tokenSizeBytes;
-        this.vectorDim       = vectorDim;
-        this.totalFlushedPoints = totalFlushedPoints;
-        this.flushThreshold  = flushThreshold;
-        this.touchedCount    = touchedCount;
-        this.reencryptedCount = reencryptedCount;
-        this.reencTimeMs     = reencTimeMs;
-        this.reencBytesDelta = reencBytesDelta;
-        this.reencBytesAfter = reencBytesAfter;
-
-        // Legacy ctor didn’t know about these:
-        this.ratioDenomSource = null;
-        this.clientTimeMs    = -1L;
-        this.tokenK          = topKRequested;
-        this.tokenKBase      = topKRequested;
-        this.qIndexZeroBased = -1;
-        this.candMetricsMode = "legacy";
-
-        this.candTotal       = -1;
-        this.candKept        = -1;
-        this.candReturned    = retrieved;
-        this.runTimeMs       = -1L;
-        this.decryptTimeMs   = -1L;
+        this(
+                topKRequested,
+                retrieved,
+                ratio,
+                precision,
+                timeMs,
+                -1,        // client
+                -1,        // run
+                -1,        // decrypt
+                insertTimeMs,
+                -1, -1,    // candTotal/candKept
+                candDecrypted,
+                retrieved, // returned
+                tokenSizeBytes,
+                vectorDim,
+                totalFlushedPoints,
+                flushThreshold,
+                touchedCount,
+                reencryptedCount,
+                reencTimeMs,
+                reencBytesDelta,
+                reencBytesAfter,
+                null,        // denom source
+                topKRequested,
+                topKRequested,
+                -1,
+                "legacy"
+        );
     }
 
-    // ---------------------------------------------------------------------
-    // OPTIONAL: future extended ctor (if you ever want to pass candTotal etc.)
-    // ---------------------------------------------------------------------
-    // You can add another constructor that includes candTotal, candKept,
-    // candReturned, runTimeMs, decryptTimeMs if needed later.
+    // =============================================================
+    //                       GETTERS
+    // =============================================================
+    public int getTopKRequested() { return topKRequested; }
+    public int getRetrieved() { return retrieved; }
+    public double getRatio() { return ratio; }
+    public double getPrecision() { return precision; }
 
-    // ---------------------------------------------------------------------
-    // Getters
-    // ---------------------------------------------------------------------
+    public long getTimeMs() { return timeMs; }
+    public long getClientTimeMs() { return clientTimeMs; }
+    public long getRunTimeMs() { return runTimeMs; }
+    public long getDecryptTimeMs() { return decryptTimeMs; }
+    public long getInsertTimeMs() { return insertTimeMs; }
 
-    public int getTopKRequested()      { return topKRequested; }
-    public int getRetrieved()          { return retrieved; }
-    public double getRatio()           { return ratio; }
-    public double getPrecision()       { return precision; }
+    public int getCandTotal() { return candTotal; }
+    public int getCandKept() { return candKept; }
+    public int getCandDecrypted() { return candDecrypted; }
+    public int getCandReturned() { return candReturned; }
 
-    public long getTimeMs()            { return timeMs; }
-    public long getClientTimeMs()      { return clientTimeMs; }
-    public long getRunTimeMs()         { return runTimeMs; }
-    public long getDecryptTimeMs()     { return decryptTimeMs; }
-    public long getInsertTimeMs()      { return insertTimeMs; }
-
-    public int getCandTotal()          { return candTotal; }
-    public int getCandKept()           { return candKept; }
-    public int getCandDecrypted()      { return candDecrypted; }
-    public int getCandReturned()       { return candReturned; }
-
-    public int getTokenSizeBytes()     { return tokenSizeBytes; }
-    public int getVectorDim()          { return vectorDim; }
+    public int getTokenSizeBytes() { return tokenSizeBytes; }
+    public int getVectorDim() { return vectorDim; }
+    public int getTokenK() { return tokenK; }
+    public int getTokenKBase() { return tokenKBase; }
+    public int getQIndexZeroBased() { return qIndexZeroBased; }
+    public String getCandMetricsMode() { return candMetricsMode; }
 
     public int getTotalFlushedPoints() { return totalFlushedPoints; }
-    public int getFlushThreshold()     { return flushThreshold; }
+    public int getFlushThreshold() { return flushThreshold; }
 
-    public int getTouchedCount()       { return touchedCount; }
-    public int getReencryptedCount()   { return reencryptedCount; }
-    public long getReencTimeMs()       { return reencTimeMs; }
-    public long getReencBytesDelta()   { return reencBytesDelta; }
-    public long getReencBytesAfter()   { return reencBytesAfter; }
+    public int getTouchedCount() { return touchedCount; }
+    public int getReencryptedCount() { return reencryptedCount; }
+    public long getReencTimeMs() { return reencTimeMs; }
+    public long getReencBytesDelta() { return reencBytesDelta; }
+    public long getReencBytesAfter() { return reencBytesAfter; }
 
-    public String getRatioDenomSource(){ return ratioDenomSource; }
-    public long getClientTimeMillis()  { return clientTimeMs; } // alias if needed
-
-    public int getTokenK()             { return tokenK; }
-    public int getTokenKBase()         { return tokenKBase; }
-    public int getQIndexZeroBased()    { return qIndexZeroBased; }
-    public String getCandMetricsMode() { return candMetricsMode; }
+    public String getRatioDenomSource() { return ratioDenomSource; }
 }

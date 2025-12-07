@@ -5,215 +5,287 @@ import java.io.IOException;
 import java.util.*;
 
 /**
- * Simple profiler for measuring durations (in nanoseconds) and
- * logging per-query metrics such as server/client time and ratio.
+ * Profiler
  *
- * Thread-safety:
- *  - All mutating methods are synchronized.
- *  - Getter methods return defensive copies.
+ * Responsibilities:
+ *  - Store per-label timings (ns)
+ *  - Store per-query metrics needed by Aggregates
+ *  - Backwards compatible with previous Profiler API
+ *
+ * NOTE:
+ *  Aggregation is NOT done here. This class only stores
+ *  atomic observations. ForwardSecureANNSystem performs
+ *  aggregation and sends Aggregates → EvaluationSummaryPrinter.
  */
-public class Profiler {
+public final class Profiler {
 
-    // ---- raw timings per label ----
+    /* -----------------------------------------------------
+     * Timing buckets: generic label → list<durationNs>
+     * ----------------------------------------------------- */
     private final Map<String, Long> startTimes = new HashMap<>();
     private final Map<String, List<Long>> timings = new LinkedHashMap<>();
 
-    // ---- per-query metrics for ART / ratio ----
-    private final List<QueryMetric> queryMetrics = new ArrayList<>();
-    private final List<Double> clientQueryTimes = new ArrayList<>();
-    private final List<Double> serverQueryTimes = new ArrayList<>();
-    private final List<Double> queryRatios       = new ArrayList<>();
+    /* -----------------------------------------------------
+     * Per-query unified metrics (one row per query)
+     * ----------------------------------------------------- */
+    private final List<QueryRow> queryRows = new ArrayList<>();
 
-    // Optional: generic rows for Top-K / debug tables
+    /* Optional: arbitrary multi-column tables (e.g., debug) */
     private final List<String[]> topKRecords = new ArrayList<>();
 
-    // ========================================================================
-    // Timing API
-    // ========================================================================
+    /* -----------------------------------------------------
+     * TIMING API
+     * ----------------------------------------------------- */
 
-    /** Start a timer for the given label. */
     public synchronized void start(String label) {
         startTimes.put(label, System.nanoTime());
     }
 
-    /**
-     * Stop the timer for the given label and record the duration (ns).
-     * If start() was never called, this is a no-op.
-     */
     public synchronized void stop(String label) {
-        Long start = startTimes.remove(label);
-        if (start == null) {
-            return; // no matching start; ignore
-        }
-        long end = System.nanoTime();
-        long duration = Math.max(0L, end - start);
-        timings
-                .computeIfAbsent(label, k -> new ArrayList<>())
-                .add(duration);
+        Long st = startTimes.remove(label);
+        if (st == null) return;
+        long dt = Math.max(0, System.nanoTime() - st);
+        timings.computeIfAbsent(label, x -> new ArrayList<>()).add(dt);
     }
 
-    /**
-     * Manually record a timing (in nanoseconds) against a label.
-     * Useful if you already measured a duration elsewhere.
-     */
     public synchronized void recordTiming(String label, long durationNs) {
         if (durationNs < 0) durationNs = 0;
-        timings
-                .computeIfAbsent(label, k -> new ArrayList<>())
-                .add(durationNs);
+        timings.computeIfAbsent(label, x -> new ArrayList<>()).add(durationNs);
     }
 
-    /** Get a copy of the full timings map (label → list of durations in ns). */
     public synchronized Map<String, List<Long>> getTimings() {
-        Map<String, List<Long>> copy = new LinkedHashMap<>();
-        for (Map.Entry<String, List<Long>> e : timings.entrySet()) {
-            copy.put(e.getKey(), new ArrayList<>(e.getValue()));
+        Map<String, List<Long>> cp = new LinkedHashMap<>();
+        for (var e : timings.entrySet()) {
+            cp.put(e.getKey(), new ArrayList<>(e.getValue()));
         }
-        return copy;
+        return cp;
     }
 
-    /** Get all recorded durations (ns) for a specific label. */
     public synchronized List<Long> getTimings(String label) {
-        List<Long> list = timings.get(label);
-        return (list == null) ? Collections.emptyList() : new ArrayList<>(list);
+        List<Long> v = timings.get(label);
+        return (v == null) ? Collections.emptyList() : new ArrayList<>(v);
     }
 
-    /** Clear all timing, query, and Top-K data. */
+    /* -----------------------------------------------------
+     * RESET
+     * ----------------------------------------------------- */
+
     public synchronized void reset() {
         startTimes.clear();
         timings.clear();
-        queryMetrics.clear();
-        clientQueryTimes.clear();
-        serverQueryTimes.clear();
-        queryRatios.clear();
+        queryRows.clear();
         topKRecords.clear();
     }
 
-    // ========================================================================
-    // Query-level metrics (for ART / ratio summaries)
-    // ========================================================================
+    /* -----------------------------------------------------
+     * PER-QUERY METRIC API  (Option-C)
+     * ----------------------------------------------------- */
 
     /**
-     * Record a single query metric.
-     *
-     * @param label     query identifier (e.g., "Q0")
-     * @param serverMs  server-side time in milliseconds
-     * @param clientMs  client-side time in milliseconds
-     * @param ratio     accuracy ratio (may be NaN)
+     * Store all unified query metrics in one structured row.
+     * ForwardSecureANNSystem constructs QueryEvaluationResult
+     * and then calls this method to persist it.
      */
-    public synchronized void recordQueryMetric(String label,
-                                               double serverMs,
-                                               double clientMs,
-                                               double ratio) {
-        QueryMetric qm = new QueryMetric(label, serverMs, clientMs, ratio);
-        queryMetrics.add(qm);
-        serverQueryTimes.add(serverMs);
-        clientQueryTimes.add(clientMs);
-        queryRatios.add(ratio);
+    public synchronized void recordQueryRow(
+            String label,
+            double serverMs,
+            double clientMs,
+            double runMs,
+            double decryptMs,
+            double insertMs,
+            double ratio,
+            double precision,
+            int candTotal,
+            int candKept,
+            int candDecrypted,
+            int candReturned,
+            int tokenBytes,
+            int vectorDim,
+            int tokenK,
+            int tokenKBase,
+            int qIndex,
+            int totalFlushed,
+            int flushThreshold,
+            int touchedCount,
+            int reencCount,
+            long reencTimeMs,
+            long reencBytesDelta,
+            long reencBytesAfter,
+            String ratioDenomSource,
+            String mode
+    ) {
+        queryRows.add(new QueryRow(
+                label,
+                serverMs,
+                clientMs,
+                runMs,
+                decryptMs,
+                insertMs,
+                ratio,
+                precision,
+                candTotal,
+                candKept,
+                candDecrypted,
+                candReturned,
+                tokenBytes,
+                vectorDim,
+                tokenK,
+                tokenKBase,
+                qIndex,
+                totalFlushed,
+                flushThreshold,
+                touchedCount,
+                reencCount,
+                reencTimeMs,
+                reencBytesDelta,
+                reencBytesAfter,
+                ratioDenomSource,
+                mode
+        ));
     }
 
-    /** Copy of all recorded query metrics. */
-    public synchronized List<QueryMetric> getQueryMetrics() {
-        return new ArrayList<>(queryMetrics);
+
+    /** Defensive copy of stored rows. */
+    public synchronized List<QueryRow> getQueryRows() {
+        return new ArrayList<>(queryRows);
     }
 
-    /** All client-side times (ms) across queries. */
-    public synchronized List<Double> getAllClientQueryTimes() {
-        return new ArrayList<>(clientQueryTimes);
-    }
+    /* -----------------------------------------------------
+     * OPTIONAL: Top-K debug rows
+     * ----------------------------------------------------- */
 
-    /** All server-side times (ms) across queries. */
-    public synchronized List<Double> getAllServerQueryTimes() {
-        return new ArrayList<>(serverQueryTimes);
-    }
-
-    /** All recorded ratios across queries. */
-    public synchronized List<Double> getAllQueryRatios() {
-        return new ArrayList<>(queryRatios);
-    }
-
-    // ========================================================================
-    // Top-K / arbitrary records (optional, for CSV tables)
-    // ========================================================================
-
-    /** Append an arbitrary CSV row (e.g., from Top-K evaluation). */
     public synchronized void addTopKRecord(String... cols) {
-        if (cols != null) {
-            topKRecords.add(Arrays.copyOf(cols, cols.length));
-        }
+        if (cols != null) topKRecords.add(Arrays.copyOf(cols, cols.length));
     }
 
-    /** Get a defensive copy of all stored Top-K rows. */
     public synchronized List<String[]> getTopKRecords() {
         List<String[]> out = new ArrayList<>(topKRecords.size());
-        for (String[] row : topKRecords) {
-            out.add(Arrays.copyOf(row, row.length));
-        }
+        for (String[] r : topKRecords) out.add(Arrays.copyOf(r, r.length));
         return out;
     }
 
-    // ========================================================================
-    // CSV export helpers
-    // ========================================================================
+    /* -----------------------------------------------------
+     * OPTIONAL CSV export (legacy compatibility)
+     * Still only exports basic trio (server/client/ratio),
+     * full CSV produced by EvaluationSummaryPrinter instead.
+     * ----------------------------------------------------- */
 
-    /**
-     * Export per-query metrics to a CSV file:
-     *   label,serverMs,clientMs,ratio
-     */
-    public synchronized void exportQueryMetricsCsv(String filePath) throws IOException {
-        try (FileWriter fw = new FileWriter(filePath)) {
+    public synchronized void exportQueryMetricsCsv(String fp) throws IOException {
+        try (FileWriter fw = new FileWriter(fp)) {
             fw.write("label,serverMs,clientMs,ratio\n");
-            for (QueryMetric qm : queryMetrics) {
-                fw.write(String.format(Locale.ROOT, "%s,%.6f,%.6f,%.6f%n",
-                        qm.label,
-                        qm.serverMs,
-                        qm.clientMs,
-                        qm.ratio));
+            for (QueryRow qr : queryRows) {
+                fw.write(String.format(Locale.ROOT,
+                        "%s,%.6f,%.6f,%.6f%n",
+                        qr.label,
+                        qr.serverMs,
+                        qr.clientMs,
+                        qr.ratio));
             }
         }
     }
 
-    /**
-     * Convenience alias if some older code expects this spelling.
-     */
-    public void exportToCsv(String filePath) throws IOException {
-        exportQueryMetricsCsv(filePath);
-    }
+    public void exportToCsv(String fp) throws IOException { exportQueryMetricsCsv(fp); }
+    public void exportToCSV(String fp) throws IOException { exportQueryMetricsCsv(fp); }
 
-    public void exportToCSV(String filePath) throws IOException {
-        exportQueryMetricsCsv(filePath);
-    }
+    /* -----------------------------------------------------
+     * QUERY ROW DTO – unify with QueryEvaluationResult
+     * ----------------------------------------------------- */
+    public static final class QueryRow {
+        public final String label;
 
-    // ========================================================================
-    // Inner DTO for per-query metrics
-    // ========================================================================
+        public final double serverMs;
+        public final double clientMs;
+        public final double runMs;
+        public final double decryptMs;
+        public final double insertMs;
 
-    public static final class QueryMetric {
-        private final String label;
-        private final double serverMs;
-        private final double clientMs;
-        private final double ratio;
+        public final double ratio;
+        public final double precision;
 
-        public QueryMetric(String label, double serverMs, double clientMs, double ratio) {
-            this.label = (label == null) ? "" : label;
+        public final int candTotal;
+        public final int candKept;
+        public final int candDecrypted;
+        public final int candReturned;
+
+        public final int tokenBytes;
+        public final int vectorDim;
+        public final int tokenK;
+        public final int tokenKBase;
+        public final int qIndex;
+
+        public final int totalFlushed;
+        public final int flushThreshold;
+
+        public final int touchedCount;
+        public final int reencCount;
+        public final long reencTimeMs;
+        public final long reencBytesDelta;
+        public final long reencBytesAfter;
+
+        public final String ratioDenomSource;
+        public final String mode;
+
+        private QueryRow(
+                String label,
+                double serverMs,
+                double clientMs,
+                double runMs,
+                double decryptMs,
+                double insertMs,
+                double ratio,
+                double precision,
+                int candTotal,
+                int candKept,
+                int candDecrypted,
+                int candReturned,
+                int tokenBytes,
+                int vectorDim,
+                int tokenK,
+                int tokenKBase,
+                int qIndex,
+                int totalFlushed,
+                int flushThreshold,
+                int touched,
+                int reencCount,
+                long reencMs,
+                long reencDelta,
+                long reencAfter,
+                String denom,
+                String mode
+        ) {
+            this.label = label;
+
             this.serverMs = serverMs;
             this.clientMs = clientMs;
-            this.ratio    = ratio;
-        }
+            this.runMs = runMs;
+            this.decryptMs = decryptMs;
+            this.insertMs = insertMs;
 
-        public String getLabel()     { return label; }
-        public double getServerMs()  { return serverMs; }
-        public double getClientMs()  { return clientMs; }
-        public double getRatio()     { return ratio; }
+            this.ratio = ratio;
+            this.precision = precision;
 
-        @Override
-        public String toString() {
-            return "QueryMetric{" +
-                    "label='" + label + '\'' +
-                    ", serverMs=" + serverMs +
-                    ", clientMs=" + clientMs +
-                    ", ratio=" + ratio +
-                    '}';
+            this.candTotal = candTotal;
+            this.candKept = candKept;
+            this.candDecrypted = candDecrypted;
+            this.candReturned = candReturned;
+
+            this.tokenBytes = tokenBytes;
+            this.vectorDim = vectorDim;
+            this.tokenK = tokenK;
+            this.tokenKBase = tokenKBase;
+            this.qIndex = qIndex;
+
+            this.totalFlushed = totalFlushed;
+            this.flushThreshold = flushThreshold;
+
+            this.touchedCount = touched;
+            this.reencCount = reencCount;
+            this.reencTimeMs = reencMs;
+            this.reencBytesDelta = reencDelta;
+            this.reencBytesAfter = reencAfter;
+
+            this.ratioDenomSource = denom;
+            this.mode = mode;
         }
     }
 }
