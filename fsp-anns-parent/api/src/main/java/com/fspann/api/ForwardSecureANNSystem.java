@@ -1901,6 +1901,16 @@ public class ForwardSecureANNSystem {
         return buf != null ? buf.getLastBatchInsertTimeMs() : 0L;
     }
 
+    /** Test-only: expose evaluation engine */
+    public QueryExecutionEngine getEngine() {
+        return this.engine;
+    }
+
+    /** Test-only: read all encrypted points from metadata */
+    public List<EncryptedPoint> getAllEncryptedPointsForTest() {
+        return metadataManager.getAllEncryptedPoints();
+    }
+
     public int totalFlushed() {
         var buf = indexService.getPointBuffer();
         return buf != null ? buf.getTotalFlushedPoints() : 0;
