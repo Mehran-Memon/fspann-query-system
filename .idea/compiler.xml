@@ -12,6 +12,7 @@
         <module name="index" />
         <module name="keymanagement" />
         <module name="api" />
+        <module name="it" />
         <module name="config" />
         <module name="crypto" />
       </profile>
