@@ -12,7 +12,7 @@
     </parent>
 
     <artifactId>loader</artifactId>
-    <name>FSP‑ANN Data Loader</name>
+    <name>FSPANN Data Loader</name>
 
     <dependencies>
         <!-- Common DTOs & types -->

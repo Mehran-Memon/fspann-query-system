@@ -10,7 +10,7 @@
     </parent>
 
     <artifactId>common</artifactId>
-    <name>FSP-ANN Common Utilities</name>
+    <name>FSPANN Common Utilities</name>
 
     <properties>
         <maven.compiler.source>21</maven.compiler.source>

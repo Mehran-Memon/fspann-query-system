@@ -21,6 +21,7 @@
     <module>index</module>
     <module>query</module>
     <module>api</module>
+      <module>it</module>
   </modules>
 
   <repositories>

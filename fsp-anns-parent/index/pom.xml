@@ -12,7 +12,7 @@
     </parent>
 
     <artifactId>index</artifactId>
-    <name>FSP‑ANN Index Service</name>
+    <name>FSPANN Index Service</name>
 
     <dependencies>
 

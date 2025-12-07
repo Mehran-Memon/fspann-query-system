@@ -11,8 +11,8 @@
         <version>0.0.1-SNAPSHOT</version>
     </parent>
 
-    <artifactId>api</artifactId>
-    <name>FSPANN API Service</name>
+    <artifactId>it</artifactId>
+    <name>FSPANN Integration Testing</name>
 
     <dependencies>
         <!-- All functional layers -->
@@ -31,10 +31,6 @@
         <dependency>
             <groupId>com.fspann</groupId>
             <artifactId>config</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.fspann</groupId>
-            <artifactId>loader</artifactId>
         </dependency>
         <!-- SLF4J & Logback for logging -->
         <dependency>
@@ -88,6 +84,11 @@
             <groupId>org.mockito</groupId>
             <artifactId>mockito-core</artifactId>
             <version>5.14.2</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.fspann</groupId>
+            <artifactId>api</artifactId>
             <scope>test</scope>
         </dependency>
 
@@ -155,7 +156,7 @@
                         <rocksdb.stats>true</rocksdb.stats>
                     </systemPropertyVariables>
                     <skipAfterFailureCount>1</skipAfterFailureCount>
-                        <argLine>-XX:+EnableDynamicAgentLoading</argLine>
+                    <argLine>-XX:+EnableDynamicAgentLoading</argLine>
                 </configuration>
 
             </plugin>

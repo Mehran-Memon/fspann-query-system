@@ -12,7 +12,7 @@
     </parent>
 
     <artifactId>query</artifactId>
-    <name>FSP‑ANN Query Service</name>
+    <name>FSPANN Query Service</name>
 
     <dependencies>
         <!-- Index layer -->

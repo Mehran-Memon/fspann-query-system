@@ -12,7 +12,7 @@
     </parent>
 
     <artifactId>keymanagement</artifactId>
-    <name>FSP‑ANN Key Management</name>
+    <name>FSPANN Key Management</name>
 
     <dependencies>
         <!-- Crypto layer (for key encryption/decryption) -->
