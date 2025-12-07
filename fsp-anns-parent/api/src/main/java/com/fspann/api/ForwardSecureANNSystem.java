@@ -19,7 +19,6 @@ import com.fspann.loader.GroundtruthManager;
 import com.fspann.loader.StreamingBatchLoader;
 import com.fspann.common.RocksDBMetadataManager;
 import com.fspann.query.core.DecoyQueryGenerator;
-import com.fspann.query.core.QueryEvaluationResult;
 import com.fspann.common.QueryToken;
 import com.fspann.query.core.QueryTokenFactory;
 import com.fspann.common.QueryResult;
@@ -31,7 +30,6 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.lang.reflect.Field;
 import java.util.concurrent.ConcurrentHashMap;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -43,8 +41,7 @@ import java.security.MessageDigest;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.stream.Collectors;
-import java.util.stream.IntStream;
-import java.util.Collections;
+
 
 public class ForwardSecureANNSystem {
     private static final Logger logger = LoggerFactory.getLogger(ForwardSecureANNSystem.class);
@@ -65,6 +62,8 @@ public class ForwardSecureANNSystem {
     private BaseVectorReader baseReader = null;
     private final ReencryptionTracker reencTracker;
     private final SelectiveReencCoordinator reencCoordinator;
+    private QueryExecutionEngine engine;
+    private final MicrometerProfiler microProfiler;
 
     // Config-driven toggles
     private final boolean computePrecision;
@@ -90,23 +89,9 @@ public class ForwardSecureANNSystem {
     );
 
     private final ShardedMetadataManager shardedMetadata;
-
-    // Decoy query support
     private final DecoyQueryGenerator decoyGenerator;
     private final boolean decoyEnabled;
-
     private final RatioSource ratioSource;
-
-    static final class TrueNN {
-        final int id;
-        final double d;
-
-        TrueNN(int id, double d) {
-            this.id = id;
-            this.d = d;
-        }
-    }
-
     private final int BATCH_SIZE;
     private long totalIndexingTimeNs = 0L;
     private long totalQueryTimeNs = 0L;
@@ -163,79 +148,75 @@ public class ForwardSecureANNSystem {
             CryptoService cryptoService,
             int batchSize
     ) throws IOException {
+
+        // ---- basic invariants ----
         Objects.requireNonNull(configPath, "Config path cannot be null");
         Objects.requireNonNull(keysFilePath, "Keys file path cannot be null");
         Objects.requireNonNull(dimensions, "Dimensions cannot be null");
         Objects.requireNonNull(metadataPath, "Metadata path cannot be null");
-        if (batchSize <= 0) throw new IllegalArgumentException("Batch size must be positive");
         if (dimensions.isEmpty()) throw new IllegalArgumentException("Dimensions list cannot be empty");
+        if (batchSize <= 0) throw new IllegalArgumentException("Batch size must be positive");
 
         this.verbose = verbose;
         this.BATCH_SIZE = batchSize;
         this.executor = Executors.newFixedThreadPool(Math.max(1, Runtime.getRuntime().availableProcessors() / 2));
         this.configPath = normalizePath(configPath);
 
-        // Load config
+        // ---- load config ----
         SystemConfig cfg;
         try {
-            com.fspann.api.ApiSystemConfig apiCfg = new com.fspann.api.ApiSystemConfig(this.configPath);
-            cfg = apiCfg.getConfig();
+            cfg = new com.fspann.api.ApiSystemConfig(this.configPath).getConfig();
         } catch (IOException e) {
             logger.error("Failed to initialize configuration: {}", configPath, e);
             throw e;
         }
         this.config = cfg;
 
+        // ==== feature configuration ====
+
+        // K-adaptive (Option-C friendly)
         this.kAdaptive = (config.getKAdaptive() != null)
                 ? config.getKAdaptive()
                 : new SystemConfig.KAdaptiveConfig();
 
-        this.decoyEnabled = Boolean.parseBoolean(
-                System.getProperty("decoy.enabled", "false")
-        );
-
+        // Decoy queries (optional)
+        this.decoyEnabled = Boolean.parseBoolean(System.getProperty("decoy.enabled", "false"));
         if (decoyEnabled) {
-            double decoyRatio = Double.parseDouble(
-                    System.getProperty("decoy.ratio", "0.2")
-            );
+            double ratio = Double.parseDouble(System.getProperty("decoy.ratio", "0.2"));
             String distStr = System.getProperty("decoy.distribution", "GAUSSIAN");
             DecoyQueryGenerator.DecoyDistribution dist =
                     DecoyQueryGenerator.DecoyDistribution.valueOf(distStr.toUpperCase());
 
-            this.decoyGenerator = new DecoyQueryGenerator(
-                    dimensions.get(0), // primary dimension
-                    decoyRatio,
-                    dist
-            );
-            logger.info("Decoy queries enabled: ratio={}, distribution={}",
-                    decoyRatio, dist);
+            this.decoyGenerator = new DecoyQueryGenerator(dimensions.get(0), ratio, dist);
+            logger.info("Decoy queries enabled: ratio={}, distribution={}", ratio, dist);
         } else {
             this.decoyGenerator = null;
         }
 
-        // ---- Materialize commonly used settings from config ----
-        boolean defaultComputePrecision =
-                (config.getEval() != null) ? config.getEval().computePrecision : true;
-        this.computePrecision = propOr(defaultComputePrecision, "eval.computePrecision", "computePrecision");
+        // Precision controls
+        boolean defaultPrecision = (config.getEval() != null) && config.getEval().computePrecision;
+        this.computePrecision = propOr(defaultPrecision, "eval.computePrecision", "computePrecision");
 
         this.writeGlobalPrecisionCsv = propOr(
                 config.getEval().writeGlobalPrecisionCsv,
-                "eval.writeGlobalPrecisionCsv", "eval.writeGlobalPrecision", "writeGlobalPrecisionCsv");
+                "eval.writeGlobalPrecisionCsv", "eval.writeGlobalPrecision", "writeGlobalPrecisionCsv"
+        );
 
         this.K_VARIANTS = (config.getEval().kVariants != null && config.getEval().kVariants.length > 0)
                 ? config.getEval().kVariants.clone()
                 : new int[]{1, 5, 10, 20, 40, 60, 80, 100};
 
+        // selective re-encryption global toggle
         this.reencEnabled = propOr(
-                (config != null ? config.isReencryptionGloballyEnabled() : true),
+                config.isReencryptionGloballyEnabled(),
                 "reenc.enabled", "reencryption.enabled", "reencrypt.enabled"
         );
 
-        // ---- AUDIT (robust to missing top-level "audit")
+        // ==== audit subsystem ====
+
         boolean enableAudit = false;
-        int aK = 100;
-        int aEvery = 100;
-        int aWorst = 25;
+        int aK = 100, aEvery = 100, aWorst = 25;
+
         try {
             var ac = config.getAudit();
             if (ac != null) {
@@ -244,52 +225,65 @@ public class ForwardSecureANNSystem {
                 if (ac.sampleEvery > 0) aEvery = ac.sampleEvery;
                 if (ac.worstKeep > 0) aWorst = ac.worstKeep;
             }
-        } catch (Throwable ignore) { /* fall back below */ }
+        } catch (Throwable ignore) {}
+
         enableAudit = enableAudit || propOr(true, "output.audit", "audit");
+
         this.auditEnable = enableAudit;
         this.auditK = aK;
         this.auditSampleEvery = aEvery;
         this.auditWorstKeep = aWorst;
 
-        // results directory
-        String resultsDirStr = (config.getOutput() != null && config.getOutput().resultsDir != null && !config.getOutput().resultsDir.isBlank())
-                ? config.getOutput().resultsDir : System.getProperty("results.dir", "results");
-        this.resultsDir = Paths.get(resultsDirStr);
+        // ==== output directory + profilers ====
+
+        String outDir = (config.getOutput() != null && config.getOutput().resultsDir != null
+                && !config.getOutput().resultsDir.isBlank())
+                ? config.getOutput().resultsDir
+                : System.getProperty("results.dir", "results");
+
+        this.resultsDir = Paths.get(outDir);
         try {
             Files.createDirectories(resultsDir);
         } catch (IOException ioe) {
             logger.warn("Could not create resultsDir {}; falling back to CWD", resultsDir, ioe);
         }
-        this.topKProfiler = new TopKProfiler(resultsDir.toString());
-        double defaultNoise = (config.getCloak() != null) ? Math.max(0.0, config.getCloak().noise) : 0.0;
-        this.configuredNoiseScale = defaultNoise;
 
-        // init per-query re-encryption CSV *after* resultsDir exists
+        this.topKProfiler = new TopKProfiler(resultsDir.toString());
+
+        this.configuredNoiseScale = (config.getCloak() != null)
+                ? Math.max(0.0, config.getCloak().noise)
+                : 0.0;
+
+        // per-run re-encryption CSV
         this.reencCsv = resultsDir.resolve("reencrypt_metrics.csv");
         initReencCsvIfNeeded(this.reencCsv);
 
-        // ratio source
+        // ==== ratio computation mode ====
+
         String rs = (config.getRatio() != null && config.getRatio().source != null)
                 ? config.getRatio().source.toLowerCase(Locale.ROOT)
                 : "auto";
+
         this.ratioSource = switch (rs) {
             case "gt" -> RatioSource.GT;
             case "base" -> RatioSource.BASE;
             default -> RatioSource.AUTO;
         };
 
-        // legacy override hooks
+        // ==== LSH override hooks (legacy) ====
         this.OVERRIDE_TABLES = (config.getLsh().numTables > 0)
                 ? config.getLsh().numTables
                 : Integer.getInteger("lsh.tables", -1);
+
         this.OVERRIDE_ROWS = (config.getLsh().rowsPerBand > 0)
                 ? config.getLsh().rowsPerBand
                 : Integer.getInteger("lsh.rowsPerBand", -1);
+
         this.OVERRIDE_PROBE = (config.getLsh().probeShards > 0)
                 ? config.getLsh().probeShards
                 : Integer.getInteger("probe.shards", -1);
 
-        // Initialize audit writer once (if enabled)
+        // ==== audit files ====
         RetrievedAudit ra = null;
         if (auditEnable) {
             try {
@@ -300,21 +294,26 @@ public class ForwardSecureANNSystem {
         }
         this.retrievedAudit = ra;
 
-        // ---- Centralize paths via FsPaths ----
+        // ==== FsPaths binding ====
+
         this.prevBaseProp = System.getProperty(FsPaths.BASE_DIR_PROP);
         this.prevMetaProp = System.getProperty(FsPaths.METADB_PROP);
         this.prevPointsProp = System.getProperty(FsPaths.POINTS_PROP);
+
         System.setProperty(FsPaths.BASE_DIR_PROP, metadataPath.toString());
         System.setProperty(FsPaths.METADB_PROP, metadataPath.resolve("metadata").toString());
         System.setProperty(FsPaths.POINTS_PROP, metadataPath.resolve("points").toString());
 
         this.pointsPath = FsPaths.pointsDir();
         this.metaDBPath = FsPaths.metadataDb();
+
         Files.createDirectories(pointsPath);
         Files.createDirectories(metaDBPath);
 
-        // Initializing metadataManager based on the data scale
+        // ==== metadata manager + optional sharding ====
+
         this.metadataManager = Objects.requireNonNull(metadataManager, "MetadataManager cannot be null");
+
         if (useShardedMetadata) {
             int shardCount = Integer.getInteger("metadata.shards", 16);
             this.shardedMetadata = new ShardedMetadataManager(
@@ -327,18 +326,21 @@ public class ForwardSecureANNSystem {
             this.shardedMetadata = null;
         }
 
+        // ==== Crypto + key lifecycle ====
+
         this.cryptoService = Objects.requireNonNull(cryptoService, "CryptoService cannot be null");
 
-
-        // Key service (also align FsPaths KEYSTORE_PROP)
         Path derivedKeyRoot = resolveKeyStorePath(keysFilePath, metadataPath);
+
         this.prevKeyStoreProp = System.getProperty(FsPaths.KEYSTORE_PROP);
         System.setProperty(FsPaths.KEYSTORE_PROP, derivedKeyRoot.toString());
 
-        MeterRegistry meterRegistry = null;
+        MeterRegistry meterRegistry;
         try {
             meterRegistry = new SimpleMeterRegistry();
-        } catch (Throwable ignore) { /* allow null */ }
+        } catch (Throwable ignore) {
+            meterRegistry = null;
+        }
 
         KeyLifeCycleService ks = cryptoService.getKeyService();
         if (ks == null) {
@@ -346,145 +348,123 @@ public class ForwardSecureANNSystem {
             KeyManager keyManager = new KeyManager(derivedKeyRoot.toString());
             int opsCap = (int) Math.min(Integer.MAX_VALUE, config.getOpsThreshold());
             KeyRotationPolicy policy = new KeyRotationPolicy(opsCap, config.getAgeThresholdMs());
+
             ks = new KeyRotationServiceImpl(keyManager, policy, metaDBPath.toString(), metadataManager, cryptoService);
+
             try {
-                cryptoService.getClass().getMethod("setKeyService", KeyLifeCycleService.class).invoke(cryptoService, ks);
-            } catch (Exception ignore) { /* no-op */ }
+                cryptoService.getClass().getMethod("setKeyService", KeyLifeCycleService.class)
+                        .invoke(cryptoService, ks);
+            } catch (Exception ignore) {}
         }
         this.keyService = ks;
 
-        // Capture an actual keystore path for export
-        Path ksp = derivedKeyRoot;
-        try {
-            if (keyService instanceof KeyRotationServiceImpl kr) {
-                try {
-                    var m = kr.getClass().getMethod("getKeyManager");
-                    Object km = m.invoke(kr);
-                    var mp = km.getClass().getMethod("getStorePath");
-                    String p = (String) mp.invoke(km);
-                    if (p != null && !p.isBlank()) ksp = Paths.get(p);
-                } catch (Throwable ignore) { /* fallback remains derivedKeyRoot */ }
-            }
-        } catch (Throwable ignore) {
+        // resolve actual keystore path
+        Path resolvedKeyStore = derivedKeyRoot;
+        if (keyService instanceof KeyRotationServiceImpl kr) {
+            try {
+                Object km = kr.getClass().getMethod("getKeyManager").invoke(kr);
+                String p = (String) km.getClass().getMethod("getStorePath").invoke(km);
+                if (p != null && !p.isBlank()) resolvedKeyStore = Paths.get(p);
+            } catch (Throwable ignore) {}
         }
-        this.keyStorePath = ksp;
+        this.keyStorePath = resolvedKeyStore;
 
-        // Build index service
+        // ==== index service ====
+
         this.indexService = SecureLSHIndexService.fromConfig(cryptoService, keyService, metadataManager, config);
-        if (config.getPaper() != null && config.getPaper().enabled) {
-            logger.info("Ideal-system partitioned mode: disabling LSH in index service.");
-            indexService.disableLSHForAllDimensions();
-        }
 
         if (keyService instanceof KeyRotationServiceImpl kr) {
             kr.setIndexService(indexService);
         }
 
+        // optional background re-encryption
         if (Boolean.parseBoolean(System.getProperty("reenc.background.enabled", "false"))) {
-            this.backgroundReencryptor = new BackgroundReencryptionScheduler(
-                    (KeyRotationServiceImpl) keyService,
-                    cryptoService,
-                    indexService,
-                    metadataManager
-            );
-
             int intervalMin = Integer.getInteger("reenc.background.intervalMin", 60);
+
+            this.backgroundReencryptor = new BackgroundReencryptionScheduler(
+                    (KeyRotationServiceImpl) keyService, cryptoService, indexService, metadataManager
+            );
             backgroundReencryptor.start(intervalMin);
 
-            logger.info("Background re-encryption enabled: interval={}min", intervalMin);
+            logger.info("Background re-encryption enabled: interval={} min", intervalMin);
         } else {
             this.backgroundReencryptor = null;
         }
 
+        // ==== caches + profiler ====
+
         this.cache = new StringKeyedCache(config.getNumShards() * 1000);
-        this.profiler = config.isProfilerEnabled()
-                ? new com.fspann.api.MicrometerProfiler(new SimpleMeterRegistry())
-                : null;
 
-        // Token factories by dimension (apply LSH overrides if present)
+        Profiler baseProfiler = new Profiler();
+        MicrometerProfiler micro = null;
+        if (config.isProfilerEnabled()) {
+            micro = new MicrometerProfiler(meterRegistry, baseProfiler);
+        }
+        this.profiler = baseProfiler;
+        this.microProfiler = micro;
+
+        // ==== QueryTokenFactories (disables LSH entirely) ====
+
         for (int dim : dimensions) {
-            EvenLSH lshForDim = indexService.getLshForDimension(dim);
-
-            // m override (rows per band / hash funcs per table)
-            if (OVERRIDE_ROWS > 0) {
-                try {
-                    lshForDim.getClass().getMethod("setRowsPerBand", int.class).invoke(lshForDim, OVERRIDE_ROWS);
-                } catch (Throwable ignore) {
-                    try {
-                        lshForDim.getClass().getMethod("setNumHashFuncsPerTable", int.class).invoke(lshForDim, OVERRIDE_ROWS);
-                    } catch (Throwable ignored2) { /* optional */ }
-                }
-            }
-
-            // tables override
-            int tables = (OVERRIDE_TABLES > 0) ? OVERRIDE_TABLES : numTablesFor(lshForDim, config);
-
-            // probe-shards override (for logging)
-            int shards = shardsToProbe();
-
-            int ell = (config != null && config.getPaper() != null) ? Math.max(1, config.getPaper().divisions) : 1;
-            int m = (config != null && config.getPaper() != null) ? Math.max(1, config.getPaper().m) : 1;
-            long seedBase = (config != null && config.getPaper() != null) ? config.getPaper().seed : 13L;
+            int ell = Math.max(1, config.getPaper().divisions);
+            int m = Math.max(1, config.getPaper().m);
+            long seed = config.getPaper().seed;
 
             tokenFactories.put(dim, new QueryTokenFactory(
-                    cryptoService, keyService, lshForDim, /*numTables*/ tables, /*divisions*/ ell, /*m*/ m, /*seedBase*/ seedBase
+                    cryptoService,
+                    keyService,
+                    null,   // LSH disabled
+                    0,      // numTables=0
+                    0,      // probeRange=0 (multiprobe removed)
+                    ell,
+                    m,
+                    seed
             ));
 
-            boolean partitionedMode = (config != null && config.getPaper() != null && config.getPaper().isEnabled());
-            if (partitionedMode) {
-                logger.info("TokenFactory created: dim={} divisions (ℓ)={} m(projections/division)={} shardsToProbe={}",
-                        dim, ell, m, shards);
-            } else {
-                int mRows = -1;
-                try {
-                    mRows = (int) lshForDim.getClass().getMethod("getRowsPerBand").invoke(lshForDim);
-                } catch (Throwable ignore) {
-                    try {
-                        mRows = (int) lshForDim.getClass().getMethod("getNumHashFuncsPerTable").invoke(lshForDim);
-                    } catch (Throwable ignored2) { /* ok */ }
-                }
-                int logM = (OVERRIDE_ROWS > 0 ? OVERRIDE_ROWS : mRows);
-                logger.info("TokenFactory created: dim={} LSH tables (L)={} m(rows/table)={} shardsToProbe={}",
-                        dim, tables, logM, shards);
-            }
+            logger.info("TokenFactory created: dim={}  ell={}  m={}", dim, ell, m);
         }
 
-        // Primary dim
         int primaryDim = dimensions.get(0);
-        QueryTokenFactory qtf = tokenFactories.getOrDefault(primaryDim, null);
+        QueryTokenFactory qtf = tokenFactories.get(primaryDim);
 
-        // Query service
+        // ==== QueryService ====
         this.queryService = new QueryServiceImpl(indexService, cryptoService, keyService, qtf);
+        this.engine = new QueryExecutionEngine(this, profiler, K_VARIANTS);
+        // ==== touch accounting / selective re-encryption ====
 
         this.reencTracker = new ReencryptionTracker();
-        // Ensure QS continues marking touches even without LSH
+
         if (this.queryService instanceof QueryServiceImpl qs) {
-            qs.setReencryptionTracker(this.reencTracker);
+            qs.setReencryptionTracker(reencTracker);
         }
+
         this.reencCoordinator = new SelectiveReencCoordinator(
-                this.indexService,
-                this.cryptoService,
+                indexService,
+                cryptoService,
                 ks,
-                this.reencTracker,
+                reencTracker,
                 meterRegistry,
-                this.resultsDir,
-                () -> dirSize(this.pointsPath)   // StorageSizer: bytes on disk for points
+                resultsDir,
+                () -> dirSize(pointsPath)
         );
 
-        String basePathProp = System.getProperty("base.path", "").trim();
-        if (!basePathProp.isEmpty()) {
-            Path basePath = Paths.get(basePathProp);
+        // ==== load base vectors (optional distance-ratio) ====
+
+        String baseProp = System.getProperty("base.path", "").trim();
+        if (!baseProp.isEmpty()) {
+            Path basePath = Paths.get(baseProp);
             boolean isBvecs = basePath.toString().toLowerCase(Locale.ROOT).endsWith(".bvecs");
-            int dimProbe = dimensions.get(0); // expected fixed dim for this run
+            int dimExpected = dimensions.get(0);
+
             try {
-                this.baseReader = BaseVectorReader.open(basePath, dimProbe, isBvecs);
+                this.baseReader = BaseVectorReader.open(basePath, dimExpected, isBvecs);
                 logger.info("BaseVectorReader mapped: {} (dim={}, type={})",
-                        basePath, dimProbe, (isBvecs ? "bvecs" : "fvecs"));
+                        basePath, dimExpected, isBvecs ? "bvecs" : "fvecs");
             } catch (IOException ioe) {
-                logger.warn("Failed to map base.path={}, distance-ratio will be skipped", basePath, ioe);
+                logger.warn("Failed to map base.path={}, ratio metrics disabled", basePath, ioe);
             }
         } else {
-            logger.info("No -Dbase.path provided; distance-ratio will be skipped.");
+            logger.info("No -Dbase.path provided; distance-ratio disabled.");
         }
     }
 
@@ -559,7 +539,9 @@ public class ForwardSecureANNSystem {
             if (valid.isEmpty()) continue;
 
             keyService.rotateIfNeeded();
-            indexService.batchInsert(ids, valid);
+            for (int j = 0; j < valid.size(); j++) {
+                indexService.insert(ids.get(j), valid.get(j));
+            }
             indexedCount.addAndGet(valid.size());
             totalInserted += valid.size();
         }
@@ -603,928 +585,97 @@ public class ForwardSecureANNSystem {
     /* ---------------------- Query API ---------------------- */
 
     private QueryTokenFactory factoryForDim(int dim) {
-        if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
+        if (dim <= 0)
+            throw new IllegalArgumentException("Dimension must be positive");
 
-        boolean partitioned = (config.getPaper() != null && config.getPaper().enabled);
-        if (partitioned) {
-            // NEW SYSTEM / IDEAL-SYSTEM: LSH is forbidden.
-            var pc = config.getPaper();
-            int ell = Math.max(1, pc.divisions);
-            int m = Math.max(1, pc.m);
-            long seed = pc.seed;
+        if (tokenFactories.containsKey(dim))
+            return tokenFactories.get(dim);
 
-//            logger.info("TokenFactory (ideal/partitioned): dim={} ell={} m={} seed={}", dim, ell, m, seed);
+        // OPTION-C PARAMETERS
+        var pc = config.getPaper();
+        if (pc == null || !pc.enabled)
+            throw new IllegalStateException("Option-C requires paper.enabled=true");
 
-            return new QueryTokenFactory(
-                    cryptoService,
-                    keyService,
-                    null,          // << NO LSH
-                    0,             // numTables = unused
-                    ell,
-                    m,
-                    seed
-            );
-        }
+        int ell     = Math.max(1, pc.divisions);
+        int m       = Math.max(1, pc.m);
+        int lambda  = Math.max(1, pc.lambda);
+        long seed   = pc.seed;
 
-        // Legacy multiprobe path (kept intact because you said: DO NOT BREAK OLD SYSTEM)
-        return tokenFactories.computeIfAbsent(dim, d -> {
-            EvenLSH lsh = indexService.getLshForDimension(d);
-            int tables = (OVERRIDE_TABLES > 0)
-                    ? OVERRIDE_TABLES
-                    : numTablesFor(lsh, config);
+        int tables = 1;        // NO LSH IN OPTION-C
+        EvenLSH lsh = null;    // STRICT: LSH forbidden
 
-            int ell = 1;
-            int m = 1;
-            long seed = 13L;
-
-            logger.info("TokenFactory (legacy multiprobe): dim={} LSH tables={} m={} seed={}", d, tables, m, seed);
-
-            return new QueryTokenFactory(
-                    cryptoService,
-                    keyService,
-                    lsh,
-                    tables,
-                    ell,
-                    m,
-                    seed
-            );
-        });
+        QueryTokenFactory qtf = new QueryTokenFactory(
+                cryptoService,
+                keyService,
+                null,       // Option-C forbids LSH
+                0,          // numTables
+                lambda,     // probeRange
+                ell,        // divisions
+                m,          // projections
+                seed        // seedBase
+        );
+        tokenFactories.put(dim, qtf);
+        return qtf;
     }
 
-    public QueryToken cloakQuery(double[] queryVector, int dim, int topK) {
-        Objects.requireNonNull(queryVector, "Query vector cannot be null");
-        if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
-        if (queryVector.length != dim) throw new IllegalArgumentException("Query vector length must match dimension");
-        if (topK <= 0) throw new IllegalArgumentException("TopK must be positive");
+    /* ====================================================================== */
+    /*      HELPERS FOR UNIFIED EVALUATION + PROFILER PIPELINE            */
+    /* ====================================================================== */
 
-        return factoryForDim(dim).create(queryVector, topK);
+    private double toMs(long ns) { return ns <= 0 ? 0.0 : ns / 1_000_000.0; }
+
+     /** Lightweight DTO for passing timing snapshots inside this class. */
+    private static final class QueryTiming {
+        final double serverMs, clientMs, runMs, decryptMs;
+        QueryTiming(double s, double c, double r, double d) {
+            this.serverMs = s; this.clientMs = c; this.runMs = r; this.decryptMs = d;
+        }
     }
 
-    public List<QueryResult> query(double[] queryVector, int topK, int dim) {
-        Objects.requireNonNull(queryVector, "Query vector cannot be null");
-        if (topK <= 0) throw new IllegalArgumentException("TopK must be positive");
-        if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
-        if (queryVector.length != dim) throw new IllegalArgumentException("Query vector length must match dimension");
-        if (backgroundReencryptor != null) {
-            backgroundReencryptor.recordQuery();
-        }
+    /**
+     * K-adaptive “probe-only” pass.
+     * Runs the iterative widening loop but DOES NOT:
+     *   - compute or record ratios
+     *   - write profiler rows
+     *   - emit CSVs
+     *   - track return-rate metrics
+     *
+     * Purely returns early-termination decisions so that ablation
+     * can study its widening behaviour independently.
+     */
+    public void runKAdaptiveProbeOnly(int qIndex, double[] q, int dim, QueryServiceImpl qs) {
 
-        final long start = System.nanoTime();
-        final QueryToken token = factoryForDim(dim).create(queryVector, topK);
-        final String ckey = cacheKeyOf(token);
-        recordRecent(queryVector);
+        int baseK = baseKForToken();
+        int round = 0;
 
-        // cache check
-        List<QueryResult> cached = cache.get(ckey);
-        if (cached != null) {
-            long ns = Math.max(0L, System.nanoTime() - start);
-            totalQueryTimeNs += ns;  // accumulate client time (cache hit)
-            if (profiler != null) profiler.recordQueryMetric("Q_cache_" + topK, 0.0, ns / 1e6, 0.0);
-            return cached;
-        }
-
-        // miss → go to service
-        List<QueryResult> results = queryService.search(token);
-        long end = System.nanoTime();
-        cache.put(ckey, results);
-
-        long clientNs = Math.max(0L, end - start);
-        long serverNs = ((QueryServiceImpl)queryService).getLastQueryDurationNs();
-        totalQueryTimeNs += Math.max(0L, clientNs + serverNs);
-
-        if (profiler != null && queryService instanceof QueryServiceImpl qs) {
-            double serverMs = boundedServerMs(qs, start, end);
-            double clientMs = clientNs / 1_000_000.0;
-            profiler.recordQueryMetric("Q_" + topK, serverMs, clientMs, 0.0);
-        }
-        return results;
-    }
-
-    public List<QueryResult> queryWithCloak(double[] queryVector, int topK, int dim) {
-        Objects.requireNonNull(queryVector, "Query vector cannot be null");
-        if (topK <= 0) throw new IllegalArgumentException("TopK must be positive");
-        if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
-        if (queryVector.length != dim) throw new IllegalArgumentException("Query vector length must match dimension");
-
-        // With noise disabled, just use the standard path
-        if (configuredNoiseScale <= 0.0) {
-            return query(queryVector, topK, dim);
-        }
-
-        final long start = System.nanoTime();
-        final QueryToken token = cloakQuery(queryVector, dim, topK);
-        final String ckey = cacheKeyOf(token);
-        recordRecent(queryVector);
-
-        List<QueryResult> cached = cache.get(ckey);
-        if (cached != null) {
-            long clientNs = Math.max(0L, System.nanoTime() - start);
-            long serverNs = ((QueryServiceImpl)queryService).getLastQueryDurationNs();
-            totalQueryTimeNs += Math.max(0L, clientNs + serverNs);
-            if (profiler != null) profiler.recordQueryMetric("Q_cache_" + topK, 0.0, clientNs / 1_000_000.0, 0.0);
-            return cached;
-        }
-
-        List<QueryResult> results = queryService.search(token);
-        long end = System.nanoTime();
-        cache.put(ckey, results);
-
-        long clientNs = Math.max(0L, end - start);
-        long serverNs = ((QueryServiceImpl)queryService).getLastQueryDurationNs();
-        totalQueryTimeNs += Math.max(0L, clientNs + serverNs);
-
-        if (profiler != null && queryService instanceof QueryServiceImpl qs) {
-            double serverMs = boundedServerMs(qs, start, end);
-            double clientMs = clientNs / 1_000_000.0;
-            profiler.recordQueryMetric("Q_" + topK, serverMs, clientMs, 0.0);
-        }
-        if (verbose) logger.debug("Cloaked query returned {} results for topK={}", results.size(), topK);
-        return results;
-    }
-
-    // ---------------------- E2E Runner ---------------------- //
-
-    public void runEndToEnd(String dataPath, String queryPath, int dim, String groundtruthPath) throws IOException {
-        Objects.requireNonNull(dataPath, "Data path cannot be null");
-        Objects.requireNonNull(queryPath, "Query path cannot be null");
-        Objects.requireNonNull(groundtruthPath, "Groundtruth path cannot be null");
-        if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
-
-        // Local view of K-adaptive config (with sane defaults if null)
-        SystemConfig.KAdaptiveConfig kCfg = (config.getKAdaptive() != null)
-                ? config.getKAdaptive()
-                : new SystemConfig.KAdaptiveConfig();
-
-        // Freeze rotation while indexing
-        if (keyService instanceof KeyRotationServiceImpl kr) kr.freezeRotation(true);
-
-        // 1) Index + seal
-        indexStream(dataPath, dim);
-        indexService.flushBuffers();
-        finalizeForSearch();
-        if (keyService instanceof KeyRotationServiceImpl kr) {
-            kr.freezeRotation(false);
-        }
-
-        // 2) Load queries + GT
-        DefaultDataLoader loader = new DefaultDataLoader();
-        List<double[]> queries = new ArrayList<>();
         while (true) {
-            List<double[]> batch = loader.loadData(normalizePath(queryPath), dim);
-            if (batch == null || batch.isEmpty()) break;
-            queries.addAll(batch);
-        }
-        logger.info("Loaded {} real queries (dim={})", queries.size(), dim);
 
-        // --- DECOY INJECTION ---
-        List<DecoyQueryGenerator.QueryWrapper> mixedQueries;
-        if (decoyEnabled && decoyGenerator != null) {
-            mixedQueries = decoyGenerator.interleaveDecoys(queries);
-            logger.info("Injected {} decoy queries (total queries: {})",
-                    mixedQueries.size() - queries.size(),
-                    mixedQueries.size());
-        } else {
-            // No decoys: wrap real queries
-            mixedQueries = new ArrayList<>(queries.size());
-            for (int i = 0; i < queries.size(); i++) {
-                mixedQueries.add(new DecoyQueryGenerator.QueryWrapper(
-                        queries.get(i), false, i
-                ));
-            }
-        }
-
-        GroundtruthManager groundtruth = new GroundtruthManager();
-        groundtruth.load(normalizePath(groundtruthPath));
-
-        int datasetSize = (baseReader != null) ? baseReader.count
-                : Math.max(indexService.getIndexedVectorCount(), totalInserted);
-        groundtruth.normalizeIndexBaseIfNeeded(datasetSize);
-
-        boolean idsOk = groundtruth.isConsistentWithDatasetSize(datasetSize);
-        boolean dimsOk = (baseReader != null) && sampleDimsOk(baseReader);
-        boolean sampleOk = (baseReader != null) && sampleGtMatchesTrueNN(
-                queries, groundtruth, baseReader,
-                Math.max(0, config.getRatio().gtSample),
-                Math.max(0.0, Math.min(1.0, config.getRatio().gtMismatchTolerance)));
-
-        boolean gtTrusted = (baseReader != null) && idsOk && dimsOk && sampleOk;
-        logger.info("Ratio trust gate: gtTrusted={}, idsOk={}, dimsOk={}, sampleOk={}",
-                gtTrusted, idsOk, dimsOk, sampleOk);
-        if (baseReader == null) {
-            logger.warn("No baseReader: ratio computation will be NaN unless you set -Dbase.path");
-        }
-
-        ResultWriter rw = new ResultWriter(resultsDir.resolve("results_table.csv"));
-        try {
-            topKProfiler.setDatasetSize(datasetSize);
-        } catch (Throwable ignore) {
-        }
-
-        final boolean doAudit = auditEnable && (retrievedAudit != null);
-        final int baseKForToken = Math.max(
-                Math.max(auditK, 100),
-                Arrays.stream(K_VARIANTS).max().orElse(100)
-        );
-
-        final int keepWorst = Math.max(0, auditWorstKeep);
-
-        class WorstRec {
-            final int qIndex, k;
-            final double ratio, precision;
-
-            WorstRec(int q, int k, double r, double p) {
-                this.qIndex = q;
-                this.k = k;
-                this.ratio = r;
-                this.precision = p;
-            }
-        }
-
-        PriorityQueue<WorstRec> worstPQ =
-                new PriorityQueue<>(Comparator.comparingDouble(w -> w.ratio)); // min-heap
-
-        Map<Integer, Long> globalMatches = new HashMap<>();
-        Map<Integer, Long> globalReturned = new HashMap<>();
-        for (int k : K_VARIANTS) {
-            globalMatches.put(k, 0L);
-            globalReturned.put(k, 0L);
-        }
-        final int queriesCount = queries.size();
-
-        // Quick fanout probe on Q0
-        if (!queries.isEmpty()) computeAndLogFanoutForQ0(queries.get(0), dim, K_VARIANTS);
-
-        // 4) Query loop
-        for (int q = 0; q < queries.size(); q++) {
-            final int qIndex = q;
-            double[] queryVec = queries.get(q);
-
-            // --- K-adaptive query execution ---
-            final int Kmax = Arrays.stream(K_VARIANTS).max().orElse(100);
-            QueryServiceImpl qs = (QueryServiceImpl) queryService;
-            QueryToken baseToken = null;
-            List<QueryResult> baseReturned = Collections.emptyList();
-
-            long clientStart = System.nanoTime();
-            long clientEnd = clientStart;
-            double clientMs = 0.0;
-            double serverMs = 0.0;
-
-            int candTotal = -1;
-            int candKeptVersion = -1;
-            int candDecrypted = -1;
-            int returned = -1;
-
-            int round = 0;
-            while (true) {
-                baseToken = factoryForDim(dim).create(queryVec, baseKForToken);
-                baseReturned = queryService.search(baseToken);
-
-                // *** CAPTURE CANDIDATES AFTER EACH ITERATION ***
-                var iterCandIds = qs.getLastCandidateIds();
-                if (iterCandIds != null && !iterCandIds.isEmpty()) {
-                    touchedGlobal.addAll(iterCandIds);
-                    logger.trace("q{} k-adaptive round {}: added {} candidates (touchedGlobal now: {})",
-                            qIndex, round, iterCandIds.size(), touchedGlobal.size());
-                }
-
-                clientEnd = System.nanoTime();
-                clientMs = (clientEnd - clientStart) / 1_000_000.0;
-                serverMs = boundedServerMs(qs, clientStart, clientEnd);
-
-                candTotal = qs.getLastCandTotal();
-                candKeptVersion = qs.getLastCandKeptVersion();
-                candDecrypted = qs.getLastCandDecrypted();
-                returned = qs.getLastReturned();
-
-                int uptoMax = Math.min(Kmax, baseReturned.size());
-                double rr = (Kmax > 0) ? (double) uptoMax / (double) Kmax : 0.0;
-                double fanout = (returned > 0)
-                        ? candTotal / (double) returned
-                        : Double.POSITIVE_INFINITY;
-
-                if (!kCfg.enabled) {
-                    break;
-                }
-
-                boolean rrOk = rr >= kCfg.targetReturnRate;
-                boolean fanoutTooHigh = fanout >= kCfg.maxFanout;
-                boolean roundsExceeded = round >= kCfg.maxRounds;
-
-                if (rrOk || fanoutTooHigh || roundsExceeded) {
-                    if (rrOk) {
-                        logger.debug("q{} k-adaptive: return-rate {} reached target {}", qIndex, rr, kCfg.targetReturnRate);
-                    } else if (fanoutTooHigh) {
-                        logger.debug("q{} k-adaptive: fanout {} exceeded max {}", qIndex, fanout, kCfg.maxFanout);
-                    } else {
-                        logger.debug("q{} k-adaptive: maxRounds {} reached", qIndex, kCfg.maxRounds);
-                    }
-                    break;
-                }
-
-                round++;
-                int curShards = shardsToProbe();
-                int widened = (int) Math.ceil(curShards * kCfg.probeFactor);
-                System.setProperty("probe.shards", Integer.toString(widened));
-                logger.info("q{} k-adaptive round {}: rr={} fanout={} – widening probe.shards {} -> {}",
-                        qIndex,
-                        round,
-                        String.format(Locale.ROOT, "%.4f", rr),
-                        (Double.isFinite(fanout) ? String.format(Locale.ROOT, "%.1f", fanout) : "inf"),
-                        curShards,
-                        widened);
-            }
-            // --- end K-adaptive query execution ---
-
-//            // Every 1000 queries, re-encrypt touched points
-//            if ((q + 1) % 1000 == 0) {
-//                logger.info("Checkpoint re-encryption at query {}", q);
-//                finalizeReencryptionAtEnd(); // Re-encrypt accumulated touches
-//                touchedGlobal.clear();       // Reset for next batch
-//            }
-//
-            // Post-query invariants and guards
-            guardCandidateInvariants(qIndex, candTotal, candKeptVersion, candDecrypted, returned);
-
-            if (returned > 0) {
-                double fanout = candTotal / (double) returned;
-                double fanoutWarn = Double.parseDouble(System.getProperty("guard.fanout.warn", "2000"));
-                if (fanout > fanoutWarn) {
-                    logger.warn("q{} excessive fanout: scanned/returned ≈ {} ({} / {})",
-                            qIndex, String.format(Locale.ROOT, "%.1f", fanout), candTotal, returned);
-                }
-            }
-
-            int uptoMax = Math.min(Kmax, baseReturned.size());
-            double rrFinal = (Kmax > 0) ? (double) uptoMax / (double) Kmax : 0.0;
-            double minRR = Double.parseDouble(System.getProperty("guard.returnrate.min", "0.70"));
-            if (rrFinal < minRR) {
-                logger.warn("q{} low return-rate at Kmax={}: returned={} ({}% of K). Consider increasing probes/tables.",
-                        qIndex, Kmax, uptoMax, String.format(Locale.ROOT, "%.0f", 100.0 * rrFinal));
-            }
-
-            // Re-encryption + touch metrics use *final* candidate set
-            ReencOutcome rep = maybeReencryptTouched("Q" + q, qs);
-            int svcCum = qs.getLastTouchedCumulativeUnique();
-            if (svcCum != rep.cumulativeUnique) {
-                logger.debug("q{} touch-set divergence: svc={} sys={}", qIndex, svcCum, rep.cumulativeUnique);
-            }
-
-            List<String> last = qs.getLastCandidateIds();
-            int touchedCount = 0;
-
-            if (last == null || last.isEmpty()) {
-                logger.warn("q{} WARN: lastCandIds unexpectedly empty.", qIndex);
-                last = Collections.emptyList();    // safest ideal-system fallback
-            }
-
-            else {
-                touchedCount = last.size();
-                touchedGlobal.addAll(last);
-                logger.trace("q{} added {} candidate IDs to touchedGlobal (total now: {})",
-                        qIndex, last.size(), touchedGlobal.size());
-            }
-
-            com.fspann.common.EncryptedPointBuffer buf = indexService.getPointBuffer();
-            long insertTimeMs = buf != null ? buf.getLastBatchInsertTimeMs() : 0;
-            int totalFlushed = buf != null ? buf.getTotalFlushedPoints() : 0;
-            int flushThreshold = buf != null ? buf.getFlushThreshold() : 0;
-            int tokenSizeBytes = QueryServiceImpl.estimateTokenSizeBytes(baseToken);
-            int vectorDim = baseToken.getDimension();
-
-            List<QueryEvaluationResult> enriched = new ArrayList<>(K_VARIANTS.length);
-            for (int k : K_VARIANTS) {
-                int upto = Math.min(k, baseReturned.size());
-                List<QueryResult> prefix = baseReturned.subList(0, upto);
-
-                double distRatio = (baseReader == null) ? Double.NaN
-                        : ratioAtKMetric(queryVec, prefix, k, qIndex, groundtruth, baseReader, gtTrusted);
-
-                int[] truth = groundtruth.getGroundtruth(q, k);
-
-                int matches = 0;
-                for (int i = 0; i < prefix.size() && i < truth.length; i++) {
-                    int id;
-                    try {
-                        id = Integer.parseInt(prefix.get(i).getId());
-                    } catch (NumberFormatException nfe) {
-                        continue;
-                    }
-                    if (containsInt(truth, id)) matches++;
-                }
-                double precAtK = (k > 0 ? (double) matches / (double) k : 0.0);
-
-                globalMatches.put(k, globalMatches.get(k) + matches);
-                globalReturned.put(k, globalReturned.get(k) + upto);
-
-                String candMode = (candTotal >= 0 && candKeptVersion >= 0 && candDecrypted >= 0 && returned >= 0)
-                        ? "full" : "partial";
-
-                enriched.add(new QueryEvaluationResult(
-                        k, upto, distRatio, precAtK,
-                        Math.round(serverMs),
-                        insertTimeMs,
-                        candDecrypted,
-                        tokenSizeBytes, vectorDim,
-                        totalFlushed, flushThreshold,
-                        /* touchedCount      */ touchedCount,
-                        /* reencryptedCount  */ rep.rep.reencryptedCount,
-                        /* reencTimeMs       */ rep.rep.timeMs,
-                        /* reencBytesDelta   */ rep.rep.bytesDelta,
-                        /* reencBytesAfter   */ rep.rep.bytesAfter,
-                        /* ratioDenomSource  */ ratioDenomLabel(gtTrusted),
-                        /* clientTimeMs      */ Math.round(clientMs),
-                        /* tokenK            */ baseKForToken,
-                        /* tokenKBase        */ baseKForToken,
-                        /* qIndexZeroBased   */ qIndex,
-                        /* candMetricsMode   */ candMode
-                ));
-            }
-            // ---- make captured vars effectively final for the lambda ----
-            final int qIndexF = qIndex;
-            final int candTotalF = candTotal;
-            final int candKeptVersionF = candKeptVersion;
-            final int candDecryptedF = candDecrypted;
-            final int returnedF = returned;
-            // -------------------------------------------------------------
-
-            topKProfiler.record("Q" + q, enriched, candTotal, candKeptVersion, candDecrypted, returned);
-
-            if (doAudit) {
-                final int kAudit = Math.max(1, auditK);
-                final int uptoA = Math.min(kAudit, baseReturned.size());
-                final List<QueryResult> prefixA = baseReturned.subList(0, uptoA);
-                final int[] truthA = groundtruth.getGroundtruth(qIndex, kAudit);
-
-                final double ratioA = (baseReader == null) ? Double.NaN
-                        : ratioAtKMetric(queryVec, prefixA, kAudit, qIndex, groundtruth, baseReader, gtTrusted);
-
-                int hits = 0;
-                for (int i = 0; i < uptoA && i < truthA.length; i++) {
-                    try {
-                        int id = Integer.parseInt(prefixA.get(i).getId());
-                        if (containsInt(truthA, id)) hits++;
-                    } catch (NumberFormatException ignore) {
-                    }
-                }
-                final double precA = (kAudit > 0 ? (double) hits / (double) kAudit : 0.0);
-
-                if (auditSampleEvery > 0 && (qIndex % auditSampleEvery) == 0) {
-                    try {
-                        retrievedAudit.appendSample(qIndex, kAudit, ratioA, precA, prefixA, truthA);
-                    } catch (IOException ioe) {
-                        logger.warn("Audit sample write failed q={},k={}", qIndex, kAudit, ioe);
-                    }
-                }
-                if (auditWorstKeep > 0 && !Double.isNaN(ratioA)) {
-                    worstPQ.offer(new WorstRec(qIndex, kAudit, ratioA, precA));
-                    if (worstPQ.size() > keepWorst) worstPQ.poll();
-                }
-            }
-            rw.writeTable("Query " + (q + 1) + " Results (dim=" + dim + ")",
-                    new String[]{
-                            "QIndex0", "TopK", "Returned", "Ratio", "Precision", "RatioDenomSource",
-                            "ServerTimeMs", "ClientTimeMs", "OverheadMs", "InsertTimeMs",
-                            "ScannedCandidates", "CandKeptVersion", "CandDecrypted", "ReturnedAgain",
-                            "TokenSize", "TokenK", "VectorDim", "TotalFlushed", "FlushThreshold",
-                            "CandMetricsMode", "TokenKBase"
-                    },
-                    enriched.stream().map(er -> new String[]{
-                            String.valueOf(qIndexF),
-                            String.valueOf(er.getTopKRequested()),
-                            String.valueOf(er.getRetrieved()),
-                            (Double.isNaN(er.getRatio()) ? "NaN" :
-                                    String.format(Locale.ROOT, "%.4f", er.getRatio())),
-                            String.format(Locale.ROOT, "%.4f", er.getPrecision()),
-                            (gtTrusted ? "gt" : "base"),
-                            String.valueOf(er.getTimeMs()),
-                            String.valueOf(er.getClientTimeMs()),
-                            String.valueOf(Math.max(0, er.getClientTimeMs() - er.getTimeMs())),
-                            String.valueOf(er.getInsertTimeMs()),
-                            String.valueOf(candTotalF),
-                            String.valueOf(candKeptVersionF),
-                            String.valueOf(candDecryptedF),
-                            String.valueOf(returnedF),
-                            String.valueOf(er.getTokenSizeBytes()),
-                            String.valueOf(er.getTokenK()),
-                            String.valueOf(er.getVectorDim()),
-                            String.valueOf(er.getTotalFlushedPoints()),
-                            String.valueOf(er.getFlushThreshold()),
-                            er.getCandMetricsMode(),
-                            String.valueOf(er.getTokenKBase())
-                    }).collect(Collectors.toList())
-            );
-            QueryEvaluationResult atK = enriched.stream()
-                    .filter(e -> e.getTopKRequested() == Math.max(auditK, 1))
-                    .findFirst().orElseGet(() -> enriched.get(enriched.size() - 1));
-
-            if (profiler != null) profiler.recordQueryMetric("Q" + q, serverMs, clientMs, atK.getRatio());
-            long serverNs = ((QueryServiceImpl)queryService).getLastQueryDurationNs();
-            totalQueryTimeNs += Math.max(0L, clientEnd - clientStart + serverNs);
-
-            if (q < 3 && !baseReturned.isEmpty() && baseReader != null) {
-                int topId = -1;
-                try {
-                    topId = Integer.parseInt(baseReturned.get(0).getId());
-                } catch (Exception ignore) {
-                }
-                int gt1 = -1;
-                int[] row = groundtruth.getGroundtruth(q, 1);
-                if (row.length > 0) gt1 = row[0];
-                double dTop = (topId >= 0) ? baseReader.l2(queryVec, topId) : Double.NaN;
-                double dGt1 = (gt1 >= 0) ? baseReader.l2(queryVec, gt1) : Double.NaN;
-                logger.info("Sanity q{}: topId={} dTop={}; gt1={} dGt1={}", q, topId, dTop, gt1, dGt1);
-            }
-        }
-
-        if (writeGlobalPrecisionCsv && computePrecision) {
-            writeGlobalPrecisionCsv(
-                    resultsDir, dim, K_VARIANTS,
-                    globalMatches, globalReturned, queriesCount
-            );
-        }
-
-        if (doAudit && !worstPQ.isEmpty()) {
-            List<WorstRec> worst = new ArrayList<>(worstPQ);
-            worst.sort(Comparator.comparingDouble((WorstRec w) -> w.ratio).reversed());
-            for (WorstRec w : worst) {
-                double[] qv = queries.get(w.qIndex);
-                QueryToken tk = factoryForDim(dim).create(qv, w.k);
-                List<QueryResult> ret = queryService.search(tk);
-                int[] truth = groundtruth.getGroundtruth(w.qIndex, w.k);
-                double ratio = (baseReader == null) ? Double.NaN
-                        : ratioAvgOverRanks(qv, ret.subList(0, Math.min(w.k, ret.size())), truth, baseReader);
-                try {
-                    retrievedAudit.appendWorst(w.qIndex, w.k, ratio, w.precision, ret, truth);
-                } catch (IOException ioe) {
-                    logger.warn("Audit worst write failed q={},k={}", w.qIndex, w.k, ioe);
-                }
-            }
-        }
-        // re-encryption-at-end runs in shutdown() via finalizeReencryptionAtEnd()
-    }
-
-    public void runQueries(String queryPath, int dim, String groundtruthPath) throws IOException {
-        Objects.requireNonNull(queryPath, "Query path cannot be null");
-        Objects.requireNonNull(groundtruthPath, "Groundtruth path cannot be null");
-        if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
-
-        // Freeze rotation while querying
-        if (keyService instanceof KeyRotationServiceImpl kr) kr.freezeRotation(true);
-
-        indexService.flushBuffers();
-        finalizeForSearch();
-        if (keyService instanceof KeyRotationServiceImpl kr) {
-            kr.freezeRotation(false);
-        }
-
-        DefaultDataLoader loader = new DefaultDataLoader();
-        List<double[]> queries = new ArrayList<>();
-        while (true) {
-            List<double[]> batch = loader.loadData(normalizePath(queryPath), dim);
-            if (batch == null || batch.isEmpty()) break;
-            queries.addAll(batch);
-        }
-        logger.info("Loaded {} queries (dim={})", queries.size(), dim);
-
-        GroundtruthManager groundtruth = new GroundtruthManager();
-        groundtruth.load(normalizePath(groundtruthPath));
-
-        int datasetSize = (baseReader != null)
-                ? baseReader.count
-                : Math.max(indexService.getIndexedVectorCount(), totalInserted);
-
-        groundtruth.normalizeIndexBaseIfNeeded(datasetSize);
-        boolean idsOk = groundtruth.isConsistentWithDatasetSize(datasetSize);
-        boolean dimsOk = (baseReader != null) && sampleDimsOk(baseReader);
-        boolean sampleOk = (baseReader != null) &&
-                sampleGtMatchesTrueNN(queries, groundtruth, baseReader,
-                        Math.max(0, config.getRatio().gtSample),
-                        Math.max(0.0, Math.min(1.0, config.getRatio().gtMismatchTolerance)));
-
-        boolean gtTrusted = (baseReader != null) && idsOk && dimsOk && sampleOk;
-        logger.info("Ratio trust gate: gtTrusted={}, idsOk={}, dimsOk={}, sampleOk={}",
-                gtTrusted, idsOk, dimsOk, sampleOk);
-        if (baseReader == null) {
-            logger.warn("No baseReader: ratio computation will be NaN unless you set -Dbase.path");
-        }
-
-        ResultWriter rw = new ResultWriter(resultsDir.resolve("results_table.csv"));
-        try {
-            topKProfiler.setDatasetSize(datasetSize);
-        } catch (Throwable ignore) {}
-
-        final boolean doAudit = auditEnable && (retrievedAudit != null);
-
-        // Base K for token (before k-adaptive widening)
-        final int baseKForToken = Math.max(
-                Math.max(auditK, 100),
-                Arrays.stream(K_VARIANTS).max().orElse(100)
-        );
-
-        final int keepWorst = Math.max(0, auditWorstKeep);
-        record WorstRec(int qIndex, int k, double ratio, double precision) {}
-        PriorityQueue<WorstRec> worstPQ =
-                new PriorityQueue<>(Comparator.comparingDouble(w -> w.ratio));
-
-        Map<Integer, Long> globalMatches = new HashMap<>();
-        Map<Integer, Long> globalReturned = new HashMap<>();
-        for (int k : K_VARIANTS) {
-            globalMatches.put(k, 0L);
-            globalReturned.put(k, 0L);
-        }
-        final int queriesCount = queries.size();
-
-        int indexedNow = indexService.getIndexedVectorCount();
-        if (indexedNow <= 0) logger.warn("No points in memory before querying! Continuing for diagnostics.");
-        int dimCountMem = indexService.getVectorCountForDimension(dim);
-        if (dimCountMem <= 0) logger.warn("No points registered for dim={} before querying. Continuing anyway.", dim);
-
-        if (!queries.isEmpty()) computeAndLogFanoutForQ0(queries.get(0), dim, K_VARIANTS);
-
-        // --- system-property based K-adaptive controls ---
-        final boolean kAdaptiveEnabled = Boolean.parseBoolean(
-                System.getProperty("search.kadaptive.enabled", "false")
-        );
-        final double normLow = Double.parseDouble(
-                System.getProperty("search.kadaptive.norm.low", "0.5")
-        );
-        final double normHigh = Double.parseDouble(
-                System.getProperty("search.kadaptive.norm.high", "2.0")
-        );
-        final double widenLow = Double.parseDouble(
-                System.getProperty("search.kadaptive.widen.low", "1.0")
-        );
-        final double widenHigh = Double.parseDouble(
-                System.getProperty("search.kadaptive.widen.high", "2.0")
-        );
-        final int minKAdaptive = Integer.parseInt(
-                System.getProperty("search.kadaptive.minK", "32")
-        );
-        final int maxKAdaptive = Integer.parseInt(
-                System.getProperty(
-                        "search.kadaptive.maxK",
-                        Integer.toString(Math.max(baseKForToken, 1024))
-                )
-        );
-        // -------------------------------------------------
-
-        for (int q = 0; q < queries.size(); q++) {
-            final int qIndex = q;
-
-            double[] queryVec = queries.get(q);
-
-            // ---- per-query K-adaptive widening ----
-            int adaptiveKForToken = baseKForToken;
-            if (kAdaptiveEnabled) {
-                double norm = 0.0;
-                for (double v : queryVec) norm += v * v;
-                norm = Math.sqrt(norm);
-
-                double factor;
-                if (norm <= normLow) {
-                    factor = widenLow;
-                } else if (norm >= normHigh) {
-                    factor = widenHigh;
-                } else {
-                    double t = (norm - normLow) / Math.max(1e-9, (normHigh - normLow));
-                    factor = widenLow + t * (widenHigh - widenLow);
-                }
-
-                int candidateK = (int) Math.round(baseKForToken * factor);
-                if (candidateK < minKAdaptive) candidateK = minKAdaptive;
-                if (candidateK > maxKAdaptive) candidateK = maxKAdaptive;
-                adaptiveKForToken = candidateK;
-            }
-            // ----------------------------------------
-
-            long clientStart = System.nanoTime();
-            QueryToken baseToken = factoryForDim(dim).create(queryVec, adaptiveKForToken);
-            List<QueryResult> baseReturned = queryService.search(baseToken);
-            long clientEnd = System.nanoTime();
-
-            QueryServiceImpl qs = (QueryServiceImpl) queryService;
-            double clientMs = (clientEnd - clientStart) / 1_000_000.0;
-            double serverMs = boundedServerMs(qs, clientStart, clientEnd);
-
-            ReencOutcome rep = maybeReencryptTouched("Q" + q, qs);
-            int svcCum = ((QueryServiceImpl) queryService).getLastTouchedCumulativeUnique();
-            if (svcCum != rep.cumulativeUnique) {
-                logger.debug("q{} touch-set divergence: svc={} sys={}", qIndex, svcCum, rep.cumulativeUnique);
-            }
-            // *** VALIDATE AND CAPTURE CANDIDATE IDs ***
-            var last = qs.getLastCandidateIds();
-            int touchedCount = 0;
-
-            if (last == null || last.isEmpty()) {
-                logger.warn("q{} getLastCandidateIds() returned empty! Candidate tracking failed. " +
-                        "Check QueryServiceImpl.search() - lastCandIds may not be updated.", qIndex);
-            } else {
-                touchedCount = last.size();
-                touchedGlobal.addAll(last);
-                logger.trace("q{} added {} candidate IDs to touchedGlobal (total now: {})",
-                        qIndex, last.size(), touchedGlobal.size());
-            }
-            com.fspann.common.EncryptedPointBuffer buf = indexService.getPointBuffer();
-            long insertTimeMs = buf != null ? buf.getLastBatchInsertTimeMs() : 0;
-            int totalFlushed = buf != null ? buf.getTotalFlushedPoints() : 0;
-            int flushThreshold = buf != null ? buf.getFlushThreshold() : 0;
-            int tokenSizeBytes = QueryServiceImpl.estimateTokenSizeBytes(baseToken);
-            int vectorDim = baseToken.getDimension();
+            QueryToken tok = factoryForDim(dim).create(q, baseK);
+            List<QueryResult> ret = qs.search(tok);
 
             int candTotal = qs.getLastCandTotal();
-            int candKeptVersion = qs.getLastCandKeptVersion();
-            int candDecrypted = qs.getLastCandDecrypted();
-            int returned = qs.getLastReturned();
+            int returned  = ret != null ? ret.size() : 0;
 
-            guardCandidateInvariants(qIndex, candTotal, candKeptVersion, candDecrypted, returned);
+            double rr = (baseK > 0)
+                    ? ((double) Math.min(baseK, returned) / (double) baseK)
+                    : 0.0;
 
-            if (returned > 0) {
-                double fanout = candTotal / (double) returned;
-                double fanoutWarn = Double.parseDouble(System.getProperty("guard.fanout.warn", "2000"));
-                if (fanout > fanoutWarn) {
-                    logger.warn("q{} excessive fanout: scanned/returned ≈ {} ({} / {})",
-                            qIndex, String.format(Locale.ROOT, "%.1f", fanout), candTotal, returned);
-                }
-            }
+            double fanout = (returned > 0)
+                    ? ((double) candTotal / (double) returned)
+                    : Double.POSITIVE_INFINITY;
 
-            int Kmax = Arrays.stream(K_VARIANTS).max().orElse(100);
-            int uptoMax = Math.min(Kmax, baseReturned.size());
-            double rr = (Kmax > 0) ? (double) uptoMax / (double) Kmax : 0.0;
-            double minRR = Double.parseDouble(System.getProperty("guard.returnrate.min", "0.70"));
-            if (rr < minRR) {
-                logger.warn("q{} low return-rate at Kmax={}: returned={} ({}% of K). Consider increasing probes/tables.",
-                        qIndex, Kmax, uptoMax, String.format(Locale.ROOT, "%.0f", 100.0 * rr));
-            }
+            boolean rrOk = rr >= kAdaptive.targetReturnRate;
+            boolean fanoutTooHigh = fanout >= kAdaptive.maxFanout;
+            boolean roundsExceeded = round >= kAdaptive.maxRounds;
 
-            List<QueryEvaluationResult> enriched = new ArrayList<>(K_VARIANTS.length);
-            for (int k : K_VARIANTS) {
-                int upto = Math.min(k, baseReturned.size());
-                List<QueryResult> prefix = baseReturned.subList(0, upto);
+            if (rrOk || fanoutTooHigh || roundsExceeded)
+                break;
 
-                double distRatio = (baseReader == null) ? Double.NaN
-                        : ratioAtKMetric(queryVec, prefix, k, qIndex, groundtruth, baseReader, gtTrusted);
-                int[] truth = groundtruth.getGroundtruth(q, k);
+            round++;
 
-                int matches = 0;
-                for (int i = 0; i < prefix.size() && i < truth.length; i++) {
-                    int id;
-                    try {
-                        id = Integer.parseInt(prefix.get(i).getId());
-                    } catch (NumberFormatException nfe) {
-                        continue;
-                    }
-                    if (containsInt(truth, id)) matches++;
-                }
-                double precAtK = (k > 0 ? (double) matches / (double) k : 0.0);
-
-                globalMatches.put(k, globalMatches.get(k) + matches);
-                globalReturned.put(k, globalReturned.get(k) + upto);
-
-                String candMode = (candTotal >= 0 && candKeptVersion >= 0 && candDecrypted >= 0 && returned >= 0)
-                        ? "full" : "partial";
-
-                enriched.add(new QueryEvaluationResult(
-                        k, upto, distRatio, precAtK,
-                        Math.round(serverMs),
-                        insertTimeMs,
-                        candDecrypted,
-                        tokenSizeBytes, vectorDim,
-                        totalFlushed, flushThreshold,
-                        /* touchedCount      */ touchedCount,
-                        /* reencryptedCount  */ rep.rep.reencryptedCount,
-                        /* reencTimeMs       */ rep.rep.timeMs,
-                        /* reencBytesDelta   */ rep.rep.bytesDelta,
-                        /* reencBytesAfter   */ rep.rep.bytesAfter,
-                        /* ratioDenomSource  */ ratioDenomLabel(gtTrusted),
-                        /* clientTimeMs      */ Math.round(clientMs),
-                        /* tokenK            */ adaptiveKForToken,
-                        /* tokenKBase        */ baseKForToken,
-                        /* qIndexZeroBased   */ qIndex,
-                        /* candMetricsMode   */ candMode
-                ));
-            }
-
-            topKProfiler.record("Q" + q, enriched, candTotal, candKeptVersion, candDecrypted, returned);
-
-            if (doAudit) {
-                final int kAudit = Math.max(1, auditK);
-                final int uptoA = Math.min(kAudit, baseReturned.size());
-                final List<QueryResult> prefixA = baseReturned.subList(0, uptoA);
-                final int[] truthA = groundtruth.getGroundtruth(qIndex, kAudit);
-
-                final double ratioA = (baseReader == null) ? Double.NaN
-                        : ratioAtKMetric(queryVec, prefixA, kAudit, qIndex, groundtruth, baseReader, gtTrusted);
-
-                int hits = 0;
-                for (int i = 0; i < uptoA && i < truthA.length; i++) {
-                    try {
-                        int id = Integer.parseInt(prefixA.get(i).getId());
-                        if (containsInt(truthA, id)) hits++;
-                    } catch (NumberFormatException ignore) {
-                    }
-                }
-                final double precA = (kAudit > 0 ? (double) hits / (double) kAudit : 0.0);
-
-                if (auditSampleEvery > 0 && (qIndex % auditSampleEvery) == 0) {
-                    try {
-                        retrievedAudit.appendSample(qIndex, kAudit, ratioA, precA, prefixA, truthA);
-                    } catch (IOException ioe) {
-                        logger.warn("Audit sample write failed q={},k={}", qIndex, kAudit, ioe);
-                    }
-                }
-                if (auditWorstKeep > 0 && !Double.isNaN(ratioA)) {
-                    worstPQ.offer(new WorstRec(qIndex, kAudit, ratioA, precA));
-                    if (worstPQ.size() > keepWorst) worstPQ.poll();
-                }
-            }
-
-            // make captured vars effectively final for the lambda
-            final int qIndexF = qIndex;
-            final int candTotalF = candTotal;
-            final int candKeptVersionF = candKeptVersion;
-            final int candDecryptedF = candDecrypted;
-            final int returnedF = returned;
-
-            rw.writeTable("Query " + (q + 1) + " Results (dim=" + dim + ")",
-                    new String[]{
-                            "QIndex0", "TopK", "Returned", "Ratio", "Precision", "RatioDenomSource",
-                            "ServerTimeMs", "ClientTimeMs", "OverheadMs", "InsertTimeMs",
-                            "ScannedCandidates", "CandKeptVersion", "CandDecrypted", "ReturnedAgain",
-                            "TokenSize", "TokenK", "VectorDim", "TotalFlushed", "FlushThreshold",
-                            "CandMetricsMode", "TokenKBase"
-                    },
-                    enriched.stream().map(er -> new String[]{
-                            String.valueOf(qIndexF),
-                            String.valueOf(er.getTopKRequested()),
-                            String.valueOf(er.getRetrieved()),
-                            (Double.isNaN(er.getRatio()) ? "NaN" :
-                                    String.format(Locale.ROOT, "%.4f", er.getRatio())),
-                            String.format(Locale.ROOT, "%.4f", er.getPrecision()),
-                            (gtTrusted ? "gt" : "base"),
-                            String.valueOf(er.getTimeMs()),
-                            String.valueOf(er.getClientTimeMs()),
-                            String.valueOf(Math.max(0, er.getClientTimeMs() - er.getTimeMs())),
-                            String.valueOf(er.getInsertTimeMs()),
-                            String.valueOf(candTotalF),
-                            String.valueOf(candKeptVersionF),
-                            String.valueOf(candDecryptedF),
-                            String.valueOf(returnedF),
-                            String.valueOf(er.getTokenSizeBytes()),
-                            String.valueOf(er.getTokenK()),
-                            String.valueOf(er.getVectorDim()),
-                            String.valueOf(er.getTotalFlushedPoints()),
-                            String.valueOf(er.getFlushThreshold()),
-                            er.getCandMetricsMode(),
-                            String.valueOf(er.getTokenKBase())
-                    }).collect(Collectors.toList())
-            );
-
-            QueryEvaluationResult atK = enriched.stream()
-                    .filter(e -> e.getTopKRequested() == Math.max(auditK, 1))
-                    .findFirst().orElseGet(() -> enriched.get(enriched.size() - 1));
-
-            if (profiler != null) profiler.recordQueryMetric("Q" + q, serverMs, clientMs, atK.getRatio());
-            totalQueryTimeNs += Math.max(0L, clientEnd - clientStart);
-
-            if (q < 3 && !baseReturned.isEmpty() && baseReader != null) {
-                int topId = -1;
-                try {
-                    topId = Integer.parseInt(baseReturned.get(0).getId());
-                } catch (Exception ignore) {
-                }
-                int gt1 = -1;
-                int[] row = groundtruth.getGroundtruth(q, 1);
-                if (row.length > 0) gt1 = row[0];
-                double dTop = (topId >= 0) ? baseReader.l2(queryVec, topId) : Double.NaN;
-                double dGt1 = (gt1 >= 0) ? baseReader.l2(queryVec, gt1) : Double.NaN;
-                logger.info("Sanity q{}: topId={} dTop={}; gt1={} dGt1={}", q, topId, dTop, gt1, dGt1);
-            }
-        }
-
-        if (writeGlobalPrecisionCsv && computePrecision) {
-            writeGlobalPrecisionCsv(
-                    resultsDir, dim, K_VARIANTS,
-                    globalMatches, globalReturned, queriesCount
-            );
-        }
-
-        if (doAudit && !worstPQ.isEmpty()) {
-            List<WorstRec> worst = new ArrayList<>(worstPQ);
-            worst.sort(Comparator.comparingDouble((WorstRec w) -> w.ratio).reversed());
-            for (WorstRec w : worst) {
-                double[] qv = queries.get(w.qIndex);
-                QueryToken tk = factoryForDim(dim).create(qv, w.k);
-                List<QueryResult> ret = queryService.search(tk);
-                int[] truth = groundtruth.getGroundtruth(w.qIndex, w.k);
-                double ratio = (baseReader == null) ? Double.NaN
-                        : ratioAvgOverRanks(qv, ret.subList(0, Math.min(w.k, ret.size())), truth, baseReader);
-                try {
-                    retrievedAudit.appendWorst(w.qIndex, w.k, ratio, w.precision, ret, truth);
-                } catch (IOException ioe) {
-                    logger.warn("Audit worst write failed q={},k={}", w.qIndex, w.k, ioe);
-                }
-            }
+            int curShards = shardsToProbe();
+            int widened = (int) Math.ceil(curShards * kAdaptive.probeFactor);
+            System.setProperty("probe.shards", Integer.toString(widened));
         }
     }
 
@@ -1550,7 +701,9 @@ public class ForwardSecureANNSystem {
                 ids.add(java.util.UUID.randomUUID().toString());
             }
 
-            indexService.batchInsert(ids, batch);
+            for (int j = 0; j < batch.size(); j++) {
+                indexService.insert(ids.get(j), batch.get(j));
+            }
             indexedCount.addAndGet(size);
             remaining -= size;
         }
@@ -1564,7 +717,11 @@ public class ForwardSecureANNSystem {
         try {
             for (EncryptedPoint ep : metadataManager.getAllEncryptedPoints()) {
                 if (ep == null || ep.getVersion() != version) continue;
-                indexService.addPointToIndexOnly(ep);
+                //reconstruct vector ← decrypt
+                double[] vec = cryptoService.decryptFromPoint(ep, keyService.getCurrentVersion().getKey());
+                if (vec != null && vec.length > 0) {
+                    indexService.insert(ep.getId(), vec);
+                }
                 restored++;
             }
         } finally {
@@ -1595,56 +752,6 @@ public class ForwardSecureANNSystem {
 
     private static String normalizePath(String path) {
         return Paths.get(path).normalize().toString();
-    }
-
-    private static class StringKeyedCache extends ConcurrentHashMap<String, List<QueryResult>> {
-        private final int maxSize;
-        private final ConcurrentMap<String, Long> timestamps = new ConcurrentHashMap<>();
-        private static final long CACHE_EXPIRY_MS = 10 * 60 * 1000;
-
-        StringKeyedCache(int maxSize) {
-            this.maxSize = maxSize;
-        }
-
-        @Override
-        public List<QueryResult> put(String key, List<QueryResult> value) {
-            cleanExpiredEntries();
-            if (size() >= maxSize) {
-                removeOldestEntry();
-            }
-            timestamps.put(key, System.currentTimeMillis());
-            return super.put(key, value);
-        }
-
-        @Override
-        public List<QueryResult> get(Object key) {
-            List<QueryResult> v = super.get(key);
-            if (v != null) {
-                timestamps.put((String) key, System.currentTimeMillis());
-            }
-            cleanExpiredEntries();
-            return v;
-        }
-
-        private void cleanExpiredEntries() {
-            long now = System.currentTimeMillis();
-            timestamps.entrySet().removeIf(e -> {
-                boolean expired = now - e.getValue() > CACHE_EXPIRY_MS;
-                if (expired) {
-                    super.remove(e.getKey());
-                }
-                return expired;
-            });
-        }
-
-        private void removeOldestEntry() {
-            timestamps.entrySet().stream()
-                    .min(Map.Entry.comparingByValue())
-                    .ifPresent(e -> {
-                        super.remove(e.getKey());
-                        timestamps.remove(e.getKey());
-                    });
-        }
     }
 
     private void recordRecent(double[] v) {
@@ -1681,63 +788,6 @@ public class ForwardSecureANNSystem {
         }
     }
 
-    /** Empirically compute candidate fanout ratios for a single query vector. */
-    private Map<Integer, Double> computeAndLogFanoutForQ0(double[] q0, int dim, int[] kVariants) {
-        Map<Integer, Double> fanout = new LinkedHashMap<>();
-        if (q0 == null || kVariants == null || kVariants.length == 0) return fanout;
-
-        int baseK = Math.max(100, Arrays.stream(kVariants).max().orElse(100));
-        QueryToken baseToken = factoryForDim(dim).create(q0, baseK);
-        QueryServiceImpl qs = (QueryServiceImpl) queryService;
-
-        // One real search only
-        List<QueryResult> retMax = queryService.search(baseToken);
-        int candTotalOnce = qs.getLastCandTotal();
-        int returnedMax = (retMax != null ? retMax.size() : 0);
-
-        if (returnedMax <= 0) {
-            logger.warn("Fanout probe skipped: returnedMax=0 for baseK={}", baseK);
-            return fanout;
-        }
-
-        for (int k : kVariants) {
-            int returnedK = Math.min(k, returnedMax);
-            double ratio = (returnedK == 0) ? Double.NaN : ((double) candTotalOnce / (double) returnedK);
-            fanout.put(k, ratio);
-        }
-
-        boolean partitioned = (config.getPaper() != null && config.getPaper().enabled);
-        if (partitioned) {
-            var pc = config.getPaper();
-            logger.info("Fanout(Q0, approx, partitioned; m={}, λ={}, ℓ={}): {}",
-                    pc.m, pc.lambda, pc.divisions, fanout);
-        } else {
-            int L = -1, mRows = -1;
-            try {
-                EvenLSH lsh = indexService.getLshForDimension(dim);
-                try {
-                    L = (int) lsh.getClass().getMethod("getNumTables").invoke(lsh);
-                } catch (Throwable ignore) {
-                }
-                try {
-                    mRows = (int) lsh.getClass().getMethod("getRowsPerBand").invoke(lsh);
-                } catch (Throwable e1) {
-                    try {
-                        mRows = (int) lsh.getClass().getMethod("getNumHashFuncsPerTable").invoke(lsh);
-                    } catch (Throwable e2) {
-                        /* ignore */
-                    }
-                }
-            } catch (Throwable ignore) {
-            }
-            int shards = shardsToProbe();
-            logger.info("Fanout(Q0, approx, multiprobe; L={}, m={}, probeShards={}): {}",
-                    L, mRows, shards, fanout);
-        }
-        return fanout;
-    }
-
-    // lightweight, zero-copy random-access reader
     static final class BaseVectorReader implements AutoCloseable {
         private final FileChannel ch;
         private final MappedByteBuffer map;
@@ -1859,6 +909,56 @@ public class ForwardSecureANNSystem {
         }
     }
 
+    private static class StringKeyedCache extends ConcurrentHashMap<String, List<QueryResult>> {
+        private final int maxSize;
+        private final ConcurrentMap<String, Long> timestamps = new ConcurrentHashMap<>();
+        private static final long CACHE_EXPIRY_MS = 10 * 60 * 1000;
+
+        StringKeyedCache(int maxSize) {
+            this.maxSize = maxSize;
+        }
+
+        @Override
+        public List<QueryResult> put(String key, List<QueryResult> value) {
+            cleanExpiredEntries();
+            if (size() >= maxSize) {
+                removeOldestEntry();
+            }
+            timestamps.put(key, System.currentTimeMillis());
+            return super.put(key, value);
+        }
+
+        @Override
+        public List<QueryResult> get(Object key) {
+            List<QueryResult> v = super.get(key);
+            if (v != null) {
+                timestamps.put((String) key, System.currentTimeMillis());
+            }
+            cleanExpiredEntries();
+            return v;
+        }
+
+        private void cleanExpiredEntries() {
+            long now = System.currentTimeMillis();
+            timestamps.entrySet().removeIf(e -> {
+                boolean expired = now - e.getValue() > CACHE_EXPIRY_MS;
+                if (expired) {
+                    super.remove(e.getKey());
+                }
+                return expired;
+            });
+        }
+
+        private void removeOldestEntry() {
+            timestamps.entrySet().stream()
+                    .min(Map.Entry.comparingByValue())
+                    .ifPresent(e -> {
+                        super.remove(e.getKey());
+                        timestamps.remove(e.getKey());
+                    });
+        }
+    }
+
     private static final class DistId {
         final double dsq;
         final int id;
@@ -1892,59 +992,106 @@ public class ForwardSecureANNSystem {
         return out;
     }
 
-    /** Dump profiler CSVs, query list, and copies of keys/metadata/points to outDir. */
+    /** Export profiler CSVs, queries, and storage summary to outDir. */
     public void exportArtifacts(Path outDir) throws IOException {
         Files.createDirectories(outDir);
 
-        // --- profiler csvs / summaries ---
+        /* ====================================================================== */
+        /*                      1. RAW PROFILER CSV EXPORT                         */
+        /* ====================================================================== */
+
+        Path profilerCsv = outDir.resolve("profiler_metrics.csv");
+
         if (profiler != null) {
-            if (!config.getOutput().suppressLegacyMetrics) {
-                profiler.exportToCSV(outDir.resolve("profiler_metrics.csv").toString());
-                if (profiler instanceof MicrometerProfiler mp) {
-                    mp.exportQueryMetricsCSV(outDir.resolve("query_metrics.csv").toString());
-                    mp.exportMetersCSV(outDir.resolve("micrometer_meters.csv").toString());
-                }
-            }
-            var client = profiler.getAllClientQueryTimes();
-            var server = profiler.getAllServerQueryTimes();
-            var ratio = profiler.getAllQueryRatios();
-            double art = IntStream.range(0, Math.min(client.size(), server.size()))
-                    .mapToDouble(i -> client.get(i) + server.get(i))
-                    .average().orElse(0.0);
-            double avgRatio = ratio.stream().mapToDouble(Double::doubleValue).average().orElse(0);
-
-            String mode = (config.getPaper() != null && config.getPaper().enabled) ? "partitioned" : "multiprobe";
-            String cfgHash = "NA";
-            try {
-                Path cfgPath = Paths.get(this.configPath);
-                if (Files.exists(cfgPath)) {
-                    byte[] bytes = Files.readAllBytes(cfgPath);
-                    MessageDigest md = MessageDigest.getInstance("SHA-256");
-                    cfgHash = toHex(md.digest(bytes));
-                }
-            } catch (Exception ignore) {
-            }
-
-            int keyVer = -1;
-            try {
-                keyVer = keyService.getCurrentVersion().getVersion();
-            } catch (Exception ignore) {
-            }
-
-            Files.writeString(outDir.resolve("metrics_summary.txt"),
-                    String.format(Locale.ROOT,
-                            "mode=%s  config_sha256=%s  key_version=v%d%nART(ms)=%.3f%nAvgRatio=%.6f%n",
-                            mode, cfgHash, keyVer, art, avgRatio),
-                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+            profiler.exportToCSV(profilerCsv.toString());
         }
+
+        /* ====================================================================== */
+        /*                 2. COMPUTE ART + AvgRatio BY READING CSV               */
+        /* ====================================================================== */
+
+        double avgArt = 0.0;
+        double avgRatio = 0.0;
+
+        if (Files.exists(profilerCsv)) {
+
+            List<String> lines = Files.readAllLines(profilerCsv)
+                    .stream()
+                    .filter(s -> !s.trim().isEmpty())
+                    .collect(Collectors.toList());
+
+            if (lines.size() > 1) { // skip header
+                double sumArt = 0.0;
+                double sumRatio = 0.0;
+                int count = 0;
+
+                for (int i = 1; i < lines.size(); i++) {
+                    String[] cols = lines.get(i).split(",");
+
+                    if (cols.length < 7) continue;
+
+                    try {
+                        double serverMs = Double.parseDouble(cols[1]);
+                        double clientMs = Double.parseDouble(cols[2]);
+                        double ratio    = Double.parseDouble(cols[6]);
+
+                        sumArt   += (serverMs + clientMs);
+                        sumRatio += ratio;
+                        count++;
+
+                    } catch (Exception ignore) {}
+                }
+
+                if (count > 0) {
+                    avgArt = sumArt / count;
+                    avgRatio = sumRatio / count;
+                }
+            }
+        }
+
+        /* ====================================================================== */
+        /*                   3. WRITE METRICS SUMMARY (REPRODUCIBLE)              */
+        /* ====================================================================== */
+
+        String mode = "partitioned";
+
+        String cfgHash = "NA";
+        try {
+            Path cfgPath = Paths.get(this.configPath);
+            if (Files.exists(cfgPath)) {
+                byte[] bytes = Files.readAllBytes(cfgPath);
+                cfgHash = toHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+            }
+        } catch (Exception ignore) {}
+
+        int keyVer = -1;
+        try { keyVer = keyService.getCurrentVersion().getVersion(); } catch (Exception ignore) {}
+
+        Files.writeString(
+                outDir.resolve("metrics_summary.txt"),
+                String.format(Locale.ROOT,
+                        "mode=%s  config_sha256=%s  key_version=v%d%nART(ms)=%.3f%nAvgRatio=%.6f%n",
+                        mode, cfgHash, keyVer, avgArt, avgRatio),
+                StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING
+        );
+
+
+        /* ====================================================================== */
+        /*                         4. EXPORT TOP-K EVALUATION                     */
+        /* ====================================================================== */
 
         try {
             topKProfiler.export(outDir.resolve("topk_evaluation.csv").toString());
-        } catch (Exception ignore) { /* ok if not used */ }
+        } catch (Exception ignore) {}
+
+
+        /* ====================================================================== */
+        /*                         5. WRITE QUERIES SNAPSHOT                      */
+        /* ====================================================================== */
 
         if (!recentQueries.isEmpty()) {
-            var p = outDir.resolve("queries.csv");
-            try (var w = Files.newBufferedWriter(p)) {
+            Path qcsv = outDir.resolve("queries.csv");
+            try (var w = Files.newBufferedWriter(qcsv)) {
                 for (double[] q : recentQueries) {
                     for (int i = 0; i < q.length; i++) {
                         if (i > 0) w.write(",");
@@ -1955,134 +1102,50 @@ public class ForwardSecureANNSystem {
             }
         }
 
-        // === Storage summary (mode-aware) ===
+
+        /* ====================================================================== */
+        /*                      6. STORAGE SUMMARY (Option-C)                      */
+        /* ====================================================================== */
+
         try {
-            final int version = keyService.getCurrentVersion().getVersion();
-            final int N = Math.max(indexService.getIndexedVectorCount(), totalInserted);
+            int version = keyService.getCurrentVersion().getVersion();
+            int N = Math.max(indexService.getIndexedVectorCount(), totalInserted);
 
-            int dimReport = -1;
-            if (!tokenFactories.isEmpty()) {
-                try {
-                    dimReport = tokenFactories.keySet().iterator().next();
-                } catch (Exception ignore) {
-                }
-            }
+            int dim = tokenFactories.keySet().stream().findFirst().orElse(-1);
 
-            boolean partitioned = (config.getPaper() != null && config.getPaper().enabled);
-
-            int L = -1;
-            int m_rows = -1;
-            int ell = -1;
-            int m_proj = -1;
-
-            if (partitioned) {
-                var pc = config.getPaper();
-                ell = pc.divisions;
-                m_proj = pc.m;
-            } else {
-                try {
-                    if (dimReport > 0) {
-                        EvenLSH lsh = indexService.getLshForDimension(dimReport);
-                        try {
-                            L = (int) lsh.getClass().getMethod("getNumTables").invoke(lsh);
-                        } catch (Throwable ignore) {
-                        }
-                        if (L <= 0) L = numTablesFor(lsh, config);
-                        try {
-                            m_rows = (int) lsh.getClass().getMethod("getRowsPerBand").invoke(lsh);
-                        } catch (Throwable e1) {
-                            try {
-                                m_rows = (int) lsh.getClass().getMethod("getNumHashFuncsPerTable").invoke(lsh);
-                            } catch (Throwable e2) {
-                                /* leave -1 */
-                            }
-                        }
-                    }
-                } catch (Throwable ignore) {
-                }
-            }
-
-            final int shards = shardsToProbe();
+            int ell = config.getPaper().divisions;
+            int mProj = config.getPaper().m;
+            int probeShards = shardsToProbe();
 
             Path pointsVerDir = pointsPath.resolve("v" + version);
-            long bytesPoints = dirSize(pointsVerDir);
-            long bytesMeta = dirSize(metaDBPath);
-            long bytesKeys = Files.exists(keyStorePath) ? safeSize(keyStorePath) : dirSize(keyStorePath.getParent());
-            long totalBytes = bytesPoints + bytesMeta + bytesKeys;
-            double bytesPerPt = (N > 0 ? (double) totalBytes / (double) N : Double.NaN);
 
-            long indexTerms_LxN = (partitioned || L < 0) ? -1 : (long) L * (long) N;
-            long vectorTerms_Nxd = (dimReport > 0 ? (long) N * (long) dimReport : -1);
+            long bytesPoints = dirSize(pointsVerDir);
+            long bytesMeta   = dirSize(metaDBPath);
+            long bytesKeys   = Files.exists(keyStorePath)
+                    ? safeSize(keyStorePath)
+                    : dirSize(keyStorePath.getParent());
+
+            long totalBytes = bytesPoints + bytesMeta + bytesKeys;
+            double bytesPerPoint = N > 0 ? (double) totalBytes / (double) N : Double.NaN;
+            long vectorTerms = dim > 0 ? (long) N * (long) dim : -1;
 
             Path csv = outDir.resolve("storage_summary.csv");
             if (!Files.exists(csv)) {
                 Files.writeString(csv,
-                        "mode,version,dataset_size,dim,num_tables_L,divisions_ell,lsh_m_rows_per_table," +
-                                "paper_m_projections,probe_shards,points_bytes,metadata_bytes,keystore_bytes," +
-                                "total_bytes,bytes_per_point,index_terms_LxN,vector_terms_Nxd\n",
-                        StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-            }
-            String row = String.format(Locale.ROOT,
-                    "%s,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%.6f,%d,%d%n",
-                    (partitioned ? "partitioned" : "multiprobe"),
-                    version, N, dimReport,
-                    (partitioned ? -1 : L),
-                    (partitioned ? ell : -1),
-                    (partitioned ? -1 : m_rows),
-                    (partitioned ? m_proj : -1),
-                    shards,
-                    bytesPoints, bytesMeta, bytesKeys, totalBytes, bytesPerPt,
-                    indexTerms_LxN, vectorTerms_Nxd);
-            Files.writeString(csv, row, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-
-            Path txt = outDir.resolve("storage_breakdown.txt");
-            StringBuilder pretty = new StringBuilder();
-            pretty.append("=== Storage Breakdown ===\n");
-            pretty.append(String.format("Mode              : %s%n", (partitioned ? "partitioned" : "multiprobe")));
-            pretty.append(String.format("Version           : v%d%n", version));
-            pretty.append(String.format("Dataset Size (N)  : %d%n", N));
-            pretty.append(String.format("Dimension (d)     : %d%n", dimReport));
-            if (partitioned) {
-                pretty.append(String.format("Paper divisions (ℓ)        : %d%n", ell));
-                pretty.append(String.format("m (projections/division)   : %d%n", m_proj));
-            } else {
-                pretty.append(String.format("LSH tables (L)             : %d%n", L));
-                pretty.append(String.format("m (rows per LSH table)     : %d%n", m_rows));
-                pretty.append(String.format("Probe shards               : %d%n", shards));
-            }
-            pretty.append("\n");
-            pretty.append(String.format("Points bytes      : %d%n", bytesPoints));
-            pretty.append(String.format("Metadata bytes    : %d%n", bytesMeta));
-            pretty.append(String.format("Keystore bytes    : %d%n", bytesKeys));
-            pretty.append("--------------------------\n");
-            pretty.append(String.format("TOTAL bytes       : %d%n", totalBytes));
-            pretty.append(String.format("Bytes / point     : %.6f%n", bytesPerPt));
-            pretty.append("\n");
-            pretty.append("(Symbolic terms)\n");
-            pretty.append(String.format("L·N (index terms) : %d%n", indexTerms_LxN));
-            pretty.append(String.format("N·d (vector terms): %d%n", vectorTerms_Nxd));
-            pretty.append("\n");
-            Files.writeString(txt, pretty.toString(), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-
-            Path readme = outDir.resolve("README_results_columns.txt");
-            if (!Files.exists(readme)) {
-                Files.writeString(readme,
-                        """
-                        Files & units:
-                        - storage_summary.csv
-                          * mode: partitioned|multiprobe
-                          * *_bytes: long bytes; bytes_delta may be negative (compaction).
-                        - storage_breakdown.txt: human-readable mirror of the CSV (mode-aware L vs ℓ, and m label).
-                        - metrics_summary.txt:
-                          * First line includes mode, config SHA-256, active key version.
-                          * ART(ms) and AvgRatio are aggregates over the run.
-                        - reencrypt_metrics.csv:
-                          * TimeMs is long milliseconds. Bytes* are long bytes. BytesDelta may be negative.
-                        """,
+                        "mode,version,N,dim,ell,m_proj,probe_shards," +
+                                "points_bytes,metadata_bytes,keystore_bytes," +
+                                "total_bytes,bytes_per_point,vector_terms_Nxd\n",
                         StandardOpenOption.CREATE_NEW);
             }
 
-            logger.info("Storage summary written: {}, {}", csv, txt);
+            String row = String.format(Locale.ROOT,
+                    "partitioned,%d,%d,%d,%d,%d,%d,%d,%d,%d,%.6f,%d%n",
+                    version, N, dim, ell, mProj, probeShards,
+                    bytesPoints, bytesMeta, bytesKeys,
+                    bytesPerPoint, vectorTerms);
+
+            Files.writeString(csv, row, StandardOpenOption.APPEND);
+
         } catch (Exception e) {
             logger.warn("Failed to write storage summary", e);
         }
@@ -2139,6 +1202,16 @@ public class ForwardSecureANNSystem {
         }
     }
 
+    static final class TrueNN {
+        final int id;
+        final double d;
+
+        TrueNN(int id, double d) {
+            this.id = id;
+            this.d = d;
+        }
+    }
+
     private TrueNN computeTrueNNFromBase(double[] q, BaseVectorReader br) {
         double bestSq = Double.POSITIVE_INFINITY;
         int bestId = -1;
@@ -2150,119 +1223,6 @@ public class ForwardSecureANNSystem {
             }
         }
         return new TrueNN(bestId, Math.sqrt(bestSq));
-    }
-
-    /** Compute ratio@K(q) using ranked lists: average over i=1..upto of sqrt(d2(ret_i)/d2(gt_i)). */
-    private static double ratioAtKFromLists(double[] q,
-                                            List<QueryResult> retPrefix,
-                                            int k,
-                                            int[] gtTopK,
-                                            BaseVectorReader br) {
-        final double eps = 1e-24;
-        final int upto = Math.min(k, Math.min(retPrefix.size(), gtTopK.length));
-        if (upto <= 0) return 1.0;
-        double sum = 0.0;
-        int used = 0;
-        for (int i = 0; i < upto; i++) {
-            int ridx;
-            try {
-                ridx = Integer.parseInt(retPrefix.get(i).getId());
-            } catch (NumberFormatException nfe) {
-                continue;
-            }
-            double d2Num = br.l2sq(q, ridx);
-            double d2Den = br.l2sq(q, gtTopK[i]);
-            if (!Double.isFinite(d2Num) || !Double.isFinite(d2Den)) continue;
-            if (d2Den <= eps) {
-                sum += (d2Num <= eps) ? 1.0 : 1.0;
-            } else {
-                sum += Math.sqrt(d2Num / d2Den);
-            }
-            used++;
-        }
-        return (used == 0) ? 1.0 : (sum / used);
-    }
-
-    /** Dispatcher that chooses GT vs BASE for the denominator list and computes the per-rank average ratio. */
-    private double ratioAtKMetric(double[] q,
-                                  List<QueryResult> retPrefix,
-                                  int k,
-                                  int qIndex,
-                                  GroundtruthManager gt,
-                                  BaseVectorReader br,
-                                  boolean gtTrusted) {
-        if (br == null || retPrefix == null || retPrefix.isEmpty() || k <= 0) {
-            return Double.NaN;
-        }
-        int[] gtTopK;
-        switch (this.ratioSource) {
-            case GT -> {
-                gtTopK = gt.getGroundtruth(qIndex, k);
-                if (gtTopK.length == 0) return Double.NaN;
-                return ratioAtKFromLists(q, retPrefix, k, gtTopK, br);
-            }
-            case AUTO -> {
-                if (gtTrusted) {
-                    gtTopK = gt.getGroundtruth(qIndex, k);
-                    if (gtTopK.length == 0) return Double.NaN;
-                    return ratioAtKFromLists(q, retPrefix, k, gtTopK, br);
-                } else {
-                    int[] baseTopK = topKFromBase(br, q, k);
-                    return ratioAtKFromLists(q, retPrefix, k, baseTopK, br);
-                }
-            }
-            case BASE -> {
-                int[] baseTopK = topKFromBase(br, q, k);
-                return ratioAtKFromLists(q, retPrefix, k, baseTopK, br);
-            }
-            default -> {
-                return Double.NaN;
-            }
-        }
-    }
-
-    // Paper-accurate ratio@K (average over ranks 1..K).
-    private static double ratioAvgOverRanks(double[] q,
-                                            List<QueryResult> retrievedPrefix,
-                                            int[] truthTopK,
-                                            BaseVectorReader br) {
-        if (q == null || br == null || retrievedPrefix == null || truthTopK == null) return Double.NaN;
-        final int upto = Math.min(retrievedPrefix.size(), truthTopK.length);
-        if (upto <= 0) return Double.NaN;
-
-        double sum = 0.0;
-        int terms = 0;
-
-        for (int i = 0; i < upto; i++) {
-            QueryResult qr = retrievedPrefix.get(i);
-            int rIdx;
-            try {
-                rIdx = Integer.parseInt(qr.getId());
-            } catch (NumberFormatException ignored) {
-                continue;
-            }
-
-            int oIdx = truthTopK[i];
-
-            if (rIdx == oIdx) {
-                sum += 1.0;
-                terms++;
-                continue;
-            }
-
-            double numSq = br.l2sq(q, rIdx);
-            double denSq = br.l2sq(q, oIdx);
-            if (!(Double.isFinite(numSq) && Double.isFinite(denSq))) continue;
-
-            if (denSq <= RATIO_EPS) {
-                sum += 1.0;
-            } else {
-                if (numSq < 0) numSq = 0.0;
-                sum += Math.sqrt(numSq / denSq);
-            }
-            terms++;
-        }
-        return (terms == 0) ? Double.NaN : (sum / terms);
     }
 
     private static int numTablesFor(EvenLSH lsh, SystemConfig cfg) {
@@ -2281,57 +1241,6 @@ public class ForwardSecureANNSystem {
         }
 
         return 4; // fallback
-    }
-
-    private int shardsToProbe() {
-        int cfgVal = config.getLsh() != null ? config.getLsh().getProbeShards() : 0;
-        String prop = System.getProperty("probe.shards");
-        if (prop != null) {
-            try {
-                int v = Integer.parseInt(prop);
-                if (v > 0) return v;
-            } catch (NumberFormatException ignore) {}
-        }
-        if (cfgVal > 0) return cfgVal;
-        return Math.max(1, config.getNumShards() / 4); // or whatever baseline you like
-    }
-
-    private boolean sampleDimsOk(BaseVectorReader br) {
-        int[] probes = {0, Math.max(0, br.count / 2), Math.max(0, br.count - 1)};
-        for (int idx : probes) {
-            if (!br.storedDimOk(idx)) return false;
-        }
-        return true;
-    }
-
-    private boolean sampleGtMatchesTrueNN(List<double[]> queries,
-                                          GroundtruthManager gt,
-                                          BaseVectorReader br,
-                                          int sampleSize, double tol) {
-        if (queries.isEmpty() || gt.size() == 0) return false;
-        int n = Math.min(sampleSize, Math.min(queries.size(), gt.size()));
-        int mismatches = 0;
-
-        java.util.Random rnd = new java.util.Random(13);
-        for (int t = 0; t < n; t++) {
-            int qi = rnd.nextInt(Math.min(queries.size(), gt.size()));
-            int[] row = gt.getGroundtruth(qi, 1);
-            if (row.length == 0) {
-                mismatches++;
-                continue;
-            }
-            int gtId = row[0];
-
-            TrueNN dn = computeTrueNNFromBase(queries.get(qi), br);
-            if (dn.id != gtId) mismatches++;
-        }
-        double rate = mismatches / (double) n;
-        if (rate > tol) {
-            logger.warn("GT trust check failed: mismatch rate={}/{} ({})", mismatches, n, rate);
-            return false;
-        }
-        logger.info("GT trust check passed: mismatch rate={}/{} ({})", mismatches, n, rate);
-        return true;
     }
 
     /** Disable System exit on shutdown (for tests). */
@@ -2396,15 +1305,6 @@ public class ForwardSecureANNSystem {
         }
 
         return sb.toString();
-    }
-
-    private static double scanTrueNNSq(double[] q, BaseVectorReader br) {
-        double best = Double.POSITIVE_INFINITY;
-        for (int i = 0; i < br.count; i++) {
-            double d2 = br.l2sq(q, i);
-            if (d2 < best) best = d2;
-        }
-        return best;
     }
 
     // --- storage helpers ---
@@ -2665,22 +1565,6 @@ public class ForwardSecureANNSystem {
         return false;
     }
 
-    private static void guardCandidateInvariants(int qIndex, int candTotal, int kept, int dec, int ret) {
-        if (candTotal < kept) {
-            logger.warn("q{} invariant: ScannedCandidates ({}) < KeptVersion ({})", qIndex, candTotal, kept);
-        }
-        if (kept < dec) {
-            logger.warn("q{} invariant: KeptVersion ({}) < Decrypted ({})", qIndex, kept, dec);
-        }
-        if (dec < ret) {
-            logger.warn("q{} invariant: Decrypted ({}) < Returned ({})", qIndex, dec, ret);
-        }
-        if (ret < 0 || dec < 0 || kept < 0 || candTotal < 0) {
-            logger.warn("q{} invariant: negative counters [scanned={}, kept={}, dec={}, ret={}]",
-                    qIndex, candTotal, kept, dec, ret);
-        }
-    }
-
     private String ratioDenomLabel(boolean gtTrusted) {
         return switch (this.ratioSource) {
             case GT -> "gt";
@@ -2689,7 +1573,7 @@ public class ForwardSecureANNSystem {
         };
     }
 
-    private static final class ReencReport {
+    public static final class ReencReport {
         final int reencryptedCount;
         final long timeMs;
         final long bytesDelta;
@@ -2706,12 +1590,14 @@ public class ForwardSecureANNSystem {
             return new ReencReport(0, 0L, 0L, 0L);
         }
 
-        ReencReport withTimeMs(long ms) {
-            return new ReencReport(this.reencryptedCount, ms, this.bytesDelta, this.bytesAfter);
-        }
+        // MUST be public
+        public int getReencryptedCount() { return reencryptedCount; }
+        public long getTimeMs() { return timeMs; }
+        public long getBytesDelta() { return bytesDelta; }
+        public long getBytesAfter() { return bytesAfter; }
     }
 
-    private static final class ReencOutcome {
+    static final class ReencOutcome {
         final int cumulativeUnique;
         final ReencReport rep;
 
@@ -2721,27 +1607,7 @@ public class ForwardSecureANNSystem {
         }
     }
 
-    public void disableLSHForAllDimensions() {
-        try {
-            Field f = this.getClass().getDeclaredField("lshPerDim");
-            f.setAccessible(true);
-            Map<Integer, EvenLSH> map = (Map<Integer, EvenLSH>) f.get(this);
-            if (map != null) map.clear();
-        } catch (Throwable ignore) {}
-    }
-
-    /** Server ms, gently bounded to the client window. */
-    private static double boundedServerMs(QueryServiceImpl qs, long clientStartNs, long clientEndNs) {
-        final long clientWin = Math.max(0L, clientEndNs - clientStartNs);
-        long server = Math.max(0L, qs.getLastQueryDurationNs());
-
-        if (clientWin > 0 && server > clientWin * 1.10) {
-            server = clientWin;
-        }
-        return server / 1_000_000.0;
-    }
-
-    private static String buildQueryCacheKey(double[] q, int topK, int dim) {
+     private static String buildQueryCacheKey(double[] q, int topK, int dim) {
         int h = 1;
         for (double v : q) {
             long bits = Double.doubleToLongBits(v);
@@ -2752,7 +1618,7 @@ public class ForwardSecureANNSystem {
 
     // Delegate to sharded metadata when available:
     private RocksDBMetadataManager getMetadataManager() {
-        // For now, keep using regular metadata
+        // For now, using regular metadata
         // Full migration would require wrapping ShardedMetadataManager
         // to implement same interface as RocksDBMetadataManager
         return this.metadataManager;
@@ -2812,9 +1678,191 @@ public class ForwardSecureANNSystem {
         }
     }
 
-    public void clearTouchedGlobal() {
-        touchedGlobal.clear();
-        logger.info("Cleared touchedGlobal set for new run");
+    /* ====================================================================== */
+    /*                     FORWARD SECURE ANN — PUBLIC FAÇADE                */
+    /* ====================================================================== */
+
+    /** Façade: produce a token for (q, k, dim) */
+    public QueryToken createToken(double[] q, int k, int dim) {
+        return factoryForDim(dim).create(q, k);
+    }
+
+    /** Façade: produce a cloaked token (noise only if enabled) */
+    public QueryToken cloakQuery(double[] q, int dim, int k) {
+        if (configuredNoiseScale <= 0) {
+            return createToken(q, k, dim);
+        }
+        return factoryForDim(dim).create(q, k); // QueryExecutionEngine adds cloak noise separately
+    }
+
+    /** Façade: expose QueryTokenFactory */
+    public QueryTokenFactory getFactoryForDim(int dim) {
+        return factoryForDim(dim);
+    }
+
+    /** Façade: expose QueryServiceImpl */
+    public QueryServiceImpl getQueryServiceImpl() {
+        return (QueryServiceImpl) this.queryService;
+    }
+
+    /** Façade: get current shard probing count */
+    public int shardsToProbe() {
+        int cfgVal = config.getLsh() != null ? config.getLsh().getProbeShards() : 0;
+        String prop = System.getProperty("probe.shards");
+        if (prop != null) {
+            try {
+                int v = Integer.parseInt(prop);
+                if (v > 0) return v;
+            } catch (Exception ignore) {}
+        }
+        if (cfgVal > 0) return cfgVal;
+        return Math.max(1, config.getNumShards() / 4);
+    }
+
+    /** Façade: update probe shard count */
+    public void widenProbeShards(int newShardCount) {
+        if (newShardCount > 0) {
+            System.setProperty("probe.shards", Integer.toString(newShardCount));
+        }
+    }
+
+    /** Façade: return-rate check */
+    public boolean rrOk(double rr, double targetRR) {
+        return rr >= targetRR;
+    }
+
+    /** Façade: fanout check */
+    public boolean fanoutTooHigh(double fanout, double maxFanout) {
+        return fanout >= maxFanout;
+    }
+
+    /** Façade: round-limit check */
+    public boolean roundsExceeded(int round, int maxRounds) {
+        return round >= maxRounds;
+    }
+
+    private double ratioAtKMetric(double[] q,
+                                  List<QueryResult> prefix,
+                                  int k,
+                                  int qIndex,
+                                  GroundtruthManager gt,
+                                  BaseVectorReader base,
+                                  boolean trusted) {
+
+        if (prefix == null || prefix.isEmpty() || k <= 0) return 0.0;
+
+        int[] truth;
+        if (ratioSource == RatioSource.GT || (ratioSource == RatioSource.AUTO && trusted)) {
+            truth = gt.getGroundtruth(qIndex, k);
+        } else {
+            truth = topKFromBase(base, q, k);
+        }
+
+        if (truth == null || truth.length == 0) return 0.0;
+
+        int hits = 0;
+        int upto = Math.min(k, prefix.size());
+        for (int i = 0; i < upto; i++) {
+            try {
+                int id = Integer.parseInt(prefix.get(i).getId());
+                if (containsInt(truth, id)) hits++;
+            } catch (Exception ignore) {}
+        }
+        return (double) hits / (double) truth.length;
+    }
+
+    /** Façade: compute server-ms bounded to client window */
+    public double boundedServerMs(QueryServiceImpl qs, long startNs, long endNs) {
+        final long clientWin = Math.max(0L, endNs - startNs);
+        long server = Math.max(0L, qs.getLastQueryDurationNs());
+        if (clientWin > 0 && server > clientWin * 1.10) server = clientWin;
+        return server / 1_000_000.0;
+    }
+
+    /** Façade: cache-key for QueryToken */
+    public String getCacheKeyOf(QueryToken tok) {
+        return cacheKeyOf(tok);
+    }
+
+    /** Façade: expose the logical-result cache */
+    public Map<String, List<QueryResult>> getQueryCache() {
+        return this.queryCache;
+    }
+
+    /** Façade: record most recent queries for artifact export */
+    public void recordRecentVector(double[] q) {
+        recordRecent(q);
+    }
+
+    /** Façade: global query-time accumulator */
+    public void addQueryTime(long ns) {
+        totalQueryTimeNs += Math.max(0L, ns);
+    }
+
+    /** Façade: compute ratio@K */
+    public double computeRatio(double[] q,
+                               List<QueryResult> prefix,
+                               int k,
+                               int qIndex,
+                               GroundtruthManager gt,
+                               boolean trusted) {
+        if (baseReader == null) return Double.NaN;
+        return ratioAtKMetric(q, prefix, k, qIndex, gt, baseReader, trusted);
+    }
+
+    /** Façade: compute precision@K */
+    public double computePrecision(List<QueryResult> prefix, int[] truth) {
+        if (truth == null || truth.length == 0) return 0.0;
+        int hits = 0;
+        for (int i = 0; i < prefix.size() && i < truth.length; i++) {
+            try {
+                int id = Integer.parseInt(prefix.get(i).getId());
+                if (containsInt(truth, id)) hits++;
+            } catch (Exception ignore) {}
+        }
+        return (double) hits / truth.length;
+    }
+
+    /** Façade: GT / BASE label exposure */
+    public String ratioDenomLabelPublic(boolean trusted) {
+        return ratioDenomLabel(trusted);
+    }
+
+    /** Façade: expose selective re-encryption hook */
+    public ReencOutcome doReencrypt(String label, QueryServiceImpl qs) {
+        return maybeReencryptTouched(label, qs);
+    }
+
+    /** Façade: max-K across auditK and K-variants */
+    public int baseKForToken() {
+        return Math.max(
+                Math.max(auditK, 100),
+                Arrays.stream(K_VARIANTS).max().orElse(100)
+        );
+    }
+
+    public void resetProbeShards() {
+        System.clearProperty("probe.shards");
+    }
+
+    public boolean kAdaptiveProbeEnabled() {
+        return kAdaptive != null && kAdaptive.enabled;
+    }
+
+    /** Façade: insert-related metrics */
+    public long lastInsertMs() {
+        var buf = indexService.getPointBuffer();
+        return buf != null ? buf.getLastBatchInsertTimeMs() : 0L;
+    }
+
+    public int totalFlushed() {
+        var buf = indexService.getPointBuffer();
+        return buf != null ? buf.getTotalFlushedPoints() : 0;
+    }
+
+    public int flushThreshold() {
+        var buf = indexService.getPointBuffer();
+        return buf != null ? buf.getFlushThreshold() : 0;
     }
 
     public void flushAll() throws IOException {
@@ -2905,121 +1953,150 @@ public class ForwardSecureANNSystem {
     }
 
     public static void main(String[] args) throws Exception {
+
         if (args.length < 7) {
             System.err.println("Usage: <configPath> <dataPath> <queryPath> <keysFilePath> <dimensions> <metadataPath> <groundtruthPath> [batchSize]");
             System.exit(1);
         }
 
-        String configFile = args[0];
-        String dataPath = args[1];
-        String queryPath = args[2];
-        String keysFile = args[3];
-        List<Integer> dimensions = Arrays.stream(args[4].split(",")).map(Integer::parseInt).collect(Collectors.toList());
-        Path metadataPath = Paths.get(args[5]);
-        String groundtruthPath = args[6];
-        int batchSize = args.length >= 8 ? Integer.parseInt(args[7]) : 100_000;
+        String configFile     = args[0];
+        String dataPath       = args[1];
+        String queryPath      = args[2];
+        String keysFile       = args[3];
+        List<Integer> dims    = Arrays.stream(args[4].split(",")).map(Integer::parseInt).toList();
+        Path metadataPath     = Paths.get(args[5]);
+        String groundtruth    = args[6];
+        int batchSize         = (args.length >= 8 ? Integer.parseInt(args[7]) : 100_000);
 
         Files.createDirectories(metadataPath);
-        Path pointsPath = metadataPath.resolve("points");
-        Path metaDBPath = metadataPath.resolve("metadata");
-        Files.createDirectories(pointsPath);
-        Files.createDirectories(metaDBPath);
+        Path pointsRoot = metadataPath.resolve("points");
+        Path metaDBRoot = metadataPath.resolve("metadata");
+        Files.createDirectories(pointsRoot);
+        Files.createDirectories(metaDBRoot);
 
+        // --- metadata + keystore ---
         RocksDBMetadataManager metadataManager =
-                RocksDBMetadataManager.create(metaDBPath.toString(), pointsPath.toString());
+                RocksDBMetadataManager.create(metaDBRoot.toString(), pointsRoot.toString());
 
-        Path resolvedKeyStore = resolveKeyStorePath(keysFile, metadataPath);
-        Files.createDirectories(resolvedKeyStore.getParent());
-        KeyManager keyManager = new KeyManager(resolvedKeyStore.toString());
+        Path resolvedKS = resolveKeyStorePath(keysFile, metadataPath);
+        Files.createDirectories(resolvedKS.getParent());
+        KeyManager keyManager = new KeyManager(resolvedKS.toString());
 
-        boolean queryOnly = "POINTS_ONLY".equalsIgnoreCase(dataPath) || Boolean.getBoolean("query.only");
-        int restoreVersion = Integer.getInteger("restore.version", -1);
-        if (queryOnly && restoreVersion <= 0) {
-            restoreVersion = detectLatestVersion(pointsPath);
-        }
-
-        com.fspann.api.ApiSystemConfig apiCfg = new com.fspann.api.ApiSystemConfig(configFile);
+        // --- system config ---
+        ApiSystemConfig apiCfg = new ApiSystemConfig(configFile);
         SystemConfig cfg = apiCfg.getConfig();
 
+        boolean queryOnlyMode = "POINTS_ONLY".equalsIgnoreCase(dataPath)
+                || Boolean.getBoolean("query.only");
+        int restoreVer = Integer.getInteger("restore.version", -1);
+
+        if (queryOnlyMode && restoreVer <= 0) {
+            restoreVer = detectLatestVersion(pointsRoot);
+        }
+
+        // --- base/query vectors paths ---
         Path baseVecs = Paths.get(dataPath);
         Path queryVecs = Paths.get(queryPath);
 
-        int kMax = 100;
-        try {
-            int[] ks = (cfg.getEval() != null && cfg.getEval().kVariants != null) ? cfg.getEval().kVariants : null;
-            if (ks != null && ks.length > 0) {
-                for (int v : ks) if (v > kMax) kMax = v;
-            }
-        } catch (Exception ignore) {}
+        // --- GT selection or generation ---
+        int kMax = Arrays.stream(
+                (cfg.getEval() != null && cfg.getEval().kVariants != null)
+                        ? cfg.getEval().kVariants
+                        : new int[]{100}
+        ).max().orElse(100);
 
-        boolean needAutoGT = "AUTO".equalsIgnoreCase(groundtruthPath) || !Files.exists(Paths.get(groundtruthPath));
+        boolean needAutoGT = "AUTO".equalsIgnoreCase(groundtruth)
+                || !Files.exists(Paths.get(groundtruth));
+
         if (needAutoGT) {
-            if (!"POINTS_ONLY".equalsIgnoreCase(dataPath)) {
+            if (!queryOnlyMode) {
                 int threads = Math.max(1, Runtime.getRuntime().availableProcessors() / 2);
-                Path outGt = com.fspann.api.GroundtruthPrecompute.defaultOutputForQuery(queryVecs);
+                Path outGt = GroundtruthPrecompute.defaultOutputForQuery(queryVecs);
+
                 try {
-                    Path gtComputed = com.fspann.api.GroundtruthPrecompute.run(baseVecs, queryVecs, outGt, kMax, threads);
-                    groundtruthPath = gtComputed.toString();
-                    System.out.println("Groundtruth auto-precomputed at: " + groundtruthPath);
+                    Path gtComputed =
+                            GroundtruthPrecompute.run(baseVecs, queryVecs, outGt, kMax, threads);
+                    groundtruth = gtComputed.toString();
+                    System.out.println("Groundtruth auto-precomputed at: " + groundtruth);
                 } catch (Exception e) {
                     System.err.println("GT precompute failed: " + e.getMessage());
-                    e.printStackTrace();
                     System.exit(2);
                 }
+
             } else {
-                System.err.println("GT requested AUTO but dataPath=POINTS_ONLY (no base vectors). Provide a GT file.");
+                System.err.println("AUTO GT not allowed in POINTS_ONLY mode.");
                 System.exit(2);
             }
         }
-        if (!"POINTS_ONLY".equalsIgnoreCase(dataPath) && Files.exists(baseVecs)) {
+
+        if (!queryOnlyMode && Files.exists(baseVecs)) {
             System.setProperty("base.path", baseVecs.toString());
         }
+
+        // --- Key lifecycle ---
         int opsCap = (int) Math.min(Integer.MAX_VALUE, cfg.getOpsThreshold());
         long ageMs = cfg.getAgeThresholdMs();
 
         KeyRotationPolicy policy = new KeyRotationPolicy(
-                queryOnly ? Integer.MAX_VALUE : opsCap,
-                queryOnly ? Long.MAX_VALUE : ageMs
+                queryOnlyMode ? Integer.MAX_VALUE : opsCap,
+                queryOnlyMode ? Long.MAX_VALUE : ageMs
         );
 
-        KeyRotationServiceImpl keyService =
-                new KeyRotationServiceImpl(keyManager, policy, metaDBPath.toString(), metadataManager, null);
-        CryptoService cryptoService =
-                new com.fspann.crypto.AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadataManager);
-        keyService.setCryptoService(cryptoService);
+        KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(
+                keyManager, policy, metaDBRoot.toString(), metadataManager, null
+        );
 
-        if (queryOnly && restoreVersion > 0) {
-            boolean ok = keyService.activateVersion(restoreVersion);
-            if (!ok) {
-                logger.warn("Could not activate key version v{}; current is v{}",
-                        restoreVersion, keyService.getCurrentVersion().getVersion());
-            }
-        }
-        logger.info("Key current version at startup: v{}", keyService.getCurrentVersion().getVersion());
+        CryptoService crypto = new com.fspann.crypto.AesGcmCryptoService(
+                new SimpleMeterRegistry(), keyService, metadataManager
+        );
+        keyService.setCryptoService(crypto);
 
-        try {
-            cryptoService.getClass()
-                    .getMethod("setKeyService", KeyLifeCycleService.class)
-                    .invoke(cryptoService, keyService);
-        } catch (Throwable t) {
-            logger.warn("Could not setKeyService on cryptoService; using fallback wiring", t);
+        if (queryOnlyMode && restoreVer > 0) {
+            keyService.activateVersion(restoreVer);
         }
 
+        // --- Construct system ---
         ForwardSecureANNSystem sys = new ForwardSecureANNSystem(
-                configFile, dataPath, keysFile, dimensions, metadataPath, false,
-                metadataManager, cryptoService, batchSize
+                configFile, dataPath, keysFile, dims, metadataPath,
+                false, metadataManager, crypto, batchSize
         );
 
-        if (queryOnly) {
+        // =====================================================================
+        //                   QUERY ONLY MODE (NO INDEXING)
+        // =====================================================================
+        if (queryOnlyMode) {
             sys.setQueryOnlyMode(true);
-            if (restoreVersion > 0) {
-                int restored = sys.restoreIndexFromDisk(restoreVersion);
-                logger.info("Ready to query: restored {} points for dim={} (requested)", restored, dimensions.get(0));
-            } else {
-                logger.warn("No on-disk version found to restore; continuing with empty in-memory index");
+
+            if (restoreVer > 0) {
+                int restored = sys.restoreIndexFromDisk(restoreVer);
+                System.out.println("Restored: " + restored + " points");
             }
+
             sys.finalizeForSearch();
-            sys.runQueries(queryPath, dimensions.get(0), groundtruthPath);
+
+            //Load queries
+            DefaultDataLoader loader = new DefaultDataLoader();
+            List<double[]> queries = new ArrayList<>();
+
+            while (true) {
+                List<double[]> batch = loader.loadData(queryVecs.toString(), dims.get(0));
+                if (batch == null || batch.isEmpty()) break;
+                queries.addAll(batch);
+            }
+
+            // load GT
+            GroundtruthManager gt = new GroundtruthManager();
+            gt.load(groundtruth);
+
+            // unified evaluation
+            sys.engine.evalBatch(
+                    queries,
+                    dims.get(0),
+                    gt,
+                    sys.resultsDir,
+                    true
+            );
+
             sys.shutdown();
             if (cfg.getOutput() != null && cfg.getOutput().exportArtifacts) {
                 sys.exportArtifacts(sys.resultsDir);
@@ -3027,36 +2104,44 @@ public class ForwardSecureANNSystem {
             return;
         }
 
-        if ("true".equals(System.getProperty("disable.exit"))) {
-            sys.setExitOnShutdown(false);
+        // =====================================================================
+        //                        FULL INDEXING + EVALUATION
+        // =====================================================================
+
+        // 1) Index
+        sys.indexStream(dataPath, dims.get(0));
+
+        // 2) Freeze index for query phase
+        sys.finalizeForSearch();
+
+        // 3) Load queries
+        DefaultDataLoader loader = new DefaultDataLoader();
+        List<double[]> queries = new ArrayList<>();
+
+        while (true) {
+            List<double[]> batch = loader.loadData(queryVecs.toString(), dims.get(0));
+            if (batch == null || batch.isEmpty()) break;
+            queries.addAll(batch);
         }
 
-        int dim = dimensions.get(0);
-        sys.runEndToEnd(dataPath, queryPath, dim, groundtruthPath);
+        // 4) Load GT manager
+        GroundtruthManager gt = new GroundtruthManager();
+        gt.load(groundtruth);
 
-        if (sys.getProfiler() != null) {
-            var client = sys.getProfiler().getAllClientQueryTimes();
-            var server = sys.getProfiler().getAllServerQueryTimes();
-            var ratios = sys.getProfiler().getAllQueryRatios();
+        // 5) Unified batch evaluation
+        sys.engine.evalBatch(
+                queries,
+                dims.get(0),
+                gt,
+                sys.resultsDir,
+                true
+        );
 
-            double avgClient = client.stream().mapToDouble(d -> d).average().orElse(0.0);
-            double avgServer = server.stream().mapToDouble(d -> d).average().orElse(0.0);
-            double artMs = java.util.stream.IntStream.range(0, Math.min(client.size(), server.size()))
-                    .mapToDouble(i -> client.get(i) + server.get(i))
-                    .average().orElse(0.0);
-            double avgRatio = ratios.stream().mapToDouble(Double::doubleValue).average().orElse(0.0);
-
-            System.out.printf("Average Client Query Time: %.2f ms%n", avgClient);
-            System.out.printf("Average Server Query Time: %.2f ms%n", avgServer);
-            System.out.printf("Average Total Query Time (ART): %.2f ms%n", artMs);
-            System.out.printf("Average Ratio: %.4f%n", avgRatio);
-        }
-
-        long start = System.currentTimeMillis();
+        // 6) Shutdown + export
         sys.shutdown();
+
         if (cfg.getOutput() != null && cfg.getOutput().exportArtifacts) {
             sys.exportArtifacts(sys.resultsDir);
         }
-        logger.info("Shutdown completed in {} ms", System.currentTimeMillis() - start);
     }
 }
