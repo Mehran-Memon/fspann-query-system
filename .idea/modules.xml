@@ -3,6 +3,7 @@
   <component name="ProjectModuleManager">
     <modules>
       <module fileurl="file://$PROJECT_DIR$/.idea/fspann-query-system.iml" filepath="$PROJECT_DIR$/.idea/fspann-query-system.iml" />
+      <module fileurl="file://$PROJECT_DIR$/it.iml" filepath="$PROJECT_DIR$/it.iml" />
     </modules>
   </component>
 </project>
