@@ -1,20 +1,18 @@
 package com.fspann.it;
 
 import com.fspann.api.ForwardSecureANNSystem;
+import com.fspann.common.*;
 import com.fspann.loader.GroundtruthManager;
 import com.fspann.crypto.*;
-
 import com.fspann.key.*;
-import com.fspann.common.*;
 
 import org.junit.jupiter.api.*;
 
 import java.nio.file.*;
 import java.util.*;
-
 import static org.junit.jupiter.api.Assertions.*;
 
-public class RatioPipelineIT {
+public class RatioPipelineIT extends BaseSystemIT {
 
     @Test
     void testRatioComputationBaseSource() throws Exception {
@@ -27,42 +25,53 @@ public class RatioPipelineIT {
         Files.createDirectories(meta);
         Files.createDirectories(pts);
 
-        RocksDBMetadataManager metadata =
+        // seed file required
+        Path seed = root.resolve("seed.csv");
+        Files.writeString(seed, "");
+
+        RocksDBMetadataManager m =
                 RocksDBMetadataManager.create(meta.toString(), pts.toString());
 
-        KeyRotationServiceImpl ksvc = new KeyRotationServiceImpl(
+        KeyRotationServiceImpl ksrv = new KeyRotationServiceImpl(
                 new KeyManager(ks.toString()),
                 new KeyRotationPolicy(999999,999999),
                 meta.toString(),
-                metadata,
+                m,
                 null
         );
 
-        AesGcmCryptoService crypto = new AesGcmCryptoService(null, ksvc, metadata);
-        ksvc.setCryptoService(crypto);
+        AesGcmCryptoService crypto = new AesGcmCryptoService(null, ksrv, m);
+        ksrv.setCryptoService(crypto);
 
-        // Make 10 base vectors
-        List<double[]> base = new ArrayList<>();
-        for (int i = 0; i < 10; i++)
-            base.add(new double[]{i, i+0.1, i+0.2, i+0.3});
-
-        Files.writeString(Paths.get(System.getProperty("base.path","base.fvecs")),
-                ""); // Fake, we do not test file IO here
+        // Dummy GT file
+        Path gtPath = root.resolve("gt.ivecs");
+        Files.writeString(gtPath, "");
 
         ForwardSecureANNSystem sys = new ForwardSecureANNSystem(
-                "CFG","DATA",ks.toString(),
-                List.of(4), root,false,metadata,crypto,32
+                gtPath.toString(),     // config path not used for ratio
+                seed.toString(),
+                ks.toString(),
+                List.of(4),
+                root,
+                false,
+                m,
+                crypto,
+                32
         );
 
+        ksrv.setIndexService(sys.getIndexService());
+
+        // Insert base vectors
         for (int i=0;i<10;i++)
-            sys.insert(String.valueOf(i), base.get(i), 4);
+            sys.insert(String.valueOf(i),
+                    new double[]{i, i+0.1, i+0.2, i+0.3}, 4);
 
         sys.finalizeForSearch();
 
         List<double[]> queries = List.of(new double[]{1.0,1.1,1.2,1.3});
 
         GroundtruthManager gt = new GroundtruthManager();
-        gt.load(tempEmptyGT.ivecs);
+        gt.load(gtPath.toString());   // OK — file exists
 
         sys.getEngine().evalBatch(
                 queries,
@@ -73,7 +82,6 @@ public class RatioPipelineIT {
         );
 
         sys.shutdown();
-
         assertTrue(true);
     }
 }

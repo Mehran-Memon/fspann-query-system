@@ -1,97 +1,143 @@
 package com.fspann.api;
 
+import com.fspann.common.Profiler;
+import io.micrometer.core.instrument.*;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import io.micrometer.prometheus.PrometheusConfig;
-import io.micrometer.prometheus.PrometheusMeterRegistry;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
-import java.util.Locale;
-
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import java.nio.file.*;
 import java.util.List;
-
+import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 class MicrometerProfilerTest {
 
-    @TempDir Path tempDir;
+    private MeterRegistry registry;
+    private Profiler base;
+    private MicrometerProfiler prof;
 
+    @BeforeEach
+    void setup() {
+        registry = new SimpleMeterRegistry();
+        base = mock(Profiler.class);
+        prof = new MicrometerProfiler(registry, base);
+    }
+
+    /* ------------------------------------------------------------
+     * 1. start()/stop() registers a Timer and records duration
+     * ------------------------------------------------------------ */
     @Test
-    void timingEntriesGetRecorded() {
-        PrometheusMeterRegistry registry = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
-        MicrometerProfiler prof = new MicrometerProfiler(registry);
+    void startStop_recordsTimer() throws Exception {
+        prof.start("opA");
+        Thread.sleep(30);
+        prof.stop("opA");
 
-        // Start and stop a label
-        prof.start("test-op");
-        try {
-            Thread.sleep(50); // Simulate some work
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-        prof.stop("test-op");
+        Timer timer = registry.find("fspann.operation.duration").timer();
+        assertNotNull(timer, "Timer must exist after start/stop");
 
-        // Export to CSV
-        Path csv = tempDir.resolve("profiler.csv");
-        prof.recordQueryRow(csv.toString());
-        assertTrue(Files.exists(csv), "CSV file should exist");
+        assertEquals(1, timer.count(), "Exactly 1 recording expected");
+        assertTrue(timer.totalTime(TimeUnit.MILLISECONDS) >= 20,
+                "Duration should be >= 20ms");
+    }
 
-        // Verify CSV content
-        try (BufferedReader r = Files.newBufferedReader(csv)) {
-            String header = r.readLine();
-            assertEquals("Label,AvgTime(ms),Runs", header, "CSV header should match expected format");
-            String data = r.readLine();
-            assertNotNull(data, "There should be at least one data line");
-            assertTrue(data.startsWith("test-op,"), "Data line should start with label");
-            String[] parts = data.split(",");
-            double avgTime = Double.parseDouble(parts[1]);
-            assertTrue(avgTime >= 40, "Average time should be at least 50ms");
-            assertEquals("1", parts[2], "Should have exactly 1 run");
-        } catch (IOException e) {
-            fail("Failed to read CSV: " + e.getMessage());
-        }
+    /* ------------------------------------------------------------
+     * 2. recordQueryRow updates DistributionSummaries
+     * ------------------------------------------------------------ */
+    @Test
+    void recordQueryRow_updatesSummaries() {
+        prof.recordQueryRow(
+                "Q0",
+                12.0, 6.0, 18.0, 2.0, 1.0,
+                1.23, 0.50,
+                10, 9, 8, 5,
+                32, 128,
+                100, 100,
+                0,
+                0, 0,
+                0, 0,
+                0L, 0L, 0L,
+                "gt",
+                "full"
+        );
+
+        DistributionSummary client = registry.find("fspann.query.client_ms").summary();
+        DistributionSummary server = registry.find("fspann.query.server_ms").summary();
+        DistributionSummary ratio  = registry.find("fspann.query.ratio").summary();
+
+        assertNotNull(client);
+        assertNotNull(server);
+        assertNotNull(ratio);
+
+        assertEquals(1, client.count());
+        assertEquals(1, server.count());
+        assertEquals(1, ratio.count());
+
+        assertEquals(6.0, client.totalAmount(), 1e-6);
+        assertEquals(12.0, server.totalAmount(), 1e-6);
+        assertEquals(1.23, ratio.totalAmount(), 1e-6);
+    }
+
+    /* ------------------------------------------------------------
+     * 3. recordQueryRow delegates to base Profiler
+     * ------------------------------------------------------------ */
+    @Test
+    void recordQueryRow_delegatesToBaseProfiler() {
+        prof.recordQueryRow(
+                "Q0",
+                12.0, 6.0, 18.0, 2.0, 1.0,
+                1.23, 0.50,
+                10, 9, 8, 5,
+                32, 128,
+                100, 100,
+                0,
+                0, 0,
+                0, 0,
+                0L, 0L, 0L,
+                "gt",
+                "full"
+        );
+
+        verify(base, times(1)).recordQueryRow(
+                "Q0",
+                12.0, 6.0, 18.0, 2.0, 1.0,
+                1.23, 0.50,
+                10, 9, 8, 5,
+                32, 128,
+                100, 100,
+                0,
+                0, 0,
+                0, 0,
+                0L, 0L, 0L,
+                "gt",
+                "full"
+        );
 
     }
 
+    /* ------------------------------------------------------------
+     * 4. exportMetersCSV writes all timers to a CSV file
+     * ------------------------------------------------------------ */
     @Test
-    void averageRatio_usesOnlyTrueQueryLabels() {
-        MicrometerProfiler p = new MicrometerProfiler(new SimpleMeterRegistry());
+    void exportMetersCSV_writesExpectedCsv(@TempDir Path tmp) throws Exception {
+        // produce some meter activity
+        prof.start("TEST_OP");
+        Thread.sleep(20);
+        prof.stop("TEST_OP");
 
-        // Non-query label → ignored by TRUE_QUERY ("^Q\\d+$")
-        p.recordQueryMetric("warmup", 0, 0, 9.9);
+        Path out = tmp.resolve("meters.csv");
+        prof.exportMetersCSV(out.toString());
 
-        // True per-query rows
-        p.recordQueryMetric("Q0", 12, 15, 1.10);
-        p.recordQueryMetric("Q1", 10, 12, 1.30);
+        assertTrue(Files.exists(out), "CSV must exist");
 
-        // Cache/cloak style labels should be ignored by the tightened filter
-        p.recordQueryMetric("Q_cache_20", 0, 1, 0.00);
-        p.recordQueryMetric("Q_cloak_10", 0, 1, 0.00);
+        List<String> lines = Files.readAllLines(out);
+        assertFalse(lines.isEmpty(), "CSV must not be empty");
 
-        List<Double> ratios = p.getAllQueryRatios();
-        assertEquals(2, ratios.size(), "Only Q<digits> should be tracked");
-        assertEquals(1.10, ratios.get(0), 1e-9);
-        assertEquals(1.30, ratios.get(1), 1e-9);
+        // CSV header
+        assertEquals("name,tags,count,totalMs,meanMs,maxMs", lines.get(0));
 
-        double avg = ratios.stream().mapToDouble(Double::doubleValue).average().orElse(0.0);
-        assertEquals(1.20, avg, 1e-9);
-    }
-
-    @Test
-    void exportQueryMetricsCSV_includesAllRows_forDiagnostics() throws Exception {
-        var p = new MicrometerProfiler(new SimpleMeterRegistry());
-        p.recordQueryMetric("Q0", 10, 12, 1.1);
-        p.recordQueryMetric("warmup", 1, 1, 9.9);       // will be present in CSV
-        p.recordQueryMetric("Q_cache_20", 0, 1, 0.0);   // present in CSV
-
-        java.nio.file.Path tmp = java.nio.file.Files.createTempFile("qm", ".csv");
-        p.exportQueryMetricsCSV(tmp.toString());
-
-        String csv = java.nio.file.Files.readString(tmp);
-        assertTrue(csv.contains("Q0,10.000,12.000,1.100000"));
-        assertTrue(csv.contains("warmup,1.000,1.000,9.900000"));
-        assertTrue(csv.contains("Q_cache_20,0.000,1.000,0.000000"));
+        // One timer row expected
+        boolean found = lines.stream().anyMatch(s -> s.contains("fspann.operation.duration"));
+        assertTrue(found, "CSV should contain our timer");
     }
 }

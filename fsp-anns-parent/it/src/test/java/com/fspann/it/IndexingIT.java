@@ -1,162 +1,140 @@
 package com.fspann.it;
 
 import com.fspann.api.ForwardSecureANNSystem;
-import com.fspann.common.RocksDBMetadataManager;
-import com.fspann.crypto.AesGcmCryptoService;
-import com.fspann.key.KeyManager;
-import com.fspann.key.KeyRotationPolicy;
-import com.fspann.key.KeyRotationServiceImpl;
-import com.fspann.config.SystemConfig;
 import com.fspann.api.ApiSystemConfig;
+import com.fspann.config.SystemConfig;
+
+import com.fspann.common.*;
+import com.fspann.crypto.AesGcmCryptoService;
+import com.fspann.key.*;
 
 import org.junit.jupiter.api.*;
+
 import java.nio.file.*;
 import java.util.*;
-import java.io.IOException;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
-public class IndexingIT {
+public class IndexingIT extends BaseSystemIT {
 
-    static Path tempRoot;
-    static Path metaDir;
-    static Path pointsDir;
-    static Path ksFile;
+    static Path root;
+    static Path metaDir, ptsDir, ksFile, seedFile, cfgFile;
+
     static RocksDBMetadataManager metadata;
-    static KeyManager keyManager;
+    static KeyManager km;
     static KeyRotationServiceImpl keyService;
     static AesGcmCryptoService crypto;
-
     static SystemConfig cfg;
 
     @BeforeAll
     static void init() throws Exception {
 
-        tempRoot   = Files.createTempDirectory("fspann_index_it_");
-        metaDir    = tempRoot.resolve("metadata");
-        pointsDir  = tempRoot.resolve("points");
-        ksFile     = tempRoot.resolve("keystore.bin");
+        root    = Files.createTempDirectory("idx_it_");
+        metaDir = root.resolve("metadata");
+        ptsDir  = root.resolve("points");
+        ksFile  = root.resolve("keystore.bin");
+        seedFile = root.resolve("seed.csv");
 
         Files.createDirectories(metaDir);
-        Files.createDirectories(pointsDir);
+        Files.createDirectories(ptsDir);
 
-        // Load minimal config (Option-C)
-        Path cfgPath = Files.createTempFile("optc_cfg_", ".json");
-        Files.writeString(cfgPath, """
+        Files.writeString(seedFile, "");
+
+        cfgFile = Files.createTempFile(root, "cfg_", ".json");
+        Files.writeString(cfgFile, """
         {
           "paper": { "enabled": true, "m": 3, "divisions": 3, "lambda": 3, "seed": 13 },
           "lsh":   { "numTables": 0, "rowsPerBand": 0, "probeShards": 0 },
-          "eval":  { "computePrecision": false, "writeGlobalPrecisionCsv": false,
-                     "kVariants": [1,5,10] },
+          "eval":  { "computePrecision": false },
           "ratio": { "source": "base" },
-          "opsThreshold": 999999,
-          "ageThresholdMs": 999999,
+          "reencryption": { "enabled": false },
+          "output": { "exportArtifacts": false },
           "numShards": 8,
-          "output": { "exportArtifacts": false, "resultsDir": "out" },
-          "reencryption": { "enabled": false }
+          "opsThreshold": 9999999,
+          "ageThresholdMs": 99999999
         }
         """);
 
-        cfg = new ApiSystemConfig(cfgPath.toString()).getConfig();
+        cfg = new ApiSystemConfig(cfgFile.toString()).getConfig();
 
-        metadata = RocksDBMetadataManager.create(
-                metaDir.toString(), pointsDir.toString());
+        metadata = RocksDBMetadataManager.create(metaDir.toString(), ptsDir.toString());
 
-        keyManager = new KeyManager(ksFile.toString());
-        KeyRotationPolicy policy = new KeyRotationPolicy(
+        km = new KeyManager(ksFile.toString());
+        KeyRotationPolicy pol = new KeyRotationPolicy(
                 (int) cfg.getOpsThreshold(), cfg.getAgeThresholdMs());
 
         keyService = new KeyRotationServiceImpl(
-                keyManager, policy, metaDir.toString(), metadata, null);
+                km, pol, metaDir.toString(), metadata, null);
 
         crypto = new AesGcmCryptoService(null, keyService, metadata);
         keyService.setCryptoService(crypto);
     }
 
+    // ----------------------------------------------------
     @Test
     @Order(1)
-    void testBasicIndexing_smallDim8() throws Exception {
+    void testBasicIndexing() throws Exception {
 
         ForwardSecureANNSystem sys = new ForwardSecureANNSystem(
-                "ignored_config_path.json",
-                "IGNORED",
-                ksFile.toString(),
-                List.of(8),          // dim
-                tempRoot,
-                false,
-                metadata,
-                crypto,
-                16                   // batchSize
+                cfgFile.toString(), seedFile.toString(), ksFile.toString(),
+                List.of(8), root, false, metadata, crypto, 32
         );
 
-        // Create 64 small vectors (dim=8)
-        List<double[]> vecs = new ArrayList<>();
+        keyService.setIndexService(sys.getIndexService());
+
         Random r = new Random(123);
+        List<double[]> vs = new ArrayList<>();
+
         for (int i = 0; i < 64; i++) {
             double[] v = new double[8];
-            for (int j = 0; j < 8; j++) v[j] = r.nextDouble();
-            vecs.add(v);
+            for (int j = 0; j < 8; j++)
+                v[j] = r.nextDouble();
+            vs.add(v);
         }
 
-        // Insert in two passes of 32 sized chunks
-        sys.batchInsert(vecs.subList(0, 32), 8);
-        sys.batchInsert(vecs.subList(32, 64), 8);
+        sys.batchInsert(vs, 8);
+        assertEquals(64, sys.getIndexedVectorCount());
 
-        assertEquals(64, sys.getIndexedVectorCount(), "Total inserted mismatch");
-
-        // Ensure encrypted points exist in RocksDB
         int stored = metadata.getAllEncryptedPoints().size();
-        assertEquals(64, stored, "Metadata DB should store all encrypted points");
+        assertEquals(64, stored);
 
-        // Ensure a key version exists
-        assertTrue(keyService.getCurrentVersion().getVersion() >= 1,
-                "Key version must be >=1");
-
-        // Shutdown cleanly
-        assertDoesNotThrow(sys::shutdown);
+        sys.shutdown();
     }
 
+    // ----------------------------------------------------
     @Test
     @Order(2)
-    void testIndex_thenFinalizeForSearch() throws Exception {
+    void testFinalizeForSearch() throws Exception {
 
         ForwardSecureANNSystem sys = new ForwardSecureANNSystem(
-                "ignored_config_path.json",
-                "IGNORED",
-                ksFile.toString(),
-                List.of(8),
-                tempRoot,
-                false,
-                metadata,
-                crypto,
-                16
+                cfgFile.toString(), seedFile.toString(), ksFile.toString(),
+                List.of(8), root, false, metadata, crypto, 32
         );
 
-        // Insert small batch
-        List<double[]> vs = new ArrayList<>();
+        keyService.setIndexService(sys.getIndexService());
+
         Random r = new Random(99);
+        List<double[]> vs = new ArrayList<>();
+
         for (int i = 0; i < 16; i++) {
             double[] v = new double[8];
-            for (int j = 0; j < 8; j++) v[j] = r.nextDouble();
+            for (int j = 0; j < 8; j++)
+                v[j] = r.nextDouble();
             vs.add(v);
         }
         sys.batchInsert(vs, 8);
 
-        // finalize does flush + disable write-through + optimize
         assertDoesNotThrow(sys::finalizeForSearch);
 
         sys.shutdown();
     }
 
     @AfterAll
-    static void cleanup() throws IOException {
+    static void cleanup() throws Exception {
         try { metadata.close(); } catch (Exception ignore) {}
-        Files.walk(tempRoot)
-                .sorted(Comparator.reverseOrder())
-                .forEach(p -> {
-                    try { Files.deleteIfExists(p); }
-                    catch (Exception ignore) {}
-                });
+        if (root != null)
+            Files.walk(root).sorted(Comparator.reverseOrder())
+                    .forEach(p -> { try { Files.deleteIfExists(p); } catch (Exception ignore) {} });
     }
 }

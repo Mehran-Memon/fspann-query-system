@@ -12,7 +12,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-public class MetadataPersistenceIT {
+public class MetadataPersistenceIT extends BaseSystemIT{
 
     @Test
     void testRestoreIndex() throws Exception {
@@ -39,12 +39,36 @@ public class MetadataPersistenceIT {
         AesGcmCryptoService crypto = new AesGcmCryptoService(null, ksrv, m);
         ksrv.setCryptoService(crypto);
 
+        Path cfgFile = Files.createTempFile(root, "cfg_", ".json");
+        Files.writeString(cfgFile, """
+{
+  "paper": { "enabled": false },
+  "lsh":   { "numTables": 0, "rowsPerBand": 0, "probeShards": 0 },
+  "eval":  { "computePrecision": false },
+  "ratio": { "source": "base" },
+  "opsThreshold": 999999,
+  "ageThresholdMs": 999999,
+  "numShards": 4,
+  "output": { "exportArtifacts": false, "resultsDir": "out" },
+  "reencryption": { "enabled": false }
+}
+""");
+
+
         ForwardSecureANNSystem sys = new ForwardSecureANNSystem(
-                "CFG","DATA",ks.toString(),
-                List.of(4), root,false,m,crypto,32
+                cfgFile.toString(),
+                "DATA",
+                ks.toString(),
+                List.of(4),
+                root,
+                false,
+                m,
+                crypto,
+                32
         );
 
-        sys.insert("z", new double[]{9,9,9,9},4);
+        // use batchInsert instead of insert()
+        sys.batchInsert(List.of(new double[]{9,9,9,9}), 4);
         sys.flushAll();
 
         int restored = sys.restoreIndexFromDisk(ksrv.getCurrentVersion().getVersion());
