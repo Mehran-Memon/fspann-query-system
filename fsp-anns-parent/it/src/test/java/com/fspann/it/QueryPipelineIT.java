@@ -123,7 +123,7 @@ public class QueryPipelineIT extends BaseSystemIT {
         assertFalse(ret.isEmpty());
         assertTrue(ret.size() <= 10);
 
-        sys.shutdown();
+        sys.setExitOnShutdown(false);
     }
 
     // ===========================================================
@@ -169,7 +169,7 @@ public class QueryPipelineIT extends BaseSystemIT {
         // FIX: cannot assertSame; engine may clone list
         assertEquals(r1, r2);
 
-        sys.shutdown();
+        sys.setExitOnShutdown(false);
     }
 
     // ===========================================================
@@ -214,7 +214,7 @@ public class QueryPipelineIT extends BaseSystemIT {
         List<QueryResult> ret = qs.search(tok);
 
         assertFalse(ret.isEmpty());
-        sys.shutdown();
+        sys.setExitOnShutdown(false);
     }
 
     @AfterAll

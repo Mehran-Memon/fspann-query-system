@@ -8,11 +8,14 @@ import com.fspann.key.*;
 
 import org.junit.jupiter.api.*;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.file.*;
 import java.util.*;
+
 import static org.junit.jupiter.api.Assertions.*;
 
-public class RatioPipelineIT extends BaseSystemIT {
+public class RatioPipelineIT {
 
     @Test
     void testRatioComputationBaseSource() throws Exception {
@@ -25,9 +28,8 @@ public class RatioPipelineIT extends BaseSystemIT {
         Files.createDirectories(meta);
         Files.createDirectories(pts);
 
-        // seed file required
-        Path seed = root.resolve("seed.csv");
-        Files.writeString(seed, "");
+        Path cfg = root.resolve("cfg.json");
+        Files.writeString(cfg, BaseSystemIT.minimalCfgJson());
 
         RocksDBMetadataManager m =
                 RocksDBMetadataManager.create(meta.toString(), pts.toString());
@@ -43,13 +45,18 @@ public class RatioPipelineIT extends BaseSystemIT {
         AesGcmCryptoService crypto = new AesGcmCryptoService(null, ksrv, m);
         ksrv.setCryptoService(crypto);
 
-        // Dummy GT file
         Path gtPath = root.resolve("gt.ivecs");
-        Files.writeString(gtPath, "");
+        try (var out = Files.newOutputStream(gtPath)) {
+            out.write(ByteBuffer.allocate(8)
+                    .order(ByteOrder.LITTLE_ENDIAN)
+                    .putInt(1)   // one groundtruth label
+                    .putInt(0)   // label = 0
+                    .array());
+        }
 
         ForwardSecureANNSystem sys = new ForwardSecureANNSystem(
-                gtPath.toString(),     // config path not used for ratio
-                seed.toString(),
+                cfg.toString(),
+                root.resolve("seed.csv").toString(),
                 ks.toString(),
                 List.of(4),
                 root,
@@ -61,27 +68,24 @@ public class RatioPipelineIT extends BaseSystemIT {
 
         ksrv.setIndexService(sys.getIndexService());
 
-        // Insert base vectors
         for (int i=0;i<10;i++)
             sys.insert(String.valueOf(i),
                     new double[]{i, i+0.1, i+0.2, i+0.3}, 4);
 
         sys.finalizeForSearch();
 
-        List<double[]> queries = List.of(new double[]{1.0,1.1,1.2,1.3});
-
         GroundtruthManager gt = new GroundtruthManager();
-        gt.load(gtPath.toString());   // OK — file exists
+        gt.load(gtPath.toString());
 
         sys.getEngine().evalBatch(
-                queries,
+                List.of(new double[]{1,1.1,1.2,1.3}),
                 4,
                 gt,
                 root,
                 true
         );
 
-        sys.shutdown();
+        sys.setExitOnShutdown(false);
         assertTrue(true);
     }
 }

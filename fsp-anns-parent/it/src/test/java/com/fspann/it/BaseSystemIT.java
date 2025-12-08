@@ -3,10 +3,9 @@ package com.fspann.it;
 import com.fspann.api.ForwardSecureANNSystem;
 import com.fspann.common.RocksDBMetadataManager;
 import com.fspann.crypto.AesGcmCryptoService;
-import com.fspann.key.KeyManager;
-import com.fspann.key.KeyRotationPolicy;
-import com.fspann.key.KeyRotationServiceImpl;
+import com.fspann.key.*;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -17,19 +16,32 @@ public abstract class BaseSystemIT {
     protected RocksDBMetadataManager meta;
     protected KeyRotationServiceImpl keySvc;
 
-    protected ForwardSecureANNSystem build(Path temp, String json) throws Exception {
+    protected static String minimalCfgJson() {
+        return """
+        {
+          "paper": { "enabled": true, "m": 3, "divisions": 3, "lambda": 3, "seed": 13 },
+          "lsh": { "numTables": 0, "rowsPerBand": 0, "probeShards": 0 },
+          "ratio": { "source": "base" },
+          "output": { "exportArtifacts": false },
+          "reencryption": { "enabled": false }
+        }
+        """;
+    }
 
-        Path cfg = temp.resolve("conf.json");
-        Files.writeString(cfg, json);
+    protected ForwardSecureANNSystem build(Path temp) throws Exception {
+
+        Path cfg = temp.resolve("cfg.json");
+        Files.writeString(cfg, minimalCfgJson());
 
         Path keysDir = temp.resolve("keys");
         Path metaDir = temp.resolve("meta");
-        Path ptDir   = temp.resolve("pts");
+        Path ptsDir  = temp.resolve("pts");
+
         Files.createDirectories(keysDir);
         Files.createDirectories(metaDir);
-        Files.createDirectories(ptDir);
+        Files.createDirectories(ptsDir);
 
-        meta = RocksDBMetadataManager.create(metaDir.toString(), ptDir.toString());
+        meta = RocksDBMetadataManager.create(metaDir.toString(), ptsDir.toString());
 
         KeyManager km = new KeyManager(keysDir.resolve("ks.blob").toString());
         keySvc = new KeyRotationServiceImpl(
@@ -44,16 +56,17 @@ public abstract class BaseSystemIT {
         keySvc.setCryptoService(crypto);
 
         sys = new ForwardSecureANNSystem(
-                cfg.toString(),
-                temp.resolve("dummy.csv").toString(),
+                cfg.toString(),                     // VALID real config
+                temp.resolve("ignored.csv").toString(),
                 keysDir.toString(),
-                List.of(2),
+                List.of(4),
                 temp,
-                true,
+                false,
                 meta,
                 crypto,
                 128
         );
+
         sys.setExitOnShutdown(false);
         return sys;
     }

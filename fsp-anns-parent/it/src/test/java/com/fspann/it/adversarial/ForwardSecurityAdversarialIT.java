@@ -4,12 +4,11 @@ import com.fspann.api.ForwardSecureANNSystem;
 import com.fspann.common.EncryptedPoint;
 import com.fspann.common.RocksDBMetadataManager;
 import com.fspann.crypto.AesGcmCryptoService;
-import com.fspann.key.KeyManager;
-import com.fspann.key.KeyRotationPolicy;
-import com.fspann.key.KeyRotationServiceImpl;
+import com.fspann.key.*;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 import javax.crypto.SecretKey;
 import java.nio.file.*;
@@ -36,18 +35,18 @@ public class ForwardSecurityAdversarialIT {
 
         Path keysDir   = temp.resolve("keys");
         Path metaDir   = temp.resolve("meta");
-        Path pointsDir = temp.resolve("points");
+        Path ptsDir    = temp.resolve("pts");
 
         Files.createDirectories(keysDir);
         Files.createDirectories(metaDir);
-        Files.createDirectories(pointsDir);
+        Files.createDirectories(ptsDir);
 
-        meta = RocksDBMetadataManager.create(metaDir.toString(), pointsDir.toString());
+        meta = RocksDBMetadataManager.create(metaDir.toString(), ptsDir.toString());
 
         KeyManager km = new KeyManager(keysDir.resolve("ks.blob").toString());
         keySvc = new KeyRotationServiceImpl(
                 km,
-                new KeyRotationPolicy(100_000, 100_000),
+                new KeyRotationPolicy(100000, 100000),
                 metaDir.toString(),
                 meta,
                 null
@@ -55,18 +54,17 @@ public class ForwardSecurityAdversarialIT {
 
         crypto = new AesGcmCryptoService(new SimpleMeterRegistry(), keySvc, meta);
         keySvc.setCryptoService(crypto);
-        String safePath = temp.toString().replace("\\", "\\\\");
 
-        Path cfg = temp.resolve("conf.json");
+        Path cfg = temp.resolve("cfg.json");
         Files.writeString(cfg, """
-{
-  "numShards": 1,
-  "profilerEnabled": false,
-  "lsh": { "numTables": 1, "rowsPerBand": 2, "probeShards": 1 },
-  "ratio": { "source": "base" },
-  "output": { "resultsDir": "%s", "exportArtifacts": false }
-}
-""".formatted(safePath));
+        {
+          "paper": { "enabled": true, "m": 3, "divisions": 3, "lambda": 3, "seed": 13 },
+          "lsh": { "numTables": 1, "rowsPerBand": 2, "probeShards": 1 },
+          "ratio": { "source": "base" },
+          "output": { "exportArtifacts": false },
+          "reencryption": { "enabled": true }
+        }
+        """);
 
         sys = new ForwardSecureANNSystem(
                 cfg.toString(),
@@ -90,82 +88,62 @@ public class ForwardSecurityAdversarialIT {
         sys.finalizeForSearch();
 
         compromisedKeyBefore = keySvc.getCurrentVersion().getKey();
-
-        keySvc.rotateKeyOnly();   // correct method
+        keySvc.rotateKeyOnly();
         keyAfterRotate = keySvc.getCurrentVersion().getKey();
 
         assertNotEquals(compromisedKeyBefore, keyAfterRotate);
     }
 
-
-    // -------------------------------------------------------------------------
-    //  GAME 1 — Old key must NOT decrypt new ciphertext after full re-encryption
-    // -------------------------------------------------------------------------
     @Test
     void compromisedKeyCannotDecryptAfterRotation() {
-
-        keySvc.reEncryptAll(); // full forward-secure rewrite
-
-        int success = 0;
-
+        keySvc.reEncryptAll();
+        int ok = 0;
         for (EncryptedPoint p : meta.getAllEncryptedPoints()) {
             try {
                 crypto.decryptFromPoint(p, compromisedKeyBefore);
-                success++;
+                ok++;
             } catch (Exception ignore) {}
         }
-
-        assertEquals(0, success, "Old key MUST NOT decrypt new ciphertext");
+        assertEquals(0, ok);
     }
 
-    // -------------------------------------------------------------------------
-    //  GAME 2 — Re-encryption must change ciphertext on disk
-    // -------------------------------------------------------------------------
     @Test
     void reencryptAllChangesCiphertext() {
-
-        Map<String, byte[]> before = snapshotCiphertext();
-
+        var before = snapshot();
         keySvc.reEncryptAll();
-
-        Map<String, byte[]> after = snapshotCiphertext();
-
-        assertNotEquals(before, after, "Ciphertext files must be modified by reEncryptAll()");
+        var after = snapshot();
+        assertNotEquals(before, after);
     }
 
-    // -------------------------------------------------------------------------
-    //  GAME 3 — Selective re-encryption must rewrite only touched IDs
-    // -------------------------------------------------------------------------
     @Test
-    void selectiveReencryptionOnlyUpdatesTouched(){
-
+    void selectiveReencryptionOnlyUpdatesTouched() {
         List<String> ids = meta.getAllVectorIds();
         assertFalse(ids.isEmpty());
 
         var touched = List.of(ids.get(0));
 
-        Map<String, byte[]> before = snapshotCiphertext();
-
+        var before = snapshot();
         var rep = keySvc.reencryptTouched(touched, keySvc.getCurrentVersion().getVersion(), () -> meta.sizePointsDir());
         assertTrue(rep.reencryptedCount() > 0);
 
-        Map<String, byte[]> after = snapshotCiphertext();
+        var after = snapshot();
 
-        assertNotEquals(before.get(touched.get(0)), after.get(touched.get(0)),
-                "Touched vector must be rewritten");
+        assertNotEquals(before.get(touched.get(0)), after.get(touched.get(0)));
 
-        for (int i = 1; i < ids.size(); i++) {
-            assertArrayEquals(before.get(ids.get(i)), after.get(ids.get(i)),
-                    "Untouched vectors MUST remain identical");
-        }
+        for (int i = 1; i < ids.size(); i++)
+            assertArrayEquals(before.get(ids.get(i)), after.get(ids.get(i)));
     }
 
-    // Utility to snapshot ciphertexts from disk
-    private Map<String, byte[]> snapshotCiphertext(){
-        Map<String, byte[]> out = new HashMap<>();
-        for (EncryptedPoint p : meta.getAllEncryptedPoints()) {
-            out.put(p.getId(), Arrays.copyOf(p.getCiphertext(), p.getCiphertext().length));
-        }
-        return out;
+    @AfterEach
+    void cleanup() {
+        try { sys.setExitOnShutdown(false); sys.shutdown(); } catch (Exception ignore) {}
+        try { meta.close(); } catch (Exception ignore) {}
+    }
+
+    private Map<String, byte[]> snapshot() {
+        Map<String,byte[]> m = new HashMap<>();
+        for (EncryptedPoint p : meta.getAllEncryptedPoints())
+            m.put(p.getId(), Arrays.copyOf(p.getCiphertext(), p.getCiphertext().length));
+        return m;
     }
 }

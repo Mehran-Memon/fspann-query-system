@@ -99,7 +99,7 @@ public class IndexingIT extends BaseSystemIT {
         int stored = metadata.getAllEncryptedPoints().size();
         assertEquals(64, stored);
 
-        sys.shutdown();
+        sys.setExitOnShutdown(false);
     }
 
     // ----------------------------------------------------
@@ -127,7 +127,7 @@ public class IndexingIT extends BaseSystemIT {
 
         assertDoesNotThrow(sys::finalizeForSearch);
 
-        sys.shutdown();
+        sys.setExitOnShutdown(false);
     }
 
     @AfterAll

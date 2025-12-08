@@ -86,6 +86,6 @@ public class KAdaptiveProbeOnlyTest extends BaseSystemIT {
         );
 
         assertTrue(true);
-        sys.shutdown();
+        sys.setExitOnShutdown(false);
     }
 }

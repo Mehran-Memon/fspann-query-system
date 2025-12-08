@@ -75,7 +75,7 @@ public class ReencryptionEndToEndIT extends BaseSystemIT {
         double[] q = new double[]{0.5,0.5,0.5,0.5};
         sys.getEngine().evalSimple(q, 10, 4, false);
 
-        sys.shutdown();
+        sys.setExitOnShutdown(false);
 
         assertTrue(ksrv.getCurrentVersion().getVersion() >= 1);
     }
