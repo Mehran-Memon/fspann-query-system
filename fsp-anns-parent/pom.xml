@@ -20,8 +20,8 @@
     <module>keymanagement</module>
     <module>index</module>
     <module>query</module>
+    <module>it</module>
     <module>api</module>
-      <module>it</module>
   </modules>
 
   <repositories>
