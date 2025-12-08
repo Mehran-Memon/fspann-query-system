@@ -56,11 +56,11 @@ public final class QueryServiceImpl implements QueryService {
     public QueryServiceImpl(IndexService indexService,
                             CryptoService cryptoService,
                             KeyLifeCycleService keyService,
-                            QueryTokenFactory tokenFactory) {
+                            QueryTokenFactory tf) {
         this.indexService = Objects.requireNonNull(indexService);
         this.cryptoService = Objects.requireNonNull(cryptoService);
         this.keyService = Objects.requireNonNull(keyService);
-        this.tokenFactory = Objects.requireNonNull(tokenFactory);
+        this.tokenFactory = tf;
     }
 
     public void setReencryptionTracker(ReencryptionTracker tr) {
@@ -171,7 +171,7 @@ public final class QueryServiceImpl implements QueryService {
             lastTouchedCumulativeUnique = touchedThisSession.size();
 
             double[] vec = cryptoService.decryptFromPoint(ep, kv.getKey());
-            if (vec == null || vec.length == 0) continue;
+            if (!isValid(vec)) continue;
 
             lastCandKeptVersion++;
             lastCandDecrypted++;
@@ -414,6 +414,13 @@ public final class QueryServiceImpl implements QueryService {
         int iv = (t.getIv() != null ? t.getIv().length : 0);
         int ct = (t.getEncryptedQuery() != null ? t.getEncryptedQuery().length : 0);
         return iv + ct;
+    }
+    private static boolean isValid(double[] v) {
+        if (v == null) return false;
+        for (double x : v) {
+            if (!Double.isFinite(x)) return false;
+        }
+        return true;
     }
 
 }
