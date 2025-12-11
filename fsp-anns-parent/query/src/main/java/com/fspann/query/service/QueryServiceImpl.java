@@ -440,5 +440,8 @@ public final class QueryServiceImpl implements QueryService {
         }
         return true;
     }
+    public Set<String> getTouchedIds() {
+        return new HashSet<>(touchedThisSession);
+    }
 
 }

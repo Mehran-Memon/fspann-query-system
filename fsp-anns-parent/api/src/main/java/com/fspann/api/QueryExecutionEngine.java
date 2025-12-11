@@ -156,6 +156,11 @@ public final class QueryExecutionEngine {
             int flushed = sys.totalFlushed();
             int flushThreshold = sys.flushThreshold();
 
+            Set<String> touched = qs.getTouchedIds();
+            if (touched != null && !touched.isEmpty()) {
+                sys.accumulateTouchedIds(touched);
+            }
+
             /* --------------------------------------------------------------
              * 5) Per-K evaluation loop
              * -------------------------------------------------------------- */

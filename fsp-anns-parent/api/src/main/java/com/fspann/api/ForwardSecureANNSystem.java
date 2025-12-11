@@ -1660,6 +1660,13 @@ public class ForwardSecureANNSystem {
         }
     }
 
+    public void accumulateTouchedIds(Set<String> ids) {
+        if (ids != null && !ids.isEmpty()) {
+            touchedGlobal.addAll(ids);
+            logger.debug("Accumulated {} touched IDs (total now: {})", ids.size(), touchedGlobal.size());
+        }
+    }
+
      private static String buildQueryCacheKey(double[] q, int topK, int dim) {
         int h = 1;
         for (double v : q) {

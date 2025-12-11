@@ -176,39 +176,9 @@ public final class SecureLSHIndexService implements IndexService {
         Objects.requireNonNull(token);
 
         List<EncryptedPoint> raw = engine.lookup(token);
-
-        return stabilizeCandidates(raw, token);
+        return (raw == null) ? Collections.emptyList() : raw;
     }
-    private List<EncryptedPoint> stabilizeCandidates(List<EncryptedPoint> raw, QueryToken tok) {
-        if (raw == null || raw.isEmpty()) return Collections.emptyList();
-
-        // Access stabilization configuration from system config
-        SystemConfig.StabilizationConfig sc = this.config.getStabilization(); // Access stabilization config
-
-        // If stabilization is not enabled, return raw list
-        if (sc == null || !sc.isEnabled()) return raw;
-
-        double alpha = sc.getAlpha();  // Get alpha (fraction of raw candidates to keep)
-        int minCandidates = sc.getMinCandidates();  // Get minimum number of candidates to keep
-
-        // Sort the raw candidates based on their IDs to ensure deterministic ordering
-        raw.sort(Comparator.comparing(EncryptedPoint::getId));
-
-        int total = raw.size();
-        int alphaCap = (int) Math.ceil(alpha * total);  // Calculate the maximum candidates based on alpha
-        int capped = Math.min(alphaCap, total);  // Apply alpha cap
-
-        // Ensure the final size is at least minCandidates
-        int finalSize = Math.max(capped, minCandidates);
-
-        // If final size exceeds the total candidates, return the raw list
-        if (finalSize >= total)
-            return raw;
-
-        // Otherwise, return the stabilized list as a sublist of the raw candidates
-        return raw.subList(0, finalSize);
-    }
-
+    
     // ------------------------------------------------------------
     // METADATA + CACHE
     // ------------------------------------------------------------
