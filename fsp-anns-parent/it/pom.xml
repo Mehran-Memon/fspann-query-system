@@ -104,18 +104,20 @@
                                 <include>**/*IT.java</include>
                                 <include>**/*IntegrationTest.java</include>
                             </includes>
+
+                            <!-- MOVE THE MEMORY SETTINGS HERE -->
+                            <argLine>-Xmx8g -Xss4m -XX:+CrashOnOutOfMemoryError -XX:+EnableDynamicAgentLoading</argLine>
+
+                            <reuseForks>false</reuseForks>
+                            <forkCount>1</forkCount>
+
+                            <systemPropertyVariables>
+                                <test.env>true</test.env>
+                                <rocksdb.stats>true</rocksdb.stats>
+                            </systemPropertyVariables>
                         </configuration>
                     </execution>
                 </executions>
-            </plugin>
-
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-surefire-plugin</artifactId>
-                <version>3.0.0-M5</version>
-                <configuration>
-                    <skip>true</skip>
-                </configuration>
             </plugin>
 
         </plugins>
