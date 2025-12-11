@@ -120,6 +120,10 @@ public class ForwardSecureANNSystem {
     private final String prevPointsProp;
     private final String prevKeyStoreProp;
 
+    // Stabilization diagnostics
+    private volatile int lastStabilizedRaw = 0;
+    private volatile int lastStabilizedFinal = 0;
+
     /**
      * Global "touched" accumulator of vector IDs encountered during the run.
      */
@@ -416,7 +420,8 @@ public class ForwardSecureANNSystem {
                     0,      // probeRange=0 (multiprobe removed)
                     ell,
                     m,
-                    seed
+                    seed,
+                    cfg
             ));
 
             logger.info("TokenFactory created: dim={}  ell={}  m={}", dim, ell, m);
@@ -426,7 +431,7 @@ public class ForwardSecureANNSystem {
         QueryTokenFactory qtf = tokenFactories.get(primaryDim);
 
         // ==== QueryService ====
-        this.queryService = new QueryServiceImpl(indexService, cryptoService, keyService, qtf);
+        this.queryService = new QueryServiceImpl(indexService, cryptoService, keyService, qtf, cfg);
         this.engine = new QueryExecutionEngine(this, profiler, K_VARIANTS);
         // ==== touch accounting / selective re-encryption ====
 
@@ -434,6 +439,7 @@ public class ForwardSecureANNSystem {
 
         if (this.queryService instanceof QueryServiceImpl qs) {
             qs.setReencryptionTracker(reencTracker);
+            qs.setStabilizationCallback(this::setStabilizationStats);
         }
 
         this.reencCoordinator = new SelectiveReencCoordinator(
@@ -610,7 +616,8 @@ public class ForwardSecureANNSystem {
                 lambda,     // probeRange
                 ell,        // divisions
                 m,          // projections
-                seed        // seedBase
+                seed,        // seedBase
+                config
         );
         tokenFactories.put(dim, qtf);
         return qtf;
@@ -1910,6 +1917,14 @@ public class ForwardSecureANNSystem {
     public List<EncryptedPoint> getAllEncryptedPointsForTest() {
         return metadataManager.getAllEncryptedPoints();
     }
+
+    public void setStabilizationStats(int raw, int fin) {
+        this.lastStabilizedRaw = raw;
+        this.lastStabilizedFinal = fin;
+    }
+
+    public int getLastStabilizedRaw() { return lastStabilizedRaw; }
+    public int getLastStabilizedFinal() { return lastStabilizedFinal; }
 
     public int totalFlushed() {
         var buf = indexService.getPointBuffer();

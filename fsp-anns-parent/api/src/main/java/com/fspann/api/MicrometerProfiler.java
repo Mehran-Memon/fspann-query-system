@@ -87,7 +87,9 @@ public final class MicrometerProfiler {
             long reencDelta,
             long reencAfter,
             String ratioDenomSource,
-            String mode
+            String mode,
+            int stableRaw,
+            int stableFinal
     ) {
         // send to real Profiler
         base.recordQueryRow(
@@ -95,7 +97,7 @@ public final class MicrometerProfiler {
                 candTotal, candKept, candDec, returned, tokenBytes, vectorDim,
                 tokenK, tokenKBase, qIndex, totalFlushed, flushThreshold,
                 touchedCount, reencCount, reencMs, reencDelta, reencAfter,
-                ratioDenomSource, mode
+                ratioDenomSource, mode, stableRaw, stableFinal
         );
 
         // micrometer metrics

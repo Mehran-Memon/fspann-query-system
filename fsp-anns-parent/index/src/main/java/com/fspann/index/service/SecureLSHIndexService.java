@@ -57,6 +57,7 @@ public final class SecureLSHIndexService implements IndexService {
 
     // LSH registry (only for QueryTokenFactory compatibility)
     private final Map<Integer, EvenLSH> lshRegistry = new ConcurrentHashMap<>();
+    private final SystemConfig config;
 
     // ------------------------------------------------------------
     // CONSTRUCTION
@@ -66,7 +67,8 @@ public final class SecureLSHIndexService implements IndexService {
                                  KeyLifeCycleService keyService,
                                  RocksDBMetadataManager metadata,
                                  PartitionedIndexService engine,
-                                 EncryptedPointBuffer buffer) {
+                                 EncryptedPointBuffer buffer,
+                                 SystemConfig config) {
 
         this.crypto = (crypto != null)
                 ? crypto
@@ -76,19 +78,22 @@ public final class SecureLSHIndexService implements IndexService {
         this.metadata = Objects.requireNonNull(metadata, "metadata");
         this.engine = Objects.requireNonNull(engine, "engine");
         this.buffer = Objects.requireNonNull(buffer, "buffer");
+        this.config = Objects.requireNonNull(config, "config");
 
         log.info("SecureLSHIndexService (Option-C) initialized: partitioned-engine ENABLED.");
     }
 
-    /** Factory from SystemConfig. Always builds PartitionedIndexService. */
-    public static SecureLSHIndexService fromConfig(CryptoService crypto,
-                                                   KeyLifeCycleService keyService,
-                                                   RocksDBMetadataManager metadata,
-                                                   SystemConfig cfg) {
 
+    /** Factory from SystemConfig. Always builds PartitionedIndexService. */
+    public static SecureLSHIndexService fromConfig(
+            CryptoService crypto,
+            KeyLifeCycleService keyService,
+            RocksDBMetadataManager metadata,
+            SystemConfig cfg)
+    {
         var pc = cfg.getPaper();
         if (pc == null || !pc.isEnabled()) {
-            throw new IllegalStateException("Option-C requires paper.enabled=true in config.");
+            throw new IllegalStateException("System requires paper.enabled=true in config.");
         }
 
         PartitionedIndexService engine = new PartitionedIndexService(
@@ -100,7 +105,9 @@ public final class SecureLSHIndexService implements IndexService {
 
         EncryptedPointBuffer buf = createBuffer(metadata);
 
-        return new SecureLSHIndexService(crypto, keyService, metadata, engine, buf);
+        return new SecureLSHIndexService(
+                crypto, keyService, metadata, engine, buf, cfg
+        );
     }
 
     private static EncryptedPointBuffer createBuffer(RocksDBMetadataManager m) {
@@ -165,10 +172,41 @@ public final class SecureLSHIndexService implements IndexService {
     // LOOKUP
     // ------------------------------------------------------------
 
-    @Override
     public List<EncryptedPoint> lookup(QueryToken token) {
         Objects.requireNonNull(token);
-        return engine.lookup(token);
+
+        List<EncryptedPoint> raw = engine.lookup(token);
+
+        return stabilizeCandidates(raw, token);
+    }
+    private List<EncryptedPoint> stabilizeCandidates(List<EncryptedPoint> raw, QueryToken tok) {
+        if (raw == null || raw.isEmpty()) return Collections.emptyList();
+
+        // Access stabilization configuration from system config
+        SystemConfig.StabilizationConfig sc = this.config.getStabilization(); // Access stabilization config
+
+        // If stabilization is not enabled, return raw list
+        if (sc == null || !sc.isEnabled()) return raw;
+
+        double alpha = sc.getAlpha();  // Get alpha (fraction of raw candidates to keep)
+        int minCandidates = sc.getMinCandidates();  // Get minimum number of candidates to keep
+
+        // Sort the raw candidates based on their IDs to ensure deterministic ordering
+        raw.sort(Comparator.comparing(EncryptedPoint::getId));
+
+        int total = raw.size();
+        int alphaCap = (int) Math.ceil(alpha * total);  // Calculate the maximum candidates based on alpha
+        int capped = Math.min(alphaCap, total);  // Apply alpha cap
+
+        // Ensure the final size is at least minCandidates
+        int finalSize = Math.max(capped, minCandidates);
+
+        // If final size exceeds the total candidates, return the raw list
+        if (finalSize >= total)
+            return raw;
+
+        // Otherwise, return the stabilized list as a sublist of the raw candidates
+        return raw.subList(0, finalSize);
     }
 
     // ------------------------------------------------------------

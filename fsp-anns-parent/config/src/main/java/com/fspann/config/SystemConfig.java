@@ -88,6 +88,10 @@ public class SystemConfig {
     @JsonProperty("kAware")
     private KAwareConfig kAware = new KAwareConfig();
 
+    @JsonProperty("stabilization")
+    private StabilizationConfig stabilization = new StabilizationConfig();
+    public StabilizationConfig getStabilization() { return stabilization; }
+
     /* ======================== Static loading API ======================== */
 
     public static SystemConfig load(String path, boolean refresh) throws ConfigLoadException {
@@ -221,7 +225,6 @@ public class SystemConfig {
 
         @JsonProperty("probeShards")
         public int probeShards = 0;
-
         public int getNumTables() {
             return clamp(numTables, 1, MAX_TABLES);
         }
@@ -229,6 +232,39 @@ public class SystemConfig {
             // 0 means "use default" at higher level; otherwise clamp
             if (probeShards <= 0) return 0;
             return clamp(probeShards, 1, MAX_SHARDS);
+        }
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class StabilizationConfig {
+
+        @JsonProperty("enabled")
+        public boolean enabled = true;
+
+        /**
+         * Fraction of raw candidates to keep before minCandidates is applied.
+         * Example: alpha = 0.10 means "keep 10% of raw candidates".
+         */
+        @JsonProperty("alpha")
+        public double alpha = 0.10;
+
+        /**
+         * Hard lower bound on stabilized candidate count.
+         * Ensures K=40...100 ratios stay stable and <1.3.
+         */
+        @JsonProperty("minCandidates")
+        public int minCandidates = 1200;
+
+        public boolean isEnabled() { return enabled; }
+
+        public double getAlpha() {
+            if (Double.isNaN(alpha) || alpha <= 0.0) return 0.01;
+            if (alpha > 1.0) return 1.0;
+            return alpha;
+        }
+
+        public int getMinCandidates() {
+            return Math.max(1, minCandidates);
         }
     }
 

@@ -64,8 +64,6 @@ public class ApiSystemConfig {
     public SystemConfig getConfig() {
         return config;
     }
-    public String getResolvedPath() { return resolvedPath; }
-    public String getConfigSha256() { return sha256; }
 
     /** Clear both ApiSystemConfig and SystemConfig caches. Useful for tests/hot-reload. */
     public static void clearCache() {

@@ -109,6 +109,7 @@ public final class QueryExecutionEngine {
             /* --------------------------------------------------------------
              * 1) Token at maximum K
              * -------------------------------------------------------------- */
+            sys.setStabilizationStats(0,0);   // reset for new query
             int baseK = sys.baseKForToken();
             QueryToken baseTok = sys.getFactoryForDim(dim).create(q, baseK);
 
@@ -223,39 +224,41 @@ public final class QueryExecutionEngine {
                                 .orElse(perK.get(perK.size() - 1));
 
                 profiler.recordQueryRow(
-                        /* qLabel         */ "Q" + qIndex,
+                        "Q"+qIndex,
+                        maxRow.getTimeMs(),
+                        maxRow.getClientTimeMs(),
+                        maxRow.getRunTimeMs(),
+                        maxRow.getDecryptTimeMs(),
+                        maxRow.getInsertTimeMs(),
 
-                        /* serverMs       */ maxRow.getTimeMs(),
-                        /* clientMs       */ maxRow.getClientTimeMs(),
-                        /* runMs          */ maxRow.getRunTimeMs(),
-                        /* decryptMs      */ maxRow.getDecryptTimeMs(),
-                        /* insertMs       */ maxRow.getInsertTimeMs(),
+                        maxRow.getRatio(),
+                        maxRow.getPrecision(),
 
-                        /* ratio          */ maxRow.getRatio(),
-                        /* precision      */ maxRow.getPrecision(),
+                        candTotal,
+                        candKept,
+                        candDec,
+                        returned,
 
-                        /* candTotal      */ candTotal,
-                        /* candKept       */ candKept,
-                        /* candDec        */ candDec,
-                        /* returned       */ returned,
+                        tokenSizeBytes,
+                        vectorDim,
+                        baseK,
+                        baseK,
+                        qIndex,
 
-                        /* tokenBytes     */ tokenSizeBytes,
-                        /* vectorDim      */ vectorDim,
-                        /* tokenK         */ baseK,
-                        /* tokenKBase     */ baseK,
-                        /* qIndexZero     */ qIndex,
+                        flushed,
+                        flushThreshold,
 
-                        /* totalFlushed   */ flushed,
-                        /* flushThreshold */ flushThreshold,
+                        touchedCount,
+                        reencCount,
+                        reencMs,
+                        reencDelta,
+                        reencAfter,
 
-                        /* touched        */ touchedCount,
-                        /* reencCount     */ reencCount,
-                        /* reencMs        */ reencMs,
-                        /* reencDelta     */ reencDelta,
-                        /* reencAfter     */ reencAfter,
+                        sys.ratioDenomLabelPublic(gtTrusted),
+                        "full",
 
-                        /* denom source   */ sys.ratioDenomLabelPublic(gtTrusted),
-                        /* mode           */ "full"
+                        sys.getLastStabilizedRaw(),
+                        sys.getLastStabilizedFinal()
                 );
             }
         }

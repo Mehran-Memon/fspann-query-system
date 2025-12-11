@@ -112,7 +112,9 @@ public final class Profiler {
             long reencBytesDelta,
             long reencBytesAfter,
             String ratioDenomSource,
-            String mode
+            String mode,
+            int stableRaw,
+            int stableFinal
     ) {
         queryRows.add(new QueryRow(
                 label,
@@ -140,7 +142,9 @@ public final class Profiler {
                 reencBytesDelta,
                 reencBytesAfter,
                 ratioDenomSource,
-                mode
+                mode,
+                stableRaw,
+                stableFinal
         ));
     }
 
@@ -225,6 +229,9 @@ public final class Profiler {
         public final String ratioDenomSource;
         public final String mode;
 
+        public final int stableRaw;
+        public final int stableFinal;
+
         private QueryRow(
                 String label,
                 double serverMs,
@@ -251,7 +258,9 @@ public final class Profiler {
                 long reencDelta,
                 long reencAfter,
                 String denom,
-                String mode
+                String mode,
+                int stableRaw,
+                int stableFinal
         ) {
             this.label = label;
 
@@ -286,6 +295,9 @@ public final class Profiler {
 
             this.ratioDenomSource = denom;
             this.mode = mode;
+
+            this.stableRaw = stableRaw;
+            this.stableFinal = stableFinal;
         }
     }
 }
