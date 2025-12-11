@@ -1,6 +1,7 @@
 package com.index;
 
 import com.fspann.common.*;
+import com.fspann.config.SystemConfig;
 import com.fspann.crypto.CryptoService;
 import com.fspann.index.paper.PartitionedIndexService;
 import com.fspann.index.service.SecureLSHIndexService;
@@ -31,16 +32,11 @@ class SecureLSHIndexServiceTest {
         engine = mock(PartitionedIndexService.class);
         buffer = mock(EncryptedPointBuffer.class);
 
-        when(metadata.getPointsBaseDir())
-                .thenReturn(System.getProperty("java.io.tmpdir") + "/points");
+        // Mock SystemConfig
+        SystemConfig config = mock(SystemConfig.class);
+        when(metadata.getPointsBaseDir()).thenReturn(System.getProperty("java.io.tmpdir") + "/points");
 
-        svc = new SecureLSHIndexService(
-                crypto,
-                keySvc,
-                metadata,
-                engine,
-                buffer
-        );
+        svc = new SecureLSHIndexService(crypto, keySvc, metadata, engine, buffer, config);
     }
 
     @Test

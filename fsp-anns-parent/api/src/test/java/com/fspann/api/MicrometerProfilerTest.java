@@ -58,7 +58,7 @@ class MicrometerProfilerTest {
                 0, 0,
                 0L, 0L, 0L,
                 "gt",
-                "full"
+                "full", 0, 0
         );
 
         DistributionSummary client = registry.find("fspann.query.client_ms").summary();
@@ -95,7 +95,7 @@ class MicrometerProfilerTest {
                 0, 0,
                 0L, 0L, 0L,
                 "gt",
-                "full"
+                "full", 0, 0
         );
 
         verify(base, times(1)).recordQueryRow(
@@ -110,7 +110,7 @@ class MicrometerProfilerTest {
                 0, 0,
                 0L, 0L, 0L,
                 "gt",
-                "full"
+                "full", 0 ,0
         );
 
     }

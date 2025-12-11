@@ -1,6 +1,7 @@
 package com.fspann.query.service;
 
 import com.fspann.common.*;
+import com.fspann.config.SystemConfig;
 import com.fspann.crypto.CryptoService;
 import org.junit.jupiter.api.*;
 import javax.crypto.SecretKey;
@@ -22,8 +23,11 @@ public class QueryServiceImplPureTest {
     @BeforeEach
     void init() {
         crypto = mock(CryptoService.class);
-        keys   = mock(KeyLifeCycleService.class);
-        index  = mock(IndexService.class);
+        keys = mock(KeyLifeCycleService.class);
+        index = mock(IndexService.class);
+
+        // Create a mock for SystemConfig
+        SystemConfig cfg = mock(SystemConfig.class);
 
         // global non-null AES key
         k = new SecretKeySpec(new byte[16], "AES");
@@ -32,9 +36,10 @@ public class QueryServiceImplPureTest {
         when(keys.getVersion(1)).thenReturn(new KeyVersion(1, k));
         when(keys.getVersion(anyInt())).thenReturn(new KeyVersion(1, k));
 
-        // no QueryTokenFactory needed for pure version/decryption tests
-        svc = new QueryServiceImpl(index, crypto, keys, null);
+        // Update the constructor to include the cfg parameter
+        svc = new QueryServiceImpl(index, crypto, keys, null, cfg);
     }
+
 
     @Test
     void versionFilter_skipsMismatchedVersion() {

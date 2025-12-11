@@ -25,7 +25,9 @@ class AggregatesBasicTest {
                 0,               // reencCount
                 0, 0, 0,         // reencTimeMs, reencDelta, reencAfter
                 "base",
-                "full"           // mode MUST be "full" or precision@K is ignored
+                "full",           // mode MUST be "full" or precision@K is ignored
+                0,
+                0
         );
 
         p.recordQueryRow(
@@ -43,7 +45,7 @@ class AggregatesBasicTest {
                 0,
                 0, 0, 0,
                 "base",
-                "full"
+                "full", 0,0
         );
 
         Aggregates ag = Aggregates.fromProfiler(p);

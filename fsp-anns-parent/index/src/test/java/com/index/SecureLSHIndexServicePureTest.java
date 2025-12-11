@@ -1,6 +1,7 @@
 package com.index;
 
 import com.fspann.common.*;
+import com.fspann.config.SystemConfig;
 import com.fspann.crypto.CryptoService;
 import com.fspann.index.paper.PartitionedIndexService;
 import com.fspann.index.service.SecureLSHIndexService;
@@ -17,8 +18,7 @@ public class SecureLSHIndexServicePureTest {
     @Mock CryptoService crypto;
     @Mock KeyLifeCycleService keys;
     @Mock RocksDBMetadataManager meta;
-    @Mock
-    PartitionedIndexService engine;
+    @Mock PartitionedIndexService engine;
     @Mock EncryptedPointBuffer buffer;
 
     SecureLSHIndexService svc;
@@ -27,10 +27,14 @@ public class SecureLSHIndexServicePureTest {
     void init() {
         MockitoAnnotations.openMocks(this);
 
+        // Mock SystemConfig
+        SystemConfig config = mock(SystemConfig.class);
+
         when(meta.getPointsBaseDir()).thenReturn("tmpPoints");
 
-        svc = new SecureLSHIndexService(crypto, keys, meta, engine, buffer);
+        svc = new SecureLSHIndexService(crypto, keys, meta, engine, buffer, config);
     }
+
 
     @Test
     void insert_encrypts_persists_forwards() throws IOException {
@@ -54,9 +58,13 @@ public class SecureLSHIndexServicePureTest {
     @Test
     void lookup_delegatesToEngine() {
         QueryToken tok = mock(QueryToken.class);
-        List<EncryptedPoint> ps = List.of();
+        List<EncryptedPoint> ps = Collections.emptyList();  // Use the same empty list type as expected
         when(engine.lookup(tok)).thenReturn(ps);
 
-        assertSame(ps, svc.lookup(tok));
+        List<EncryptedPoint> result = svc.lookup(tok);
+
+        // Compare the size of the lists instead of the exact objects
+        assertTrue(result.isEmpty(), "Expected empty list, but got: " + result);
+        assertSame(ps, result, "The lists should be the same reference.");
     }
 }

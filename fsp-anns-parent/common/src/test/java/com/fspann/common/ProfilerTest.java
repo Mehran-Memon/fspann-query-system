@@ -47,7 +47,9 @@ class ProfilerTest {
                 0L,         // reencBytesDelta
                 0L,         // reencBytesAfter
                 "auto",     // ratioDenomSource
-                "full"      // mode
+                "full",      // mode
+                0,
+                0
         );
 
         Path csv = tempDir.resolve("prof.csv");
