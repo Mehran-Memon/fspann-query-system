@@ -4,18 +4,17 @@ IFS=$'\n\t'
 
 # ============================
 # FSP-ANN (multi-dataset, multi-profile batch) — Linux bash
-# - Disables GT recompute; uses explicit GT path
-# - Integrates EvaluationSummaryPrinter (expects Java side in place)
-# - Consolidates per-profile results into per-dataset combined files
+# - Option-C: LSH Disabled, Alpha-Based Stabilization
+# - Selective Reencryption (end-of-run)
+# - Consolidates results with enhanced reporting
 # ============================
 
 # ---- required paths ----
-JarPath="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/api/target/api-0.0.1-SNAPSHOT-jar-with-dependencies.jar"
-ConfigPath="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/config/src/main/resources/config.json"
-OutRoot="/mnt/data/mehran/fsp-ann"
+JarPath="/home/user/fspann-query-system/fsp-anns-parent/api/target/api-0.0.1-SNAPSHOT-jar-with-dependencies.jar"
+ConfigPath="/home/user/fspann-query-system/fsp-anns-parent/config/src/main/resources/config.json"
+OutRoot="/mnt/data/fsp-run-option-c"
 
-# ---- alpha and JVM system props ----
-Alpha="0.1"
+# ---- JVM system props ----
 JvmArgs=(
   "-XX:+UseG1GC" "-XX:MaxGCPauseMillis=200" "-XX:+AlwaysPreTouch"
   "-Ddisable.exit=true"
@@ -26,16 +25,13 @@ JvmArgs=(
   "-Dlog.progress.everyN=0"
   "-Dpaper.buildThreshold=2000000"
   "-Djava.security.egd=file:/dev/./urandom"
-  "-Dpaper.alpha=${Alpha}"
 )
 
 # ---- app batch size arg ----
 Batch="100000"
 
 # ---- profile filter ----
-# - "" => all
-# - exact name => that profile only
-# - wildcard => pattern (e.g., "*ell3*")
+# "" => all; exact name => that profile only; wildcard => pattern (e.g., "*fast*")
 OnlyProfile=""
 
 # ---- toggles ----
@@ -49,7 +45,6 @@ die() { echo "Error: $*" >&2; exit 1; }
 have_java() { command -v java >/dev/null 2>&1; }
 
 safe_resolve() {
-  # usage: safe_resolve <path> [allowMissing=true|false]
   local p="${1:-}" allow="${2:-false}"
   if [[ "$allow" == "true" && ! -e "$p" ]]; then
     printf "%s" "$p"; return 0
@@ -98,44 +93,47 @@ sha256_of() {
 }
 
 detect_fvecs_dim() {
-  # Reads first 4 bytes (int32 little-endian) => dim
   local path="$1"
-  python - "$path" <<'PY'
+  python3 - "$path" <<'PY'
 import sys,struct
 p=sys.argv[1]
-with open(p,'rb') as f:
-    b=f.read(4)
-    if len(b)!=4:
-        print("", end="")
-        sys.exit(0)
-    print(struct.unpack('<i',b)[0], end="")
+try:
+    with open(p,'rb') as f:
+        b=f.read(4)
+        if len(b)!=4:
+            print("", end="")
+            sys.exit(0)
+        print(struct.unpack('<i',b)[0], end="")
+except Exception:
+    print("", end="")
 PY
 }
 
 json_merge_with_overrides() {
-  # jq-merge base JSON with overrides JSON (top-level keys; merge objects at keys)
   local base_json="$1" ovr_json="$2"
-  jq -c --argjson ovr "${ovr_json}" '
-    def merge_at_top(a;b):
-      reduce (b|keys[]) as $k (a;
-        if (a[$k]|type=="object") and (b[$k]|type=="object")
-          then .[$k] = (a[$k] + b[$k])
-        else .[$k] = b[$k]
-        end);
-    merge_at_top(.; $ovr)
-  ' <<< "$base_json"
+  python3 - "$base_json" "$ovr_json" <<'PY'
+import json,sys
+base = json.loads(sys.argv[1])
+ovr = json.loads(sys.argv[2])
+def merge(a, b):
+    for k in b:
+        if k in a and isinstance(a[k], dict) and isinstance(b[k], dict):
+            merge(a[k], b[k])
+        else:
+            a[k] = b[k]
+    return a
+result = merge(base, ovr)
+print(json.dumps(result, separators=(',', ':')))
+PY
 }
 
-# --- helpers for combining results ---
 profile_from_path() {
-  # input: /.../<dataset>/<profile>/results/<file>
   local p="$1"
-  local parent="$(dirname "$p")"  # .../<profile>/results
-  basename "$(dirname "$parent")" # <profile>
+  local parent="$(dirname "$p")"
+  basename "$(dirname "$parent")"
 }
 
 combine_csv_with_profile() {
-  # combine_csv_with_profile <out_csv> <colname> <file1> <file2> ...
   local out="$1"; shift
   local colname="$1"; shift
   local header_done="false"
@@ -156,7 +154,6 @@ combine_csv_with_profile() {
 }
 
 concat_txt_with_profile() {
-  # concat_txt_with_profile <out_txt> <file1> <file2> ...
   local out="$1"; shift
   mkdir -p "$(dirname "$out")"
   rm -f "$out"
@@ -183,7 +180,7 @@ cfg_json="$(cat "$ConfigPath")"
 profiles_count="$(jq '.profiles|length' <<<"$cfg_json")"
 [[ "$profiles_count" -gt 0 ]] || die "config.json must contain a non-empty 'profiles' array."
 
-# Build base payload (back-compat w/ optional 'base' node)
+# Build base payload
 if jq -e '.base' >/dev/null 2>&1 <<<"$cfg_json"; then
   base_json="$(jq -c '.base' <<<"$cfg_json")"
 else
@@ -191,27 +188,30 @@ else
 fi
 
 # ---------- dataset matrix ----------
-# If Dim is "", it will be auto-detected from base file header.
-# Format: Name::Base::Query::GT::Dim
 DATASETS=(
-  "Enron::/mnt/data/mehran/Datasets/Enron/enron_base.fvecs::/mnt/data/mehran/Datasets/Enron/enron_query.fvecs::/mnt/data/mehran/Datasets/Enron/enron_groundtruth.ivecs::1369"
-  "audio::/mnt/data/mehran/Datasets/audio/audio_base.fvecs::/mnt/data/mehran/Datasets/audio/audio_query.fvecs::/mnt/data/mehran/Datasets/audio/audio_groundtruth.ivecs::192"
-  "SIFT1M::/mnt/data/mehran/Datasets/SIFT1M/sift_base.fvecs::/mnt/data/mehran/Datasets/SIFT1M/sift_query.fvecs::/mnt/data/mehran/Datasets/SIFT1M/sift_query_groundtruth.ivecs::128"
-  "synthetic_128::/mnt/data/mehran/Datasets/synthetic_128/base.fvecs::/mnt/data/mehran/Datasets/synthetic_128/query.fvecs::/mnt/data/mehran/Datasets/synthetic_128/groundtruth.ivecs::128"
-  "synthetic_256::/mnt/data/mehran/Datasets/synthetic_256/base.fvecs::/mnt/data/mehran/Datasets/synthetic_256/query.fvecs::/mnt/data/mehran/Datasets/synthetic_256/groundtruth.ivecs::256"
-  "synthetic_512::/mnt/data/mehran/Datasets/synthetic_512/base.fvecs::/mnt/data/mehran/Datasets/synthetic_512/query.fvecs::/mnt/data/mehran/Datasets/synthetic_512/groundtruth.ivecs::512"
-  "synthetic_1024::/mnt/data/mehran/Datasets/synthetic_1024/base.fvecs::/mnt/data/mehran/Datasets/synthetic_1024/query.fvecs::/mnt/data/mehran/Datasets/synthetic_1024/groundtruth.ivecs::1024"
-  "glove-100::/mnt/data/mehran/Datasets/glove-100/glove-100_base.fvecs::/mnt/data/mehran/Datasets/glove-100/glove-100_query.fvecs::/mnt/data/mehran/Datasets/glove-100/glove-100_groundtruth.ivecs::100"
+  "SIFT1M::/mnt/data/datasets/SIFT1M/sift_base.fvecs::/mnt/data/datasets/SIFT1M/sift_query.fvecs::/mnt/data/datasets/SIFT1M/sift_query_groundtruth.ivecs::128"
+  "glove-100::/mnt/data/datasets/glove-100/glove-100_base.fvecs::/mnt/data/datasets/glove-100/glove-100_query.fvecs::/mnt/data/datasets/glove-100/glove-100_groundtruth.ivecs::100"
+  "RedCaps::/mnt/data/datasets/RedCaps/redcaps_base.fvecs::/mnt/data/datasets/RedCaps/redcaps_query.fvecs::/mnt/data/datasets/RedCaps/redcaps_groundtruth.ivecs::512"
+  "Deep1B::/mnt/data/datasets/Deep1B/deep1b_base.fvecs::/mnt/data/datasets/Deep1B/deep1b_query.fvecs::/mnt/data/datasets/Deep1B/deep1b_groundtruth.ivecs::96"
+  "GIST1B::/mnt/data/datasets/GIST1B/gist1b_base.fvecs::/mnt/data/datasets/GIST1B/gist1b_query.fvecs::/mnt/data/datasets/GIST1B/gist1b_groundtruth.ivecs::960"
 )
+
+echo ""
+echo "========================================"
+echo "FSP-ANN Option-C: LSH-Disabled System"
+echo "Alpha-Based Stabilization + End-Mode Reenc"
+echo "========================================"
+echo ""
+
+declare -a all_results=()
 
 # ---------- MAIN LOOP: datasets x profiles ----------
 for ds in "${DATASETS[@]}"; do
-# robust split on "::<exactly>"
-Name="$(awk -F '::' '{print $1}' <<<"$ds")"
-Base="$(awk -F '::' '{print $2}' <<<"$ds")"
-Query="$(awk -F '::' '{print $3}' <<<"$ds")"
-GT="$(awk -F '::' '{print $4}' <<<"$ds")"
-Dim="$(awk -F '::' '{print $5}' <<<"$ds")"
+  Name="$(awk -F '::' '{print $1}' <<<"$ds")"
+  Base="$(awk -F '::' '{print $2}' <<<"$ds")"
+  Query="$(awk -F '::' '{print $3}' <<<"$ds")"
+  GT="$(awk -F '::' '{print $4}' <<<"$ds")"
+  Dim="$(awk -F '::' '{print $5}' <<<"$ds")"
 
   if [[ -z "$Dim" ]]; then
     [[ -f "$Base" ]] || { echo "Skipping $Name (missing base)"; continue; }
@@ -226,6 +226,8 @@ Dim="$(awk -F '::' '{print $5}' <<<"$ds")"
 
   datasetRoot="${OutRoot}/${Name}"
   mkdir -p "$datasetRoot"
+
+  echo "Dataset: $Name (Dim=$Dim)"
 
   # Iterate profiles from config.json
   while IFS= read -r profile; do
@@ -251,7 +253,7 @@ Dim="$(awk -F '::' '{print $5}' <<<"$ds")"
     ovr_json="$(jq -c '.overrides // {}' <<<"$profile")"
     final_json="$(json_merge_with_overrides "$base_json" "$ovr_json")"
 
-    # Ensure output/eval/cloak exist and set fields
+    # Ensure output settings
     final_json="$(jq -c \
       --arg resultsDir "${runDir}/results" \
       '.output |= (. // {})
@@ -265,7 +267,7 @@ Dim="$(awk -F '::' '{print $5}' <<<"$ds")"
        | .cloak.noise = 0.0
       ' <<<"$final_json")"
 
-    # ratio: enforce GT path & disable recompute
+    # Ratio: enforce GT path & disable recompute
     final_json="$(jq -c \
       --arg gtPath "$(safe_resolve "$GT")" \
       '.ratio |= (. // {})
@@ -277,59 +279,54 @@ Dim="$(awk -F '::' '{print $5}' <<<"$ds")"
        | .ratio.allowComputeIfMissing = false
       ' <<<"$final_json")"
 
-    # Paper vs LSH knobs (preserve your logic)
+    # Stabilization + reencryption config
     final_json="$(jq -c '
-      .paper |= (. // {})
-      | if (.paper.enabled // false) then
-          (.paper.seed |= (. // 13))
-          | .lsh |= (. // {})
-          | .lsh.numTables = 0
-          | .lsh.rowsPerBand = 0
-          | .lsh.probeShards = 0
-        else
-          .
-        end
+      .stabilization |= (. // {})
+      | .stabilization.enabled = true
+      | .reencryption |= (. // {})
+      | .reencryption.enabled = true
     ' <<<"$final_json")"
 
     # Write run-specific config
     tmpConf="${runDir}/config.json"
     echo "$final_json" > "$tmpConf"
 
-# args
-keysFile="${runDir}/keystore.blob"
-gtArg="$(safe_resolve "$GT")" # ignored when gtPath provided & compute disabled
-dataArg="$Base"
-queryArg="$Query"
+    # args
+    keysFile="${runDir}/keystore.blob"
+    gtArg="$(safe_resolve "$GT")"
+    dataArg="$Base"
+    queryArg="$Query"
 
-declare -a restoreFlags=()   # <— add declare to ensure array exists
+    declare -a restoreFlags=()
 
-if [[ "$QueryOnly" == "true" ]]; then
-  dataArg="POINTS_ONLY"
-  restoreFlags+=("-Dquery.only=true")
-  if [[ -n "${RestoreVersion}" ]]; then
-    restoreFlags+=("-Drestore.version=${RestoreVersion}")
-  fi
-fi
+    if [[ "$QueryOnly" == "true" ]]; then
+      dataArg="POINTS_ONLY"
+      restoreFlags+=("-Dquery.only=true")
+      if [[ -n "${RestoreVersion}" ]]; then
+        restoreFlags+=("-Drestore.version=${RestoreVersion}")
+      fi
+    fi
 
-# Build java arg list (order preserved)
-argList=()
-argList+=("${JvmArgs[@]}")
+    # Build java arg list
+    argList=()
+    argList+=("${JvmArgs[@]}")
 
-# add restoreFlags only if non-empty (avoids unbound expansion with set -u)
-if ((${#restoreFlags[@]})); then
-  argList+=("${restoreFlags[@]}")
-fi
+    if ((${#restoreFlags[@]})); then
+      argList+=("${restoreFlags[@]}")
+    fi
 
-argList+=("-Dbase.path=$(safe_resolve "$Base" true)")
-argList+=("-jar" "$(safe_resolve "$JarPath")")
-argList+=("$(safe_resolve "$tmpConf")")
-argList+=("$(safe_resolve "$dataArg" true)")
-argList+=("$(safe_resolve "$queryArg" true)")
-argList+=("$(safe_resolve "$keysFile" true)")
-argList+=("${Dim}")
-argList+=("$(safe_resolve "$runDir")")
-argList+=("$(safe_resolve "$gtArg")")
-argList+=("${Batch}")
+    argList+=("-Dbase.path=$(safe_resolve "$Base" true)")
+    argList+=("-Dcli.dataset=$Name")
+    argList+=("-Dcli.profile=$label")
+    argList+=("-jar" "$(safe_resolve "$JarPath")")
+    argList+=("$(safe_resolve "$tmpConf")")
+    argList+=("$(safe_resolve "$dataArg" true)")
+    argList+=("$(safe_resolve "$queryArg" true)")
+    argList+=("$(safe_resolve "$keysFile" true)")
+    argList+=("${Dim}")
+    argList+=("$(safe_resolve "$runDir")")
+    argList+=("$(safe_resolve "$gtArg")")
+    argList+=("${Batch}")
 
     # Manifest
     manifest_json="$(jq -n -c \
@@ -345,7 +342,6 @@ argList+=("${Batch}")
       --arg baseVectors "$(safe_resolve "$Base" true)" \
       --arg queryVectors "$(safe_resolve "$Query" true)" \
       --arg gtPath "$(safe_resolve "$GT" true)" \
-      --arg alpha "$Alpha" \
       --arg timestampUtc "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       --argjson jvmArgs "$(printf '%s\n' "${JvmArgs[@]}" | jq -R . | jq -s .)" '
       {
@@ -362,7 +358,6 @@ argList+=("${Batch}")
         queryVectors: $queryVectors,
         gtPath: $gtPath,
         jvmArgs: $jvmArgs,
-        alpha: ($alpha|tonumber),
         timestampUtc: $timestampUtc
       }')"
     echo "$manifest_json" > "${runDir}/manifest.json"
@@ -370,28 +365,30 @@ argList+=("${Batch}")
     # Log commandline
     printf "%s\n" "java ${argList[*]}" > "${runDir}/cmdline.txt"
 
-    # Run (filter GT progress from console; full log kept)
+    # Run
     combinedLog="${runDir}/run.out.log"
     start_ts="$(date +%s)"
     set +e
-    java "${argList[@]}" 2>&1 | tee "$combinedLog" | grep -Ev '^\[[0-9]+/[0-9]+\]\s+ queries processed \(GT\)' || true
+    java "${argList[@]}" 2>&1 | tee "$combinedLog" | grep -Ev '^\[[0-9]+/[0-9]+\]\s+ queries processed' || true
     exit_code=${PIPESTATUS[0]}
     set -e
     end_ts="$(date +%s)"
     elapsed="$((end_ts - start_ts))"
     printf "ElapsedSec=%.1f\n" "$elapsed" > "${runDir}/elapsed.txt"
 
+    all_results+=("${Name}|${label}|${exit_code}|${elapsed}")
+
     if [[ "$exit_code" -ne 0 ]]; then
-      echo "Run failed: dataset=${Name}, profile=${label}, exit=${exit_code}" >&2
+      echo "  ✗ $label - EXIT $exit_code" >&2
     else
-      echo "Completed: ${Name} (${label})"
+      echo "  ✓ $label - Elapsed: ${elapsed}s"
     fi
 
   done < <(jq -c '.profiles[]' <<<"$cfg_json")
 
   # ---- per-dataset merges ----
-  mapfile -t g_prec        < <(find "${datasetRoot}" -type f -path "*/results/global_precision.csv"        2>/dev/null)
   mapfile -t g_results     < <(find "${datasetRoot}" -type f -path "*/results/results_table.csv"           2>/dev/null)
+  mapfile -t g_prec        < <(find "${datasetRoot}" -type f -path "*/results/global_precision.csv"        2>/dev/null)
   mapfile -t g_topk        < <(find "${datasetRoot}" -type f -path "*/results/topk_evaluation.csv"         2>/dev/null)
   mapfile -t g_reenc       < <(find "${datasetRoot}" -type f -path "*/results/reencrypt_metrics.csv"       2>/dev/null)
   mapfile -t g_samples     < <(find "${datasetRoot}" -type f -path "*/results/retrieved_samples.csv"       2>/dev/null)
@@ -427,10 +424,41 @@ argList+=("${Batch}")
     cp -n "${g_readme[0]}" "${datasetRoot}/results_readme/README_results_columns.txt" || true
   fi
 
-  if command -v tar >/dev/null 2>&1; then
-    # archive all per-profile results/ folders (shallow)
-    mapfile -t results_dirs < <(find "${datasetRoot}" -maxdepth 2 -type d -name "results" -printf '%P\n' 2>/dev/null)
-    [[ "${#results_dirs[@]}" -gt 0 ]] && tar -czf "${datasetRoot}/all_results_tarball.tgz" -C "${datasetRoot}" "${results_dirs[@]}" 2>/dev/null || true
-  fi
-
 done
+
+# ---------- FINAL REPORT ----------
+echo ""
+echo "========================================"
+echo "SUMMARY: Run Results by Dataset"
+echo "========================================"
+echo ""
+
+for result in "${all_results[@]}"; do
+  IFS='|' read -r ds prof exit el <<<"$result"
+  if [[ $exit -eq 0 ]]; then
+    printf "%-15s %-30s : %10.1fs\n" "$ds" "$prof" "$el"
+  else
+    printf "%-15s %-30s : EXIT %d\n" "$ds" "$prof" "$exit"
+  fi
+done
+
+# Export summary
+summaryPath="${OutRoot}/RUN_SUMMARY.txt"
+{
+  echo "FSP-ANN Run Summary"
+  echo "===================="
+  echo "Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "Config: $ConfigPath"
+  echo "Output Root: $OutRoot"
+  echo ""
+  echo "Results:"
+  for result in "${all_results[@]}"; do
+    IFS='|' read -r ds prof exit el <<<"$result"
+    printf "  %-15s %-30s : %s (%.1fs)\n" "$ds" "$prof" "$([ $exit -eq 0 ] && echo 'OK' || echo "FAIL:$exit")" "$el"
+  done
+} > "$summaryPath"
+
+echo ""
+echo "✓ Summary: $summaryPath"
+echo "✓ Results in: $OutRoot"
+echo ""
