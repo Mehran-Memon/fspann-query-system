@@ -1,3 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="
@@ -13,6 +14,12 @@
 
     <artifactId>index</artifactId>
     <name>FSPANN Index Service</name>
+
+    <properties>
+        <maven.compiler.source>11</maven.compiler.source>
+        <maven.compiler.target>11</maven.compiler.target>
+        <junit.version>5.11.0</junit.version>
+    </properties>
 
     <dependencies>
 
@@ -35,6 +42,7 @@
             <groupId>com.fspann</groupId>
             <artifactId>config</artifactId>
         </dependency>
+
         <!-- Common DTOs -->
         <dependency>
             <groupId>com.fspann</groupId>
@@ -46,46 +54,92 @@
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
         </dependency>
+
+        <!-- ============================================================ -->
+        <!-- TEST DEPENDENCIES - JUnit 5 ONLY (NO JUnit 4)                -->
+        <!-- ============================================================ -->
+
+        <!-- JUnit 5 API (annotations and assertions) -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-api</artifactId>
-            <version>5.11.0</version>
+            <version>${junit.version}</version>
             <scope>test</scope>
         </dependency>
+
+        <!-- JUnit 5 Engine (runtime for executing tests) -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-engine</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- JUnit 5 Params (for parameterized tests) -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-params</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- SLF4J Simple implementation for test logging -->
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-simple</artifactId>
             <version>2.0.13</version>
             <scope>test</scope>
         </dependency>
+
+        <!-- Mockito for mocking dependencies -->
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-core</artifactId>
-            <version>5.12.0</version> <!-- Use the latest version -->
+            <version>5.14.2</version>
             <scope>test</scope>
         </dependency>
+
+        <!-- Mockito JUnit 5 integration -->
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-junit-jupiter</artifactId>
+            <version>5.14.2</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- ByteBuddy for Mockito -->
         <dependency>
             <groupId>net.bytebuddy</groupId>
             <artifactId>byte-buddy</artifactId>
-            <version>1.14.15</version> <!-- Latest stable version -->
+            <version>1.14.15</version>
             <scope>test</scope>
         </dependency>
 
     </dependencies>
 
-    <!-- 4. Plugin Management -->
+    <!-- Build Configuration -->
     <build>
-        <pluginManagement>
-            <plugins>
-                <plugin>
-                    <groupId>org.apache.maven.plugins</groupId>
-                    <artifactId>maven-surefire-plugin</artifactId>
-                    <version>3.0.0-M5</version>
-                    <configuration>
-                        <argLine>-XX:+EnableDynamicAgentLoading</argLine>
-                    </configuration>
-                </plugin>
-            </plugins>
-        </pluginManagement>
+        <plugins>
+            <!-- Maven Surefire Plugin - runs tests -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
+                <configuration>
+                    <!-- Enable dynamic agent loading for Mockito -->
+                    <argLine>-XX:+EnableDynamicAgentLoading</argLine>
+                </configuration>
+            </plugin>
+
+            <!-- Maven Compiler Plugin -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <source>11</source>
+                    <target>11</target>
+                </configuration>
+            </plugin>
+        </plugins>
     </build>
 </project>
