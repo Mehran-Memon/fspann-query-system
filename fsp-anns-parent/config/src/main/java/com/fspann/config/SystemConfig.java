@@ -225,13 +225,46 @@ public class SystemConfig {
 
         @JsonProperty("probeShards")
         public int probeShards = 0;
+
+        // ========== NEW FIELDS FOR LSH-ONLY SYSTEM ==========
+        @JsonProperty("numFunctions")
+        public int numFunctions = 8;
+
+        @JsonProperty("numBuckets")
+        public int numBuckets = 1000;
+
+        @JsonProperty("adaptiveProbing")
+        public boolean adaptiveProbing = true;
+
+        @JsonProperty("targetRatio")
+        public double targetRatio = 1.2;
+
         public int getNumTables() {
             return clamp(numTables, 1, MAX_TABLES);
         }
+
         public int getProbeShards() {
-            // 0 means "use default" at higher level; otherwise clamp
             if (probeShards <= 0) return 0;
             return clamp(probeShards, 1, MAX_SHARDS);
+        }
+
+        // ========== NEW GETTERS FOR LSH-ONLY ==========
+        public int getNumFunctions() {
+            return clamp(numFunctions, 1, 256);
+        }
+
+        public int getNumBuckets() {
+            return clamp(numBuckets, 100, 1_000_000);
+        }
+
+        public boolean isAdaptiveProbing() {
+            return adaptiveProbing;
+        }
+
+        public double getTargetRatio() {
+            if (Double.isNaN(targetRatio) || targetRatio < 1.0) return 1.2;
+            if (targetRatio > 2.0) return 2.0;
+            return targetRatio;
         }
     }
 

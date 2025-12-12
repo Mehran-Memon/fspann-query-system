@@ -533,6 +533,20 @@ public final class PartitionedIndexService{
         return sum;
     }
 
+    /**
+     * Get shard ID for vector (compatibility method).
+     * Option-C partitioned mode doesn't use traditional shards.
+     * Returns -1 to indicate no specific shard.
+     *
+     * @param vector the vector (unused in partitioned mode)
+     * @return -1 (no shard assignment in Option-C)
+     */
+    public int getShardIdForVector(double[] vector) {
+        // Option-C doesn't use shards; partitions are division-based
+        // Return -1 to indicate N/A
+        return -1;
+    }
+
     public Set<Integer> getRegisteredDimensions() {
         return Collections.unmodifiableSet(dims.keySet());
     }
