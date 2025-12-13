@@ -97,8 +97,7 @@ public class FvecsLoaderTest {
             dos.writeInt(Integer.reverseBytes(0));
         }
 
-        Iterator<double[]> it = loader.openVectorIterator(testFile);
-        assertThrows(UncheckedIOException.class, it::next);
+        assertThrows(UncheckedIOException.class, () -> loader.openVectorIterator(testFile));
     }
 
     @Test
@@ -109,8 +108,7 @@ public class FvecsLoaderTest {
             dos.writeInt(Integer.reverseBytes(-10));
         }
 
-        Iterator<double[]> it = loader.openVectorIterator(testFile);
-        assertThrows(UncheckedIOException.class, it::next);
+        assertThrows(UncheckedIOException.class, () -> loader.openVectorIterator(testFile));
     }
 
     @Test
@@ -121,8 +119,7 @@ public class FvecsLoaderTest {
             dos.writeInt(Integer.reverseBytes(2_000_000));
         }
 
-        Iterator<double[]> it = loader.openVectorIterator(testFile);
-        assertThrows(UncheckedIOException.class, it::next);
+        assertThrows(UncheckedIOException.class, () -> loader.openVectorIterator(testFile));
     }
 
     @Test

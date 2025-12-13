@@ -92,8 +92,7 @@ public class IvecsLoaderTest {
             dos.writeInt(Integer.reverseBytes(2_000_000));
         }
 
-        Iterator<int[]> it = loader.openIndexIterator(testFile);
-        assertThrows(UncheckedIOException.class, it::next);
+        assertThrows(UncheckedIOException.class, () -> loader.openIndexIterator(testFile));
     }
 
     private Path createIvecsFile(int numRows, int dim) throws IOException {
