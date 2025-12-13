@@ -3,6 +3,7 @@ package com.fspann;
 import com.fspann.common.RocksDBMetadataManager;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.io.TempDir;
 import static org.junit.jupiter.api.Assertions.*;
@@ -30,6 +31,15 @@ public class RocksDBMetadataManagerCrudTest {
         Files.createDirectories(pointsPath);
 
         manager = RocksDBMetadataManager.create(metadataPath.toString(), pointsPath.toString());
+    }
+
+    @AfterEach
+    public void tearDown() {
+        if (manager != null) {
+            try {
+                manager.close();
+            } catch (Exception ignore) {}
+        }
     }
 
     @Test

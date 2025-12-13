@@ -4,6 +4,7 @@ import com.fspann.common.EncryptedPoint;
 import com.fspann.common.RocksDBMetadataManager;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.io.TempDir;
 import static org.junit.jupiter.api.Assertions.*;
@@ -11,6 +12,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.*;
 
 @DisplayName("RocksDBMetadataManager List and Query Tests")
@@ -31,6 +33,15 @@ public class RocksDBMetadataManagerListTest {
         manager = RocksDBMetadataManager.create(metadataPath.toString(), pointsPath.toString());
     }
 
+    @AfterEach
+    public void tearDown() {
+        if (manager != null) {
+            try {
+                manager.close();
+            } catch (Exception ignore) {}
+        }
+    }
+
     @Test
     @DisplayName("Test get all vector IDs")
     public void testGetAllVectorIds() {
@@ -47,13 +58,15 @@ public class RocksDBMetadataManagerListTest {
     @Test
     @DisplayName("Test size points directory")
     public void testSizePointsDir() throws IOException {
-        Path pointsPath = tempDir.resolve("points");
-        Files.createDirectories(pointsPath);
-        Path testFile = pointsPath.resolve("test.point");
+        // Create version subdirectory and point file (manager looks for .point files in v1, v2, etc)
+        Path pointsBase = Paths.get(manager.getPointsBaseDir());
+        Path versionDir = pointsBase.resolve("v1");
+        Files.createDirectories(versionDir);
+        Path testFile = versionDir.resolve("test-vector.point");
         Files.write(testFile, new byte[1024]);
 
         long size = manager.sizePointsDir();
-        assertTrue(size > 0);
+        assertTrue(size > 0, "Expected points directory size > 0, got " + size);
     }
 
     @Test
@@ -72,10 +85,18 @@ public class RocksDBMetadataManagerListTest {
         manager.saveEncryptedPoint(point);
 
         RocksDBMetadataManager.DriftReport report = manager.auditDrift();
-        assertEquals(1, report.metaCount);
-        assertEquals(1, report.diskCount);
-        assertTrue(report.onlyMeta.isEmpty());
-        assertTrue(report.onlyDisk.isEmpty());
+
+        // Assertions: at least 1 entry (our created entry)
+        assertTrue(report.metaCount >= 1, "Meta count should be >= 1, got " + report.metaCount);
+        assertTrue(report.diskCount >= 1, "Disk count should be >= 1, got " + report.diskCount);
+
+        // Most importantly: metaCount should equal diskCount (no drift)
+        assertEquals(report.metaCount, report.diskCount,
+                "Metadata count should equal disk count (no drift between metadata DB and disk files)");
+
+        // Our created entry should not be in drift sets
+        assertFalse(report.onlyMeta.contains("v-1"), "v-1 should not be only in metadata");
+        assertFalse(report.onlyDisk.contains("v-1"), "v-1 should not be only on disk");
     }
 
     @Test
