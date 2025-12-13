@@ -1,6 +1,6 @@
 package com.fspann.key;
 
-import com.fspann.common.*;
+import com.fspann.common.KeyVersion;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -11,7 +11,7 @@ import javax.crypto.SecretKey;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.*;
+import java.util.Arrays;
 
 @DisplayName("KeyManager Unit Tests")
 public class KeyManagerTest {
@@ -107,16 +107,42 @@ public class KeyManagerTest {
         assertEquals(3, current.getVersion());
     }
 
+    /**
+     * FIXED: Test that deleteKeysOlderThan properly removes old versions
+     *
+     * Before fix: Was checking sessionKeys.size() which would be wrong
+     * After fix: Check that deleted versions cannot be accessed
+     */
     @Test
     @DisplayName("Test KeyManager deletes old keys")
     public void testDeleteKeysOlderThan() {
-        keyManager.rotateKey();
-        keyManager.rotateKey();
-        keyManager.rotateKey();
-
-        keyManager.deleteKeysOlderThan(2);
+        // Create: v1 (initial), v2, v3, v4
+        keyManager.rotateKey();  // v2
+        keyManager.rotateKey();  // v3
+        keyManager.rotateKey();  // v4
 
         KeyVersion current = keyManager.getCurrentVersion();
-        assertEquals(3, current.getVersion());
+        assertEquals(4, current.getVersion());
+
+        // Delete all versions < 2 (deletes v1)
+        keyManager.deleteKeysOlderThan(2);
+
+        // Current version should still be v4
+        KeyVersion currentAfterDelete = keyManager.getCurrentVersion();
+        assertEquals(4, currentAfterDelete.getVersion());
+
+        // v1 should be deleted and inaccessible
+        SecretKey v1Key = keyManager.getSessionKey(1);
+        assertNull(v1Key, "Version 1 should be deleted and return null");
+
+        // v2, v3, v4 should still be accessible
+        SecretKey v2Key = keyManager.getSessionKey(2);
+        assertNotNull(v2Key, "Version 2 should still exist");
+
+        SecretKey v3Key = keyManager.getSessionKey(3);
+        assertNotNull(v3Key, "Version 3 should still exist");
+
+        SecretKey v4Key = keyManager.getSessionKey(4);
+        assertNotNull(v4Key, "Version 4 should still exist");
     }
 }

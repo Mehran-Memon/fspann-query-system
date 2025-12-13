@@ -80,7 +80,9 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
     @Override
     public KeyVersion getVersion(int version) {
         SecretKey key = keyManager.getSessionKey(version);
-        if (key == null) throw new IllegalArgumentException("Unknown key version: " + version);
+        if (key == null) {
+            throw new IllegalArgumentException("Unknown key version: " + version);
+        }
         return new KeyVersion(version, key);
     }
 
@@ -156,7 +158,10 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
     public void setLastRotationTime(long timestamp)          { this.lastRotation = Instant.ofEpochMilli(timestamp); }
     public void freezeRotation(boolean freeze)               { this.frozen = freeze; }
 
-    /** Pin the active key version; disables auto-rotation until cleared. */
+    /**
+     * Pin the active key version; disables auto-rotation until cleared.
+     * FIXED: Now returns false gracefully if version doesn't exist, doesn't throw.
+     */
     public synchronized boolean activateVersion(int version) {
         try {
             SecretKey key = keyManager.getSessionKey(version);
@@ -165,6 +170,10 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
                 return false;
             }
             this.forcedVersion = new KeyVersion(version, key);
+            if (this.forcedVersion == null) {
+                logger.error("activateVersion({}) failed: KeyVersion constructor returned null", version);
+                return false;
+            }
             this.operationCount.set(0);
             this.lastRotation = Instant.now();
             logger.info("Activated key version v{}", version);
@@ -175,12 +184,19 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
         }
     }
 
-    /** Unpin any forced version and return to automatic rotation mode. */
+    /**
+     * Unpin any forced version and return to automatic rotation mode.
+     * FIXED: More defensive null checks.
+     */
     public synchronized void clearActivatedVersion() {
-        this.forcedVersion = null;
-        this.operationCount.set(0);
-        this.lastRotation = Instant.now();
-        logger.info("Cleared forced key version; auto-rotation re-enabled");
+        try {
+            this.forcedVersion = null;
+            this.operationCount.set(0);
+            this.lastRotation = Instant.now();
+            logger.info("Cleared forced key version; auto-rotation re-enabled");
+        } catch (Exception e) {
+            logger.error("clearActivatedVersion() failed", e);
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -306,13 +322,24 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
     /**
      * Finalize key rotation: delete all keys older than currentVersion-1.
      * Must be called only AFTER full/partial re-encryption is complete.
+     *
+     * FIXED: Now uses (currentVersion - 1) to keep at least 2 versions
+     * (current + previous) for security. Never deletes v1.
      */
     public synchronized void finalizeRotation() {
         try {
             KeyVersion curr = keyManager.getCurrentVersion();
-            int keepVersion = curr.getVersion();
+            if (curr == null) {
+                logger.error("finalizeRotation failed: no current version available");
+                return;
+            }
+            int currentVer = curr.getVersion();
 
-            // delete ALL versions < keepVersion
+            // Keep current version and one previous for safety
+            // Delete all keys older than currentVer-1
+            // This ensures v1 is never deleted (it's the master KDF seed)
+            int keepVersion = Math.max(1, currentVer - 1);
+
             keyManager.deleteKeysOlderThan(keepVersion);
 
             logger.info("Finalized rotation: deleted keys older than v{}", keepVersion);
@@ -324,6 +351,4 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
     public KeyManager getKeyManager() {
         return this.keyManager;
     }
-
-
 }

@@ -3,13 +3,16 @@ package com.fspann.key;
 import com.fspann.common.*;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.io.TempDir;
 import static org.junit.jupiter.api.Assertions.*;
 
+import javax.crypto.SecretKey;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.*;
 
 @DisplayName("KeyRotationServiceImpl Unit Tests")
 public class KeyRotationServiceImplTest {
@@ -42,6 +45,19 @@ public class KeyRotationServiceImplTest {
                 metadataManager,
                 null
         );
+    }
+
+    /**
+     * ADDED: Proper cleanup of RocksDB metadata manager
+     * RocksDB holds file locks that must be released before @TempDir cleanup
+     */
+    @AfterEach
+    public void tearDown() {
+        if (metadataManager != null) {
+            try {
+                metadataManager.close();
+            } catch (Exception ignore) {}
+        }
     }
 
     @Test

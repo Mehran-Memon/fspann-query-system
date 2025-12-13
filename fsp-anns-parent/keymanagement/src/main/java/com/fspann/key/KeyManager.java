@@ -261,6 +261,10 @@ public class KeyManager {
     /**
      * Delete all keys strictly older than keepVersion.
      * Uses secure deletion and updates all auxiliary maps.
+     *
+     * NOTE: All versions can be deleted (including v1) because the master key
+     * is stored separately and is never deleted. Session keys are derived from
+     * the master key on-demand, so deleting v1 doesn't prevent us from deriving it again.
      */
     public synchronized void deleteKeysOlderThan(int keepVersion) {
         try {
@@ -276,12 +280,6 @@ public class KeyManager {
                 SecretKey old = sessionKeys.remove(v);
                 derived.remove(v);
                 keyCreationTimes.remove(v);
-
-                if (v == 1) {
-                    // Do not delete v1 if it is the original seed of the KDF.
-                    // Its value is used to derive all other session keys.
-                    continue;
-                }
 
                 if (old != null) {
                     SecureKeyDeletion.wipeKey(old);
