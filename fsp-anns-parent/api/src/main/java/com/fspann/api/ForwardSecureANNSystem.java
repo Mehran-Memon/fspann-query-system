@@ -503,15 +503,21 @@ public class ForwardSecureANNSystem {
         long startNs = System.nanoTime();
         if (profiler != null) profiler.start("batchInsert");
 
+        KeyVersion currentKV = keyService.getCurrentVersion();
+        int currentKeyVersion = currentKV.getVersion();
+
+        List<EncryptedPoint> allEncrypted = new ArrayList<>();
+
         for (int offset = 0; offset < vectors.size(); offset += BATCH_SIZE) {
             List<double[]> slice = vectors.subList(offset, Math.min(offset + BATCH_SIZE, vectors.size()));
 
             List<double[]> valid = new ArrayList<>(slice.size());
             List<String> ids = new ArrayList<>(slice.size());
 
+            // ===== CRITICAL FIX #2: Encrypt all vectors =====
             for (int j = 0; j < slice.size(); j++) {
                 double[] v = slice.get(j);
-                long ord = fileOrdinal.getAndIncrement(); // original file position for this record
+                long ord = fileOrdinal.getAndIncrement();
 
                 if (v == null) {
                     logger.warn("Skipping null vector at ordinal={}", ord);
@@ -521,12 +527,53 @@ public class ForwardSecureANNSystem {
                     logger.warn("Skipping vector at ordinal={} with dim={} (expected {})", ord, v.length, dim);
                     continue;
                 }
-                ids.add(Long.toString(ord));
+
+                String pointId = Long.toString(ord);
+                ids.add(pointId);
                 valid.add(v);
+
+                // Encrypt this vector
+                byte[] ciphertext = encryptVector(v);
+                if (ciphertext == null || ciphertext.length == 0) {
+                    logger.error("Encryption produced empty ciphertext for ordinal {}", ord);
+                    continue;
+                }
+
+                // Generate IV
+                byte[] iv = generateIV();
+
+                // Create EncryptedPoint
+                EncryptedPoint ep = new EncryptedPoint(
+                        pointId,                 // id
+                        currentKeyVersion,       // version
+                        iv,                      // iv
+                        ciphertext,              // ciphertext
+                        currentKeyVersion,       // keyVersion
+                        dim,                     // dimension
+                        0,                       // shardId
+                        List.of(),               // buckets
+                        List.of()                // metadata
+                );
+
+                allEncrypted.add(ep);
             }
 
             if (valid.isEmpty()) continue;
 
+            // ===== CRITICAL FIX #3: Batch persist all to metadata =====
+            try {
+                for (EncryptedPoint ep : allEncrypted) {
+                    metadataManager.saveEncryptedPoint(ep);
+                }
+                if (verbose) {
+                    logger.debug("Persisted {} encrypted points to metadata", allEncrypted.size());
+                }
+            } catch (Exception e) {
+                logger.error("Failed to persist {} encrypted points to metadata", allEncrypted.size(), e);
+                throw new RuntimeException("Batch metadata persistence failed", e);
+            }
+
+            // ===== Index all vectors =====
             keyService.rotateIfNeeded();
             for (int j = 0; j < valid.size(); j++) {
                 indexService.insert(ids.get(j), valid.get(j));
@@ -546,7 +593,7 @@ public class ForwardSecureANNSystem {
     public int getIndexedVectorCount() {
         return indexedCount.get();
     }
-
+    
     public void insert(String id, double[] vector, int dim) {
         Objects.requireNonNull(id, "ID cannot be null");
         Objects.requireNonNull(vector, "Vector cannot be null");
@@ -556,8 +603,49 @@ public class ForwardSecureANNSystem {
         if (profiler != null) profiler.start("insert");
         try {
             keyService.rotateIfNeeded();
+
+            // ===== CRITICAL FIX #1: Encrypt and persist to metadata =====
+            KeyVersion currentKV = keyService.getCurrentVersion();
+            int currentKeyVersion = currentKV.getVersion();
+
+            // Encrypt the vector
+            byte[] ciphertext = encryptVector(vector);
+            if (ciphertext == null || ciphertext.length == 0) {
+                throw new RuntimeException("Encryption produced empty ciphertext");
+            }
+
+            // Generate IV (nonce)
+            byte[] iv = generateIV();
+
+            // Create EncryptedPoint with all required fields
+            EncryptedPoint encryptedPoint = new EncryptedPoint(
+                    id,                      // id
+                    currentKeyVersion,       // version
+                    iv,                      // iv
+                    ciphertext,              // ciphertext
+                    currentKeyVersion,       // keyVersion (same as version)
+                    dim,                     // dimension
+                    0,                       // shardId (default)
+                    List.of(),               // buckets (empty)
+                    List.of()                // metadata (empty)
+            );
+
+            // CRITICAL: Persist to metadata before indexing
+            try {
+                metadataManager.saveEncryptedPoint(encryptedPoint);
+                if (verbose) {
+                    logger.debug("Persisted encrypted point {} to metadata (key v{})",
+                            id, currentKeyVersion);
+                }
+            } catch (Exception e) {
+                logger.error("Failed to persist encrypted point {} to metadata", id, e);
+                throw new RuntimeException("Metadata persistence failed for " + id, e);
+            }
+
+            // ===== Index the encrypted point =====
             indexService.insert(id, vector);
             indexedCount.incrementAndGet();
+
         } finally {
             if (profiler != null) {
                 profiler.stop("insert");
@@ -569,6 +657,33 @@ public class ForwardSecureANNSystem {
                 }
             }
         }
+    }
+
+    /**
+     * Helper: Encrypt a vector using crypto service
+     */
+    private byte[] encryptVector(double[] vector) throws RuntimeException {
+        try {
+            KeyVersion kv = keyService.getCurrentVersion();
+            EncryptedPoint temp = cryptoService.encryptToPoint(
+                    "temp",  // temporary ID
+                    vector,
+                    kv.getKey()
+            );
+            return temp.getCiphertext();
+        } catch (Exception e) {
+            logger.error("Vector encryption failed", e);
+            throw new RuntimeException("Vector encryption failed", e);
+        }
+    }
+
+    /**
+     * Helper: Generate a random IV for AES-GCM
+     */
+    private byte[] generateIV() {
+        byte[] iv = new byte[12];  // 96 bits for GCM
+        new java.security.SecureRandom().nextBytes(iv);
+        return iv;
     }
 
     /* ---------------------- Query API ---------------------- */

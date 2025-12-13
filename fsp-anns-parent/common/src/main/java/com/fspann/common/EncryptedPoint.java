@@ -8,6 +8,8 @@ import java.util.Objects;
  * EncryptedPoint: An encrypted vector with metadata.
  *
  * Implements Serializable for persistence via PersistenceUtils.
+ *
+ * FIXED: Added getAAD() method for decrypt operations
  */
 public class EncryptedPoint implements Serializable {
     private static final long serialVersionUID = 1L;
@@ -18,8 +20,8 @@ public class EncryptedPoint implements Serializable {
     private final byte[] ciphertext;
     private final int keyVersion;
     private final int dimension;
-    private final int shardId;  // <-- NEW: for data sharding
-    private final List<Integer> buckets;  // <-- NEW: for LSH bucket IDs
+    private final int shardId;  // <-- for data sharding
+    private final List<Integer> buckets;  // <-- for LSH bucket IDs
     private final List<String> metadata;
 
     /**
@@ -71,9 +73,20 @@ public class EncryptedPoint implements Serializable {
     public int getKeyVersion() { return keyVersion; }
     public int getDimension() { return dimension; }
     public int getVectorLength() { return dimension; }  // Alias
-    public int getShardId() { return shardId; }  // <-- NEW
-    public List<Integer> getBuckets() { return buckets; }  // <-- NEW
+    public int getShardId() { return shardId; }
+    public List<Integer> getBuckets() { return buckets; }
     public List<String> getMetadata() { return metadata; }
+
+    /**
+     * FIXED: Generate AAD (Additional Authenticated Data) for AES-GCM
+     * Must match the AAD used during encryption
+     *
+     * Format: "id:{id}|v:{version}|d:{dimension}"
+     */
+    public byte[] getAAD() {
+        String aadStr = String.format("id:%s|v:%d|d:%d", id, version, dimension);
+        return aadStr.getBytes();
+    }
 
     @Override
     public String toString() {

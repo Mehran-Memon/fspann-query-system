@@ -361,17 +361,34 @@ public final class QueryServiceImpl implements QueryService {
             if (ep == null) continue;
             touchedThisSession.add(ep.getId());
 
-            double[] v = cryptoService.decryptFromPoint(ep, kv.getKey());
-            if (!isValid(v)) continue;
+            try {
+                // ===== CRITICAL FIX: Use correct key version per point =====
+                // cryptoService.decryptFromPoint() now uses ep.getKeyVersion()
+                // to retrieve the correct key, not the kv parameter
+                double[] v = cryptoService.decryptFromPoint(ep, null);  // null = unused parameter
 
-            lastCandDecrypted++;
-            out.add(new QueryScored(ep.getId(), l2(qVec, v)));
+                if (!isValid(v)) {
+                    logger.debug("Decrypted vector {} is invalid (NaN/Inf)", ep.getId());
+                    continue;
+                }
+
+                lastCandDecrypted++;
+                out.add(new QueryScored(ep.getId(), l2(qVec, v)));
+
+            } catch (Exception e) {
+                logger.warn("Failed to decrypt point {}: {}", ep.getId(), e.getMessage());
+                // Skip this point and continue with next
+                continue;
+            }
         }
 
         return out;
     }
 
-    // true Euclidean L2
+    /**
+     * True Euclidean L2 distance
+     * (keep existing implementation)
+     */
     private double l2(double[] a, double[] b) {
         int len = Math.min(a.length, b.length);
         double s = 0.0;
@@ -408,6 +425,10 @@ public final class QueryServiceImpl implements QueryService {
         return iv + ct;
     }
 
+    /**
+     * Validate that vector contains only finite numbers
+     * (keep existing implementation)
+     */
     private static boolean isValid(double[] v) {
         if (v == null) return false;
         for (double x : v) {

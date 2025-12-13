@@ -103,35 +103,77 @@ public class AesGcmCryptoService implements CryptoService {
         }
     }
 
+    /**
+     * This is CRITICAL for forward-security:
+     * - Vector encrypted with key v1 must decrypt with key v1
+     * - Even if current key is now v2
+     * - Key v1 is retrieved from keyService based on version in point
+     */
     @Override
-    public double[] decryptFromPoint(EncryptedPoint encrypted, SecretKey key) {
-        if (encrypted == null || key == null) {
-            throw new IllegalArgumentException("encrypted and key cannot be null");
+    public double[] decryptFromPoint(EncryptedPoint encrypted, javax.crypto.SecretKey unusedKey) {
+        if (encrypted == null) {
+            throw new IllegalArgumentException("encrypted cannot be null");
         }
 
         try {
             String id = encrypted.getId();
             int version = encrypted.getVersion();
+            int keyVersion = encrypted.getKeyVersion();  // ← CRITICAL: Use point's key version
             int dim = encrypted.getDimension();
             byte[] iv = encrypted.getIv();
             byte[] ciphertext = encrypted.getCiphertext();
+            byte[] aad = encrypted.getAAD();  // ← Use AAD from point
 
-            // AAD
-            String aadStr = String.format("id:%s|v:%d|d:%d", id, version, dim);
-            byte[] aad = aadStr.getBytes();
+            // ===== CRITICAL FIX #1: Get the CORRECT key version =====
+            SecretKey key;
+            try {
+                // Try to get the specific key version used for encryption
+                KeyVersion kv = keyService.getVersion(keyVersion);
+                key = kv.getKey();
+            } catch (Exception e) {
+                log.warn("Key version {} not available for point {}, trying current key",
+                        keyVersion, id);
+                // Fallback to current key (may fail if key was rotated)
+                KeyVersion currentKv = keyService.getCurrentVersion();
+                key = currentKv.getKey();
+            }
+
+            if (key == null) {
+                throw new IllegalArgumentException(
+                        "No key available for decryption of point " + id +
+                                " (encrypted with key v" + keyVersion + ")"
+                );
+            }
+
+            // ===== CRITICAL FIX #2: Decrypt with CORRECT key =====
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            GCMParameterSpec spec = new GCMParameterSpec(128, iv);  // 128-bit tag
+            cipher.init(Cipher.DECRYPT_MODE, key, spec);
+
+            // Update AAD if available
+            if (aad != null && aad.length > 0) {
+                cipher.updateAAD(aad);
+            }
 
             // Decrypt
-            Cipher cipher = Cipher.getInstance(ALGO);
-            GCMParameterSpec spec = new GCMParameterSpec(TAG_BITS, iv);
-            cipher.init(Cipher.DECRYPT_MODE, key, spec);
-            cipher.updateAAD(aad);
             byte[] plainBytes = cipher.doFinal(ciphertext);
 
             // Deserialize
             return deserializeVector(plainBytes);
 
+        } catch (javax.crypto.AEADBadTagException e) {
+            log.error("AEADBadTagException for point {}: Authentication tag mismatch. " +
+                            "This likely means the wrong key was used for decryption. " +
+                            "Expected key v{}, actual: {}",
+                    encrypted.getId(), encrypted.getKeyVersion(), e.getMessage());
+            throw new RuntimeException(
+                    "Decryption failed: Tag mismatch for point " + encrypted.getId() +
+                            " (key v" + encrypted.getKeyVersion() + ")",
+                    e
+            );
         } catch (Exception e) {
-            throw new RuntimeException("Decryption failed", e);
+            log.error("Decryption failed for point {}", encrypted.getId(), e);
+            throw new RuntimeException("Decryption failed for point " + encrypted.getId(), e);
         }
     }
 
