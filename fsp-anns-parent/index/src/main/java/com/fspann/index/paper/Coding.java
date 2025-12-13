@@ -26,16 +26,20 @@ public final class Coding {
 
     private Coding() {}
 
-    // ----------------------------------------------------------------------
+    // Default parameters
+    private static final int DEFAULT_LAMBDA = 8;
+    private static final double DEFAULT_OMEGA = 1.0;
+
+    // ============================================================
     // Code family interface
-    // ----------------------------------------------------------------------
+    // ============================================================
     public interface CodeFamily {
         int codeBits();
     }
 
-    // ----------------------------------------------------------------------
+    // ============================================================
     // Fully-materialized GFunction
-    // ----------------------------------------------------------------------
+    // ============================================================
     public static final class GFunction implements Serializable, CodeFamily {
         /** alpha[j][d] Gaussian projections */
         public final double[][] alpha;
@@ -83,9 +87,9 @@ public final class Coding {
         }
     }
 
-    // ----------------------------------------------------------------------
+    // ============================================================
     // Minimal, seed-only descriptor used for metadata
-    // ----------------------------------------------------------------------
+    // ============================================================
     public static final class GMeta implements Serializable, CodeFamily {
         private final int m;
         private final int lambda;
@@ -112,9 +116,9 @@ public final class Coding {
         }
     }
 
-    // ----------------------------------------------------------------------
+    // ============================================================
     // GFunction Builders (Algorithm-1 initialization)
-    // ----------------------------------------------------------------------
+    // ============================================================
 
     /**
      * Build a GFunction with random Gaussian α, a uniform ω for all projections,
@@ -150,7 +154,6 @@ public final class Coding {
     public static GMeta fromSeedOnly(int m, int lambda, long seed) {
         return new GMeta(m, lambda, seed);
     }
-
 
     /**
      * Build GFunction from sample (Algorithm-1, data-aware ω).
@@ -201,9 +204,9 @@ public final class Coding {
         return new GFunction(alpha, r, w, lambda, seed);
     }
 
-    // ----------------------------------------------------------------------
+    // ============================================================
     // Algorithm-1: H(v) and C(v)
-    // ----------------------------------------------------------------------
+    // ============================================================
 
     /** Compute H(v) = { h_j(v) }. */
     public static int[] H(double[] v, GFunction G) {
@@ -232,9 +235,76 @@ public final class Coding {
         return out;
     }
 
-    // ----------------------------------------------------------------------
+    // ============================================================
+    // Wrapper method: code() - generates codes for all divisions
+    // ============================================================
+
+    /**
+     * Generate bit-interleaved codes for all divisions.
+     *
+     * Creates a separate GFunction for each division using a unique seed,
+     * then computes the code for each division independently.
+     *
+     * @param vec the vector to code
+     * @param divisions number of divisions
+     * @param m projections per division
+     * @param seed base seed (division-specific seeds derived from this)
+     * @return array of BitSets, one per division
+     */
+    public static BitSet[] code(double[] vec, int divisions, int m, long seed) {
+        if (vec == null || vec.length == 0)
+            throw new IllegalArgumentException("vec empty");
+        if (divisions <= 0)
+            throw new IllegalArgumentException("divisions ≤ 0");
+        if (m <= 0)
+            throw new IllegalArgumentException("m ≤ 0");
+
+        BitSet[] result = new BitSet[divisions];
+
+        // For each division, create a GFunction with unique seed
+        for (int d = 0; d < divisions; d++) {
+            long divisionSeed = seed + d;  // Unique seed per division
+            GFunction G = buildRandomG(vec.length, m, DEFAULT_LAMBDA, DEFAULT_OMEGA, divisionSeed);
+            result[d] = C(vec, G);
+        }
+
+        return result;
+    }
+
+    /**
+     * Advanced variant: generate codes with custom lambda.
+     *
+     * @param vec the vector to code
+     * @param divisions number of divisions
+     * @param m projections per division
+     * @param lambda bits per projection
+     * @param seed base seed
+     * @return array of BitSets, one per division
+     */
+    public static BitSet[] code(double[] vec, int divisions, int m, int lambda, long seed) {
+        if (vec == null || vec.length == 0)
+            throw new IllegalArgumentException("vec empty");
+        if (divisions <= 0)
+            throw new IllegalArgumentException("divisions ≤ 0");
+        if (m <= 0)
+            throw new IllegalArgumentException("m ≤ 0");
+        if (lambda <= 0)
+            throw new IllegalArgumentException("lambda ≤ 0");
+
+        BitSet[] result = new BitSet[divisions];
+
+        for (int d = 0; d < divisions; d++) {
+            long divisionSeed = seed + d;
+            GFunction G = buildRandomG(vec.length, m, lambda, DEFAULT_OMEGA, divisionSeed);
+            result[d] = C(vec, G);
+        }
+
+        return result;
+    }
+
+    // ============================================================
     // Helpers
-    // ----------------------------------------------------------------------
+    // ============================================================
 
     private static double nextGaussian(SplittableRandom r) {
         double u1 = Math.max(Double.MIN_VALUE, r.nextDouble());

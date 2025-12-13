@@ -49,8 +49,8 @@ public class RatioPipelineIT {
         try (var out = Files.newOutputStream(gtPath)) {
             out.write(ByteBuffer.allocate(8)
                     .order(ByteOrder.LITTLE_ENDIAN)
-                    .putInt(1)   // one groundtruth label
-                    .putInt(0)   // label = 0
+                    .putInt(1)
+                    .putInt(0)
                     .array());
         }
 

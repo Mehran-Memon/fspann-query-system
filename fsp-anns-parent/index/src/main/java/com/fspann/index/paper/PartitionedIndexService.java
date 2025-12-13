@@ -2,6 +2,8 @@ package com.fspann.index.paper;
 
 import com.fspann.common.*;
 import com.fspann.config.SystemConfig;
+import com.fspann.key.KeyRotationServiceImpl;
+import com.fspann.crypto.AesGcmCryptoService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -16,18 +18,38 @@ import java.util.concurrent.ConcurrentHashMap;
  * - No intersection
  * - Stable arrival order
  * - Compatible with D1 limiter
- */
+ * - Full CRUD support (Insert, Read, Update, Delete)
+  */
 public final class PartitionedIndexService implements IndexService {
 
-    private static final Logger log =
+    private static final Logger logger =
             LoggerFactory.getLogger(PartitionedIndexService.class);
 
+    // =====================================================
+    // CONFIGURATION CONSTANTS
+    // =====================================================
+
+    /** Build trigger threshold: create partitions when staged >= this */
+    private static final int DEFAULT_BUILD_THRESHOLD = 1000;
+
+    // =====================================================
+    // FIELDS
+    // =====================================================
     private final RocksDBMetadataManager metadata;
     private final SystemConfig cfg;
+    private final StorageMetrics storageMetrics;
+    private final KeyRotationServiceImpl keyService;
+    private final AesGcmCryptoService cryptoService;
 
     // dim -> state
     private final Map<Integer, DimensionState> dims = new ConcurrentHashMap<>();
 
+    // Finalization state
+    private volatile boolean frozen = false;
+
+    // =====================================================
+    // INNER CLASSES
+    // =====================================================
     private static final class DimensionState {
         final int dim;
         final List<DivisionState> divisions = new ArrayList<>();
@@ -44,24 +66,63 @@ public final class PartitionedIndexService implements IndexService {
         Map<String, List<String>> tagToIds = new HashMap<>();
     }
 
+    // =====================================================
+    // CONSTRUCTOR
+    // =====================================================
     public PartitionedIndexService(
             RocksDBMetadataManager metadata,
-            SystemConfig cfg) {
+            SystemConfig cfg,
+            KeyRotationServiceImpl keyService,
+            AesGcmCryptoService cryptoService) {
+        this.metadata = Objects.requireNonNull(metadata, "metadata");
+        this.cfg = Objects.requireNonNull(cfg, "cfg");
+        this.keyService = Objects.requireNonNull(keyService, "keyService");
+        this.cryptoService = Objects.requireNonNull(cryptoService, "cryptoService");
 
-        this.metadata = Objects.requireNonNull(metadata);
-        this.cfg = Objects.requireNonNull(cfg);
+        this.storageMetrics = metadata.getStorageMetrics();
+        if (this.storageMetrics == null) {
+            throw new IllegalStateException(
+                    "StorageMetrics not available from RocksDBMetadataManager"
+            );
+        }
+
+        logger.info("PartitionedIndexService initialized with CryptoService and default build threshold: {}",
+                DEFAULT_BUILD_THRESHOLD);
     }
 
-    // ======================================================
+    // =====================================================
     // INSERT
-    // ======================================================
+    // =====================================================
     @Override
     public void insert(String id, double[] vector) {
-        EncryptedPoint ep = metadata.encrypt(id, vector); // or injected CryptoService
+        Objects.requireNonNull(id, "id cannot be null");
+        Objects.requireNonNull(vector, "vector cannot be null");
+
+        int dim = vector.length;
+
+        // This properly encrypts the vector and returns all required fields
+        EncryptedPoint ep;
+        try {
+            // CryptoService.encrypt() returns a properly constructed EncryptedPoint with:
+            // - id, shardId, iv, ciphertext, version, vectorLength, buckets
+            ep = cryptoService.encrypt(id, vector, keyService.getCurrentVersion());
+
+            if (ep == null) {
+                logger.error("CryptoService returned null EncryptedPoint for id={}", id);
+                throw new RuntimeException("Failed to encrypt vector");
+            }
+        } catch (Exception e) {
+            logger.error("Failed to encrypt vector {}: {}", id, e.getMessage());
+            throw new RuntimeException("Encryption failed for vector " + id, e);
+        }
+
         insert(ep, vector);
     }
 
     public void insert(EncryptedPoint pt, double[] vec) {
+        Objects.requireNonNull(pt, "EncryptedPoint cannot be null");
+        Objects.requireNonNull(vec, "vector cannot be null");
+
         int dim = vec.length;
         DimensionState S = dims.computeIfAbsent(dim, DimensionState::new);
 
@@ -71,22 +132,24 @@ public final class PartitionedIndexService implements IndexService {
             S.staged.add(pt);
             S.stagedCodes.add(codes);
 
-            if (S.staged.size() >= cfg.getPaper().buildThreshold) {
+            // (SystemConfig.Paper doesn't have buildThreshold property)
+            if (S.staged.size() >= DEFAULT_BUILD_THRESHOLD) {
                 build(S);
+
+                // Update storage metrics after build
+                try {
+                    storageMetrics.updateDimensionStorage(dim);
+                } catch (Exception e) {
+                    logger.warn("Failed to update storage metrics after insert", e);
+                }
             }
         }
     }
 
-    @Override
-    public void insert(EncryptedPoint pt) {
-        throw new UnsupportedOperationException();
-    }
-
-    // ======================================================
-    // BUILD
-    // ======================================================
+    // =====================================================
+    // BUILD - Partitioning (Algorithm-2)
+    // =====================================================
     private void build(DimensionState S) {
-
         var pc = cfg.getPaper();
         int divisions = pc.divisions;
         int m = pc.m;
@@ -118,19 +181,29 @@ public final class PartitionedIndexService implements IndexService {
 
         S.staged.clear();
         S.stagedCodes.clear();
+
+        logger.debug("Built partitions for dimension {}: {} divisions", S.dim, S.divisions.size());
     }
 
-    // ======================================================
+    // =====================================================
     // LOOKUP (Algorithm-3 prefix order)
-    // ======================================================
+    // =====================================================
+
+// In PartitionedIndexService.java, replace the lookup() method with this:
+
     @Override
-    public List<String> lookup(QueryToken token) {
+    public List<EncryptedPoint> lookup(QueryToken token) {
+        Objects.requireNonNull(token, "token cannot be null");
+
         int dim = token.getDimension();
         DimensionState S = dims.get(dim);
-        if (S == null) return List.of();
+        if (S == null) return Collections.emptyList();
 
         BitSet[] qcodes = token.getCodes();
-        LinkedHashSet<String> out = new LinkedHashSet<>();
+        LinkedHashSet<EncryptedPoint> out = new LinkedHashSet<>();
+
+        int totalCandidates = 0;
+        int filteredCandidates = 0;
 
         for (int d = 0; d < S.divisions.size(); d++) {
             DivisionState div = S.divisions.get(d);
@@ -139,10 +212,40 @@ public final class PartitionedIndexService implements IndexService {
             for (GreedyPartitioner.SubsetBounds sb : div.I) {
                 if (covers(sb, qc)) {
                     List<String> ids = div.tagToIds.get(sb.tag);
-                    if (ids != null) out.addAll(ids);
+                    if (ids != null) {
+                        for (String id : ids) {
+                            totalCandidates++;
+
+                            // Skip if deleted
+                            if (metadata.isDeleted(id)) {
+                                continue;
+                            }
+
+                            // Load full EncryptedPoint from metadata
+                            try {
+                                EncryptedPoint ep = metadata.loadEncryptedPoint(id);
+                                if (ep != null) {
+                                    out.add(ep);
+                                    filteredCandidates++;
+                                }
+                            } catch (Exception e) {
+                                logger.warn("Failed to load encrypted point {} during lookup", id, e);
+                            }
+                        }
+                    }
                 }
             }
         }
+
+        // Log filtering statistics if significant
+        if (totalCandidates > 0 && filteredCandidates < totalCandidates) {
+            int filtered = totalCandidates - filteredCandidates;
+            logger.debug(
+                    "Lookup dim={}: {} total, {} deleted, {} active returned",
+                    dim, totalCandidates, filtered, filteredCandidates
+            );
+        }
+
         return new ArrayList<>(out);
     }
 
@@ -152,80 +255,425 @@ public final class PartitionedIndexService implements IndexService {
                 cmp.compare(c, sb.upper) <= 0;
     }
 
-    // ======================================================
-    // REQUIRED IndexService METHODS
-    // ======================================================
-    @Override
-    public EncryptedPoint getEncryptedPoint(String id) {
+    // =====================================================
+    // DELETE
+    // =====================================================
+    public void delete(String id) {
+        Objects.requireNonNull(id, "id cannot be null");
+
+        logger.debug("Deleting vector: {}", id);
+
+        // STEP 1: Load the encrypted point to verify it exists
+        EncryptedPoint ep;
         try {
-            return metadata.loadEncryptedPoint(id);
+            ep = metadata.loadEncryptedPoint(id);
         } catch (Exception e) {
-            return null;
+            logger.warn("Cannot load point {} for deletion: {}", id, e.getMessage());
+            return;
         }
+
+        if (ep == null) {
+            logger.warn("Point {} not found for deletion", id);
+            return;
+        }
+
+        int vecDim = ep.getVectorLength();
+        logger.debug("Loaded point {} (dimension={})", id, vecDim);
+
+        // STEP 2: Mark as deleted in metadata
+        try {
+            Map<String, String> meta = metadata.getVectorMetadata(id);
+            meta.put("deleted", "true");
+            meta.put("deleted_at", String.valueOf(System.currentTimeMillis()));
+            meta.put("deleted_by_op", "direct_delete");
+            metadata.updateVectorMetadata(id, meta);
+            logger.debug("Marked {} as deleted in metadata", id);
+        } catch (Exception e) {
+            logger.error("Failed to mark {} as deleted in metadata", id, e);
+            return;
+        }
+
+        // STEP 3: Remove from partition structure (only if frozen)
+        if (frozen) {
+            try {
+                DimensionState dimState = dims.get(vecDim);
+                if (dimState != null) {
+                    synchronized (dimState) {
+                        for (DivisionState divState : dimState.divisions) {
+                            for (List<String> ids : divState.tagToIds.values()) {
+                                ids.remove(id);
+                            }
+                        }
+                    }
+                }
+                logger.debug("Removed {} from partition structure for dim={}", id, vecDim);
+            } catch (Exception e) {
+                logger.warn("Failed to remove {} from partition structure", id, e);
+            }
+        } else {
+            logger.debug("Index not frozen yet, skipping partition cleanup for {}", id);
+        }
+
+        // STEP 4: Update storage metrics
+        try {
+            storageMetrics.updateDimensionStorage(vecDim);
+            logger.debug("Updated storage metrics for dimension {}", vecDim);
+        } catch (Exception e) {
+            logger.warn("Failed to update storage metrics after delete of {}", id, e);
+        }
+
+        logger.info("Successfully deleted vector {}", id);
     }
 
-    @Override public void updateCachedPoint(EncryptedPoint pt) {}
-    @Override public void delete(String id) {}
-    @Override public void markDirty(int shardId) {}
-    @Override public int getShardIdForVector(double[] v) { return -1; }
-    @Override public EncryptedPointBuffer getPointBuffer() { return null; }
+    /**
+     * Delete multiple vectors in batch.
+     */
+    public void deleteAll(List<String> ids) {
+        Objects.requireNonNull(ids, "ids list cannot be null");
+        logger.info("Batch deleting {} vectors", ids.size());
 
-    @Override
-    public int getIndexedVectorCount() {
-        return dims.values().stream()
-                .mapToInt(d -> d.divisions.isEmpty() ? 0 :
-                        d.divisions.get(0).tagToIds.values().stream()
-                                .mapToInt(List::size).sum())
-                .sum();
+        for (String id : ids) {
+            try {
+                delete(id);
+            } catch (Exception e) {
+                logger.warn("Failed to delete vector {}", id, e);
+            }
+        }
+
+        logger.info("Batch delete completed");
     }
 
-    @Override
-    public Set<Integer> getRegisteredDimensions() {
-        return dims.keySet();
-    }
+    // =====================================================
+    // UPDATE
+    // =====================================================
+    /**
+     * Update a vector (logically: mark old as deleted + insert new).
+     *
+     * Constraints:
+     *  - Vector must exist
+     *  - Dimension must match
+     *  - Index must NOT be frozen (updates only during buffering phase)
+     *
+     * @param id the vector ID
+     * @param newVector the new vector data
+     * @throws IllegalArgumentException if vector not found or dimension mismatch
+     * @throws IllegalStateException if index is frozen
+     */
+    public void update(String id, double[] newVector) {
+        Objects.requireNonNull(id, "id cannot be null");
+        Objects.requireNonNull(newVector, "newVector cannot be null");
 
-    @Override
-    public int getVectorCountForDimension(int dim) {
-        DimensionState S = dims.get(dim);
-        if (S == null || S.divisions.isEmpty()) return 0;
-        return S.divisions.get(0).tagToIds.values().stream()
-                .mapToInt(List::size).sum();
-    }
+        logger.debug("Updating vector: {}, new dimension: {}", id, newVector.length);
 
-    public void finalizeForSearch() {
-        if (frozen) return;
-        frozen = true;
-
-        for (var e : buffers.entrySet()) {
-            int dim = e.getKey();
-            List<CodedPoint> cps = e.getValue();
-
-            if (cps.isEmpty()) continue;
-
-            BuildResult br = buildForDim(dim, cps);
-            built.put(dim, br);
-
-            log.info(
-                    "Partitioned index built: dim={} divisions={} w={} subsets={}",
-                    dim,
-                    br.divisions,
-                    br.w,
-                    br.indexI.get(0).size()
+        // STEP 1: Load old point to verify existence and dimension
+        EncryptedPoint oldPoint;
+        try {
+            oldPoint = metadata.loadEncryptedPoint(id);
+        } catch (Exception e) {
+            throw new IllegalArgumentException(
+                    "Cannot load point for update: " + id, e
             );
         }
 
-        buffers.clear();
+        if (oldPoint == null) {
+            throw new IllegalArgumentException(
+                    "Point not found for update: " + id
+            );
+        }
+
+        int oldDim = oldPoint.getVectorLength();
+        int newDim = newVector.length;
+
+        logger.debug("Loaded old point {} (old dimension: {})", id, oldDim);
+
+        // STEP 2: Verify dimension match
+        if (oldDim != newDim) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Dimension mismatch for update of %s: old=%d, new=%d. " +
+                                    "Cannot change dimension of existing vector.",
+                            id, oldDim, newDim
+                    )
+            );
+        }
+
+        // STEP 3: Check index is not frozen
+        if (frozen) {
+            throw new IllegalStateException(
+                    String.format(
+                            "Cannot update finalized index for dimension %d. " +
+                                    "Index is frozen. Create a new dimension or request re-opening for updates.",
+                            oldDim
+                    )
+            );
+        }
+
+        // STEP 4: Delete old (mark as deleted)
+        try {
+            logger.debug("Marking old vector {} as deleted", id);
+            Map<String, String> oldMeta = metadata.getVectorMetadata(id);
+            oldMeta.put("deleted", "true");
+            oldMeta.put("deleted_at", String.valueOf(System.currentTimeMillis()));
+            oldMeta.put("updated_from", id);
+            metadata.updateVectorMetadata(id, oldMeta);
+        } catch (Exception e) {
+            logger.error("Failed to mark old vector {} as deleted during update", id, e);
+            throw new RuntimeException("Update failed: could not mark old vector as deleted", e);
+        }
+
+        // STEP 5: Insert new vector with same ID
+        try {
+            logger.debug("Inserting new vector {} (dimension: {})", id, newDim);
+            insert(id, newVector);
+        } catch (Exception e) {
+            logger.error("Failed to insert new vector {} during update", id, e);
+            throw new RuntimeException("Update failed: could not insert new vector", e);
+        }
+
+        // STEP 6: Update metadata with version and timestamp
+        try {
+            Map<String, String> newMeta = metadata.getVectorMetadata(id);
+            newMeta.put("updated_at", String.valueOf(System.currentTimeMillis()));
+            if (keyService != null) {
+                newMeta.put("updated_version", String.valueOf(keyService.getCurrentVersion().getVersion()));
+            }
+            newMeta.put("update_type", "full_replacement");
+            metadata.updateVectorMetadata(id, newMeta);
+            logger.debug("Updated metadata for vector {}", id);
+        } catch (Exception e) {
+            logger.warn("Failed to update metadata version for {}", id, e);
+        }
+
+        // STEP 7: Update storage metrics
+        try {
+            storageMetrics.updateDimensionStorage(newDim);
+        } catch (Exception e) {
+            logger.warn("Failed to update storage metrics during update of {}", id, e);
+        }
+
+        logger.info(
+                "Successfully updated vector {} (dimension: {}, old version retained as deleted)",
+                id, newDim
+        );
     }
 
-    // ======================================================
-    // CODING (Option-C deterministic)
-    // ======================================================
-    private BitSet[] code(double[] vec) {
+    /**
+     * Update multiple vectors in batch.
+     */
+    public void updateBatch(Map<String, double[]> updates) {
+        Objects.requireNonNull(updates, "updates map cannot be null");
+
+        logger.info("Batch updating {} vectors", updates.size());
+
+        int successCount = 0;
+        int failureCount = 0;
+
+        for (Map.Entry<String, double[]> entry : updates.entrySet()) {
+            String id = entry.getKey();
+            double[] newVector = entry.getValue();
+
+            try {
+                update(id, newVector);
+                successCount++;
+            } catch (Exception e) {
+                logger.warn("Failed to update vector {} in batch", id, e);
+                failureCount++;
+            }
+        }
+
+        logger.info("Batch update complete: {} success, {} failed", successCount, failureCount);
+    }
+
+    // =====================================================
+    // FINALIZATION
+    // =====================================================
+    /**
+     * Finalize index for search (freeze partitions).
+     * After this, no inserts/updates allowed, queries enabled.
+     */
+    public void finalizeForSearch() {
+        if (frozen) {
+            logger.info("Index already finalized");
+            return;
+        }
+
+        logger.info("Finalizing index for search...");
+
+        // Build any remaining staged vectors
+        for (DimensionState S : dims.values()) {
+            synchronized (S) {
+                if (!S.staged.isEmpty()) {
+                    logger.debug("Building staged vectors for dim={} before finalization", S.dim);
+                    build(S);
+                }
+            }
+        }
+
+        // Freeze state
+        frozen = true;
+
+        // Update storage metrics
+        for (DimensionState S : dims.values()) {
+            try {
+                storageMetrics.updateDimensionStorage(S.dim);
+                StorageMetrics.StorageSnapshot snap = storageMetrics.getSnapshot();
+                logger.info("Finalized dimension {}: {}", S.dim, snap.summary());
+            } catch (Exception e) {
+                logger.warn("Failed to update storage metrics for dimension {}", S.dim, e);
+            }
+        }
+
+        logger.info("Index finalization complete");
+    }
+
+    /**
+     * Check if index is frozen (finalized).
+     */
+    public boolean isFrozen() {
+        return frozen;
+    }
+
+    /**
+     * Check if specific dimension is finalized.
+     */
+    public boolean isDimensionFinalized(int dim) {
+        DimensionState S = dims.get(dim);
+        return S != null && !S.divisions.isEmpty();
+    }
+
+    /**
+     * Check if all registered dimensions are finalized.
+     */
+    public boolean areAllDimensionsFinalized() {
+        if (dims.isEmpty()) return false;
+
+        for (DimensionState S : dims.values()) {
+            if (S.divisions.isEmpty()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // =====================================================
+    // STORAGE METRICS
+    // =====================================================
+    /**
+     * Get storage metrics instance.
+     */
+    public StorageMetrics getStorageMetrics() {
+        return storageMetrics;
+    }
+
+    /**
+     * Get current storage snapshot.
+     */
+    public StorageMetrics.StorageSnapshot getStorageSnapshot() {
+        return storageMetrics.getSnapshot();
+    }
+
+    /**
+     * Count deleted vectors in the partition structure.
+     */
+    public int countDeletedInPartition() {
+        int deletedCount = 0;
+
+        for (DimensionState S : dims.values()) {
+            synchronized (S) {
+                for (DivisionState div : S.divisions) {
+                    for (List<String> ids : div.tagToIds.values()) {
+                        for (String id : ids) {
+                            if (metadata.isDeleted(id)) {
+                                deletedCount++;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return deletedCount;
+    }
+
+    /**
+     * Get count of active (non-deleted) vectors in partition.
+     */
+    public int countActiveInPartition() {
+        int activeCount = 0;
+
+        for (DimensionState S : dims.values()) {
+            synchronized (S) {
+                for (DivisionState div : S.divisions) {
+                    for (List<String> ids : div.tagToIds.values()) {
+                        for (String id : ids) {
+                            if (!metadata.isDeleted(id)) {
+                                activeCount++;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return activeCount;
+    }
+
+    // =====================================================
+    // CODING (Algorithm-1)
+    // =====================================================
+    /**
+     * Generate bit-interleaved codes for all divisions.
+     *
+     * ✅ FIX #4: Calls Coding.code() which now has proper overloads
+     * in the corrected Coding class.
+     */
+    public BitSet[] code(double[] vec) {
         return Coding.code(
                 vec,
                 cfg.getPaper().divisions,
                 cfg.getPaper().m,
                 cfg.getPaper().seed
         );
+    }
+
+    // =====================================================
+    // REQUIRED IndexService METHODS
+    // =====================================================
+
+    public EncryptedPoint getEncryptedPoint(String id) {
+        try {
+            return metadata.loadEncryptedPoint(id);
+        } catch (Exception e) {
+            logger.warn("Failed to load encrypted point {}: {}", id, e.getMessage());
+            return null;
+        }
+    }
+
+    @Override
+    public EncryptedPointBuffer getPointBuffer() {
+        return null; // No buffer in this implementation
+    }
+
+    public int getIndexedVectorCount() {
+        return dims.values().stream()
+                .mapToInt(this::countDimensionVectors)
+                .sum();
+    }
+
+    private int countDimensionVectors(DimensionState S) {
+        if (S.divisions.isEmpty()) return 0;
+        return S.divisions.get(0).tagToIds.values().stream()
+                .mapToInt(List::size).sum();
+    }
+
+    public Set<Integer> getRegisteredDimensions() {
+        return new HashSet<>(dims.keySet());
+    }
+
+    public int getVectorCountForDimension(int dim) {
+        DimensionState S = dims.get(dim);
+        if (S == null || S.divisions.isEmpty()) return 0;
+        return S.divisions.get(0).tagToIds.values().stream()
+                .mapToInt(List::size).sum();
     }
 }

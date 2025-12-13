@@ -249,18 +249,20 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
                 EncryptedPoint ep2 = cryptoService.encrypt(id, vec);
 
                 // *** FORCE VERSION ALIGNMENT ***
+                // *** FORCE VERSION ALIGNMENT ***
                 if (ep2.getVersion() != targetVersion) {
                     ep2 = new EncryptedPoint(
-                            ep2.getId(),
-                            ep2.getShardId(),
-                            ep2.getIv(),
-                            ep2.getCiphertext(),
-                            targetVersion,  // ← CRITICAL: Must match target
-                            ep2.getVectorLength(),
-                            ep2.getBuckets()
+                            ep2.getId(),           // String id
+                            targetVersion,         // int version
+                            ep2.getIv(),           // byte[] iv
+                            ep2.getCiphertext(),   // byte[] ciphertext
+                            targetVersion,         // int keyVersion
+                            ep2.getVectorLength(), // int dimension
+                            ep2.getShardId(),      // int shardId
+                            ep2.getBuckets(),      // List<Integer> buckets
+                            List.of()              // List<String> metadata (empty)
                     );
                 }
-
                 metadataManager.saveEncryptedPoint(ep2);
                 indexService.updateCachedPoint(ep2);
                 reenc++;

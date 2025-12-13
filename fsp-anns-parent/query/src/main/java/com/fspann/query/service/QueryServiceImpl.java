@@ -423,6 +423,9 @@ public final class QueryServiceImpl implements QueryService {
     public long getLastDecryptNs() { return lastDecryptNs; }
     public int  getLastCandTotal() { return lastCandTotal; }
     public int  getLastCandKept() { return lastCandKept; }
+    public int getLastCandKeptVersion() {
+        return lastCandKept;  // Alias for backward compatibility
+    }
     public int  getLastCandDecrypted() { return lastCandDecrypted; }
     public int  getLastReturned() { return lastReturned; }
 

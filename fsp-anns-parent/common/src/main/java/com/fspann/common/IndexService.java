@@ -1,60 +1,61 @@
 package com.fspann.common;
 
 import java.util.List;
-import java.util.Set;
+import java.util.BitSet;
 
+/**
+ * IndexService: Interface for approximate nearest neighbor indexing.
+ *
+ * Implementations should support encrypted vector storage and querying.
+ */
 public interface IndexService {
-    void insert(EncryptedPoint pt);                  // Insert an encrypted point into the index
-    void insert(String id, double[] vector);         // Insert with plaintext (will be encrypted)
-    List<EncryptedPoint> lookup(QueryToken token);   // Core lookup (subset candidates)
-    void delete(String id);                          // Delete by ID
-
-    // Shard / indexing metadata hooks
-    void markDirty(int shardId);                     // For legacy shard-based index; no-op in paper mode
-    int getIndexedVectorCount();                     // Total indexed vectors (approx is OK)
-    Set<Integer> getRegisteredDimensions();          // All dimensions that have vectors
-    int getVectorCountForDimension(int dimension);   // Count per dimension
-
-    // Point access & cache management (used by re-encryption, tests, forward security)
-    EncryptedPoint getEncryptedPoint(String id);
-    void updateCachedPoint(EncryptedPoint pt);
-    EncryptedPointBuffer getPointBuffer();
 
     /**
-     * For diagnostics. In pure partitioned/paper mode this may return -1
-     * or some sentinel, since shard != paper partitions.
+     * Insert a vector into the index.
+     *
+     * @param id       unique identifier
+     * @param vector   plaintext vector
      */
-    int getShardIdForVector(double[] vector);
-
-    // ----------------------------
-    // Default diagnostics helpers
-    // ----------------------------
+    void insert(String id, double[] vector);
 
     /**
-     * Default wrapper that calls lookup() and wraps it in a basic SearchDiagnostics
-     * with:
-     *  - uniqueCandidates = size of returned list
-     *  - probedBuckets = 0 (no bucket-level semantics in paper mode)
-     *  - fanoutPerTable = empty map
+     * Lookup candidates for a query token.
+     *
+     * Returns encrypted points that match the query.
+     *
+     * @param token    encrypted query token
+     * @return         list of candidate encrypted points
      */
-    default LookupWithDiagnostics lookupWithDiagnostics(QueryToken token) {
-        List<EncryptedPoint> raw = lookup(token);
-        SearchDiagnostics diag = new SearchDiagnostics(
-                (raw != null) ? raw.size() : 0,   // uniqueCandidates
-                0,                                // probedBuckets (0 in paper mode)
-                java.util.Map.of()                // fanoutPerTable (unused in paper mode)
-        );
-        return new LookupWithDiagnostics(
-                (raw != null) ? raw : java.util.List.of(),
-                diag
-        );
+    List<EncryptedPoint> lookup(QueryToken token);
+
+    /**
+     * Finalize index for search operations.
+     * Called after all insertions complete.
+     */
+    void finalizeForSearch();
+
+    /**
+     * Update cached point in the index.
+     * Used when a point is re-encrypted or metadata changes.
+     *
+     * @param point    the updated encrypted point
+     */
+    default void updateCachedPoint(EncryptedPoint point) {
+        // Optional - implementations may override if they cache points
     }
 
     /**
-     * Returns the number of candidate points considered for this token
-     * BEFORE distance computations.
+     * Get the encrypted point buffer (for flushing).
      */
-    default int candidateCount(QueryToken token) {
-        return lookupWithDiagnostics(token).diagnostics().uniqueCandidates();
+    default EncryptedPointBuffer getPointBuffer() {
+        throw new UnsupportedOperationException("getPointBuffer() not implemented");
+    }
+
+    /**
+     * Code a vector for partition-based indexing.
+     * Returns a BitSet array for partition lookup.
+     */
+    default BitSet[] code(double[] vector) {
+        throw new UnsupportedOperationException("code() not implemented");
     }
 }

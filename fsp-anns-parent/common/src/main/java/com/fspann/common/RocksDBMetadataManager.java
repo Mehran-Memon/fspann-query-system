@@ -7,7 +7,8 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
-import java.security.SecureRandom;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -17,6 +18,7 @@ public class RocksDBMetadataManager implements AutoCloseable {
     private static final Object LOCK = new Object();
     private static RocksDBMetadataManager instance = null;
     private volatile boolean syncWrites = false;
+    private final StorageMetrics storageMetrics;
 
     private final RocksDB db;
     private final String dbPath;
@@ -74,6 +76,13 @@ public class RocksDBMetadataManager implements AutoCloseable {
             throw new IOException("RocksDB open failed at " + dbPath, e);
         }
         logger.debug("RocksDBMetadataManager opened at {} (points at {})", dbPath, baseDir);
+
+        Path pointsDir = Paths.get(baseDir);
+        Path metaDir = Paths.get(dbPath);
+        this.storageMetrics = new StorageMetrics(pointsDir, metaDir);
+        logger.info("StorageMetrics initialized for base={}, db={}", baseDir, dbPath);
+
+        this.closed = false;
     }
 
     @Override
@@ -89,6 +98,9 @@ public class RocksDBMetadataManager implements AutoCloseable {
                 logger.warn("Error closing RocksDB at {}", dbPath, t);
             } finally {
                 try { options.close(); } catch (Throwable ignore) {}
+                if (storageMetrics != null) {
+                    logger.info("Final storage snapshot: {}", storageMetrics.getSummary());
+                }
                 closed = true;
                 instance = null;
                 logger.debug("RocksDBMetadataManager closed for {}", dbPath);
@@ -148,6 +160,118 @@ public class RocksDBMetadataManager implements AutoCloseable {
             db.delete(vectorId.getBytes(StandardCharsets.UTF_8));
         } catch (RocksDBException e) {
             logger.warn("removeVectorMetadata failed for {}", vectorId, e);
+        }
+    }
+
+    /**
+     * Check if a vector is marked as deleted.
+     *
+     * @param vectorId the vector ID
+     * @return true if deleted, false otherwise (or if not found)
+     */
+    public boolean isDeleted(String vectorId) {
+        Objects.requireNonNull(vectorId, "vectorId cannot be null");
+
+        try {
+            Map<String, String> meta = getVectorMetadata(vectorId);
+            if (meta == null) {
+                return false;  // Not found = not deleted
+            }
+
+            String deletedFlag = meta.getOrDefault("deleted", "false");
+            boolean isDeleted = "true".equalsIgnoreCase(deletedFlag);
+
+            if (isDeleted) {
+                logger.trace("Vector {} is marked deleted", vectorId);
+            }
+
+            return isDeleted;
+        } catch (Exception e) {
+            logger.warn("Error checking deletion status of {}: {}", vectorId, e.getMessage());
+            return false;  // On error, assume not deleted
+        }
+    }
+
+    /**
+     * Get the timestamp when a vector was deleted.
+     *
+     * @param vectorId the vector ID
+     * @return deletion timestamp in milliseconds, or -1 if not deleted or not found
+     */
+    public long getDeletedTimestamp(String vectorId) {
+        Objects.requireNonNull(vectorId, "vectorId cannot be null");
+
+        try {
+            Map<String, String> meta = getVectorMetadata(vectorId);
+            if (meta == null) {
+                return -1L;
+            }
+
+            String deletedFlag = meta.getOrDefault("deleted", "false");
+            if (!"true".equalsIgnoreCase(deletedFlag)) {
+                return -1L;  // Not deleted
+            }
+
+            String timestampStr = meta.get("deleted_at");
+            if (timestampStr == null) {
+                logger.warn("Vector {} marked deleted but no timestamp", vectorId);
+                return -1L;
+            }
+
+            long timestamp = Long.parseLong(timestampStr);
+            logger.trace("Vector {} deleted at timestamp {}", vectorId, timestamp);
+            return timestamp;
+        } catch (NumberFormatException e) {
+            logger.warn("Invalid deletion timestamp for {}: {}", vectorId, e.getMessage());
+            return -1L;
+        } catch (Exception e) {
+            logger.warn("Error getting deletion timestamp for {}: {}", vectorId, e.getMessage());
+            return -1L;
+        }
+    }
+
+    /**
+     * Get count of deleted vectors (for metrics).
+     * Note: This is expensive as it scans all metadata.
+     *
+     * @return count of vectors marked as deleted
+     */
+    public int countDeletedVectors() {
+        try {
+            int count = 0;
+            List<String> allIds = getAllVectorIds();
+            for (String id : allIds) {
+                if (isDeleted(id)) {
+                    count++;
+                }
+            }
+            logger.info("Total deleted vectors: {}", count);
+            return count;
+        } catch (Exception e) {
+            logger.warn("Error counting deleted vectors", e);
+            return -1;
+        }
+    }
+
+    /**
+     * Permanently remove a deleted vector from metadata (hard delete).
+     * Only call this after re-encryption if you want to reclaim space.
+     *
+     * @param vectorId the vector ID
+     */
+    public void hardDeleteVector(String vectorId) {
+        Objects.requireNonNull(vectorId, "vectorId cannot be null");
+
+        if (!isDeleted(vectorId)) {
+            logger.warn("Attempted hard delete of non-deleted vector {}", vectorId);
+            return;
+        }
+
+        try {
+            removeVectorMetadata(vectorId);
+            logger.info("Hard deleted vector {} (removed from metadata)", vectorId);
+        } catch (Exception e) {
+            logger.error("Failed to hard delete vector {}", vectorId, e);
         }
     }
 
@@ -440,6 +564,34 @@ public class RocksDBMetadataManager implements AutoCloseable {
         DriftReport(int metaCount, int diskCount, Set<String> onlyMeta, Set<String> onlyDisk) {
             this.metaCount = metaCount; this.diskCount = diskCount; this.onlyMeta = onlyMeta; this.onlyDisk = onlyDisk;
         }
+    }
+
+    /**
+     * Get storage metrics tracker for this metadata manager.
+     */
+    public StorageMetrics getStorageMetrics() {
+        return storageMetrics;
+    }
+
+    /**
+     * Update storage metrics for a specific dimension.
+     */
+    public void updateDimensionStorage(int dim) {
+        if (storageMetrics != null) {
+            storageMetrics.updateDimensionStorage(dim);
+        }
+    }
+
+    /**
+     * Get current storage snapshot (cached, refreshed every 5 seconds).
+     */
+    public StorageMetrics.StorageSnapshot getStorageSnapshot() {
+        if (storageMetrics == null) {
+            return new StorageMetrics.StorageSnapshot(0L, 0L, 0L,
+                    new java.util.concurrent.ConcurrentHashMap<>(),
+                    new java.util.concurrent.ConcurrentHashMap<>());
+        }
+        return storageMetrics.getSnapshot();
     }
 
     // ------------------- serialization helpers -------------------

@@ -1,23 +1,37 @@
 package com.fspann.common;
 
 import javax.crypto.SecretKey;
-import java.io.Serializable;
-import java.util.Arrays;
 import java.util.Objects;
 
 /**
- * Represents a versioned AES key used for encryption and forward security enforcement.
+ * KeyVersion: Represents a single version of the key.
+ *
+ * version    = version number (e.g., 1, 2, 3, ...)
+ * key        = actual SecretKey
+ * createdAt  = timestamp when key was created
+ * rotatedAt  = timestamp when key was rotated (0 if current)
  */
-public class KeyVersion implements Serializable {
-    private static final long serialVersionUID = 1L;
-
+public final class KeyVersion {
     private final int version;
     private final SecretKey key;
+    private final long createdAt;
+    private final long rotatedAt;
 
-    public KeyVersion(int version, SecretKey key) {
-        if (version < 0) throw new IllegalArgumentException("Version must be non-negative");
+    /**
+     * Full constructor with timestamps.
+     */
+    public KeyVersion(int version, SecretKey key, long createdAt, long rotatedAt) {
         this.version = version;
-        this.key = Objects.requireNonNull(key, "SecretKey must not be null");
+        this.key = Objects.requireNonNull(key, "key cannot be null");
+        this.createdAt = createdAt;
+        this.rotatedAt = rotatedAt;
+    }
+
+    /**
+     * Convenience constructor (createdAt = now, rotatedAt = 0).
+     */
+    public KeyVersion(int version, SecretKey key) {
+        this(version, key, System.currentTimeMillis(), 0L);
     }
 
     public int getVersion() {
@@ -28,23 +42,29 @@ public class KeyVersion implements Serializable {
         return key;
     }
 
-    @Override
-    public String toString() {
-        return "KeyVersion{version=" + version +
-                ", keyHash=" + Arrays.hashCode(key.getEncoded()) + "}";
+    public long getCreatedAt() {
+        return createdAt;
+    }
+
+    public long getRotatedAt() {
+        return rotatedAt;
     }
 
     @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof KeyVersion)) return false;
-        KeyVersion that = (KeyVersion) o;
-        return version == that.version &&
-                Arrays.equals(this.key.getEncoded(), that.key.getEncoded());
+    public String toString() {
+        return String.format("KeyVersion{v=%d, created=%d, rotated=%d}",
+                version, createdAt, rotatedAt);
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (this == obj) return true;
+        if (!(obj instanceof KeyVersion that)) return false;
+        return version == that.version && Objects.equals(key, that.key);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(version, Arrays.hashCode(key.getEncoded()));
+        return Objects.hash(version, key);
     }
 }

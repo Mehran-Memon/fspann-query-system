@@ -2,6 +2,7 @@ package com.fspann.api;
 
 import com.fspann.common.*;
 import com.fspann.config.SystemConfig;
+import com.fspann.crypto.AesGcmCryptoService;
 import com.fspann.crypto.CryptoService;
 import com.fspann.crypto.ReencryptionTracker;
 import com.fspann.crypto.SelectiveReencCoordinator;
@@ -355,7 +356,12 @@ public class ForwardSecureANNSystem {
         // ==== index service ====
 
         this.indexService =
-                new PartitionedIndexService(metadataManager, config);
+                new PartitionedIndexService(
+                        metadataManager,
+                        config,
+                        (KeyRotationServiceImpl) keyService,
+                        (AesGcmCryptoService) cryptoService
+                );
 
 
         // optional background re-encryption
@@ -1112,7 +1118,7 @@ public class ForwardSecureANNSystem {
                 .append(":d").append(token.getDimension())
                 .append(":k").append(token.getTopK());
 
-        // Prefer partitioned-mode codes if present
+        // Partitioned-mode codes (BitSet array)
         BitSet[] codes = token.getCodes();
         if (codes != null && codes.length > 0) {
             sb.append(":codes");
@@ -1124,28 +1130,13 @@ public class ForwardSecureANNSystem {
                 }
             }
         } else {
-            // Fallback: LSH per-table bucket hashes
-            sb.append(":codes");
-            for (BitSet bs : codes) {
-                sb.append('|').append(bs != null ? bs.hashCode() : -1);
-            }
-            if (codes != null) {
-                for (List<Integer> table : codes) {
-                    if (table == null || table.isEmpty()) {
-                        sb.append("|0");
-                    } else {
-                        int h = 1;
-                        for (Integer v : table) {
-                            h = 31 * h + (v == null ? 0 : v.hashCode());
-                        }
-                        sb.append('|').append(h);
-                    }
-                }
-            }
+            // No codes available
+            sb.append(":nocodes");
         }
 
         return sb.toString();
     }
+
 
     // --- storage helpers ---
     private static long safeSize(Path p) {
@@ -1498,6 +1489,82 @@ public class ForwardSecureANNSystem {
                     qIndex, k, ratio, precision, joinIds(retrieved), joinInts(truth));
             Files.writeString(worstCsv, line, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
         }
+    }
+
+    // ==================== K-ADAPTIVE PROBE-ONLY (ABLATION) ====================
+
+    /**
+     * Run K-adaptive probe-only widening for a query (ablation study).
+     * Increments probe shards WITHOUT actually executing search.
+     */
+    public void runKAdaptiveProbeOnly(int queryIndex, double[] q, int dim, QueryServiceImpl qs) {
+        if (!kAdaptive.enabled || q == null) {
+            return;
+        }
+
+        try {
+            // Adaptive widening: increase probe shards per round
+            int currentProbes = Integer.getInteger("probe.shards", 1);
+            int newProbes = Math.min(
+                    (int) (currentProbes * kAdaptive.probeFactor),
+                    (int) kAdaptive.maxFanout
+            );
+            System.setProperty("probe.shards", String.valueOf(newProbes));
+
+            logger.debug("K-adaptive probe-only: query {} increased probes {} → {}",
+                    queryIndex, currentProbes, newProbes);
+        } catch (Exception e) {
+            logger.warn("K-adaptive probe-only failed for query {}", queryIndex, e);
+        }
+    }
+
+    // ==================== INSERTION & FLUSHING METRICS ====================
+
+    /**
+     * Get last insertion time in milliseconds.
+     * Returns the most recent insert operation duration.
+     */
+    public long lastInsertMs() {
+        // Fallback from profiler if available
+        if (profiler != null) {
+            List<Long> timings = profiler.getTimings("insert");
+            if (!timings.isEmpty()) {
+                return timings.get(timings.size() - 1) / 1_000_000L;  // convert ns to ms
+            }
+        }
+        return 0L;
+    }
+
+    /**
+     * Get total number of vectors flushed to disk.
+     * This is a facade over the indexService buffer state.
+     */
+    public int totalFlushed() {
+        try {
+            com.fspann.common.EncryptedPointBuffer buf = indexService.getPointBuffer();
+            if (buf != null) {
+                // Get flushed count from buffer (if available)
+                try {
+                    java.lang.reflect.Method getFlushed =
+                            buf.getClass().getMethod("getFlushedCount");
+                    Object result = getFlushed.invoke(buf);
+                    if (result instanceof Number n) {
+                        return n.intValue();
+                    }
+                } catch (Exception ignore) {}
+            }
+        } catch (Exception ignore) {}
+
+        // Fallback: return indexed count (conservative estimate)
+        return indexedCount.get();
+    }
+
+    /**
+     * Get the buffer flush threshold (batch size before flushing).
+     * This is typically BATCH_SIZE or a configured value.
+     */
+    public int flushThreshold() {
+        return BATCH_SIZE;
     }
 
     /* ====================================================================== */
