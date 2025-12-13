@@ -73,11 +73,8 @@ public class KAdaptiveProbeOnlyTest extends BaseSystemIT {
         sys.insert("x", new double[]{1,2,3,4}, 4);
         sys.finalizeForSearch();
 
-        // MUST use the concrete type, not the interface
         QueryServiceImpl qsImpl = sys.getQueryServiceImpl();
 
-        // Match API signature exactly:
-        // runKAdaptiveProbeOnly(int shard, double[] q, int dim, QueryServiceImpl qs)
         sys.runKAdaptiveProbeOnly(
                 0,
                 new double[]{0.1,0.2,0.3,0.4},

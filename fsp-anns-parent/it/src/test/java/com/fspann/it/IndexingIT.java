@@ -71,7 +71,6 @@ public class IndexingIT extends BaseSystemIT {
         keyService.setCryptoService(crypto);
     }
 
-    // ----------------------------------------------------
     @Test
     @Order(1)
     void testBasicIndexing() throws Exception {
@@ -102,7 +101,6 @@ public class IndexingIT extends BaseSystemIT {
         sys.setExitOnShutdown(false);
     }
 
-    // ----------------------------------------------------
     @Test
     @Order(2)
     void testFinalizeForSearch() throws Exception {

@@ -56,7 +56,7 @@ public abstract class BaseSystemIT {
         keySvc.setCryptoService(crypto);
 
         sys = new ForwardSecureANNSystem(
-                cfg.toString(),                     // VALID real config
+                cfg.toString(),
                 temp.resolve("ignored.csv").toString(),
                 keysDir.toString(),
                 List.of(4),

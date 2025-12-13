@@ -22,7 +22,7 @@ public class QueryPipelineIT extends BaseSystemIT {
     static Path metaDir;
     static Path pointsDir;
     static Path ksFile;
-    static Path cfgFile;    // FIXED – was missing
+    static Path cfgFile;
 
     static RocksDBMetadataManager metadata;
     static KeyManager keyManager;
@@ -41,7 +41,6 @@ public class QueryPipelineIT extends BaseSystemIT {
         Files.createDirectories(metaDir);
         Files.createDirectories(pointsDir);
 
-        // FIX: create seed file
         Path seed = tempRoot.resolve("seed.csv");
         Files.writeString(seed, "");
 
@@ -76,9 +75,6 @@ public class QueryPipelineIT extends BaseSystemIT {
         keyService.setCryptoService(crypto);
     }
 
-    // ===========================================================
-    // 1. Indexing + Simple Query Flow
-    // ===========================================================
     @Test
     @Order(1)
     void testIndex_and_SimpleQuery() throws Exception {
@@ -95,7 +91,6 @@ public class QueryPipelineIT extends BaseSystemIT {
                 16
         );
 
-        // Bind index service
         keyService.setIndexService(sys.getIndexService());
 
         Random rnd = new Random(7);
@@ -126,9 +121,6 @@ public class QueryPipelineIT extends BaseSystemIT {
         sys.setExitOnShutdown(false);
     }
 
-    // ===========================================================
-    // 2. Query Cache Hit + Engine Simple
-    // ===========================================================
     @Test
     @Order(2)
     void testQueryCacheHit_and_EngineSimple() throws Exception {
@@ -166,15 +158,11 @@ public class QueryPipelineIT extends BaseSystemIT {
         List<QueryResult> r1 = engine.evalSimple(q, 10, 8, false);
         List<QueryResult> r2 = engine.evalSimple(q, 10, 8, false);
 
-        // FIX: cannot assertSame; engine may clone list
         assertEquals(r1, r2);
 
         sys.setExitOnShutdown(false);
     }
 
-    // ===========================================================
-    // 3. Touch Tracking
-    // ===========================================================
     @Test
     @Order(3)
     void testCandidateTouchTracking() throws Exception {
