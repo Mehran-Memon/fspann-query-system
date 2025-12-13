@@ -5,8 +5,7 @@ import com.fspann.config.SystemConfig;
 import com.fspann.crypto.CryptoService;
 import com.fspann.crypto.ReencryptionTracker;
 import com.fspann.crypto.SelectiveReencCoordinator;
-import com.fspann.index.paper.EvenLSH;
-import com.fspann.index.service.SecureLSHIndexService;
+import com.fspann.index.paper.PartitionedIndexService;
 import com.fspann.common.KeyLifeCycleService;
 import com.fspann.key.BackgroundReencryptionScheduler;
 import com.fspann.key.KeyManager;
@@ -44,7 +43,7 @@ import java.util.stream.Collectors;
 public class ForwardSecureANNSystem {
     private static final Logger logger = LoggerFactory.getLogger(ForwardSecureANNSystem.class);
 
-    private final SecureLSHIndexService indexService;
+    private final PartitionedIndexService indexService;
     private final Map<Integer, QueryTokenFactory> tokenFactories = new ConcurrentHashMap<>();
     private final QueryService queryService;
     private final CryptoService cryptoService;
@@ -96,11 +95,6 @@ public class ForwardSecureANNSystem {
     private int totalInserted = 0;
     private final java.util.concurrent.atomic.AtomicInteger indexedCount = new java.util.concurrent.atomic.AtomicInteger();
     private final java.util.concurrent.atomic.AtomicLong fileOrdinal = new java.util.concurrent.atomic.AtomicLong(0);
-
-    // Legacy override hooks (still honored if set), otherwise use config.getLsh()
-    private final int OVERRIDE_TABLES;
-    private final int OVERRIDE_ROWS;
-    private final int OVERRIDE_PROBE;
 
     // artifact/export helpers (aligned with FsPaths)
     private final Path metaDBPath;
@@ -272,19 +266,6 @@ public class ForwardSecureANNSystem {
             default -> RatioSource.AUTO;
         };
 
-        // ==== LSH override hooks (legacy) ====
-        this.OVERRIDE_TABLES = (config.getLsh().numTables > 0)
-                ? config.getLsh().numTables
-                : Integer.getInteger("lsh.tables", -1);
-
-        this.OVERRIDE_ROWS = (config.getLsh().rowsPerBand > 0)
-                ? config.getLsh().rowsPerBand
-                : Integer.getInteger("lsh.rowsPerBand", -1);
-
-        this.OVERRIDE_PROBE = (config.getLsh().probeShards > 0)
-                ? config.getLsh().probeShards
-                : Integer.getInteger("probe.shards", -1);
-
         // ==== audit files ====
         RetrievedAudit ra = null;
         if (auditEnable) {
@@ -373,11 +354,9 @@ public class ForwardSecureANNSystem {
 
         // ==== index service ====
 
-        this.indexService = SecureLSHIndexService.fromConfig(cryptoService, keyService, metadataManager, config);
+        this.indexService =
+                new PartitionedIndexService(metadataManager, config);
 
-        if (keyService instanceof KeyRotationServiceImpl kr) {
-            kr.setIndexService(indexService);
-        }
 
         // optional background re-encryption
         if (Boolean.parseBoolean(System.getProperty("reenc.background.enabled", "false"))) {
@@ -412,20 +391,21 @@ public class ForwardSecureANNSystem {
             int m = Math.max(1, config.getPaper().m);
             long seed = config.getPaper().seed;
 
-            tokenFactories.put(dim, new QueryTokenFactory(
-                    cryptoService,
-                    keyService,
-                    null,   // LSH disabled
-                    0,      // numTables=0
-                    0,      // probeRange=0 (multiprobe removed)
-                    ell,
-                    m,
-                    seed,
-                    cfg
-            ));
+            int divisions = Math.max(1, config.getPaper().divisions);
 
-            logger.info("TokenFactory created: dim={}  ell={}  m={}", dim, ell, m);
-        }
+                tokenFactories.put(
+                        dim,
+                        new QueryTokenFactory(
+                                cryptoService,
+                                keyService,
+                                indexService,   // REQUIRED
+                                config,
+                                divisions
+                        )
+                );
+
+                logger.info("TokenFactory created (MSANNP): dim={} divisions={}", dim, divisions);
+            }
 
         int primaryDim = dimensions.get(0);
         QueryTokenFactory qtf = tokenFactories.get(primaryDim);
@@ -502,12 +482,11 @@ public class ForwardSecureANNSystem {
             logger.warn("No batches loaded for dim={} from dataPath={}", dim, dataPath);
         }
 
-        logger.info("Indexing completed for dim={} : indexedInThisRun={}, totalIndexedCounter={}, bufferSize={}, flushedTotal={}",
-                dim,
+        logger.info(
+                "Indexing completed: indexedInThisRun={}, totalIndexed={}",
                 totalInserted,
-                getIndexedVectorCount(),
-                (indexService.getPointBuffer() != null ? indexService.getPointBuffer().getBufferSize() : -1),
-                (indexService.getPointBuffer() != null ? indexService.getPointBuffer().getTotalFlushedPoints() : -1));
+                getIndexedVectorCount()
+        );
     }
 
     public void batchInsert(List<double[]> vectors, int dim) {
@@ -588,98 +567,11 @@ public class ForwardSecureANNSystem {
 
     /* ---------------------- Query API ---------------------- */
 
-    private QueryTokenFactory factoryForDim(int dim) {
-        if (dim <= 0)
-            throw new IllegalArgumentException("Dimension must be positive");
-
-        if (tokenFactories.containsKey(dim))
-            return tokenFactories.get(dim);
-
-        // OPTION-C PARAMETERS
-        var pc = config.getPaper();
-        if (pc == null || !pc.enabled)
-            throw new IllegalStateException("Option-C requires paper.enabled=true");
-
-        int ell     = Math.max(1, pc.divisions);
-        int m       = Math.max(1, pc.m);
-        int lambda  = Math.max(1, pc.lambda);
-        long seed   = pc.seed;
-
-        int tables = 1;        // NO LSH IN OPTION-C
-        EvenLSH lsh = null;    // STRICT: LSH forbidden
-
-        QueryTokenFactory qtf = new QueryTokenFactory(
-                cryptoService,
-                keyService,
-                null,       // Option-C forbids LSH
-                0,          // numTables
-                lambda,     // probeRange
-                ell,        // divisions
-                m,          // projections
-                seed,        // seedBase
-                config
-        );
-        tokenFactories.put(dim, qtf);
+    QueryTokenFactory factoryForDim(int dim) {
+        QueryTokenFactory qtf = tokenFactories.get(dim);
+        if (qtf == null)
+            throw new IllegalStateException("No QueryTokenFactory for dim=" + dim);
         return qtf;
-    }
-
-    /* ====================================================================== */
-    /*      HELPERS FOR UNIFIED EVALUATION + PROFILER PIPELINE            */
-    /* ====================================================================== */
-
-     /** Lightweight DTO for passing timing snapshots inside this class. */
-    private static final class QueryTiming {
-        final double serverMs, clientMs, runMs, decryptMs;
-        QueryTiming(double s, double c, double r, double d) {
-            this.serverMs = s; this.clientMs = c; this.runMs = r; this.decryptMs = d;
-        }
-    }
-
-    /**
-     * K-adaptive “probe-only” pass.
-     * Runs the iterative widening loop but DOES NOT:
-     *   - compute or record ratios
-     *   - write profiler rows
-     *   - emit CSVs
-     *   - track return-rate metrics
-     *
-     * Purely returns early-termination decisions so that ablation
-     * can study its widening behaviour independently.
-     */
-    public void runKAdaptiveProbeOnly(int qIndex, double[] q, int dim, QueryServiceImpl qs) {
-
-        int baseK = baseKForToken();
-        int round = 0;
-
-        while (true) {
-
-            QueryToken tok = factoryForDim(dim).create(q, baseK);
-            List<QueryResult> ret = qs.search(tok);
-
-            int candTotal = qs.getLastCandTotal();
-            int returned  = ret != null ? ret.size() : 0;
-
-            double rr = (baseK > 0)
-                    ? ((double) Math.min(baseK, returned) / (double) baseK)
-                    : 0.0;
-
-            double fanout = (returned > 0)
-                    ? ((double) candTotal / (double) returned)
-                    : Double.POSITIVE_INFINITY;
-
-            boolean rrOk = rr >= kAdaptive.targetReturnRate;
-            boolean fanoutTooHigh = fanout >= kAdaptive.maxFanout;
-            boolean roundsExceeded = round >= kAdaptive.maxRounds;
-
-            if (rrOk || fanoutTooHigh || roundsExceeded)
-                break;
-
-            round++;
-
-            int curShards = shardsToProbe();
-            int widened = (int) Math.ceil(curShards * kAdaptive.probeFactor);
-            System.setProperty("probe.shards", Integer.toString(widened));
-        }
     }
 
     /* ---------------------- Utilities & Lifecycle ---------------------- */
@@ -713,23 +605,25 @@ public class ForwardSecureANNSystem {
     }
 
     public int restoreIndexFromDisk(int version) throws IOException {
-        logger.info("Restoring in-memory index from metadata for v{} ...", version);
+        logger.info("Restoring index from metadata for v{} ...", version);
+
         int restored = 0;
-        boolean prevWT = indexService.isWriteThrough();
-        indexService.setWriteThrough(false);
-        try {
-            for (EncryptedPoint ep : metadataManager.getAllEncryptedPoints()) {
-                if (ep == null || ep.getVersion() != version) continue;
-                //reconstruct vector ← decrypt
-                double[] vec = cryptoService.decryptFromPoint(ep, keyService.getCurrentVersion().getKey());
-                if (vec != null && vec.length > 0) {
-                    indexService.insert(ep.getId(), vec);
-                }
+        for (EncryptedPoint ep : metadataManager.getAllEncryptedPoints()) {
+            if (ep == null || ep.getVersion() != version) continue;
+
+            double[] vec =
+                    cryptoService.decryptFromPoint(
+                            ep,
+                            keyService.getCurrentVersion().getKey()
+                    );
+
+            if (vec != null) {
+                indexService.insert(ep.getId(), vec);
                 restored++;
             }
-        } finally {
-            indexService.setWriteThrough(prevWT);
         }
+
+        indexService.finalizeForSearch();
         logger.info("Restore complete: {} points", restored);
         return restored;
     }
@@ -770,25 +664,8 @@ public class ForwardSecureANNSystem {
     }
 
     public void finalizeForSearch() {
-        try {
-            var m = indexService.getClass().getMethod("finalizeForSearch");
-            m.invoke(indexService);
-            logger.info("IndexService finalized for search");
-            return;
-        } catch (NoSuchMethodException ignore) {
-            // fall through
-        } catch (Exception e) {
-            logger.warn("Error calling finalizeForSearch()", e);
-        }
-        try {
-            var opt = indexService.getClass().getMethod("optimize");
-            opt.invoke(indexService);
-            logger.info("IndexService optimized for search");
-        } catch (NoSuchMethodException ignore) {
-            logger.info("No finalize/optimize hook on indexService; continuing");
-        } catch (Exception e) {
-            logger.warn("Error calling optimize()", e);
-        }
+        indexService.finalizeForSearch();
+        logger.info("Partitioned index finalized for search");
     }
 
     static final class BaseVectorReader implements AutoCloseable {
@@ -1204,98 +1081,6 @@ public class ForwardSecureANNSystem {
         }
     }
 
-    /** Append global precision (single value) and return-rate to results/global_precision.csv */
-    private static void writeGlobalPrecisionCsv(
-            Path outDir,
-            int dim,
-            int[] kVariants,
-            Map<Integer, Long> globalMatches,
-            Map<Integer, Long> globalRetrieved,
-            int queriesCount
-    ) {
-        try {
-            Files.createDirectories(outDir);
-            Path p = outDir.resolve("global_precision.csv");
-            if (!Files.exists(p)) {
-                Files.writeString(p,
-                        "dimension,topK,precision,return_rate,matches_sum,returned_sum,queries\n",
-                        StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-            }
-
-            try (var w = Files.newBufferedWriter(p, StandardOpenOption.CREATE, StandardOpenOption.APPEND)) {
-                for (int k : kVariants) {
-                    long retrievedSum = globalRetrieved.getOrDefault(k, 0L);
-                    long matchesSum = globalMatches.getOrDefault(k, 0L);
-
-                    // Single global precision across all queries at this K:
-                    // precision = total matches / total retrieved (micro-style)
-                    double precision = (retrievedSum == 0L)
-                            ? 0.0
-                            : (double) matchesSum / (double) retrievedSum;
-
-                    double returnRate = (queriesCount <= 0 || k <= 0)
-                            ? 0.0
-                            : (double) retrievedSum / ((double) queriesCount * (double) k);
-
-                    w.write(String.format(Locale.ROOT,
-                            "%d,%d,%.6f,%.6f,%d,%d,%d%n",
-                            dim, k, precision, returnRate, matchesSum, retrievedSum, queriesCount));
-
-                    logger.info(
-                            "Global@K={} (dim={}): precision={} returnRate={} [matches={}, returned={}, Q={}]",
-                            k, dim,
-                            String.format(Locale.ROOT, "%.6f", precision),
-                            String.format(Locale.ROOT, "%.6f", returnRate),
-                            matchesSum, retrievedSum, queriesCount
-                    );
-                }
-            }
-        } catch (IOException ioe) {
-            logger.warn("Failed to write global_precision.csv", ioe);
-        }
-    }
-
-    static final class TrueNN {
-        final int id;
-        final double d;
-
-        TrueNN(int id, double d) {
-            this.id = id;
-            this.d = d;
-        }
-    }
-
-    private TrueNN computeTrueNNFromBase(double[] q, BaseVectorReader br) {
-        double bestSq = Double.POSITIVE_INFINITY;
-        int bestId = -1;
-        for (int i = 0; i < br.count; i++) {
-            double dsq = br.l2sq(q, i);
-            if (dsq < bestSq) {
-                bestSq = dsq;
-                bestId = i;
-            }
-        }
-        return new TrueNN(bestId, Math.sqrt(bestSq));
-    }
-
-    private static int numTablesFor(EvenLSH lsh, SystemConfig cfg) {
-        try {
-            var m = lsh.getClass().getMethod("getNumTables");
-            Object v = m.invoke(lsh);
-            if (v instanceof Integer n && n > 0) return n;
-        } catch (Throwable ignore) {
-        }
-
-        try {
-            var m = cfg.getClass().getMethod("getNumTables");
-            Object v = m.invoke(cfg);
-            if (v instanceof Integer n && n > 0) return n;
-        } catch (Throwable ignore) {
-        }
-
-        return 4; // fallback
-    }
-
     /** Disable System exit on shutdown (for tests). */
     public void setExitOnShutdown(boolean exitOnShutdown) {
         this.exitOnShutdown = exitOnShutdown;
@@ -1340,10 +1125,12 @@ public class ForwardSecureANNSystem {
             }
         } else {
             // Fallback: LSH per-table bucket hashes
-            sb.append(":buckets");
-            List<List<Integer>> tables = token.getTableBuckets();
-            if (tables != null) {
-                for (List<Integer> table : tables) {
+            sb.append(":codes");
+            for (BitSet bs : codes) {
+                sb.append('|').append(bs != null ? bs.hashCode() : -1);
+            }
+            if (codes != null) {
+                for (List<Integer> table : codes) {
                     if (table == null || table.isEmpty()) {
                         sb.append("|0");
                     } else {
@@ -1583,16 +1370,8 @@ public class ForwardSecureANNSystem {
         }
     }
 
-    public SecureLSHIndexService getIndexService() {
+    public PartitionedIndexService getIndexService() {
         return this.indexService;
-    }
-
-    public QueryService getQueryService() {
-        return this.queryService;
-    }
-
-    public Profiler getProfiler() {
-        return this.profiler;
     }
 
     private static String toHex(byte[] a) {
@@ -1667,23 +1446,6 @@ public class ForwardSecureANNSystem {
         }
     }
 
-     private static String buildQueryCacheKey(double[] q, int topK, int dim) {
-        int h = 1;
-        for (double v : q) {
-            long bits = Double.doubleToLongBits(v);
-            h = 31 * h + (int)(bits ^ (bits >>> 32));
-        }
-        return dim + "|" + topK + "|" + h;
-    }
-
-    // Delegate to sharded metadata when available:
-    private RocksDBMetadataManager getMetadataManager() {
-        // For now, using regular metadata
-        // Full migration would require wrapping ShardedMetadataManager
-        // to implement same interface as RocksDBMetadataManager
-        return this.metadataManager;
-    }
-
     // ====== retrieved IDs auditor ====== //
     private static final class RetrievedAudit {
         private final Path samplesCsv;
@@ -1744,7 +1506,8 @@ public class ForwardSecureANNSystem {
 
     /** Façade: produce a token for (q, k, dim) */
     public QueryToken createToken(double[] q, int k, int dim) {
-        return factoryForDim(dim).create(q, k);
+        QueryToken token = tokenFactories.get(dim).create(q, k);
+        return token;
     }
 
     /** Façade: produce a cloaked token (noise only if enabled) */
@@ -1763,42 +1526,6 @@ public class ForwardSecureANNSystem {
     /** Façade: expose QueryServiceImpl */
     public QueryServiceImpl getQueryServiceImpl() {
         return (QueryServiceImpl) this.queryService;
-    }
-
-    /** Façade: get current shard probing count */
-    public int shardsToProbe() {
-        int cfgVal = config.getLsh() != null ? config.getLsh().getProbeShards() : 0;
-        String prop = System.getProperty("probe.shards");
-        if (prop != null) {
-            try {
-                int v = Integer.parseInt(prop);
-                if (v > 0) return v;
-            } catch (Exception ignore) {}
-        }
-        if (cfgVal > 0) return cfgVal;
-        return Math.max(1, config.getNumShards() / 4);
-    }
-
-    /** Façade: update probe shard count */
-    public void widenProbeShards(int newShardCount) {
-        if (newShardCount > 0) {
-            System.setProperty("probe.shards", Integer.toString(newShardCount));
-        }
-    }
-
-    /** Façade: return-rate check */
-    public boolean rrOk(double rr, double targetRR) {
-        return rr >= targetRR;
-    }
-
-    /** Façade: fanout check */
-    public boolean fanoutTooHigh(double fanout, double maxFanout) {
-        return fanout >= maxFanout;
-    }
-
-    /** Façade: round-limit check */
-    public boolean roundsExceeded(int round, int maxRounds) {
-        return round >= maxRounds;
     }
 
     private double ratioAtKMetric(double[] q,
@@ -1909,39 +1636,17 @@ public class ForwardSecureANNSystem {
         return kAdaptive != null && kAdaptive.enabled;
     }
 
-    /** Façade: insert-related metrics */
-    public long lastInsertMs() {
-        var buf = indexService.getPointBuffer();
-        return buf != null ? buf.getLastBatchInsertTimeMs() : 0L;
-    }
-
     /** Test-only: expose evaluation engine */
     public QueryExecutionEngine getEngine() {
         return this.engine;
-    }
-
-    /** Test-only: read all encrypted points from metadata */
-    public List<EncryptedPoint> getAllEncryptedPointsForTest() {
-        return metadataManager.getAllEncryptedPoints();
     }
 
     public void setStabilizationStats(int raw, int fin) {
         this.lastStabilizedRaw = raw;
         this.lastStabilizedFinal = fin;
     }
-
     public int getLastStabilizedRaw() { return lastStabilizedRaw; }
     public int getLastStabilizedFinal() { return lastStabilizedFinal; }
-
-    public int totalFlushed() {
-        var buf = indexService.getPointBuffer();
-        return buf != null ? buf.getTotalFlushedPoints() : 0;
-    }
-
-    public int flushThreshold() {
-        var buf = indexService.getPointBuffer();
-        return buf != null ? buf.getFlushThreshold() : 0;
-    }
 
     public void flushAll() throws IOException {
         com.fspann.common.EncryptedPointBuffer buf = indexService.getPointBuffer();
@@ -1971,10 +1676,6 @@ public class ForwardSecureANNSystem {
             }
             if (backgroundReencryptor != null) {
                 backgroundReencryptor.shutdown();
-            }
-            if (indexService != null) {
-                indexService.flushBuffers();
-                indexService.shutdown();
             }
 
             if (metadataManager != null) {

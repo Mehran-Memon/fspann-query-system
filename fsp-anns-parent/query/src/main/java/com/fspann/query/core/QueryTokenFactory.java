@@ -1,160 +1,84 @@
 package com.fspann.query.core;
 
-import com.fspann.common.EncryptedPoint;
-import com.fspann.common.KeyLifeCycleService;
-import com.fspann.common.KeyVersion;
-import com.fspann.common.QueryToken;
+import com.fspann.common.*;
 import com.fspann.config.SystemConfig;
 import com.fspann.crypto.CryptoService;
-
+import com.fspann.index.paper.PartitionedIndexService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.crypto.SecretKey;
 import java.util.*;
 
-/**
- * QueryTokenFactory (LSH-ONLY VERSION)
- * ====================================
- *
- * Pure LSH token generation - no PAPER codes.
- *
- * Responsibilities:
- *   • Encrypt query vector
- *   • Compute LSH bucket hints (if available)
- *   • Create QueryToken for LSH search
- *
- * Key simplifications:
- *   ✅ No PAPER partition codes
- *   ✅ No divisions, m, lambda, seed parameters
- *   ✅ Single path - pure LSH
- *   ✅ Clean, minimal implementation
- *
- * @author FSP-ANNS Project
- * @version 4.0 (LSH-Only)
- */
 public final class QueryTokenFactory {
 
     private static final Logger log = LoggerFactory.getLogger(QueryTokenFactory.class);
 
     private final CryptoService crypto;
     private final KeyLifeCycleService keyService;
-    private final int numTables;
-    private final int probeRange;
+    private final PartitionedIndexService partition;
     private final SystemConfig cfg;
 
-    // ────────────────────────────────────────────────────────────────────
+    private final int divisions;
 
-    /**
-     * Constructor for LSH-only query token factory.
-     *
-     * @param crypto crypto service
-     * @param keyService key lifecycle service
-     * @param numTables number of LSH tables
-     * @param probeRange probe range hint
-     * @param cfg system configuration
-     */
     public QueryTokenFactory(
             CryptoService crypto,
             KeyLifeCycleService keyService,
-            int numTables,
-            int probeRange,
-            SystemConfig cfg) {
+            PartitionedIndexService partition,
+            SystemConfig cfg,
+            int divisions
+    ) {
+        this.crypto = Objects.requireNonNull(crypto);
+        this.keyService = Objects.requireNonNull(keyService);
+        this.partition = Objects.requireNonNull(partition);
+        this.cfg = Objects.requireNonNull(cfg);
+        this.divisions = divisions;
 
-        this.crypto = Objects.requireNonNull(crypto, "crypto");
-        this.keyService = Objects.requireNonNull(keyService, "keyService");
-        this.numTables = Math.max(0, numTables);
-        this.probeRange = Math.max(0, probeRange);
-        this.cfg = Objects.requireNonNull(cfg, "cfg");
-
-        log.info("QueryTokenFactory (LSH-Only): tables={}, probeRange={}",
-                numTables, probeRange);
+        log.info("QueryTokenFactory (MSANNP): divisions={}", divisions);
     }
 
-    // ────────────────────────────────────────────────────────────────────
-    // PUBLIC API
-    // ────────────────────────────────────────────────────────────────────
-
     /**
-     * Create query token for LSH search.
-     *
-     * Pure LSH path - no PAPER codes.
+     * Build MSANNP QueryToken.
      */
     public QueryToken create(double[] vec, int topK) {
-        Objects.requireNonNull(vec, "query vector");
+        Objects.requireNonNull(vec);
         if (topK <= 0) throw new IllegalArgumentException("topK must be > 0");
 
-        if (vec.length == 0) {
-            throw new IllegalArgumentException("Invalid query vector");
-        }
+        int dim = vec.length;
 
-        final int dim = vec.length;
+        // 1) Compute codes for partition lookup
+        BitSet[] codes = partition.code(vec);
 
-        /* 1) Empty bucket lists (LSH not actively used in token) */
-        List<List<Integer>> buckets = emptyTables(numTables);
-
-        /* 2) Encrypt query */
+        // 2) Encrypt query (for forward secrecy)
         KeyVersion kv = keyService.getCurrentVersion();
         SecretKey sk = kv.getKey();
-        EncryptedPoint ep = crypto.encryptToPoint("query", vec, sk);
+        EncryptedPoint enc = crypto.encryptToPoint("query", vec, sk);
 
-        /* 3) Empty codes (no PAPER in LSH-only) */
-        BitSet[] codes = emptyBitSets();
-
-        /* 4) Token construction */
+        // 3) Build token
         return new QueryToken(
-                buckets,
-                codes,
-                ep.getIv(),
-                ep.getCiphertext(),
+                Collections.emptyList(),   // no LSH buckets
+                codes,                     // MSANNP codes
+                enc.getIv(),
+                enc.getCiphertext(),
                 topK,
-                numTables,
+                divisions,
                 "dim_" + dim + "_v" + kv.getVersion(),
                 dim,
                 kv.getVersion()
         );
     }
 
-    // ────────────────────────────────────────────────────────────────────
-    // HELPERS
-    // ────────────────────────────────────────────────────────────────────
-
-    private List<List<Integer>> emptyTables(int n) {
-        List<List<Integer>> out = new ArrayList<>(n);
-        for (int i = 0; i < n; i++) {
-            out.add(Collections.emptyList());
-        }
-        return out;
-    }
-
-    private BitSet[] emptyBitSets() {
-        // No divisions in LSH-only, but return minimal array for compatibility
-        BitSet[] out = new BitSet[1];
-        out[0] = new BitSet(0);  // Empty bitset
-        return out;
-    }
-
-    // ────────────────────────────────────────────────────────────────────
-
-    public QueryToken derive(QueryToken base, int newTopK) {
+    public QueryToken derive(QueryToken tok, int newTopK) {
         return new QueryToken(
-                base.getTableBuckets(),
-                base.getCodes(),
-                base.getIv(),
-                base.getEncryptedQuery(),
+                tok.getTableBuckets(),
+                tok.getCodes(),
+                tok.getIv(),
+                tok.getEncryptedQuery(),
                 newTopK,
-                base.getNumTables(),
-                base.getEncryptionContext(),
-                base.getDimension(),
-                base.getVersion()
-        );
-    }
-
-    @Override
-    public String toString() {
-        return String.format(
-                "QueryTokenFactory{lsh-only, tables=%d, probeRange=%d}",
-                numTables, probeRange
+                tok.getNumTables(),
+                tok.getEncryptionContext(),
+                tok.getDimension(),
+                tok.getVersion()
         );
     }
 }

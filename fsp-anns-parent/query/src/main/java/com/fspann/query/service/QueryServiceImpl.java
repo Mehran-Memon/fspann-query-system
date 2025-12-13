@@ -4,7 +4,7 @@ import com.fspann.common.*;
 import com.fspann.config.SystemConfig;
 import com.fspann.crypto.CryptoService;
 import com.fspann.crypto.ReencryptionTracker;
-import com.fspann.index.service.SecureLSHIndexService;
+import com.fspann.index.paper.PartitionedIndexService;
 import com.fspann.loader.GroundtruthManager;
 import com.fspann.query.core.QueryEvaluationResult;
 import com.fspann.query.core.QueryTokenFactory;
@@ -17,77 +17,81 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 /**
- * QueryServiceImpl (LSH-ONLY VERSION)
- * ===================================
+ * QueryServiceImpl (Partitioned / Peng-style)
+ * ==========================================
  *
- * Pure LSH query service - single path, clean implementation.
- *
- * Key properties:
- *  • Single indexing engine: MultiTableLSH only
- *  • Query → decrypt → score → return results
- *  • No engine routing, no fallbacks
- *  • Full forward security (stale decrypt allowed)
- *  • Unified metrics collection
- *
- * @author FSP-ANNS Project
- * @version 4.0 (LSH-Only)
+ * - Uses PartitionedIndexService (via IndexService interface) for candidate points.
+ * - Decrypts a limited prefix of candidates (D1-style stabilization).
+ * - Scores with true L2 distance (Euclidean).
+ * - Metrics aligned with Peng:
+ *   • ratio        = #refined (L2 evaluations) / K
+ *   • serverMs     = server-side query + refine time
+ *   • clientMs     = end-to-end time (entry→exit of search())
+ *   • runMs        = clientMs (no double counting)
+ *   • decryptMs    = decrypt+score portion
+ *   • candTotal    = raw candidate count from index
+ *   • candKept     = after D1 limiter
+ *   • candDecrypted= refined (distance evaluated)
+ *   • candReturned = |top-K result|
  */
 public final class QueryServiceImpl implements QueryService {
 
     private static final Logger logger = LoggerFactory.getLogger(QueryServiceImpl.class);
 
-    private final IndexService indexService;
+    private final PartitionedIndexService index;   // implements IndexService
     private final CryptoService cryptoService;
     private final KeyLifeCycleService keyService;
-    private final QueryTokenFactory tokenFactory;
+    private final QueryTokenFactory tokenFactory;  // kept for compatibility if needed
     private final SystemConfig cfg;
 
-    // LSH index service (required)
-    private final SecureLSHIndexService lshService;
-
-    // --- Last search metrics ---
-    private volatile long lastQueryDurationNs = 0;
-    private volatile long lastClientDurationNs = 0;
-    private volatile long lastDecryptNs = 0;
-    private volatile int lastCandTotal = 0;
-    private volatile int lastCandDecrypted = 0;
-    private volatile int lastReturned = 0;
+    // --- last-search metrics ---
+    private volatile long lastServerNs = 0L;         // server-only
+    private volatile long lastClientNs = 0L;         // end-to-end
+    private volatile long lastDecryptNs = 0L;        // decrypt+score
+    private volatile int  lastCandTotal = 0;         // raw from index
+    private volatile int  lastCandKept = 0;          // after limiter
+    private volatile int  lastCandDecrypted = 0;     // refined
+    private volatile int  lastReturned = 0;          // |results|
     private volatile List<String> lastCandIds = Collections.emptyList();
-    private volatile ReencryptionTracker reencTracker;
 
+    private volatile ReencryptionTracker reencTracker;
     private StabilizationCallback stabilizationCallback;
+
+    // one-run touched set (for forward security)
     private final Set<String> touchedThisSession = ConcurrentHashMap.newKeySet();
 
     public QueryServiceImpl(
-            IndexService indexService,
+            PartitionedIndexService index,
             CryptoService cryptoService,
             KeyLifeCycleService keyService,
             QueryTokenFactory tf,
-            SystemConfig cfg) {
-
-        this.indexService = Objects.requireNonNull(indexService);
-        this.cryptoService = Objects.requireNonNull(cryptoService);
-        this.keyService = Objects.requireNonNull(keyService);
-        this.tokenFactory = tf;
+            SystemConfig cfg
+    ) {
+        this.index = Objects.requireNonNull(index, "index");
+        this.cryptoService = Objects.requireNonNull(cryptoService, "cryptoService");
+        this.keyService = Objects.requireNonNull(keyService, "keyService");
+        this.tokenFactory = tf; // may be null if created elsewhere
         this.cfg = Objects.requireNonNull(cfg, "cfg");
 
-        // LSH service is required for LSH-only system
-        if (indexService instanceof SecureLSHIndexService) {
-            this.lshService = (SecureLSHIndexService) indexService;
-            logger.info("QueryServiceImpl: LSH-Only mode");
-        } else {
-            throw new IllegalArgumentException(
-                    "LSH-only system requires SecureLSHIndexService");
-        }
+        logger.info("QueryServiceImpl: partitioned/Peng mode (L2 + D1 limiter)");
     }
 
     public void setReencryptionTracker(ReencryptionTracker tr) {
         this.reencTracker = tr;
     }
 
-    // ====================================================================
-    // SEARCH (SINGLE PATH)
-    // ====================================================================
+    public void setStabilizationCallback(StabilizationCallback cb) {
+        this.stabilizationCallback = cb;
+    }
+
+    @FunctionalInterface
+    public interface StabilizationCallback {
+        void accept(int rawCount, int finalCount);
+    }
+
+    // =====================================================================
+    // SEARCH (Partitioned index + D1 limiter + L2 scoring)
+    // =====================================================================
 
     @Override
     public List<QueryResult> search(QueryToken token) {
@@ -98,7 +102,9 @@ public final class QueryServiceImpl implements QueryService {
 
         final long clientStart = System.nanoTime();
 
-        // Decrypt query
+        // --------------------------
+        // 1) Decrypt query (client)
+        // --------------------------
         KeyVersion kv;
         try {
             kv = keyService.getVersion(token.getVersion());
@@ -109,68 +115,51 @@ public final class QueryServiceImpl implements QueryService {
         final double[] qVec = cryptoService.decryptQuery(
                 token.getEncryptedQuery(), token.getIv(), kv.getKey());
 
-        if (qVec == null || !isValid(qVec)) {
+        if (!isValid(qVec)) {
+            logger.warn("Query decryption failed or invalid vector; aborting search");
+            lastClientNs = Math.max(0L, System.nanoTime() - clientStart);
             return Collections.emptyList();
         }
 
+        // --------------------------
+        // 2) Server-side path
+        // --------------------------
         final long serverStart = System.nanoTime();
-        lastCandIds = new ArrayList<>();
+        List<QueryResult> finalResults = Collections.emptyList();
 
         try {
-            // LSH query (only path)
-            List<Map.Entry<String, Double>> lshResults = lshService.query(qVec, token.getTopK());
+            // 2.1 raw candidates from partitioned index
+            List<EncryptedPoint> raw = index.lookup(token);
+            raw = (raw != null) ? raw : Collections.emptyList();
 
-            if (lshResults == null || lshResults.isEmpty()) {
-                logger.debug("LSH query returned no results");
+            lastCandTotal = raw.size();
+            lastCandIds = raw.stream().map(EncryptedPoint::getId).toList();
+
+            if (raw.isEmpty()) {
                 return Collections.emptyList();
             }
 
-            logger.debug("LSH query returned {} candidates", lshResults.size());
-
-            // Convert (vectorId, distance) to EncryptedPoint
-            List<EncryptedPoint> candidates = new ArrayList<>();
-            EncryptedPointBuffer buffer = indexService.getPointBuffer();
-
-            for (Map.Entry<String, Double> entry : lshResults) {
-                String vectorId = entry.getKey();
-
-                EncryptedPoint ep = null;
-                try {
-                    ep = indexService.getEncryptedPoint(vectorId);
-                } catch (Exception e) {
-                    logger.warn("Failed to fetch EncryptedPoint: {}", vectorId);
-                    continue;
-                }
-
-                if (ep != null) {
-                    candidates.add(ep);
-                }
-            }
-
-            if (candidates.isEmpty()) {
+            // 2.2 D1-style limiter (stabilization) on EncryptedPoints
+            List<EncryptedPoint> limited = applyCandidateLimiter(raw);
+            lastCandKept = limited.size();
+            if (limited.isEmpty()) {
                 return Collections.emptyList();
             }
 
-            // Deduplicate
-            LinkedHashMap<String, EncryptedPoint> uniq = new LinkedHashMap<>();
-            for (EncryptedPoint ep : candidates) {
-                if (ep == null) continue;
-                uniq.putIfAbsent(ep.getId(), ep);
-            }
-
-            addCandidateIds(uniq.keySet());
-            lastCandTotal = uniq.size();
-
-            // Decrypt + score
+            // 2.3 decrypt + score (L2)
             final long decStart = System.nanoTime();
-            List<QueryScored> scored = decryptAndScore(uniq, qVec, kv);
-            scored = stabilizeScores(scored);
+            List<QueryScored> scored = decryptAndScore(limited, qVec, kv);
             final long decEnd = System.nanoTime();
             lastDecryptNs = Math.max(0L, decEnd - decStart);
 
+            if (scored.isEmpty()) {
+                return Collections.emptyList();
+            }
+
+            // sort by L2 ascending
             scored.sort(Comparator.comparingDouble(QueryScored::dist));
 
-            // Top-K cut
+            // 2.4 top-K cut
             int k = token.getTopK();
             int eff = Math.min(k, scored.size());
             lastReturned = eff;
@@ -180,77 +169,57 @@ public final class QueryServiceImpl implements QueryService {
                 QueryScored qs = scored.get(i);
                 out.add(new QueryResult(qs.id(), qs.dist()));
             }
-
+            finalResults = out;
             return out;
 
         } finally {
             long serverEnd = System.nanoTime();
-            lastQueryDurationNs = Math.max(0L, serverEnd - serverStart);
+            lastServerNs = Math.max(0L, serverEnd - serverStart);
 
             long clientEnd = System.nanoTime();
-            lastClientDurationNs = Math.max(0L, clientEnd - clientStart);
-        }
-    }
+            lastClientNs = Math.max(0L, clientEnd - clientStart);
 
-    // ====================================================================
-    // DECRYPT + SCORE
-    // ====================================================================
-
-    private List<QueryScored> decryptAndScore(
-            LinkedHashMap<String, EncryptedPoint> uniq,
-            double[] qVec,
-            KeyVersion kv) {
-
-        List<QueryScored> out = new ArrayList<>(uniq.size());
-
-        for (EncryptedPoint ep : uniq.values()) {
-            if (!touchedThisSession.contains(ep.getId())) {
-                touchedThisSession.add(ep.getId());
+            // update reencryption tracker once per query
+            if (reencTracker != null && !touchedThisSession.isEmpty()) {
+                reencTracker.record(touchedThisSession);
             }
-
-            double[] vec = cryptoService.decryptFromPoint(ep, kv.getKey());
-
-            if (vec == null || !isValid(vec)) continue;
-
-            lastCandDecrypted++;
-            out.add(new QueryScored(ep.getId(), l2sq(qVec, vec)));
         }
-
-        return out;
     }
 
-    // ====================================================================
-    // TOP-K VARIANTS
-    // ====================================================================
+    // =====================================================================
+    // TOP-K VARIANTS (1,5,10,20,40,60,80,100)
+    // =====================================================================
 
     @Override
     public List<QueryEvaluationResult> searchWithTopKVariants(
             QueryToken baseToken,
             int queryIndex,
-            GroundtruthManager gt) {
+            GroundtruthManager gt
+    ) {
+        Objects.requireNonNull(baseToken, "baseToken");
 
-        Objects.requireNonNull(baseToken);
+        List<Integer> variants = List.of(1, 5, 10, 20, 40, 60, 80, 100);
 
-        final List<Integer> variants = List.of(1, 5, 10, 20, 40, 60, 80, 100);
-
-        long clientStart = System.nanoTime();
+        // Single search run with max-K token
         List<QueryResult> base = nn(search(baseToken));
-        long clientEnd = System.nanoTime();
 
-        long clientNs = Math.max(0L, clientEnd - clientStart);
-        long serverNs = lastQueryDurationNs;
-        long runNs = clientNs + serverNs;
-
-        long clientMs = Math.round(clientNs / 1e6);
-        long serverMs = Math.round(serverNs / 1e6);
-        long runMs = Math.round(runNs / 1e6);
+        // Per Peng:
+        // serverMs = server-only
+        // clientMs = end-to-end
+        // runMs    = clientMs (no double counting)
+        long serverMs  = Math.round(lastServerNs  / 1e6);
+        long clientMs  = Math.round(lastClientNs  / 1e6);
+        long runMs     = clientMs;
         long decryptMs = Math.round(lastDecryptNs / 1e6);
 
-        int candTotal = lastCandTotal;
+        int candTotal     = lastCandTotal;
+        int candKept      = lastCandKept;
         int candDecrypted = lastCandDecrypted;
-        int candReturned = lastReturned;
-        int vectorDim = baseToken.getDimension();
+        int candReturned  = lastReturned;
+
+        int vectorDim  = baseToken.getDimension();
         int tokenBytes = prefixTokenBytes(baseToken);
+        int touchedCnt = touchedThisSession.size();
 
         List<QueryEvaluationResult> out = new ArrayList<>(variants.size());
 
@@ -260,14 +229,39 @@ public final class QueryServiceImpl implements QueryService {
 
             double precision = computePrecision(prefix, gt, queryIndex, k);
 
+            // Peng: ratio@K = # refined / K
+            double ratio = (k > 0)
+                    ? (double) candDecrypted / (double) k
+                    : 0.0;
+
             out.add(new QueryEvaluationResult(
-                    k, upto, (upto > 0 ? (double) candTotal / upto : 0.0), precision,
-                    serverMs, clientMs, runMs, decryptMs,
-                    0,
-                    candTotal, 0, candDecrypted, candReturned,
-                    tokenBytes, vectorDim, 0, 0,
-                    0, 0, 0, 0, 0, "lsh",
-                    k, k, queryIndex, "full"
+                    k,                       // topKRequested
+                    upto,                    // retrieved
+                    ratio,                   // ratio
+                    precision,               // precision
+                    serverMs,                // serverMs
+                    clientMs,                // clientMs
+                    runMs,                   // runMs
+                    decryptMs,               // decryptMs
+                    0L,                      // insertTimeMs (N/A here)
+                    candTotal,               // candTotal
+                    candKept,                // candKept
+                    candDecrypted,           // candDecrypted
+                    candReturned,            // candReturned
+                    tokenBytes,              // tokenSizeBytes
+                    vectorDim,               // vectorDim
+                    0,                       // totalFlushedPoints
+                    0,                       // flushThreshold
+                    touchedCnt,              // touchedCount
+                    0,                       // reencryptedCount
+                    0L,                      // reencTimeMs
+                    0L,                      // reencBytesDelta
+                    0L,                      // reencBytesAfter
+                    "l2-refine",             // ratioDenomSource
+                    k,                       // tokenK
+                    k,                       // tokenKBase
+                    queryIndex,              // qIndexZeroBased
+                    "full"                   // candMetricsMode
             ));
         }
 
@@ -278,6 +272,7 @@ public final class QueryServiceImpl implements QueryService {
                                     GroundtruthManager gt,
                                     int qIndex,
                                     int k) {
+
         if (gt == null || k <= 0 || prefix.isEmpty()) return 0.0;
 
         int[] g = gt.getGroundtruth(qIndex, k);
@@ -295,115 +290,121 @@ public final class QueryServiceImpl implements QueryService {
         return hits / (double) k;
     }
 
-    // ====================================================================
-    // UTILITIES & METRICS
-    // ====================================================================
+    // =====================================================================
+    // CANDIDATE LIMITER (D1-like) ON ENCRYPTED POINTS
+    // =====================================================================
+
+    /**
+     * Apply D1-style stabilization limiter on candidate list.
+     *
+     * raw       = |candidates|
+     * alphaCap  = ceil(alpha * raw)
+     * finalSize = max(minCandidates, min(alphaCap, raw))
+     *
+     * We take the first finalSize points in the natural arrival order
+     * from the partitioned index.
+     */
+    private List<EncryptedPoint> applyCandidateLimiter(List<EncryptedPoint> candidates) {
+        if (candidates == null || candidates.isEmpty()) {
+            if (stabilizationCallback != null) {
+                stabilizationCallback.accept(0, 0);
+            }
+            return Collections.emptyList();
+        }
+
+        SystemConfig.StabilizationConfig sc = cfg.getStabilization();
+        if (sc == null || !sc.isEnabled()) {
+            if (stabilizationCallback != null) {
+                stabilizationCallback.accept(candidates.size(), candidates.size());
+            }
+            return candidates;
+        }
+
+        int raw = candidates.size();
+        double alpha = sc.getAlpha();      // e.g. 0.01–0.05
+        int minCand = sc.getMinCandidates();
+
+        int alphaCap = (int) Math.ceil(alpha * raw);
+        int capped   = Math.min(alphaCap, raw);
+        int finalSize = Math.max(minCand, capped);
+
+        if (finalSize >= raw) {
+            if (stabilizationCallback != null) {
+                stabilizationCallback.accept(raw, raw);
+            }
+            return candidates;
+        }
+
+        List<EncryptedPoint> sub = candidates.subList(0, finalSize);
+
+        if (stabilizationCallback != null) {
+            stabilizationCallback.accept(raw, finalSize);
+        }
+
+        return sub;
+    }
+
+    // =====================================================================
+    // DECRYPT + SCORE (L2)
+    // =====================================================================
 
     private record QueryScored(String id, double dist) {}
 
-    private static <T> List<T> nn(List<T> v) {
-        return (v == null) ? Collections.emptyList() : v;
+    private List<QueryScored> decryptAndScore(
+            List<EncryptedPoint> points,
+            double[] qVec,
+            KeyVersion kv
+    ) {
+        List<QueryScored> out = new ArrayList<>(points.size());
+
+        for (EncryptedPoint ep : points) {
+            if (ep == null) continue;
+            touchedThisSession.add(ep.getId());
+
+            double[] v = cryptoService.decryptFromPoint(ep, kv.getKey());
+            if (!isValid(v)) continue;
+
+            lastCandDecrypted++;
+            out.add(new QueryScored(ep.getId(), l2(qVec, v)));
+        }
+
+        return out;
     }
 
-    private double l2sq(double[] a, double[] b) {
+    // true Euclidean L2
+    private double l2(double[] a, double[] b) {
         int len = Math.min(a.length, b.length);
         double s = 0.0;
         for (int i = 0; i < len; i++) {
             double d = a[i] - b[i];
             s += d * d;
         }
-        return s;
+        return Math.sqrt(s);
+    }
+
+    // =====================================================================
+    // UTILITIES / METRICS EXPOSURE
+    // =====================================================================
+
+    private static <T> List<T> nn(List<T> v) {
+        return (v == null) ? Collections.emptyList() : v;
     }
 
     private void clearLastMetrics() {
-        lastQueryDurationNs = 0;
-        lastClientDurationNs = 0;
-        lastDecryptNs = 0;
+        lastServerNs = 0L;
+        lastClientNs = 0L;
+        lastDecryptNs = 0L;
         lastCandTotal = 0;
+        lastCandKept = 0;
         lastCandDecrypted = 0;
         lastReturned = 0;
         lastCandIds = Collections.emptyList();
     }
 
-    private void addCandidateIds(Collection<String> ids) {
-        if (ids == null || ids.isEmpty()) return;
-
-        if (lastCandIds == null || lastCandIds.isEmpty()) {
-            lastCandIds = new ArrayList<>(ids);
-        } else {
-            LinkedHashSet<String> merged = new LinkedHashSet<>(lastCandIds);
-            merged.addAll(ids);
-            lastCandIds = new ArrayList<>(merged);
-        }
-    }
-
-    private List<QueryScored> stabilizeScores(List<QueryScored> scored) {
-        if (scored == null || scored.isEmpty()) {
-            if (stabilizationCallback != null)
-                stabilizationCallback.accept(0, 0);
-            return scored;
-        }
-
-        SystemConfig.StabilizationConfig sc = cfg.getStabilization();
-        if (sc == null || !sc.isEnabled()) {
-            if (stabilizationCallback != null)
-                stabilizationCallback.accept(scored.size(), scored.size());
-            return scored;
-        }
-
-        int raw = scored.size();
-        double alpha = sc.getAlpha();
-        int minCandidates = sc.getMinCandidates();
-
-        int alphaCap = (int) Math.ceil(alpha * raw);
-        int capped = Math.min(alphaCap, raw);
-        int finalSize = Math.max(capped, minCandidates);
-
-        if (finalSize >= raw) {
-            if (stabilizationCallback != null)
-                stabilizationCallback.accept(raw, raw);
-            return scored;
-        }
-
-        List<QueryScored> sub = scored.subList(0, finalSize);
-
-        if (stabilizationCallback != null)
-            stabilizationCallback.accept(raw, finalSize);
-
-        return sub;
-    }
-
-    public void setStabilizationCallback(StabilizationCallback cb) {
-        this.stabilizationCallback = cb;
-    }
-
-    @FunctionalInterface
-    public interface StabilizationCallback {
-        void accept(int rawCount, int finalCount);
-    }
-
-    @Override
-    public List<String> getLastCandidateIds() {
-        return (lastCandIds == null)
-                ? Collections.emptyList()
-                : Collections.unmodifiableList(lastCandIds);
-    }
-
-    public long getLastQueryDurationNs() { return lastQueryDurationNs; }
-    public int getLastCandTotal() { return lastCandTotal; }
-    public int getLastCandDecrypted() { return lastCandDecrypted; }
-    public int getLastReturned() { return lastReturned; }
-    public long getLastClientDurationNs() { return lastClientDurationNs; }
-    public long getLastDecryptNs() { return lastDecryptNs; }
-
-    public double getLastRatio() {
-        return (lastReturned > 0) ? (double) lastCandTotal / lastReturned : 0.0;
-    }
-
     private int prefixTokenBytes(QueryToken t) {
         if (t == null) return 0;
-        int iv = (t.getIv() != null ? t.getIv().length : 0);
-        int ct = (t.getEncryptedQuery() != null ? t.getEncryptedQuery().length : 0);
+        int iv = (t.getIv() != null) ? t.getIv().length : 0;
+        int ct = (t.getEncryptedQuery() != null) ? t.getEncryptedQuery().length : 0;
         return iv + ct;
     }
 
@@ -415,7 +416,28 @@ public final class QueryServiceImpl implements QueryService {
         return true;
     }
 
+    // Exposed to ForwardSecureANNSystem / Engine / Profiler
+
+    public long getLastQueryDurationNs() { return lastServerNs; }
+    public long getLastClientDurationNs() { return lastClientNs; }
+    public long getLastDecryptNs() { return lastDecryptNs; }
+    public int  getLastCandTotal() { return lastCandTotal; }
+    public int  getLastCandKept() { return lastCandKept; }
+    public int  getLastCandDecrypted() { return lastCandDecrypted; }
+    public int  getLastReturned() { return lastReturned; }
+
+    public double getLastRatio() {
+        return (lastReturned > 0) ? (double) lastCandDecrypted / lastReturned : 0.0;
+    }
+
     public Set<String> getTouchedIds() {
         return new HashSet<>(touchedThisSession);
+    }
+
+    @Override
+    public List<String> getLastCandidateIds() {
+        return (lastCandIds == null)
+                ? Collections.emptyList()
+                : Collections.unmodifiableList(lastCandIds);
     }
 }
