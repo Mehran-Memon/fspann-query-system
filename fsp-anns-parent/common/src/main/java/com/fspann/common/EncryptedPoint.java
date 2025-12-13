@@ -76,13 +76,6 @@ public class EncryptedPoint implements Serializable {
     public int getShardId() { return shardId; }
     public List<Integer> getBuckets() { return buckets; }
     public List<String> getMetadata() { return metadata; }
-
-    /**
-     * FIXED: Generate AAD (Additional Authenticated Data) for AES-GCM
-     * Must match the AAD used during encryption
-     *
-     * Format: "id:{id}|v:{version}|d:{dimension}"
-     */
     public byte[] getAAD() {
         String aadStr = String.format("id:%s|v:%d|d:%d", id, version, dimension);
         return aadStr.getBytes();

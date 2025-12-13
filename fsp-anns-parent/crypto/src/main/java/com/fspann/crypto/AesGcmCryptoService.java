@@ -103,7 +103,13 @@ public class AesGcmCryptoService implements CryptoService {
         }
     }
 
+
     /**
+     * FIXED: Decrypt using the CORRECT key version
+     *
+     * Before: Used the key parameter passed in (wrong if key rotated)
+     * After:  Uses point.getKeyVersion() to get the right key version
+     *
      * This is CRITICAL for forward-security:
      * - Vector encrypted with key v1 must decrypt with key v1
      * - Even if current key is now v2
@@ -266,6 +272,10 @@ public class AesGcmCryptoService implements CryptoService {
         return bytes;
     }
 
+    /**
+     * Helper: Deserialize vector from bytes
+     * (keep existing implementation)
+     */
     private double[] deserializeVector(byte[] bytes) {
         double[] v = new double[bytes.length / 8];
         for (int i = 0; i < v.length; i++) {
