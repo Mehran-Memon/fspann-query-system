@@ -149,6 +149,7 @@ public final class PartitionedIndexService implements IndexService {
     // =====================================================
     // BUILD - Partitioning (Algorithm-2)
     // =====================================================
+
     private void build(DimensionState S) {
         var pc = cfg.getPaper();
         int divisions = pc.divisions;
@@ -189,8 +190,6 @@ public final class PartitionedIndexService implements IndexService {
     // LOOKUP (Algorithm-3 prefix order)
     // =====================================================
 
-// In PartitionedIndexService.java, replace the lookup() method with this:
-
     @Override
     public List<EncryptedPoint> lookup(QueryToken token) {
         Objects.requireNonNull(token, "token cannot be null");
@@ -200,10 +199,8 @@ public final class PartitionedIndexService implements IndexService {
         if (S == null) return Collections.emptyList();
 
         BitSet[] qcodes = token.getCodes();
-        LinkedHashSet<EncryptedPoint> out = new LinkedHashSet<>();
 
-        int totalCandidates = 0;
-        int filteredCandidates = 0;
+        LinkedHashMap<String, EncryptedPoint> out = new LinkedHashMap<>();
 
         for (int d = 0; d < S.divisions.size(); d++) {
             DivisionState div = S.divisions.get(d);
@@ -212,41 +209,30 @@ public final class PartitionedIndexService implements IndexService {
             for (GreedyPartitioner.SubsetBounds sb : div.I) {
                 if (covers(sb, qc)) {
                     List<String> ids = div.tagToIds.get(sb.tag);
-                    if (ids != null) {
-                        for (String id : ids) {
-                            totalCandidates++;
+                    if (ids == null) continue;
 
-                            // Skip if deleted
-                            if (metadata.isDeleted(id)) {
+                    for (String id : ids) {
+                        if (out.containsKey(id)) continue;
+                        if (metadata.isDeleted(id)) continue;
+
+                        try {
+                            EncryptedPoint ep = metadata.loadEncryptedPoint(id);
+                            if (ep == null) continue;
+                            if (ep.getVersion() < keyService.getCurrentVersion().getVersion()) {
                                 continue;
                             }
-
-                            // Load full EncryptedPoint from metadata
-                            try {
-                                EncryptedPoint ep = metadata.loadEncryptedPoint(id);
-                                if (ep != null) {
-                                    out.add(ep);
-                                    filteredCandidates++;
-                                }
-                            } catch (Exception e) {
-                                logger.warn("Failed to load encrypted point {} during lookup", id, e);
+                            if (ep != null) {
+                                out.put(id, ep);
                             }
+                        } catch (Exception e) {
+                            logger.warn("Failed to load encrypted point {}", id, e);
                         }
                     }
                 }
             }
         }
 
-        // Log filtering statistics if significant
-        if (totalCandidates > 0 && filteredCandidates < totalCandidates) {
-            int filtered = totalCandidates - filteredCandidates;
-            logger.debug(
-                    "Lookup dim={}: {} total, {} deleted, {} active returned",
-                    dim, totalCandidates, filtered, filteredCandidates
-            );
-        }
-
-        return new ArrayList<>(out);
+        return new ArrayList<>(out.values());
     }
 
     private boolean covers(GreedyPartitioner.SubsetBounds sb, BitSet c) {
@@ -599,7 +585,7 @@ public final class PartitionedIndexService implements IndexService {
      * Get count of active (non-deleted) vectors in partition.
      */
     public int countActiveInPartition() {
-        int activeCount = 0;
+        Set<String> seen = new HashSet<>();
 
         for (DimensionState S : dims.values()) {
             synchronized (S) {
@@ -607,15 +593,14 @@ public final class PartitionedIndexService implements IndexService {
                     for (List<String> ids : div.tagToIds.values()) {
                         for (String id : ids) {
                             if (!metadata.isDeleted(id)) {
-                                activeCount++;
+                                seen.add(id);
                             }
                         }
                     }
                 }
             }
         }
-
-        return activeCount;
+        return seen.size();
     }
 
     // =====================================================

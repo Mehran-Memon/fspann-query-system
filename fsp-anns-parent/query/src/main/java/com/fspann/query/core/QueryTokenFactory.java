@@ -3,6 +3,7 @@ package com.fspann.query.core;
 import com.fspann.common.*;
 import com.fspann.config.SystemConfig;
 import com.fspann.crypto.CryptoService;
+import com.fspann.crypto.EncryptionUtils;
 import com.fspann.index.paper.PartitionedIndexService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,20 +47,22 @@ public final class QueryTokenFactory {
 
         int dim = vec.length;
 
-        // 1) Compute codes for partition lookup
+        // 1) Partition codes (Peng MSANNP)
         BitSet[] codes = partition.code(vec);
 
-        // 2) Encrypt query (for forward secrecy)
+        // 2) Encrypt query (ephemeral, NO AAD, NO point semantics)
         KeyVersion kv = keyService.getCurrentVersion();
         SecretKey sk = kv.getKey();
-        EncryptedPoint enc = crypto.encryptToPoint("query", vec, sk);
+
+        byte[] iv = EncryptionUtils.generateIV();
+        byte[] ct = crypto.encryptQuery(vec, sk, iv);
 
         // 3) Build token
         return new QueryToken(
-                Collections.emptyList(),   // no LSH buckets
+                Collections.emptyList(),   // no LSH
                 codes,                     // MSANNP codes
-                enc.getIv(),
-                enc.getCiphertext(),
+                iv,
+                ct,
                 topK,
                 divisions,
                 "dim_" + dim + "_v" + kv.getVersion(),
