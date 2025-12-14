@@ -1,0 +1,53 @@
+{
+  "base": {
+    "numShards": 24,
+    "opsThreshold": 500000000,
+    "reencryptionEnabled": true,
+    "forwardSecurityEnabled": true,
+    "partitionedIndexingEnabled": true,
+
+    "paper": {
+      "enabled": true,
+      "m": 20,
+      "lambda": 3,
+      "divisions": 3,
+      "seed": 13
+    },
+
+    "stabilization": {
+      "enabled": true,
+      "alpha": 0.12,
+      "minCandidates": 1400
+    },
+
+    "eval": {
+      "computePrecision": true,
+      "writeGlobalPrecisionCsv": true,
+      "kVariants": [1, 10, 20, 50, 100]
+    },
+
+    "output": {
+      "exportArtifacts": true
+    }
+  },
+
+  "profiles": [
+
+    { "name": "M10", "overrides": { "paper": { "m": 10 } } },
+    { "name": "M15", "overrides": { "paper": { "m": 15 } } },
+    { "name": "M20", "overrides": { "paper": { "m": 20 } } },
+    { "name": "M25", "overrides": { "paper": { "m": 25 } } },
+
+    { "name": "L1", "overrides": { "paper": { "lambda": 1 } } },
+    { "name": "L2", "overrides": { "paper": { "lambda": 2 } } },
+    { "name": "L3", "overrides": { "paper": { "lambda": 3 } } },
+    { "name": "L4", "overrides": { "paper": { "lambda": 4 } } },
+
+    { "name": "D2", "overrides": { "paper": { "divisions": 2 } } },
+    { "name": "D3", "overrides": { "paper": { "divisions": 3 } } },
+
+    { "name": "A0.05", "overrides": { "stabilization": { "alpha": 0.05 } } },
+    { "name": "A0.10", "overrides": { "stabilization": { "alpha": 0.10 } } },
+    { "name": "A0.15", "overrides": { "stabilization": { "alpha": 0.15 } } }
+  ]
+}
