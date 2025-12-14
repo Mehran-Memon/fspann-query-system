@@ -8,11 +8,11 @@ $ThinJar   = Join-Path $ApiDir "api-0.0.1-SNAPSHOT.jar"
 
 if (Test-Path $ShadedJar) {
     $JarPath = $ShadedJar
-    Write-Host "Using SHADED JAR: $JarPath" -ForegroundColor Green
+    Write-Host "Using SHADED JAR: $JarPath"
 }
 elseif (Test-Path $ThinJar) {
     $JarPath = $ThinJar
-    Write-Host "Using THIN JAR: $JarPath" -ForegroundColor Yellow
+    Write-Host "Using THIN JAR: $JarPath"
 }
 else {
     throw "No runnable API JAR found in $ApiDir"
@@ -37,24 +37,22 @@ $JvmArgs = @(
 
 $Batch = 100000
 
-# ---- DATASETS (AUTHORITATIVE) ----
+# ---- DATASETS ----
 $Datasets = @(
     @{ Name="SIFT1M";      Base="E:\Research Work\Datasets\SIFT1M\sift_base.fvecs";           Query="E:\Research Work\Datasets\SIFT1M\sift_query.fvecs";           GT="E:\Research Work\Datasets\SIFT1M\sift_query_groundtruth.ivecs";           Dim=128 },
     @{ Name="Glove-100";   Base="E:\Research Work\Datasets\glove-100\glove-100_base.fvecs";  Query="E:\Research Work\Datasets\glove-100\glove-100_query.fvecs";  GT="E:\Research Work\Datasets\glove-100\glove-100_groundtruth.ivecs";  Dim=100 },
     @{ Name="RedCaps";     Base="E:\Research Work\Datasets\redcaps\redcaps_base.fvecs";      Query="E:\Research Work\Datasets\redcaps\redcaps_query.fvecs";      GT="E:\Research Work\Datasets\redcaps\redcaps_groundtruth.ivecs";      Dim=512 }
 )
 
-# ---- DEEP MERGE FUNCTION (CRITICAL FIX) ----
+# ---- DEEP MERGE FUNCTION ----
 function Merge-ConfigObjects {
     param(
         [Parameter(Mandatory=$true)]$Base,
         [Parameter(Mandatory=$true)]$Overrides
     )
 
-    # Deep copy base
     $result = $Base | ConvertTo-Json -Depth 64 | ConvertFrom-Json
 
-    # Recursively merge overrides
     function Merge-Recursive {
         param($target, $source)
 
@@ -65,7 +63,6 @@ function Merge-ConfigObjects {
                 continue
             }
 
-            # If both are objects (not arrays/primitives), merge recursively
             if ($sourceValue -is [PSCustomObject] -and $target.PSObject.Properties.Name -contains $key) {
                 $targetValue = $target.$key
                 if ($targetValue -is [PSCustomObject]) {
@@ -74,7 +71,6 @@ function Merge-ConfigObjects {
                 }
             }
 
-            # Otherwise, replace
             $target | Add-Member -MemberType NoteProperty -Name $key -Value $sourceValue -Force
         }
     }
@@ -83,7 +79,22 @@ function Merge-ConfigObjects {
     return $result
 }
 
-# ---- HELPERS ----
+# ---- SAFE PROPERTY SETTER ----
+function Set-SafeProperty {
+    param(
+        [Parameter(Mandatory=$true)]$Object,
+        [Parameter(Mandatory=$true)][string]$PropertyName,
+        [Parameter(Mandatory=$true)]$Value
+    )
+
+    if ($Object.PSObject.Properties.Name -contains $PropertyName) {
+        $Object.$PropertyName = $Value
+    } else {
+        $Object | Add-Member -MemberType NoteProperty -Name $PropertyName -Value $Value -Force
+    }
+}
+
+# ---- METRICS EXTRACTION ----
 function Extract-Metrics {
     param([string]$LogPath)
 
@@ -96,15 +107,15 @@ function Extract-Metrics {
     $ratio = "N/A"
     $precision = "N/A"
 
-    # Look for patterns in log
-    if ($content -match 'Server.*?(\d+\.\d+)') { $server = $matches[1] }
-    if ($content -match 'Client.*?(\d+\.\d+)') { $client = $matches[1] }
-    if ($content -match 'Ratio.*?(\d+\.\d+)') { $ratio = $matches[1] }
-    if ($content -match 'Precision.*?(\d+\.\d+)') { $precision = $matches[1] }
+    if ($content -match '(?:ServerTimeMs|Server Time|ART.*Server)[:\s=]+(\d+\.?\d*)') { $server = $matches[1] }
+    if ($content -match '(?:ClientTimeMs|Client Time|ART.*Client)[:\s=]+(\d+\.?\d*)') { $client = $matches[1] }
+    if ($content -match '(?:Ratio|CandidateRatio)[:\s=]+(\d+\.?\d*)') { $ratio = $matches[1] }
+    if ($content -match '(?:Precision|Recall)[:\s=]+(\d+\.?\d*)') { $precision = $matches[1] }
 
     return "$server|$client|$ratio|$precision"
 }
 
+# ---- CSV COMBINING ----
 function Combine-CSVFiles {
     param(
         [string]$OutputPath,
@@ -121,14 +132,13 @@ function Combine-CSVFiles {
     foreach ($f in $InputFiles) {
         if (-not (Test-Path $f)) { continue }
 
-        $lines = @(Get-Content $f)
+        $lines = @(Get-Content $f -ErrorAction SilentlyContinue)
         if ($lines.Count -eq 0) { continue }
 
-        # Extract profile name from path
         $profileDir = (Get-Item (Split-Path -Parent (Split-Path -Parent $f))).BaseName
 
         if (-not $headerWritten) {
-            "profile,$(($lines[0]))" | Out-File $OutputPath -Encoding UTF8
+            "profile,$($lines[0])" | Out-File $OutputPath -Encoding UTF8
             if ($lines.Count -gt 1) {
                 $lines[1..($lines.Count-1)] | ForEach-Object { "$profileDir,$_" } | Add-Content $OutputPath -Encoding UTF8
             }
@@ -141,14 +151,20 @@ function Combine-CSVFiles {
     }
 }
 
-Write-Host "Verifying system..."
+# ---- SYSTEM VERIFICATION ----
+Write-Host "FSP-ANN 3-Dataset Evaluation Runner"
+Write-Host "Starting system verification..."
+
 if (-not (Get-Command java -ErrorAction SilentlyContinue)) {
     throw "Java not found in PATH"
 }
-java -version 2>&1 | Select-Object -First 1
-Write-Host "All requirements satisfied`n"
 
-# ---- MAIN LOOP ----
+Write-Host "Java found"
+Write-Host "JAR resolved: $JarPath"
+Write-Host "All requirements satisfied"
+Write-Host ""
+
+# ---- MAIN EXECUTION ----
 $allResults = @()
 
 foreach ($cfg in $Configs) {
@@ -156,20 +172,19 @@ foreach ($cfg in $Configs) {
     $ConfigPath = $cfg.Path
 
     if (-not (Test-Path $ConfigPath)) {
-        Write-Host "Skipping $CFG_NAME (config not found: $ConfigPath)" -ForegroundColor Yellow
+        Write-Host "Skipping $CFG_NAME - config not found"
         continue
     }
 
     $OutRoot = "G:\fsp-run\$CFG_NAME"
     New-Item -ItemType Directory -Force -Path $OutRoot | Out-Null
 
-    Write-Host "CONFIG FAMILY: $CFG_NAME" -ForegroundColor Yellow
+    Write-Host "Processing CONFIG FAMILY: $CFG_NAME"
 
-    # Load config
     try {
         $cfgObj = Get-Content $ConfigPath -Raw | ConvertFrom-Json
     } catch {
-        Write-Host "Failed to parse config: $_" -ForegroundColor Red
+        Write-Host "ERROR: Failed to parse config: $_"
         continue
     }
 
@@ -185,32 +200,27 @@ foreach ($cfg in $Configs) {
     }
 
     if ($null -eq $matchingDataset) {
-        Write-Host "⏭No dataset matching config family $CFG_NAME" -ForegroundColor Yellow
+        Write-Host "No dataset matching config family $CFG_NAME"
         continue
     }
 
     $ds = $matchingDataset
 
     # Verify dataset files
-    if (-not (Test-Path $ds.Base -PathType Leaf)) {
-        Write-Host "Missing base: $($ds.Base)" -ForegroundColor Red
-        continue
-    }
-    if (-not (Test-Path $ds.Query -PathType Leaf)) {
-        Write-Host "Missing query: $($ds.Query)" -ForegroundColor Red
-        continue
-    }
-    if (-not (Test-Path $ds.GT -PathType Leaf)) {
-        Write-Host "Missing GT: $($ds.GT)" -ForegroundColor Red
-        continue
+    @($ds.Base, $ds.Query, $ds.GT) | ForEach-Object {
+        if (-not (Test-Path $_ -PathType Leaf)) {
+            throw "Missing dataset file: $_"
+        }
     }
 
     $datasetRoot = Join-Path $OutRoot $ds.Name
     New-Item -ItemType Directory -Force -Path $datasetRoot | Out-Null
 
-    Write-Host "Dataset: $($ds.Name) (Dim=$($ds.Dim))`n" -ForegroundColor Yellow
-    Write-Host "Profile                   | Status      | Server(ms) | Client(ms) | ART(ms) | Ratio  | Precision"
-    Write-Host "──────────────────────────────────────────────────────────────────────────────────────────────────"
+    Write-Host ""
+    Write-Host "Dataset: $($ds.Name) Dimension: $($ds.Dim)"
+    Write-Host ""
+    Write-Host "Profile                   | Status  | Server(ms) | Client(ms) | ART(ms) | Ratio  | Precision"
+    Write-Host "----------------------------------------------------------------------------------------------------"
 
     # Process each profile
     foreach ($profile in $cfgObj.profiles) {
@@ -218,29 +228,32 @@ foreach ($cfg in $Configs) {
         $runDir = Join-Path $datasetRoot $label
         New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 
-        # ===== CRITICAL FIX: Deep merge config =====
         $overrides = $profile.overrides
         if ($null -eq $overrides) { $overrides = @{} }
 
         $finalConfig = Merge-ConfigObjects -Base $baseConfig -Overrides $overrides
 
-        # ===== Verify override was applied =====
-        $appliedDivisions = $finalConfig.paper.divisions
-        $appliedAlpha = $finalConfig.stabilization.alpha
+        $appliedDivisions = if ($finalConfig.paper) { $finalConfig.paper.divisions } else { "?" }
+        $appliedAlpha = if ($finalConfig.stabilization) { $finalConfig.stabilization.alpha } else { "?" }
 
-        # Set output paths
-        $finalConfig.output.resultsDir = Join-Path $runDir "results"
-        $finalConfig.ratio.source = "gt"
-        $finalConfig.ratio.gtPath = $ds.GT
-        $finalConfig.ratio.gtSample = 10000
-        $finalConfig.ratio.autoComputeGT = $false
-        $finalConfig.ratio.allowComputeIfMissing = $false
+        if (-not $finalConfig.output) {
+            $finalConfig | Add-Member -MemberType NoteProperty -Name "output" -Value @{} -Force
+        }
+        Set-SafeProperty -Object $finalConfig.output -PropertyName "resultsDir" -Value (Join-Path $runDir "results")
 
-        # Save config
+        if (-not $finalConfig.ratio) {
+            $finalConfig | Add-Member -MemberType NoteProperty -Name "ratio" -Value @{} -Force
+        }
+        Set-SafeProperty -Object $finalConfig.ratio -PropertyName "source" -Value "gt"
+        Set-SafeProperty -Object $finalConfig.ratio -PropertyName "gtPath" -Value $ds.GT
+        Set-SafeProperty -Object $finalConfig.ratio -PropertyName "gtSample" -Value 10000
+        Set-SafeProperty -Object $finalConfig.ratio -PropertyName "gtMismatchTolerance" -Value 0.0
+        Set-SafeProperty -Object $finalConfig.ratio -PropertyName "autoComputeGT" -Value $false
+        Set-SafeProperty -Object $finalConfig.ratio -PropertyName "allowComputeIfMissing" -Value $false
+
         $configFile = Join-Path $runDir "config.json"
         $finalConfig | ConvertTo-Json -Depth 64 | Set-Content $configFile -Encoding UTF8
 
-        # Build command
         $cmd = @(
             $JvmArgs
             "-Dcli.dataset=$($ds.Name)"
@@ -256,11 +269,8 @@ foreach ($cfg in $Configs) {
             "$Batch"
         )
 
-        # Save command
-        $cmdLine = $cmd -join " "
-        $cmdLine | Out-File (Join-Path $runDir "cmdline.txt") -Encoding UTF8
+        ($cmd -join " ") | Out-File (Join-Path $runDir "cmdline.txt") -Encoding UTF8
 
-        # Execute
         $logFile = Join-Path $runDir "run.out.log"
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
@@ -272,8 +282,8 @@ foreach ($cfg in $Configs) {
         }
 
         $sw.Stop()
+        $elapsedSec = [math]::Round($sw.Elapsed.TotalSeconds, 1)
 
-        # Extract metrics
         $metrics = Extract-Metrics $logFile
         $parts = $metrics -split '\|'
         $serverMs = $parts[0]
@@ -283,27 +293,23 @@ foreach ($cfg in $Configs) {
 
         $artMs = "N/A"
         if ($serverMs -ne "N/A" -and $clientMs -ne "N/A") {
-            $artMs = [math]::Round([double]$serverMs + [double]$clientMs, 2)
+            try {
+                $artMs = [math]::Round([double]$serverMs + [double]$clientMs, 2)
+            } catch {
+                $artMs = "N/A"
+            }
         }
 
-        # Display
-        if ($exitCode -eq 0) {
-            $status = "OK"
-            $color = "Green"
-        } else {
-            $status = "FAILED"
-            $color = "Red"
-        }
+        $status = if ($exitCode -eq 0) { "OK" } else { "FAILED" }
 
-        Write-Host ("{0,-25} | {1,-11} | {2,10} | {3,10} | {4,7} | {5,6} | {6,9}  [d={7} α={8}]" -f `
-            $label, $status, $serverMs, $clientMs, $artMs, $ratio, $precision, `
-            $appliedDivisions, $appliedAlpha) -ForegroundColor $color
+        Write-Host ("{0,-25} | {1,-7} | {2,10} | {3,10} | {4,7} | {5,6} | {6,9}" -f `
+            $label, $status, $serverMs, $clientMs, $artMs, $ratio, $precision)
 
         $allResults += @{
             Dataset = $ds.Name
             Profile = $label
             ExitCode = $exitCode
-            ElapsedSec = [math]::Round($sw.Elapsed.TotalSeconds, 1)
+            ElapsedSec = $elapsedSec
             ServerMs = $serverMs
             ClientMs = $clientMs
             Ratio = $ratio
@@ -313,32 +319,39 @@ foreach ($cfg in $Configs) {
         }
     }
 
-    # ---- Combine results per dataset ----
     $csvFiles = @(Get-ChildItem -Path (Join-Path $datasetRoot "*\results\results_table.csv") -File -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
     if ($csvFiles.Count -gt 0) {
         Combine-CSVFiles -OutputPath (Join-Path $datasetRoot "combined_results.csv") -InputFiles $csvFiles
+        Write-Host "Combined results saved"
     }
 
     Write-Host ""
 }
 
 # ---- FINAL SUMMARY ----
-Write-Host "                     RUN SUMMARY                                "
-
+Write-Host ""
+Write-Host "RUN SUMMARY"
+Write-Host "======================================================================================================"
+Write-Host ""
 Write-Host "Dataset        | Profile               | Elapsed(s) | ART(ms) | Ratio | Divisions | Alpha | Status"
-Write-Host "──────────────────────────────────────────────────────────────────────────────────────────────────────"
+Write-Host "----------------------------------------------------------------------------------------------------"
 
 foreach ($r in $allResults) {
-    $status = if ($r.ExitCode -eq 0) { "✅" } else { "❌" }
-
+    $status = if ($r.ExitCode -eq 0) { "OK" } else { "FAILED" }
     $art = "N/A"
     if ($r.ServerMs -ne "N/A" -and $r.ClientMs -ne "N/A") {
-        $art = [math]::Round([double]$r.ServerMs + [double]$r.ClientMs, 2)
+        try {
+            $art = [math]::Round([double]$r.ServerMs + [double]$r.ClientMs, 2)
+        } catch {
+            $art = "N/A"
+        }
     }
 
     Write-Host ("{0,-14} | {1,-21} | {2,10} | {3,7} | {4,5} | {5,9} | {6,5} | {7}" -f `
         $r.Dataset, $r.Profile, $r.ElapsedSec, $art, $r.Ratio, $r.Divisions, $r.Alpha, $status)
 }
 
-Write-Host "`n Results: G:\fsp-run"
-Write-Host " Combined CSVs created per dataset`n"
+Write-Host ""
+Write-Host "Results location: G:\fsp-run"
+Write-Host "Combined CSV files created per dataset"
+Write-Host ""
