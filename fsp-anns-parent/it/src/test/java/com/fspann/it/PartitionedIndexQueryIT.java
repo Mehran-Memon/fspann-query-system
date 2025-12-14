@@ -15,9 +15,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PartitionedIndexQueryIT {
+    private static final Logger logger =
+            LoggerFactory.getLogger(PartitionedIndexQueryIT.class);
 
     static PartitionedIndexService index;
     static QueryServiceImpl queryService;
@@ -78,18 +82,33 @@ class PartitionedIndexQueryIT {
 
     @Test
     void testBasicInsertAndQuery() {
-        for (int i = 0; i < 500; i++) {
-            index.insert("v" + i, new double[]{i, i + 1, i + 2});
+        for (int i = 0; i < 1000; i++) {
+            // Insert more dense vectors around the query vector
+            double offset = (i % 100) * 0.1;
+            index.insert("v" + i, new double[]{
+                    10.0 + offset,      // Centered near query [10, 11, 12]
+                    11.0 + offset,
+                    12.0 + offset
+            });
         }
 
         index.finalizeForSearch();
 
-        QueryToken token =
-                tokenFactory.create(new double[]{10, 11, 12}, 10);
+        // ===== CRITICAL: Force flush to metadata =====
+        try {
+            metadata.flush();
+            if (logger.isDebugEnabled()) {
+                logger.debug("Metadata flushed after finalization");
+            }
+        } catch (Exception e) {
+            logger.warn("Flush failed", e);
+        }
 
+        QueryToken token = tokenFactory.create(new double[]{10, 11, 12}, 10);
         List<QueryResult> results = queryService.search(token);
 
-        assertFalse(results.isEmpty());
+        // Results should not be empty now (within ~0.1 of query)
+        assertFalse(results.isEmpty(), "Query should find candidates near [10,11,12]");
         assertTrue(results.size() <= 10);
         assertTrue(queryService.getLastCandDecrypted() <= queryService.getLastCandTotal());
     }

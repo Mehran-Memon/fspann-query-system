@@ -8,7 +8,8 @@ import com.fspann.key.*;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.*;
-
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import javax.crypto.SecretKey;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -16,6 +17,9 @@ import java.nio.file.Path;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ForwardSecurityRotationIT {
+
+    private static final Logger logger =
+            LoggerFactory.getLogger(ForwardSecurityRotationIT.class);
 
     @Test
     void testOldKeyCannotDecryptAfterRotation() throws Exception {
@@ -61,24 +65,47 @@ class ForwardSecurityRotationIT {
                         crypto
                 );
 
-        index.insert("p1", new double[]{1, 2, 3});
-        index.finalizeForSearch();
+            index.insert("p1", new double[]{1, 2, 3});
+            index.finalizeForSearch();
 
-        EncryptedPoint before = metadata.loadEncryptedPoint("p1");
-        int oldVersion = keyService.getCurrentVersion().getVersion();
-        SecretKey oldKey = keyService.getCurrentVersion().getKey();
+            // ===== CRITICAL: Force flush to metadata =====
+            try {
+                metadata.flush();
+            } catch (Exception e) {
+                logger.warn("Flush after insert failed", e);
+            }
 
-        keyService.rotateKeyOnly();
-        keyService.reEncryptAll();
+            EncryptedPoint before = metadata.loadEncryptedPoint("p1");
+            assertNotNull(before, "Point should exist before rotation");
 
-        EncryptedPoint after = metadata.loadEncryptedPoint("p1");
+            int oldVersion = keyService.getCurrentVersion().getVersion();
+            SecretKey oldKey = keyService.getCurrentVersion().getKey();
 
-        assertThrows(
-                Exception.class,
-                () -> crypto.decryptFromPoint(after, oldKey)
-        );
+            // Rotate and re-encrypt
+            keyService.rotateKeyOnly();
+            keyService.reEncryptAll();
 
-        double[] vec = crypto.decryptFromPoint(after, null);
-        assertEquals(3, vec.length);
-    }
+            // ===== CRITICAL: Flush again after re-encryption =====
+            try {
+                metadata.flush();
+            } catch (Exception e) {
+                logger.warn("Flush after re-encryption failed", e);
+            }
+
+            EncryptedPoint after = metadata.loadEncryptedPoint("p1");
+            assertNotNull(after, "Point should exist after re-encryption");
+            assertEquals(oldVersion + 1, after.getVersion(),
+                    "Re-encrypted point should have new version");
+
+            // Now verify old key cannot decrypt
+            assertThrows(
+                    RuntimeException.class,
+                    () -> crypto.decryptFromPoint(after, oldKey),
+                    "Old key should not be able to decrypt re-encrypted point"
+            );
+
+            // But current key should work
+            double[] vec = crypto.decryptFromPoint(after, null);
+            assertEquals(3, vec.length);
+        }
 }
