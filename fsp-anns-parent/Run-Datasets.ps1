@@ -1,7 +1,23 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$JarPath = "F:\fspann-query-system\fsp-anns-parent\api\target\api-0.0.1-SNAPSHOT-jar-with-dependencies.jar"
+# ---- JAR RESOLUTION (supports thin + shaded) ----
+$ApiDir = "F:\fspann-query-system\fsp-anns-parent\api\target"
+
+$ShadedJar = Join-Path $ApiDir "api-0.0.1-SNAPSHOT-shaded.jar"
+$ThinJar   = Join-Path $ApiDir "api-0.0.1-SNAPSHOT.jar"
+
+if (Test-Path $ShadedJar) {
+    $JarPath = $ShadedJar
+    Write-Host "Using SHADED JAR: $JarPath" -ForegroundColor Green
+}
+elseif (Test-Path $ThinJar) {
+    $JarPath = $ThinJar
+    Write-Host "Using THIN JAR: $JarPath" -ForegroundColor Yellow
+}
+else {
+    throw "No runnable API JAR found in $ApiDir"
+}
 
 $Configs = @(
     @{ Name="SIFT1M";   Path="F:\fspann-query-system\fsp-anns-parent\config\src\main\resources\config_sift1m.json" },
@@ -19,8 +35,10 @@ $JvmArgs = @(
 $Batch = 100000
 
 $Datasets = @(
-    @{ Name="SIFT1M"; Base="E:\Datasets\SIFT1M\sift_base.fvecs"; Query="E:\Datasets\SIFT1M\sift_query.fvecs"; GT="E:\Datasets\SIFT1M\sift_query_groundtruth.ivecs"; Dim=128 },
-    @{ Name="glove-100"; Base="E:\Datasets\glove-100\glove-100_base.fvecs"; Query="E:\Datasets\glove-100\glove-100_query.fvecs"; GT="E:\Datasets\glove-100\glove-100_groundtruth.ivecs"; Dim=100 }
+    @{ Name="SIFT1M"; Base="E:\Research Work\Datasets\SIFT1M\sift_base.fvecs"; Query="E:\Research Work\Datasets\SIFT1M\sift_query.fvecs"; GT="E:\Research Work\Datasets\SIFT1M\sift_query_groundtruth.ivecs"; Dim=128 },
+    @{ Name="Glove-100"; Base="E:\Research Work\Datasets\glove-100\glove-100_base.fvecs"; Query="E:\Research Work\Datasets\glove-100\glove-100_query.fvecs"; GT="E:\Research Work\Datasets\glove-100\glove-100_groundtruth.ivecs"; Dim=100 }
+    @{ Name="RedCaps"; Base="E:\Research Work\Datasets\redcaps\redcaps_base.fvecs"; Query="E:\Research Work\Datasets\redcaps\redcaps_query.fvecs"; GT="E:\Research Work\Datasets\redcaps\redcaps_groundtruth.ivecs"; Dim=512 }
+
 )
 
 foreach ($cfg in $Configs) {

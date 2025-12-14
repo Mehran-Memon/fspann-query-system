@@ -10,7 +10,7 @@ IFS=$'\n\t'
 # ============================
 
 # ---- required paths ----
-JarPath="/home/user/fspann-query-system/fsp-anns-parent/api/target/api-0.0.1-SNAPSHOT-jar-with-dependencies.jar"
+JarPath="/home/user/fspann-query-system/fsp-anns-parent/api/target/api-0.0.1-SNAPSHOT-shaded.jar"
 
 # ---- CONFIG FAMILIES ----
 CONFIGS=(
