@@ -6,7 +6,9 @@ import com.fspann.crypto.CryptoService;
 import com.fspann.index.paper.PartitionedIndexService;
 import com.fspann.query.service.QueryServiceImpl;
 import com.fspann.query.core.QueryTokenFactory;
+
 import org.junit.jupiter.api.*;
+
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import java.util.*;
@@ -14,12 +16,13 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
-public class QueryServiceImplStabilizationIT {
+class QueryServiceImplStabilizationIT {
 
     private CryptoService crypto;
     private KeyLifeCycleService keys;
     private PartitionedIndexService index;
     private QueryServiceImpl queryService;
+
     private SecretKey k;
 
     @BeforeEach
@@ -31,106 +34,101 @@ public class QueryServiceImplStabilizationIT {
         k = new SecretKeySpec(new byte[16], "AES");
 
         when(keys.getCurrentVersion()).thenReturn(new KeyVersion(1, k));
-        when(keys.getVersion(1)).thenReturn(new KeyVersion(1, k));
         when(keys.getVersion(anyInt())).thenReturn(new KeyVersion(1, k));
 
         SystemConfig config = mock(SystemConfig.class);
-        SystemConfig.StabilizationConfig stabilizationConfig = mock(SystemConfig.StabilizationConfig.class);
-        when(config.getStabilization()).thenReturn(stabilizationConfig);
-        when(stabilizationConfig.isEnabled()).thenReturn(true);
-        when(stabilizationConfig.getAlpha()).thenReturn(0.2);
-        when(stabilizationConfig.getMinCandidates()).thenReturn(5);
+        SystemConfig.StabilizationConfig stab = mock(SystemConfig.StabilizationConfig.class);
+        when(config.getStabilization()).thenReturn(stab);
+        when(stab.isEnabled()).thenReturn(true);
+        when(stab.getAlpha()).thenReturn(0.2);
+        when(stab.getMinCandidates()).thenReturn(5);
 
-        QueryTokenFactory tokenFactory = mock(QueryTokenFactory.class);
-
-        queryService = new QueryServiceImpl(index, crypto, keys, tokenFactory, config);
+        QueryTokenFactory tf = mock(QueryTokenFactory.class);
+        queryService = new QueryServiceImpl(index, crypto, keys, tf, config);
     }
 
     @Test
     void testStabilizationAppliesAlphaAndMinCandidates() {
         byte[] iv = new byte[12];
-        byte[] ct = new byte[16];
+        byte[] ct = new byte[32];
 
-        EncryptedPoint p1 = new EncryptedPoint("1", 0, iv, ct, 1, 2, List.of());
-        EncryptedPoint p2 = new EncryptedPoint("2", 0, iv, ct, 1, 2, List.of());
-        EncryptedPoint p3 = new EncryptedPoint("3", 0, iv, ct, 1, 2, List.of());
-        EncryptedPoint p4 = new EncryptedPoint("4", 0, iv, ct, 1, 2, List.of());
-        EncryptedPoint p5 = new EncryptedPoint("5", 0, iv, ct, 1, 2, List.of());
-        EncryptedPoint p6 = new EncryptedPoint("6", 0, iv, ct, 1, 2, List.of());
+        List<EncryptedPoint> raw = new ArrayList<>();
+        for (int i = 1; i <= 6; i++) {
+            raw.add(new EncryptedPoint(
+                    String.valueOf(i),
+                    1,
+                    iv,
+                    ct,
+                    1,
+                    2,
+                    0,
+                    List.of(),
+                    List.of()
+            ));
+        }
 
-        List<EncryptedPoint> rawCandidates = Arrays.asList(p1, p2, p3, p4, p5, p6);
+        QueryToken token = mock(QueryToken.class);
+        when(token.getVersion()).thenReturn(1);
+        when(token.getTopK()).thenReturn(100);
+        when(token.getEncryptedQuery()).thenReturn(new byte[32]);
+        when(token.getIv()).thenReturn(iv);
 
-        QueryToken queryToken = mock(QueryToken.class);
-        when(queryToken.getVersion()).thenReturn(1);
-        when(queryToken.getTopK()).thenReturn(100);
+        when(crypto.decryptQuery(any(), any(), any())).thenReturn(new double[]{0.5,0.5});
+        when(index.lookup(token)).thenReturn(raw);
 
-        byte[] encQuery = new byte[32];
-        when(queryToken.getEncryptedQuery()).thenReturn(encQuery);
-        when(queryToken.getIv()).thenReturn(iv);
+        for (EncryptedPoint p : raw)
+            when(crypto.decryptFromPoint(eq(p), isNull()))
+                    .thenReturn(new double[]{1.0,1.0});
 
-        double[] queryVector = new double[]{0.5, 0.5};
-        when(crypto.decryptQuery(encQuery, iv, k)).thenReturn(queryVector);
-
-        when(index.lookup(queryToken)).thenReturn(rawCandidates);
-
-        when(crypto.decryptFromPoint(p1, k)).thenReturn(new double[]{1.0, 1.0});
-        when(crypto.decryptFromPoint(p2, k)).thenReturn(new double[]{2.0, 2.0});
-        when(crypto.decryptFromPoint(p3, k)).thenReturn(new double[]{3.0, 3.0});
-        when(crypto.decryptFromPoint(p4, k)).thenReturn(new double[]{4.0, 4.0});
-        when(crypto.decryptFromPoint(p5, k)).thenReturn(new double[]{5.0, 5.0});
-        when(crypto.decryptFromPoint(p6, k)).thenReturn(new double[]{6.0, 6.0});
-
-        List<QueryResult> results = queryService.search(queryToken);
+        List<QueryResult> results = queryService.search(token);
 
         assertNotNull(results);
-        assertEquals(5, results.size());
+        assertEquals(5, results.size()); // minCandidates = 5
     }
 
     @Test
-    void testStabilizationNoAlphaKeepsAllCandidates() {
-        byte[] iv = new byte[12];
-        byte[] ct = new byte[16];
-
-        EncryptedPoint p1 = new EncryptedPoint("1", 0, iv, ct, 1, 2, List.of());
-        EncryptedPoint p2 = new EncryptedPoint("2", 0, iv, ct, 1, 2, List.of());
-        EncryptedPoint p3 = new EncryptedPoint("3", 0, iv, ct, 1, 2, List.of());
-        EncryptedPoint p4 = new EncryptedPoint("4", 0, iv, ct, 1, 2, List.of());
-        EncryptedPoint p5 = new EncryptedPoint("5", 0, iv, ct, 1, 2, List.of());
-        EncryptedPoint p6 = new EncryptedPoint("6", 0, iv, ct, 1, 2, List.of());
-
-        List<EncryptedPoint> rawCandidates = Arrays.asList(p1, p2, p3, p4, p5, p6);
-
-        QueryToken queryToken = mock(QueryToken.class);
-        when(queryToken.getVersion()).thenReturn(1);
-        when(queryToken.getTopK()).thenReturn(100);
-
-        byte[] encQuery = new byte[32];
-        when(queryToken.getEncryptedQuery()).thenReturn(encQuery);
-        when(queryToken.getIv()).thenReturn(iv);
-
-        double[] queryVector = new double[]{0.5, 0.5};
-        when(crypto.decryptQuery(encQuery, iv, k)).thenReturn(queryVector);
-
-        when(index.lookup(queryToken)).thenReturn(rawCandidates);
-
-        when(crypto.decryptFromPoint(p1, k)).thenReturn(new double[]{1.0, 1.0});
-        when(crypto.decryptFromPoint(p2, k)).thenReturn(new double[]{2.0, 2.0});
-        when(crypto.decryptFromPoint(p3, k)).thenReturn(new double[]{3.0, 3.0});
-        when(crypto.decryptFromPoint(p4, k)).thenReturn(new double[]{4.0, 4.0});
-        when(crypto.decryptFromPoint(p5, k)).thenReturn(new double[]{5.0, 5.0});
-        when(crypto.decryptFromPoint(p6, k)).thenReturn(new double[]{6.0, 6.0});
-
+    void testStabilizationDisabledKeepsAllCandidates() {
         SystemConfig config = mock(SystemConfig.class);
-        SystemConfig.StabilizationConfig stabilizationConfig = mock(SystemConfig.StabilizationConfig.class);
-        when(config.getStabilization()).thenReturn(stabilizationConfig);
-        when(stabilizationConfig.isEnabled()).thenReturn(false);
+        SystemConfig.StabilizationConfig stab = mock(SystemConfig.StabilizationConfig.class);
+        when(config.getStabilization()).thenReturn(stab);
+        when(stab.isEnabled()).thenReturn(false);
 
-        QueryTokenFactory tokenFactory = mock(QueryTokenFactory.class);
-        queryService = new QueryServiceImpl(index, crypto, keys, tokenFactory, config);
+        QueryTokenFactory tf = mock(QueryTokenFactory.class);
+        queryService = new QueryServiceImpl(index, crypto, keys, tf, config);
 
-        List<QueryResult> results = queryService.search(queryToken);
+        byte[] iv = new byte[12];
+        byte[] ct = new byte[32];
 
-        assertNotNull(results);
+        List<EncryptedPoint> raw = new ArrayList<>();
+        for (int i = 1; i <= 6; i++) {
+            raw.add(new EncryptedPoint(
+                    String.valueOf(i),
+                    1,
+                    iv,
+                    ct,
+                    1,
+                    2,
+                    0,
+                    List.of(),
+                    List.of()
+            ));
+        }
+
+        QueryToken token = mock(QueryToken.class);
+        when(token.getVersion()).thenReturn(1);
+        when(token.getTopK()).thenReturn(100);
+        when(token.getEncryptedQuery()).thenReturn(new byte[32]);
+        when(token.getIv()).thenReturn(iv);
+
+        when(crypto.decryptQuery(any(), any(), any())).thenReturn(new double[]{0.5,0.5});
+        when(index.lookup(token)).thenReturn(raw);
+
+        for (EncryptedPoint p : raw)
+            when(crypto.decryptFromPoint(eq(p), isNull()))
+                    .thenReturn(new double[]{1.0,1.0});
+
+        List<QueryResult> results = queryService.search(token);
+
         assertEquals(6, results.size());
     }
 }

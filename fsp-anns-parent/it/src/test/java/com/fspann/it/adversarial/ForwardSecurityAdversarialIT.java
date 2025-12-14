@@ -96,15 +96,19 @@ public class ForwardSecurityAdversarialIT {
 
     @Test
     void compromisedKeyCannotDecryptAfterRotation() {
+
         keySvc.reEncryptAll();
+
         int ok = 0;
         for (EncryptedPoint p : meta.getAllEncryptedPoints()) {
             try {
                 crypto.decryptFromPoint(p, compromisedKeyBefore);
                 ok++;
-            } catch (Exception ignore) {}
+            } catch (Exception ignored) {}
         }
-        assertEquals(0, ok);
+
+        assertEquals(0, ok, "Old key must not decrypt any re-encrypted point");
+
     }
 
     @Test
