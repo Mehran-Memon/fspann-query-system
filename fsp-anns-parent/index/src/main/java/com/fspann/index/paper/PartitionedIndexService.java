@@ -7,6 +7,7 @@ import com.fspann.crypto.AesGcmCryptoService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -129,6 +130,17 @@ public final class PartitionedIndexService implements IndexService {
         BitSet[] codes = code(vec);
 
         synchronized (S) {
+            // ===== CRITICAL FIX: Persist IMMEDIATELY before staging =====
+            try {
+                metadata.saveEncryptedPoint(pt);
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Persisted encrypted point {} to metadata", pt.getId());
+                }
+            } catch (IOException e) {
+                logger.error("Failed to persist encrypted point {}: {}", pt.getId(), e.getMessage());
+                throw new RuntimeException("Persistence failed for point " + pt.getId(), e);
+            }
+
             S.staged.add(pt);
             S.stagedCodes.add(codes);
 

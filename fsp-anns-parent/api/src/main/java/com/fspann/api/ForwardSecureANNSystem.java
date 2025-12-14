@@ -585,8 +585,11 @@ public class ForwardSecureANNSystem {
                 for (EncryptedPoint ep : batchEncrypted) {
                     metadataManager.saveEncryptedPoint(ep);
                 }
+                // Flush to ensure durability
+                metadataManager.flush();
+
                 if (verbose) {
-                    logger.debug("Persisted {} encrypted points to metadata", batchEncrypted.size());
+                    logger.debug("Persisted and flushed {} encrypted points to metadata", batchEncrypted.size());
                 }
             } catch (Exception e) {
                 logger.error("Failed to persist {} encrypted points in batch starting at {}",
@@ -2077,6 +2080,12 @@ public class ForwardSecureANNSystem {
 
         // 1) Index
         sys.indexStream(dataPath, dims.get(0));
+        try {
+            metadataManager.flush();
+            logger.info("Metadata flushed after indexing");
+        } catch (Exception e) {
+            logger.warn("Failed to flush metadata after indexing", e);
+        }
 
         // 2) Freeze index for query phase
         sys.finalizeForSearch();

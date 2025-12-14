@@ -721,6 +721,22 @@ public class RocksDBMetadataManager implements AutoCloseable {
     }
 
     /**
+     * Flush any pending writes in RocksDB to disk.
+     * RocksDB doesn't have explicit flush, but accessing DB triggers durability.
+     */
+    public void flush() {
+        try {
+            if (this.db != null && !closed) {
+                // Sync WAL to ensure durability
+                this.db.syncWal();
+                logger.debug("RocksDB WAL synced");
+            }
+        } catch (Exception e) {
+            logger.warn("RocksDB flush/syncWal failed", e);
+        }
+    }
+
+    /**
      * Returns total size of all .point files in the points base directory.
      */
     public long sizePointsDir() {

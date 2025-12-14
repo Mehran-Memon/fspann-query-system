@@ -133,15 +133,15 @@ public final class QueryServiceImpl implements QueryService {
             raw = (raw != null) ? raw : Collections.emptyList();
 
             lastCandTotal = raw.size();
-            lastCandIds = raw.stream().map(EncryptedPoint::getId).toList();
 
             if (raw.isEmpty()) {
+                lastCandKept = 0;
                 return Collections.emptyList();
             }
 
-            // 2.2 D1-style limiter (stabilization) on EncryptedPoints
             List<EncryptedPoint> limited = applyCandidateLimiter(raw);
             lastCandKept = limited.size();
+
             if (limited.isEmpty()) {
                 return Collections.emptyList();
             }
@@ -320,28 +320,18 @@ public final class QueryServiceImpl implements QueryService {
             return candidates;
         }
 
-        int raw = candidates.size();
-        double alpha = sc.getAlpha();      // e.g. 0.01–0.05
+        int uniqueCandidates = candidates.size();
         int minCand = sc.getMinCandidates();
+        double alpha = sc.getAlpha();
 
-        int alphaCap = (int) Math.ceil(alpha * raw);
-        int capped   = Math.min(alphaCap, raw);
-        int finalSize = Math.max(minCand, capped);
-
-        if (finalSize >= raw) {
-            if (stabilizationCallback != null) {
-                stabilizationCallback.accept(raw, raw);
-            }
-            return candidates;
-        }
-
-        List<EncryptedPoint> sub = candidates.subList(0, finalSize);
+        int alphaCap = (int) Math.ceil(alpha * uniqueCandidates);
+        int finalSize = Math.min(uniqueCandidates, Math.max(minCand, alphaCap));
 
         if (stabilizationCallback != null) {
-            stabilizationCallback.accept(raw, finalSize);
+            stabilizationCallback.accept(uniqueCandidates, finalSize);
         }
 
-        return sub;
+        return candidates.subList(0, finalSize);
     }
 
     // =====================================================================
@@ -357,27 +347,25 @@ public final class QueryServiceImpl implements QueryService {
     ) {
         List<QueryScored> out = new ArrayList<>(points.size());
 
+        lastCandDecrypted = 0;
+
         for (EncryptedPoint ep : points) {
             if (ep == null) continue;
+
+            // track touched for reencryption
             touchedThisSession.add(ep.getId());
 
             try {
-                // ===== CRITICAL FIX: Use correct key version per point =====
-                // cryptoService.decryptFromPoint() now uses ep.getKeyVersion()
-                // to retrieve the correct key, not the kv parameter
-                double[] v = cryptoService.decryptFromPoint(ep, null);  // null = unused parameter
+                // MUST decrypt using point-bound key version
+                double[] v = cryptoService.decryptFromPoint(ep, null);
 
-                if (!isValid(v)) {
-                    logger.debug("Decrypted vector {} is invalid (NaN/Inf)", ep.getId());
-                    continue;
-                }
+                if (!isValid(v)) continue;
 
                 lastCandDecrypted++;
                 out.add(new QueryScored(ep.getId(), l2(qVec, v)));
 
             } catch (Exception e) {
-                logger.warn("Failed to decrypt point {}: {}", ep.getId(), e.getMessage());
-                // Skip this point and continue with next
+                // stale key or AEAD failure → skip
                 continue;
             }
         }

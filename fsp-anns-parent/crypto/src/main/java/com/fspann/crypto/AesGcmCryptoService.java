@@ -116,70 +116,45 @@ public class AesGcmCryptoService implements CryptoService {
      * - Key v1 is retrieved from keyService based on version in point
      */
     @Override
-    public double[] decryptFromPoint(EncryptedPoint encrypted, javax.crypto.SecretKey unusedKey) {
+    public double[] decryptFromPoint(EncryptedPoint encrypted, SecretKey providedKey) {
+
         if (encrypted == null) {
             throw new IllegalArgumentException("encrypted cannot be null");
         }
 
         try {
-            String id = encrypted.getId();
-            int version = encrypted.getVersion();
-            int keyVersion = encrypted.getKeyVersion();  // ← CRITICAL: Use point's key version
-            int dim = encrypted.getDimension();
-            byte[] iv = encrypted.getIv();
-            byte[] ciphertext = encrypted.getCiphertext();
-            byte[] aad = encrypted.getAAD();  // ← Use AAD from point
+            final SecretKey keyToUse;
 
-            // ===== CRITICAL FIX #1: Get the CORRECT key version =====
-            SecretKey key;
-            try {
-                // Try to get the specific key version used for encryption
-                KeyVersion kv = keyService.getVersion(keyVersion);
-                key = kv.getKey();
-            } catch (Exception e) {
-                log.warn("Key version {} not available for point {}, trying current key",
-                        keyVersion, id);
-                // Fallback to current key (may fail if key was rotated)
-                KeyVersion currentKv = keyService.getCurrentVersion();
-                key = currentKv.getKey();
+            // ===== GAME-BASED FS RULE =====
+            // If adversary supplies a key → use ONLY that key
+            // No fallback, no healing
+            if (providedKey != null) {
+                keyToUse = providedKey;
+            } else {
+                int kv = encrypted.getKeyVersion();
+                keyToUse = keyService.getVersion(kv).getKey();
             }
 
-            if (key == null) {
-                throw new IllegalArgumentException(
-                        "No key available for decryption of point " + id +
-                                " (encrypted with key v" + keyVersion + ")"
-                );
-            }
-
-            // ===== CRITICAL FIX #2: Decrypt with CORRECT key =====
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-            GCMParameterSpec spec = new GCMParameterSpec(128, iv);  // 128-bit tag
-            cipher.init(Cipher.DECRYPT_MODE, key, spec);
+            GCMParameterSpec spec =
+                    new GCMParameterSpec(128, encrypted.getIv());
 
-            // Update AAD if available
+            cipher.init(Cipher.DECRYPT_MODE, keyToUse, spec);
+
+            byte[] aad = encrypted.getAAD();
             if (aad != null && aad.length > 0) {
                 cipher.updateAAD(aad);
             }
 
-            // Decrypt
-            byte[] plainBytes = cipher.doFinal(ciphertext);
+            byte[] plain = cipher.doFinal(encrypted.getCiphertext());
+            return deserializeVector(plain);
 
-            // Deserialize
-            return deserializeVector(plainBytes);
-
-        } catch (javax.crypto.AEADBadTagException e) {
-            log.error("AEADBadTagException for point {}: Authentication tag mismatch. " +
-                            "This likely means the wrong key was used for decryption. " +
-                            "Expected key v{}, actual: {}",
-                    encrypted.getId(), encrypted.getKeyVersion(), e.getMessage());
+        } catch (Throwable t) {
+            // Crypto layer must NEVER leak IllegalArgumentException
+            // Always fail hard as RuntimeException
             throw new RuntimeException(
-                    "Decryption failed: Tag mismatch for point " + encrypted.getId() +
-                            " (key v" + encrypted.getKeyVersion() + ")",
-                    e
+                    "Decryption failed for point " + encrypted.getId(), t
             );
-        } catch (Exception e) {
-            log.error("Decryption failed for point {}", encrypted.getId(), e);
-            throw new RuntimeException("Decryption failed for point " + encrypted.getId(), e);
         }
     }
 
