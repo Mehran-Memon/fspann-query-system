@@ -179,6 +179,8 @@ public final class QueryServiceImpl implements QueryService {
             long clientEnd = System.nanoTime();
             lastClientNs = Math.max(0L, clientEnd - clientStart);
 
+            lastCandIds = new ArrayList<>(touchedThisSession);
+
             // update reencryption tracker once per query
             if (reencTracker != null && !touchedThisSession.isEmpty()) {
                 reencTracker.record(touchedThisSession);
