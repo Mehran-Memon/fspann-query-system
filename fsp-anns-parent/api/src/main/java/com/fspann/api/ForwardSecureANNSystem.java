@@ -1283,13 +1283,13 @@ public class ForwardSecureANNSystem {
 
     // Per-query hook: accumulate touched IDs; optionally do "immediate" re-encryption if requested.
     private ReencOutcome maybeReencryptTouched(String label, QueryServiceImpl qs) {
-        boolean live = "live".equalsIgnoreCase(System.getProperty("reenc.mode", "end"));
+        boolean immediate = "immediate".equalsIgnoreCase(System.getProperty("reenc.mode", "end"));
 
         int touchedUnique = reencTracker.uniqueCount();
         ReencReport rep = ReencReport.empty();
 
-        // Live mode = do not re-encrypt here
-        if (live && !reencRan.get()
+        // Immediate mode = do not re-encrypt here
+        if (immediate && !reencRan.get()
                 && touchedUnique >= Integer.getInteger("reenc.minTouched", 10_000)) {
 
             logger.info("[{}] Live-mode selective re-encryption threshold reached ({} touched).",
@@ -1347,6 +1347,12 @@ public class ForwardSecureANNSystem {
                     new ReencryptReport(0, 0, 0L, 0L, 0L)
             );
             return;
+        }
+
+        if (uniqueCount == 0 && totalQueryTimeNs > 0) {
+            throw new IllegalStateException(
+                    "Queries executed but no candidates tracked for reencryption"
+            );
         }
 
         if (uniqueCount == 0) {

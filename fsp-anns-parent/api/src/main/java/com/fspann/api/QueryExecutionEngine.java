@@ -119,6 +119,10 @@ public final class QueryExecutionEngine {
              * -------------------------------------------------------------- */
             long clientStart = System.nanoTime();
             List<QueryResult> ret = qs.search(baseTok);
+            Set<String> touched = qs.getTouchedIds();
+            if (touched != null && !touched.isEmpty()) {
+                sys.accumulateTouchedIds(touched);
+            }
             long clientEnd = System.nanoTime();
 
             double serverMs = sys.boundedServerMs(qs, clientStart, clientEnd);
@@ -131,8 +135,7 @@ public final class QueryExecutionEngine {
             int candDec = qs.getLastCandDecrypted();
             int returned = qs.getLastReturned();
 
-            sys.addQueryTime(Math.max(0L,
-                    (clientEnd - clientStart) + qs.getLastQueryDurationNs()));
+            sys.addQueryTime(qs.getLastQueryDurationNs());
 
             /* --------------------------------------------------------------
              * 3) Selective re-encryption
@@ -141,8 +144,8 @@ public final class QueryExecutionEngine {
                     sys.doReencrypt("Q" + qIndex, qs);
 
             int touchedCount = Math.max(0, ro.cumulativeUnique);
-            int reencCount   = ro.rep.getReencryptedCount();
-            long reencMs     = ro.rep.getTimeMs();
+            int reencCount   = -1;
+            long reencMs     = -1;
             long reencDelta  = ro.rep.getBytesDelta();
             long reencAfter  = ro.rep.getBytesAfter();
 
@@ -156,10 +159,6 @@ public final class QueryExecutionEngine {
             int flushed = sys.totalFlushed();
             int flushThreshold = sys.flushThreshold();
 
-            Set<String> touched = qs.getTouchedIds();
-            if (touched != null && !touched.isEmpty()) {
-                sys.accumulateTouchedIds(touched);
-            }
 
             /* --------------------------------------------------------------
              * 5) Per-K evaluation loop

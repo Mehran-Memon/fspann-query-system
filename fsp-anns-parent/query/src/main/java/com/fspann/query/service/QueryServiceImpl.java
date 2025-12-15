@@ -178,7 +178,6 @@ public final class QueryServiceImpl implements QueryService {
 
             long clientEnd = System.nanoTime();
             lastClientNs = Math.max(0L, clientEnd - clientStart);
-
             lastCandIds = new ArrayList<>(touchedThisSession);
 
             // update reencryption tracker once per query
@@ -359,7 +358,8 @@ public final class QueryServiceImpl implements QueryService {
 
             try {
                 // MUST decrypt using point-bound key version
-                double[] v = cryptoService.decryptFromPoint(ep, null);
+                KeyVersion kvp = keyService.getVersion(ep.getKeyVersion());
+                double[] v = cryptoService.decryptFromPoint(ep, kvp.getKey());
 
                 if (!isValid(v)) continue;
 
