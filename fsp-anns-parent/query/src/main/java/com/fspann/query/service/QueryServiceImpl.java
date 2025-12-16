@@ -173,123 +173,23 @@ public final class QueryServiceImpl implements QueryService {
             return out;
 
         } finally {
-            long serverEnd = System.nanoTime();
-            lastServerNs = Math.max(0L, serverEnd - serverStart);
+        long serverEnd = System.nanoTime();
+        lastServerNs = Math.max(0L, serverEnd - serverStart);
 
-            long clientEnd = System.nanoTime();
-            lastClientNs = Math.max(0L, clientEnd - clientStart);
-            lastCandIds = new ArrayList<>(touchedThisSession);
+        long clientEnd = System.nanoTime();
+        long totalNs = Math.max(0L, clientEnd - clientStart);
 
-            // update reencryption tracker once per query
-            if (reencTracker != null && !touchedThisSession.isEmpty()) {
-                reencTracker.record(touchedThisSession);
-            }
+        // client-only = total - server
+        long clientOnlyNs = Math.max(0L, totalNs - lastServerNs);
+        lastClientNs = clientOnlyNs;
+
+        lastCandIds = new ArrayList<>(touchedThisSession);
+
+        if (reencTracker != null && !touchedThisSession.isEmpty()) {
+            reencTracker.record(touchedThisSession);
         }
     }
-
-    // =====================================================================
-    // TOP-K VARIANTS (1,5,10,20,40,60,80,100)
-    // =====================================================================
-
-    @Override
-    public List<QueryEvaluationResult> searchWithTopKVariants(
-            QueryToken baseToken,
-            int queryIndex,
-            GroundtruthManager gt
-    ) {
-        Objects.requireNonNull(baseToken, "baseToken");
-
-        List<Integer> variants = List.of(1, 5, 10, 20, 40, 60, 80, 100);
-
-        // Single search run with max-K token
-        List<QueryResult> base = nn(search(baseToken));
-
-        // Per Peng:
-        // serverMs = server-only
-        // clientMs = end-to-end
-        // runMs    = clientMs (no double counting)
-        long serverMs  = Math.round(lastServerNs  / 1e6);
-        long clientMs  = Math.round(lastClientNs  / 1e6);
-        long runMs     = clientMs;
-        long decryptMs = Math.round(lastDecryptNs / 1e6);
-
-        int candTotal     = lastCandTotal;
-        int candKept      = lastCandKept;
-        int candDecrypted = lastCandDecrypted;
-        int candReturned  = lastReturned;
-
-        int vectorDim  = baseToken.getDimension();
-        int tokenBytes = prefixTokenBytes(baseToken);
-        int touchedCnt = touchedThisSession.size();
-
-        List<QueryEvaluationResult> out = new ArrayList<>(variants.size());
-
-        for (int k : variants) {
-            int upto = Math.min(k, base.size());
-            List<QueryResult> prefix = base.subList(0, upto);
-
-            double precision = computePrecision(prefix, gt, queryIndex, k);
-
-            // Peng: ratio@K = # refined / K
-            double ratio = (k > 0)
-                    ? (double) candDecrypted / (double) k
-                    : 0.0;
-
-            out.add(new QueryEvaluationResult(
-                    k,                       // topKRequested
-                    upto,                    // retrieved
-                    ratio,                   // ratio
-                    precision,               // precision
-                    serverMs,                // serverMs
-                    clientMs,                // clientMs
-                    runMs,                   // runMs
-                    decryptMs,               // decryptMs
-                    0L,                      // insertTimeMs (N/A here)
-                    candTotal,               // candTotal
-                    candKept,                // candKept
-                    candDecrypted,           // candDecrypted
-                    candReturned,            // candReturned
-                    tokenBytes,              // tokenSizeBytes
-                    vectorDim,               // vectorDim
-                    0,                       // totalFlushedPoints
-                    0,                       // flushThreshold
-                    touchedCnt,              // touchedCount
-                    0,                       // reencryptedCount
-                    0L,                      // reencTimeMs
-                    0L,                      // reencBytesDelta
-                    0L,                      // reencBytesAfter
-                    "l2-refine",             // ratioDenomSource
-                    k,                       // tokenK
-                    k,                       // tokenKBase
-                    queryIndex,              // qIndexZeroBased
-                    "full"                   // candMetricsMode
-            ));
-        }
-
-        return out;
-    }
-
-    private double computePrecision(List<QueryResult> prefix,
-                                    GroundtruthManager gt,
-                                    int qIndex,
-                                    int k) {
-
-        if (gt == null || k <= 0 || prefix.isEmpty()) return 0.0;
-
-        int[] g = gt.getGroundtruth(qIndex, k);
-        if (g == null || g.length == 0) return 0.0;
-
-        Set<String> truth = Arrays.stream(g)
-                .mapToObj(String::valueOf)
-                .collect(Collectors.toSet());
-
-        int hits = 0;
-        for (QueryResult qr : prefix) {
-            if (truth.contains(qr.getId())) hits++;
-        }
-
-        return hits / (double) k;
-    }
+}
 
     // =====================================================================
     // CANDIDATE LIMITER (D1-like) ON ENCRYPTED POINTS
@@ -437,21 +337,10 @@ public final class QueryServiceImpl implements QueryService {
     public int getLastCandKeptVersion() {
         return lastCandKept;  // Alias for backward compatibility
     }
+    public Set<String> getLastCandidateIds() {
+        return new HashSet<>(lastCandIds);
+    }
     public int  getLastCandDecrypted() { return lastCandDecrypted; }
     public int  getLastReturned() { return lastReturned; }
 
-    public double getLastRatio() {
-        return (lastReturned > 0) ? (double) lastCandDecrypted / lastReturned : 0.0;
-    }
-
-    public Set<String> getTouchedIds() {
-        return new HashSet<>(touchedThisSession);
-    }
-
-    @Override
-    public List<String> getLastCandidateIds() {
-        return (lastCandIds == null)
-                ? Collections.emptyList()
-                : Collections.unmodifiableList(lastCandIds);
-    }
 }

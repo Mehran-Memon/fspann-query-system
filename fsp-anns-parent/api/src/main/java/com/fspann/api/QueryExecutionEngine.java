@@ -12,8 +12,12 @@ import java.util.*;
 
 /**
  * Unified evaluation engine.
- * Uses ONLY the public façade methods exposed by ForwardSecureANNSystem.
- * No private-member access.
+ *
+ * Guarantees:
+ *  - Peng-consistent timing split (server / client / ART)
+ *  - ratio@K = refined / K
+ *  - selective re-encryption AFTER search
+ *  - profiler emits exactly one row per query (kMax)
  */
 public final class QueryExecutionEngine {
 
@@ -21,29 +25,24 @@ public final class QueryExecutionEngine {
     private final Profiler profiler;
     private final int[] K_VARIANTS;
 
-    public QueryExecutionEngine(ForwardSecureANNSystem sys,
-                                Profiler profiler,
-                                int[] kVariants) {
+    public QueryExecutionEngine(
+            ForwardSecureANNSystem sys,
+            Profiler profiler,
+            int[] kVariants
+    ) {
         this.sys = Objects.requireNonNull(sys);
         this.profiler = profiler;
         this.K_VARIANTS = Objects.requireNonNull(kVariants);
     }
 
-    /* ====================================================================== */
-    /*                           SIMPLE QUERY                                 */
-    /* ====================================================================== */
+    /* ======================================================================
+     * SIMPLE QUERY (no GT, no ratios)
+     * ====================================================================== */
 
-    /**
-     * Simple query:
-     *   – no GT
-     *   – no K variants
-     *   – no ratios
-     * Uses façade API only.
-     */
     public List<QueryResult> evalSimple(double[] q, int topK, int dim, boolean cloak) {
         Objects.requireNonNull(q);
 
-        long clientStart = System.nanoTime();
+        final long totalStart = System.nanoTime();
 
         QueryToken token = cloak
                 ? sys.cloakQuery(q, dim, topK)
@@ -54,173 +53,151 @@ public final class QueryExecutionEngine {
         final String cacheKey = sys.getCacheKeyOf(token);
         Map<String, List<QueryResult>> cache = sys.getQueryCache();
 
-        // Cache hit
         List<QueryResult> cached = cache.get(cacheKey);
         if (cached != null) {
-            long end = System.nanoTime();
-            sys.addQueryTime(end - clientStart);
+            sys.addQueryTime(System.nanoTime() - totalStart);
             return cached;
         }
 
-        // Miss → real search
         QueryServiceImpl qs = sys.getQueryServiceImpl();
         List<QueryResult> ret = qs.search(token);
-        long clientEnd = System.nanoTime();
+
+        long serverNs = qs.getLastQueryDurationNs();
+        long totalNs  = System.nanoTime() - totalStart;
+        long clientNs = Math.max(0L, totalNs - serverNs);
 
         cache.put(cacheKey, ret);
-        sys.addQueryTime((clientEnd - clientStart) + qs.getLastQueryDurationNs());
+        sys.addQueryTime(serverNs + clientNs);
 
         return ret;
     }
 
-    /* ====================================================================== */
-    /*                   FULL BATCH EVALUATION (K-variants)                    */
-    /* ====================================================================== */
+    /* ======================================================================
+     * FULL BATCH EVALUATION (Peng-style)
+     * ====================================================================== */
 
-    /**
-     * Full evaluation with:
-     *   – per-K ratio@K (SANNP)
-     *   – per-K precision@K (PP-ANN)
-     *   – selective re-encryption
-     *   – unified row emission to profiler
-     */
-    public void evalBatch(List<double[]> queries,
-                          int dim,
-                          GroundtruthManager gt,
-                          Path outDir,
-                          boolean gtTrusted) {
-
+    public void evalBatch(
+            List<double[]> queries,
+            int dim,
+            GroundtruthManager gt,
+            Path outDir,
+            boolean gtTrusted
+    ) {
         if (queries == null || queries.isEmpty()) return;
 
         QueryServiceImpl qs = sys.getQueryServiceImpl();
+        int kMax = Arrays.stream(K_VARIANTS).max().orElse(100);
 
         for (int qIndex = 0; qIndex < queries.size(); qIndex++) {
 
             double[] q = queries.get(qIndex);
 
-            // --------------------------------------------------------------
-            // 0) K-adaptive probe-only widening (for ablation)
-            // --------------------------------------------------------------
+            /* --------------------------------------------------------------
+             * 0) Optional K-adaptive probe-only widening
+             * -------------------------------------------------------------- */
             if (sys.kAdaptiveProbeEnabled()) {
                 sys.runKAdaptiveProbeOnly(qIndex, q, dim, qs);
-                sys.resetProbeShards();                  // << EXACT location
+                sys.resetProbeShards();
             }
 
             /* --------------------------------------------------------------
-             * 1) Token at maximum K
-             * -------------------------------------------------------------- */
-            sys.setStabilizationStats(0,0);   // reset for new query
-            int baseK = sys.baseKForToken();
-            QueryToken baseTok = sys.getFactoryForDim(dim).create(q, baseK);
-
-
-            /* --------------------------------------------------------------
-             * 2) Run search
-             * -------------------------------------------------------------- */
-            long clientStart = System.nanoTime();
-            List<QueryResult> ret = qs.search(baseTok);
-            Set<String> touched = qs.getTouchedIds();
-            if (touched != null && !touched.isEmpty()) {
-                sys.accumulateTouchedIds(touched);
-            }
-            long clientEnd = System.nanoTime();
-
-            double serverMs = sys.boundedServerMs(qs, clientStart, clientEnd);
-            double clientMs = (clientEnd - clientStart) / 1_000_000.0;
-            double runMs = serverMs + clientMs;
-            double decryptMs = qs.getLastDecryptNs() / 1_000_000.0;
-
-            int candTotal = qs.getLastCandTotal();
-            int candKept = qs.getLastCandKeptVersion();
-            int candDec = qs.getLastCandDecrypted();
-            int returned = qs.getLastReturned();
-
-            sys.addQueryTime(qs.getLastQueryDurationNs());
-
-            /* --------------------------------------------------------------
-             * 3) Selective re-encryption
-             * -------------------------------------------------------------- */
-            ForwardSecureANNSystem.ReencOutcome ro =
-                    sys.doReencrypt("Q" + qIndex, qs);
-
-            int touchedCount = Math.max(0, ro.cumulativeUnique);
-            int reencCount   = -1;
-            long reencMs     = -1;
-            long reencDelta  = ro.rep.getBytesDelta();
-            long reencAfter  = ro.rep.getBytesAfter();
-
-            /* --------------------------------------------------------------
-             * 4) Additional metrics
-             * -------------------------------------------------------------- */
-            int tokenSizeBytes = baseTok.estimateSerializedSizeBytes();
-            int vectorDim = dim;
-
-            long insertMs = sys.lastInsertMs();
-            int flushed = sys.totalFlushed();
-            int flushThreshold = sys.flushThreshold();
-
-
-            /* --------------------------------------------------------------
-             * 5) Per-K evaluation loop
+             * 1) Per-K evaluation loop
              * -------------------------------------------------------------- */
             List<QueryEvaluationResult> perK = new ArrayList<>(K_VARIANTS.length);
 
+            boolean firstRun = true;
+
+            int candTotal = 0;
+            int candKept = 0;
+            int candDec = 0;
+            int returned = 0;
+
+            int touchedCount = 0;
+            int reencCount = -1;
+            long reencMs = -1;
+            long reencDelta = 0;
+            long reencAfter = 0;
+
             for (int k : K_VARIANTS) {
 
-                int upto = Math.min(k, ret.size());
-                List<QueryResult> prefix = ret.subList(0, upto);
+                final long start = System.nanoTime();
 
-                // ratio@K (SANNP)
-                double ratio =
-                        sys.computeRatio(q, prefix, k, qIndex, gt, gtTrusted);
+                QueryToken tokK = sys.getFactoryForDim(dim).create(q, k);
+                List<QueryResult> retK = qs.search(tokK);
 
-                // precision@K (PP-ANN)
+                final long end = System.nanoTime();
+
+                long serverNs = qs.getLastQueryDurationNs();
+                long totalNs  = end - start;
+                long clientNs = Math.max(0L, totalNs - serverNs);
+
+                // capture once (kMax semantics)
+                if (firstRun) {
+                    candTotal = qs.getLastCandTotal();
+                    candKept  = qs.getLastCandKeptVersion();
+                    candDec   = qs.getLastCandDecrypted();
+                    returned = qs.getLastReturned();
+
+                    // selective re-encryption AFTER first real search
+                    ForwardSecureANNSystem.ReencOutcome ro =
+                            sys.doReencrypt("Q" + qIndex, qs);
+
+                    touchedCount = Math.max(0, ro.cumulativeUnique);
+                    reencDelta  = ro.rep.getBytesDelta();
+                    reencAfter  = ro.rep.getBytesAfter();
+
+                    // ART accumulation once per query
+                    sys.addQueryTime(serverNs + clientNs);
+
+                    firstRun = false;
+                }
+
+                int upto = Math.min(k, retK.size());
+                List<QueryResult> prefix = retK.subList(0, upto);
+
+                double ratio = (k > 0)
+                        ? (candDec / (double) k)
+                        : 0.0;
+
                 int[] truth = gt.getGroundtruth(qIndex, k);
                 double precision = sys.computePrecision(prefix, truth);
 
                 perK.add(new QueryEvaluationResult(
-                        /* topKRequested     */ k,
-                        /* retrieved         */ upto,
-                        /* ratio             */ ratio,
-                        /* precision         */ precision,
-
-                        /* timeMs(server)    */ Math.round(serverMs),
-                        /* clientTimeMs      */ Math.round(clientMs),
-                        /* runTimeMs         */ Math.round(runMs),
-                        /* decryptTimeMs     */ Math.round(decryptMs),
-                        /* insertTimeMs      */ insertMs,
-
-                        /* candTotal         */ candTotal,
-                        /* candKept          */ candKept,
-                        /* candDecrypted     */ candDec,
-                        /* candReturned      */ returned,
-
-                        /* tokenBytes        */ tokenSizeBytes,
-                        /* vectorDim         */ vectorDim,
-                        /* totalFlushed      */ flushed,
-                        /* flushThreshold    */ flushThreshold,
-
-                        /* touchedCount      */ touchedCount,
-                        /* reencCount        */ reencCount,
-                        /* reencTimeMs       */ reencMs,
-                        /* reencBytesDelta   */ reencDelta,
-                        /* reencBytesAfter   */ reencAfter,
-
-                        /* ratioDenomSource  */ sys.ratioDenomLabelPublic(gtTrusted),
-
-                        /* tokenK            */ baseK,
-                        /* tokenKBase        */ baseK,
-                        /* qIndexZeroBased   */ qIndex,
-                        /* candMetricsMode   */ "full"
+                        k,
+                        upto,
+                        ratio,
+                        precision,
+                        Math.round(serverNs / 1e6),
+                        Math.round(clientNs / 1e6),
+                        Math.round((serverNs + clientNs) / 1e6),
+                        Math.round(qs.getLastDecryptNs() / 1e6),
+                        sys.lastInsertMs(),
+                        candTotal,
+                        candKept,
+                        candDec,
+                        returned,
+                        tokK.estimateSerializedSizeBytes(),
+                        dim,
+                        sys.totalFlushed(),
+                        sys.flushThreshold(),
+                        touchedCount,
+                        reencCount,
+                        reencMs,
+                        reencDelta,
+                        reencAfter,
+                        "refine/K",
+                        k,
+                        kMax,
+                        qIndex,
+                        "full"
                 ));
             }
 
             /* --------------------------------------------------------------
-             * 6) PROFILER EMISSION (ONE ROW PER QUERY)
+             * 2) PROFILER EMISSION (kMax only)
              * -------------------------------------------------------------- */
-            if (profiler != null) {
+            if (profiler != null && !perK.isEmpty()) {
 
-                int kMax = Arrays.stream(K_VARIANTS).max().orElse(100);
                 QueryEvaluationResult maxRow =
                         perK.stream()
                                 .filter(r -> r.getTopKRequested() == kMax)
@@ -228,7 +205,7 @@ public final class QueryExecutionEngine {
                                 .orElse(perK.get(perK.size() - 1));
 
                 profiler.recordQueryRow(
-                        "Q"+qIndex,
+                        "Q" + qIndex,
                         maxRow.getTimeMs(),
                         maxRow.getClientTimeMs(),
                         maxRow.getRunTimeMs(),
@@ -243,14 +220,14 @@ public final class QueryExecutionEngine {
                         candDec,
                         returned,
 
-                        tokenSizeBytes,
-                        vectorDim,
-                        baseK,
-                        baseK,
+                        maxRow.getTokenSizeBytes(),
+                        dim,
+                        kMax,
+                        kMax,
                         qIndex,
 
-                        flushed,
-                        flushThreshold,
+                        sys.totalFlushed(),
+                        sys.flushThreshold(),
 
                         touchedCount,
                         reencCount,
@@ -258,7 +235,7 @@ public final class QueryExecutionEngine {
                         reencDelta,
                         reencAfter,
 
-                        sys.ratioDenomLabelPublic(gtTrusted),
+                        "refine/K",
                         "full",
 
                         sys.getLastStabilizedRaw(),

@@ -418,15 +418,13 @@ public class ForwardSecureANNSystem {
 
         // ==== QueryService ====
         this.queryService = new QueryServiceImpl(indexService, cryptoService, keyService, qtf, cfg);
-        this.engine = new QueryExecutionEngine(this, profiler, K_VARIANTS);
         // ==== touch accounting / selective re-encryption ====
-
         this.reencTracker = new ReencryptionTracker();
-
         if (this.queryService instanceof QueryServiceImpl qs) {
             qs.setReencryptionTracker(reencTracker);
             qs.setStabilizationCallback(this::setStabilizationStats);
         }
+        this.engine = new QueryExecutionEngine(this, profiler, K_VARIANTS);
 
         this.reencCoordinator = new SelectiveReencCoordinator(
                 indexService,
@@ -1043,13 +1041,14 @@ public class ForwardSecureANNSystem {
                     try {
                         double serverMs = Double.parseDouble(cols[1]);
                         double clientMs = Double.parseDouble(cols[2]);
-                        double ratio    = Double.parseDouble(cols[6]);
+                        double ratio = Double.parseDouble(cols[6]);
 
-                        sumArt   += (serverMs + clientMs);
+                        sumArt += (serverMs + clientMs);
                         sumRatio += ratio;
                         count++;
 
-                    } catch (Exception ignore) {}
+                    } catch (Exception ignore) {
+                    }
                 }
 
                 if (count > 0) {
@@ -1072,10 +1071,14 @@ public class ForwardSecureANNSystem {
                 byte[] bytes = Files.readAllBytes(cfgPath);
                 cfgHash = toHex(MessageDigest.getInstance("SHA-256").digest(bytes));
             }
-        } catch (Exception ignore) {}
+        } catch (Exception ignore) {
+        }
 
         int keyVer = -1;
-        try { keyVer = keyService.getCurrentVersion().getVersion(); } catch (Exception ignore) {}
+        try {
+            keyVer = keyService.getCurrentVersion().getVersion();
+        } catch (Exception ignore) {
+        }
 
         Files.writeString(
                 outDir.resolve("metrics_summary.txt"),
@@ -1092,7 +1095,8 @@ public class ForwardSecureANNSystem {
 
         try {
             topKProfiler.export(outDir.resolve("topk_evaluation.csv").toString());
-        } catch (Exception ignore) {}
+        } catch (Exception ignore) {
+        }
 
 
         /* ====================================================================== */
@@ -1135,40 +1139,9 @@ public class ForwardSecureANNSystem {
                     dataset = this.resultsDir.getFileName().toString();
                 }
             }
-
-            // -----------------------
-            // PROFILE NAME (fallback)
-            // -----------------------
-            String profile;
-            String cliProfile = System.getProperty("cli.profile", "");
-            if (!cliProfile.isBlank()) {
-                profile = cliProfile;
-            } else {
-                profile = "ideal-system";
-            }
-
-            int m         = config.getPaper().m;
-            int lambda    = config.getPaper().lambda;
-            int divisions = config.getPaper().divisions;
-            long totalIndexMs = Math.round(totalIndexingTimeNs / 1_000_000.0);
-
-            Path summaryCsv = outDir.resolve("summary.csv");
-
-            EvaluationSummaryPrinter.printAndWriteCsv(
-                    dataset,
-                    profile,
-                    m,
-                    lambda,
-                    divisions,
-                    totalIndexMs,
-                    agg,
-                    summaryCsv
-            );
-
         } catch (Exception e) {
-            logger.warn("EvaluationSummaryPrinter failed", e);
+            throw new RuntimeException(e);
         }
-
         /* ====================================================================== */
         /*                      7. EvaluationSummaryPrinter CSVs                  */
         /* ====================================================================== */
@@ -1185,9 +1158,13 @@ public class ForwardSecureANNSystem {
                 dataset = this.resultsDir.getFileName().toString();
             }
 
-            // Option-C profile name
-            String profile = "ideal-system";
-
+            String profile;
+            String cliProfile = System.getProperty("cli.profile", "");
+            if (!cliProfile.isBlank()) {
+                profile = cliProfile;
+            } else {
+                profile = "ideal-system";
+            }
             int m = config.getPaper().m;
             int lambda = config.getPaper().lambda;
             int divisions = config.getPaper().divisions;
@@ -1780,9 +1757,10 @@ public class ForwardSecureANNSystem {
 
     /** Façade: global query-time accumulator */
     public void addQueryTime(long ns) {
-        totalQueryTimeNs += Math.max(0L, ns);
+        if (!queryOnlyMode) {
+            totalQueryTimeNs += Math.max(0L, ns);
+        }
     }
-
     /** Façade: compute ratio@K */
     public double computeRatio(double[] q,
                                List<QueryResult> prefix,
@@ -1814,8 +1792,13 @@ public class ForwardSecureANNSystem {
 
     /** Façade: expose selective re-encryption hook */
     public ReencOutcome doReencrypt(String label, QueryServiceImpl qs) {
+        Set<String> ids = qs.getLastCandidateIds(); // must exist
+        if (ids != null && !ids.isEmpty()) {
+            touchedGlobal.addAll(ids);
+        }
         return maybeReencryptTouched(label, qs);
     }
+
 
     /** Façade: max-K across auditK and K-variants */
     public int baseKForToken() {
