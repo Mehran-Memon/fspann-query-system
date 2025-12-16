@@ -22,7 +22,6 @@ class QueryServiceImplStabilizationIT {
     private KeyLifeCycleService keys;
     private PartitionedIndexService index;
     private QueryServiceImpl queryService;
-
     private SecretKey k;
 
     @BeforeEach
@@ -43,8 +42,13 @@ class QueryServiceImplStabilizationIT {
         when(stab.getAlpha()).thenReturn(0.2);
         when(stab.getMinCandidates()).thenReturn(5);
 
-        QueryTokenFactory tf = mock(QueryTokenFactory.class);
-        queryService = new QueryServiceImpl(index, crypto, keys, tf, config);
+        queryService = new QueryServiceImpl(
+                index,
+                crypto,
+                keys,
+                mock(QueryTokenFactory.class),
+                config
+        );
     }
 
     @Test
@@ -73,17 +77,18 @@ class QueryServiceImplStabilizationIT {
         when(token.getEncryptedQuery()).thenReturn(new byte[32]);
         when(token.getIv()).thenReturn(iv);
 
-        when(crypto.decryptQuery(any(), any(), any())).thenReturn(new double[]{0.5,0.5});
+        when(crypto.decryptQuery(any(), any(), any()))
+                .thenReturn(new double[]{0.5, 0.5});
         when(index.lookup(token)).thenReturn(raw);
 
-        for (EncryptedPoint p : raw)
-            when(crypto.decryptFromPoint(eq(p), isNull()))
-                    .thenReturn(new double[]{1.0,1.0});
+        for (EncryptedPoint p : raw) {
+            when(crypto.decryptFromPoint(eq(p), any(SecretKey.class)))
+                    .thenReturn(new double[]{1.0, 1.0});
+        }
 
         List<QueryResult> results = queryService.search(token);
 
-        assertNotNull(results);
-        assertEquals(5, results.size()); // minCandidates = 5
+        assertEquals(5, results.size()); // minCandidates enforced
     }
 
     @Test
@@ -93,8 +98,13 @@ class QueryServiceImplStabilizationIT {
         when(config.getStabilization()).thenReturn(stab);
         when(stab.isEnabled()).thenReturn(false);
 
-        QueryTokenFactory tf = mock(QueryTokenFactory.class);
-        queryService = new QueryServiceImpl(index, crypto, keys, tf, config);
+        queryService = new QueryServiceImpl(
+                index,
+                crypto,
+                keys,
+                mock(QueryTokenFactory.class),
+                config
+        );
 
         byte[] iv = new byte[12];
         byte[] ct = new byte[32];
@@ -120,12 +130,14 @@ class QueryServiceImplStabilizationIT {
         when(token.getEncryptedQuery()).thenReturn(new byte[32]);
         when(token.getIv()).thenReturn(iv);
 
-        when(crypto.decryptQuery(any(), any(), any())).thenReturn(new double[]{0.5,0.5});
+        when(crypto.decryptQuery(any(), any(), any()))
+                .thenReturn(new double[]{0.5, 0.5});
         when(index.lookup(token)).thenReturn(raw);
 
-        for (EncryptedPoint p : raw)
-            when(crypto.decryptFromPoint(eq(p), isNull()))
-                    .thenReturn(new double[]{1.0,1.0});
+        for (EncryptedPoint p : raw) {
+            when(crypto.decryptFromPoint(eq(p), any(SecretKey.class)))
+                    .thenReturn(new double[]{1.0, 1.0});
+        }
 
         List<QueryResult> results = queryService.search(token);
 
