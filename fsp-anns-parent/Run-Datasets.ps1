@@ -57,54 +57,88 @@ function Extract-Summary($dir) {
 ############################################
 # RUN
 ############################################
-foreach ($ds in $Datasets) {
+foreach ($dataset in $Datasets) {
+
+    $dsName = $dataset.Name
+    $base   = $dataset.Base
+    $query  = $dataset.Query
+    $gt     = $dataset.GT
+    $dim    = $dataset.Dim
+
+    if (-not (Test-Path $base)) {
+        Write-Host "Skipping $dsName (missing base)"
+        continue
+    }
+
+    if (-not (Test-Path $query)) {
+        Write-Host "Skipping $dsName (missing query)"
+        continue
+    }
+
+    if (-not (Test-Path $gt)) {
+        Write-Host "Skipping $dsName (missing GT)"
+        continue
+    }
+
     Write-Host ""
     Write-Host "========================================"
-    Write-Host "DATASET: $($ds.Name)"
+    Write-Host "DATASET: $dsName (dim=$dim)"
     Write-Host "========================================"
 
-    $dsRoot = Join-Path $OutRoot $ds.Name
-    New-Item -ItemType Directory -Force -Path $dsRoot | Out-Null
+    $datasetRoot = Join-Path $OutRoot $dsName
+    New-Item -ItemType Directory -Force -Path $datasetRoot | Out-Null
 
-    foreach ($p in $Profiles) {
-        $runDir = Join-Path $dsRoot $p.name
-        Clean-RunDir $runDir
+    foreach ($profile in $cfgObj.profiles) {
 
-        $finalCfg = $Cfg.base | ConvertTo-Json -Depth 64 | ConvertFrom-Json
-        foreach ($k in $p.overrides.PSObject.Properties.Name) {
-            $finalCfg | Add-Member -Force -NotePropertyName $k -NotePropertyValue $p.overrides.$k
+        $label = $profile.name
+        if ([string]::IsNullOrWhiteSpace($label)) { continue }
+
+        $runDir = Join-Path $datasetRoot $label
+        New-Item -ItemType Directory -Force -Path "$runDir\results" | Out-Null
+
+        $finalConfig = Merge-ConfigObjects -Base $baseConfig -Overrides $profile.overrides
+
+        if (-not $finalConfig.output) {
+            $finalConfig | Add-Member NoteProperty output @{}
         }
 
-        $finalCfg.output.resultsDir = "$runDir\results"
-        $finalCfg.ratio.source = "gt"
-        $finalCfg.ratio.gtPath = $ds.GT
-        $finalCfg.ratio.autoComputeGT = $false
-        $finalCfg.ratio.allowComputeIfMissing = $false
-        $finalCfg.ratio.gtMismatchTolerance = 0.0
+        $finalConfig.output.resultsDir = "$runDir\results"
+
+        if (-not $finalConfig.ratio) {
+            $finalConfig | Add-Member NoteProperty ratio @{}
+        }
+
+        $finalConfig.ratio.source = "gt"
+        $finalConfig.ratio.gtPath = $gt
+        $finalConfig.ratio.autoComputeGT = $false
+        $finalConfig.ratio.allowComputeIfMissing = $false
 
         $cfgFile = Join-Path $runDir "config.json"
-        $finalCfg | ConvertTo-Json -Depth 64 | Set-Content $cfgFile
+        $finalConfig | ConvertTo-Json -Depth 64 | Set-Content $cfgFile
 
-        & java @JvmArgs `
-      "-Dcli.dataset=$($ds.Name)" `
-      "-Dcli.profile=$($p.name)" `
-      -jar $Jar `
-      $cfgFile `
-      $ds.Base
-                $ds.Query
-                (Join-Path $runDir "keys.blob") `
-      $ds.Dim
+        $log = Join-Path $runDir "run.log"
+
+        try {
+            & java @JvmArgs `
+                "-Dcli.dataset=$dsName" `
+                "-Dcli.profile=$label" `
+                -jar $JarPath `
+                $cfgFile `
+                $base `
+                $query `
+                "$runDir\keys.blob" `
+                $dim `
                 $runDir `
-      $ds.GT
-                $BatchSize `
-      *> (Join-Path $runDir "run.log")
+                $gt `
+                $Batch `
+                2>&1 | Tee-Object $log | Out-Null
 
-        $m = Extract-Summary $runDir
-        Write-Host ("{0,-20} | ART={1,8} | Ratio={2,7} | Precision={3,7}" -f `
-      $p.name, $m.ART, $m.Ratio, $m.Precision)
+            $status = "OK"
+        }
+        catch {
+            $status = "FAIL"
+        }
+
+        Write-Host ("{0,-25} | {1}" -f $label, $status)
     }
 }
-
-Write-Host ""
-Write-Host "ALL RUNS COMPLETE"
-Write-Host "Results in $OutRoot"
