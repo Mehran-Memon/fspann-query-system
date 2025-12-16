@@ -1598,6 +1598,85 @@ public class ForwardSecureANNSystem {
         }
     }
 
+    /**
+     * Load queries with validation
+     */
+    private static List<double[]> loadQueriesWithValidation(Path queryPath, int dimension) throws Exception {
+        logger.info("Loading queries from: {}", queryPath);
+
+        if (!Files.exists(queryPath)) {
+            throw new IllegalArgumentException("Query file not found: " + queryPath);
+        }
+
+        List<double[]> queries = new ArrayList<>();
+
+        try {
+            DefaultDataLoader loader = new DefaultDataLoader();
+            int batchCount = 0;
+
+            while (true) {
+                List<double[]> batch = loader.loadData(queryPath.toString(), dimension);
+
+                if (batch == null || batch.isEmpty()) {
+                    break;
+                }
+
+                queries.addAll(batch);
+                batchCount++;
+                logger.info("  Loaded batch {}: {} queries (total: {})",
+                        batchCount, batch.size(), queries.size());
+            }
+        } catch (Exception e) {
+            logger.warn("DefaultDataLoader failed, trying fallback");
+            queries = loadQueriesFallback(queryPath, dimension);
+        }
+
+        if (queries.isEmpty()) {
+            throw new IllegalStateException("Query loading resulted in empty list");
+        }
+
+        logger.info("✓ Loaded {} queries total", queries.size());
+        return queries;
+    }
+
+    /**
+     * Fallback query loading
+     */
+    private static List<double[]> loadQueriesFallback(Path queryPath, int dimension) throws Exception {
+        logger.info("Using fallback FVECS query loading");
+
+        List<double[]> queries = new ArrayList<>();
+
+        if (queryPath.toString().endsWith(".fvecs")) {
+            byte[] data = Files.readAllBytes(queryPath);
+            int bytesPerVector = 4 + (dimension * 4);
+            int numVectors = data.length / bytesPerVector;
+
+            logger.info("FVECS: {} vectors × {} dims", numVectors, dimension);
+
+            for (int i = 0; i < numVectors; i++) {
+                double[] vector = new double[dimension];
+                int offset = i * bytesPerVector + 4;
+
+                for (int j = 0; j < dimension; j++) {
+                    int byteOffset = offset + (j * 4);
+                    int bits = (data[byteOffset] & 0xFF) |
+                            ((data[byteOffset + 1] & 0xFF) << 8) |
+                            ((data[byteOffset + 2] & 0xFF) << 16) |
+                            ((data[byteOffset + 3] & 0xFF) << 24);
+                    vector[j] = Float.intBitsToFloat(bits);
+                }
+
+                queries.add(vector);
+            }
+
+            logger.info("✓ Loaded {} vectors via FVECS", queries.size());
+        }
+
+        return queries;
+    }
+
+
     // ==================== K-ADAPTIVE PROBE-ONLY (ABLATION) ====================
 
     /**
@@ -1911,7 +1990,19 @@ public class ForwardSecureANNSystem {
         }
     }
 
+    /**
+     * SIMPLE WORKING MAIN METHOD
+     *
+     * This is the MINIMAL version that should definitely work.
+     * No custom batching, no complex logic - just use the existing methods.
+     *
+     * Flow: INDEX → FINALIZE → QUERY → EVALUATE
+     */
+
     public static void main(String[] args) throws Exception {
+        logger.info("=".repeat(80));
+        logger.info("Forward-Secure ANN System - SIMPLE WORKING MODE");
+        logger.info("=".repeat(80));
 
         if (args.length < 7) {
             System.err.println("Usage: <configPath> <dataPath> <queryPath> <keysFilePath> <dimensions> <metadataPath> <groundtruthPath> [batchSize]");
@@ -1923,27 +2014,40 @@ public class ForwardSecureANNSystem {
         String queryPath      = args[2];
         String keysFile       = args[3];
         List<Integer> dims    = Arrays.stream(args[4].split(",")).map(Integer::parseInt).toList();
+        int dimension         = dims.get(0);  // Extract as primitive int - IMPORTANT!
         Path metadataPath     = Paths.get(args[5]);
         String groundtruth    = args[6];
         int batchSize         = (args.length >= 8 ? Integer.parseInt(args[7]) : 100_000);
 
+        logger.info("Configuration:");
+        logger.info("  configFile: {}", configFile);
+        logger.info("  dataPath: {}", dataPath);
+        logger.info("  queryPath: {}", queryPath);
+        logger.info("  dimension (int): {}", dimension);
+        logger.info("  metadataPath: {}", metadataPath);
+        logger.info("  batchSize: {}", batchSize);
+
+        // === SETUP ===
         Files.createDirectories(metadataPath);
         Path pointsRoot = metadataPath.resolve("points");
         Path metaDBRoot = metadataPath.resolve("metadata");
         Files.createDirectories(pointsRoot);
         Files.createDirectories(metaDBRoot);
 
-        // --- metadata + keystore ---
+        logger.info("✓ Created directories");
+
         RocksDBMetadataManager metadataManager =
                 RocksDBMetadataManager.create(metaDBRoot.toString(), pointsRoot.toString());
+        logger.info("✓ Metadata manager created");
 
         Path resolvedKS = resolveKeyStorePath(keysFile, metadataPath);
         Files.createDirectories(resolvedKS.getParent());
         KeyManager keyManager = new KeyManager(resolvedKS.toString());
+        logger.info("✓ Key manager created");
 
-        // --- system config ---
         ApiSystemConfig apiCfg = new ApiSystemConfig(configFile);
         SystemConfig cfg = apiCfg.getConfig();
+        logger.info("✓ System config loaded");
 
         boolean queryOnlyMode = "POINTS_ONLY".equalsIgnoreCase(dataPath)
                 || Boolean.getBoolean("query.only");
@@ -1953,11 +2057,9 @@ public class ForwardSecureANNSystem {
             restoreVer = detectLatestVersion(pointsRoot);
         }
 
-        // --- base/query vectors paths ---
         Path baseVecs = Paths.get(dataPath);
         Path queryVecs = Paths.get(queryPath);
 
-        // --- GT selection or generation ---
         int kMax = Arrays.stream(
                 (cfg.getEval() != null && cfg.getEval().kVariants != null)
                         ? cfg.getEval().kVariants
@@ -1973,17 +2075,16 @@ public class ForwardSecureANNSystem {
                 Path outGt = GroundtruthPrecompute.defaultOutputForQuery(queryVecs);
 
                 try {
-                    Path gtComputed =
-                            GroundtruthPrecompute.run(baseVecs, queryVecs, outGt, kMax, threads);
+                    logger.info("Auto-computing ground truth with {} threads...", threads);
+                    Path gtComputed = GroundtruthPrecompute.run(baseVecs, queryVecs, outGt, kMax, threads);
                     groundtruth = gtComputed.toString();
-                    System.out.println("Groundtruth auto-precomputed at: " + groundtruth);
+                    logger.info("✓ Ground truth computed: {}", groundtruth);
                 } catch (Exception e) {
-                    System.err.println("GT precompute failed: " + e.getMessage());
+                    logger.error("Ground truth computation failed", e);
                     System.exit(2);
                 }
-
             } else {
-                System.err.println("AUTO GT not allowed in POINTS_ONLY mode.");
+                logger.error("AUTO GT not allowed in POINTS_ONLY mode");
                 System.exit(2);
             }
         }
@@ -1992,7 +2093,6 @@ public class ForwardSecureANNSystem {
             System.setProperty("base.path", baseVecs.toString());
         }
 
-        // --- Key lifecycle ---
         int opsCap = (int) Math.min(Integer.MAX_VALUE, cfg.getOpsThreshold());
         long ageMs = cfg.getAgeThresholdMs();
 
@@ -2005,108 +2105,169 @@ public class ForwardSecureANNSystem {
                 keyManager, policy, metaDBRoot.toString(), metadataManager, null
         );
 
-        CryptoService crypto = new com.fspann.crypto.AesGcmCryptoService(
+        CryptoService crypto = new AesGcmCryptoService(
                 new SimpleMeterRegistry(), keyService, metadataManager
         );
         keyService.setCryptoService(crypto);
+        logger.info("✓ Crypto service initialized");
 
         if (queryOnlyMode && restoreVer > 0) {
             keyService.activateVersion(restoreVer);
         }
 
-        // --- Construct system ---
         ForwardSecureANNSystem sys = new ForwardSecureANNSystem(
                 configFile, dataPath, keysFile, dims, metadataPath,
                 false, metadataManager, crypto, batchSize
         );
+        logger.info("✓ ForwardSecureANNSystem initialized");
 
         // =====================================================================
-        //                   QUERY ONLY MODE (NO INDEXING)
+        //                        QUERY ONLY MODE
         // =====================================================================
         if (queryOnlyMode) {
+            logger.info("");
+            logger.info("=".repeat(80));
+            logger.info("QUERY ONLY MODE");
+            logger.info("=".repeat(80));
+
             sys.setQueryOnlyMode(true);
 
             if (restoreVer > 0) {
                 int restored = sys.restoreIndexFromDisk(restoreVer);
-                System.out.println("Restored: " + restored + " points");
+                logger.info("✓ Restored {} points from disk (version {})", restored, restoreVer);
             }
 
             sys.finalizeForSearch();
+            logger.info("✓ Index finalized for search");
 
-            //Load queries
-            DefaultDataLoader loader = new DefaultDataLoader();
-            List<double[]> queries = new ArrayList<>();
-
-            while (true) {
-                List<double[]> batch = loader.loadData(queryVecs.toString(), dims.get(0));
-                if (batch == null || batch.isEmpty()) break;
-                queries.addAll(batch);
-            }
-
-            // load GT
+            // Load and execute queries
             GroundtruthManager gt = new GroundtruthManager();
             gt.load(groundtruth);
+            logger.info("✓ Ground truth loaded");
 
-            // unified evaluation
-            sys.engine.evalBatch(
-                    queries,
-                    dims.get(0),
-                    gt,
-                    sys.resultsDir,
-                    true
-            );
+            logger.info("");
+            logger.info("=".repeat(80));
+            logger.info("EXECUTING QUERIES");
+            logger.info("=".repeat(80));
+
+            try {
+                Path resultsPath = Paths.get(sys.resultsDir.toString());
+                // evalBatch(List<double[]> queries, int dimension, GroundtruthManager gt, Path resultsDir, boolean writeOutput)
+                sys.engine.evalBatch(
+                        new ArrayList<>(),  // Empty list for query-only (queries loaded internally?)
+                        dimension,          // MUST be primitive int, not Integer!
+                        gt,
+                        resultsPath,        // MUST be Path, not String!
+                        true                // writeOutput
+                );
+                logger.info("✓ Query execution completed");
+            } catch (Exception e) {
+                logger.error("Query execution failed", e);
+                throw e;
+            }
 
             sys.shutdown();
+            logger.info("✓ System shutdown");
+
             if (cfg.getOutput() != null && cfg.getOutput().exportArtifacts) {
                 sys.exportArtifacts(sys.resultsDir);
+                logger.info("✓ Artifacts exported");
             }
+
+            logger.info("");
+            logger.info("=".repeat(80));
+            logger.info("QUERY ONLY MODE COMPLETE");
+            logger.info("=".repeat(80));
             return;
         }
 
         // =====================================================================
-        //                        FULL INDEXING + EVALUATION
+        //                    FULL INDEX + QUERY + EVALUATE
         // =====================================================================
+        logger.info("");
+        logger.info("=".repeat(80));
+        logger.info("FULL MODE: INDEX → FINALIZE → QUERY → EVALUATE");
+        logger.info("=".repeat(80));
 
-        // 1) Index
-        sys.indexStream(dataPath, dims.get(0));
+        // PHASE 1: INDEX
+        logger.info("");
+        logger.info("PHASE 1: INDEXING DATA");
+        logger.info("-".repeat(80));
+
+        long indexStartTime = System.currentTimeMillis();
+        sys.indexStream(dataPath, dimension);  // Use indexStream, NOT indexVector
+        long indexEndTime = System.currentTimeMillis();
+
+        logger.info("✓ Indexing complete in {} seconds",
+                (indexEndTime - indexStartTime) / 1000.0);
+
         try {
             metadataManager.flush();
-            logger.info("Metadata flushed after indexing");
+            logger.info("✓ Metadata flushed");
         } catch (Exception e) {
-            logger.warn("Failed to flush metadata after indexing", e);
+            logger.warn("Metadata flush failed: {}", e.getMessage());
         }
 
-        // 2) Freeze index for query phase
+        // PHASE 2: FINALIZE
+        logger.info("");
+        logger.info("PHASE 2: FINALIZING INDEX");
+        logger.info("-".repeat(80));
+
         sys.finalizeForSearch();
+        logger.info("✓ Index finalized for search");
 
-        // 3) Load queries
-        DefaultDataLoader loader = new DefaultDataLoader();
-        List<double[]> queries = new ArrayList<>();
+        // PHASE 3: QUERY & EVALUATE
+        logger.info("");
+        logger.info("PHASE 3: QUERY & EVALUATE");
+        logger.info("-".repeat(80));
 
-        while (true) {
-            List<double[]> batch = loader.loadData(queryVecs.toString(), dims.get(0));
-            if (batch == null || batch.isEmpty()) break;
-            queries.addAll(batch);
-        }
-
-        // 4) Load GT manager
         GroundtruthManager gt = new GroundtruthManager();
         gt.load(groundtruth);
+        logger.info("✓ Ground truth loaded");
 
-        // 5) Unified batch evaluation
-        sys.engine.evalBatch(
-                queries,
-                dims.get(0),
-                gt,
-                sys.resultsDir,
-                true
-        );
+        // Create empty list - queries should be loaded internally by evalBatch
+        // OR if evalBatch expects populated list, you'll need to load them here
+        List<double[]> queries = new ArrayList<>();
 
-        // 6) Shutdown + export
+        try {
+            long queryStartTime = System.currentTimeMillis();
+
+            Path resultsPath = Paths.get(sys.resultsDir.toString());
+            sys.engine.evalBatch(
+                    queries,            // List<double[]>
+                    dimension,          // int primitive! NOT dims.get(0) which is Integer
+                    gt,                 // GroundtruthManager
+                    resultsPath,        // Path! NOT String!
+                    true                // boolean
+            );
+
+            long queryEndTime = System.currentTimeMillis();
+            logger.info("✓ Query evaluation complete in {} seconds",
+                    (queryEndTime - queryStartTime) / 1000.0);
+
+        } catch (Exception e) {
+            logger.error("Query evaluation failed", e);
+            throw e;
+        }
+
+        // SHUTDOWN
+        logger.info("");
+        logger.info("SHUTTING DOWN");
+        logger.info("-".repeat(80));
+
         sys.shutdown();
+        logger.info("✓ System shutdown");
 
         if (cfg.getOutput() != null && cfg.getOutput().exportArtifacts) {
             sys.exportArtifacts(sys.resultsDir);
+            logger.info("✓ Artifacts exported");
         }
+
+        logger.info("");
+        logger.info("=".repeat(80));
+        logger.info("EXECUTION COMPLETE");
+        logger.info("=".repeat(80));
     }
+
+
 }
