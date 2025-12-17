@@ -398,6 +398,14 @@ public class ForwardSecureANNSystem {
             long seed = config.getPaper().seed;
 
             int divisions = Math.max(1, config.getPaper().divisions);
+            int expected = config.getPaper().divisions;
+            if (divisions != expected) {
+                throw new IllegalStateException(
+                        "TokenFactory divisions mismatch: factory=" + divisions +
+                                " config=" + expected +
+                                " (configPath=" + this.configPath + ")"
+                );
+            }
 
                 tokenFactories.put(
                         dim,
@@ -410,7 +418,7 @@ public class ForwardSecureANNSystem {
                         )
                 );
 
-                logger.info("TokenFactory created (MSANNP): dim={} divisions={}", dim, divisions);
+                logger.info("TokenFactory created (MSANNP): dim={} m={} lambda={} divisions={} seed={}", dim, m, ell, divisions, seed);
             }
 
         int primaryDim = dimensions.get(0);
@@ -446,8 +454,8 @@ public class ForwardSecureANNSystem {
 
             try {
                 this.baseReader = BaseVectorReader.open(basePath, dimExpected, isBvecs);
-                logger.info("BaseVectorReader mapped: {} (dim={}, type={})",
-                        basePath, dimExpected, isBvecs ? "bvecs" : "fvecs");
+                logger.info("BaseVectorReader mapped: (dim={}, type={})",
+                        dimExpected, isBvecs ? "bvecs" : "fvecs");
             } catch (IOException ioe) {
                 logger.warn("Failed to map base.path={}, ratio metrics disabled", basePath, ioe);
             }
@@ -1879,6 +1887,26 @@ public class ForwardSecureANNSystem {
     }
 
 
+    private void runSelectiveReencryptionIfNeeded() {
+        if (!reencEnabled) {
+            logger.info("Selective re-encryption disabled");
+            return;
+        }
+
+        if (!"end".equalsIgnoreCase(System.getProperty("reenc.mode", "end"))) {
+            return;
+        }
+
+        int touched = touchedGlobal.size();
+        if (touched == 0) {
+            logger.warn("No candidates touched; skipping selective re-encryption");
+            return;
+        }
+
+        logger.info("Running selective re-encryption on {} touched points", touched);
+        finalizeReencryptionAtEnd();
+    }
+
     /** Façade: max-K across auditK and K-variants */
     public int baseKForToken() {
         return Math.max(
@@ -1926,13 +1954,6 @@ public class ForwardSecureANNSystem {
         try {
             flushAll();
 
-            if ("end".equalsIgnoreCase(System.getProperty("reenc.mode", "end"))) {
-                try {
-                    finalizeReencryptionAtEnd();
-                } catch (Exception e) {
-                    logger.warn("finalizeReencryptionAtEnd failed", e);
-                }
-            }
             if (backgroundReencryptor != null) {
                 backgroundReencryptor.shutdown();
             }
@@ -1991,282 +2012,240 @@ public class ForwardSecureANNSystem {
     }
 
     /**
-     * SIMPLE WORKING MAIN METHOD
-     *
-     * This is the MINIMAL version that should definitely work.
-     * No custom batching, no complex logic - just use the existing methods.
-     *
-     * Flow: INDEX → FINALIZE → QUERY → EVALUATE
+     * Lifecycle:
+     *   SETUP
+     *   → INDEX
+     *   → FINALIZE INDEX
+     *   → QUERY + EVALUATE
+     *   → SELECTIVE RE-ENCRYPT
+     *   → EXPORT
+     *   → SHUTDOWN
      */
-
     public static void main(String[] args) throws Exception {
-        logger.info("=".repeat(80));
-        logger.info("Forward-Secure ANN System - SIMPLE WORKING MODE");
-        logger.info("=".repeat(80));
 
         if (args.length < 7) {
-            System.err.println("Usage: <configPath> <dataPath> <queryPath> <keysFilePath> <dimensions> <metadataPath> <groundtruthPath> [batchSize]");
+            System.err.println(
+                    "Usage: <configPath> <dataPath> <queryPath> <keysFilePath> <dimensions> <metadataPath> <groundtruthPath> [batchSize]"
+            );
             System.exit(1);
         }
 
-        String configFile     = args[0];
-        String dataPath       = args[1];
-        String queryPath      = args[2];
-        String keysFile       = args[3];
-        List<Integer> dims    = Arrays.stream(args[4].split(",")).map(Integer::parseInt).toList();
-        int dimension         = dims.get(0);  // Extract as primitive int - IMPORTANT!
-        Path metadataPath     = Paths.get(args[5]);
-        String groundtruth    = args[6];
-        int batchSize         = (args.length >= 8 ? Integer.parseInt(args[7]) : 100_000);
+        // ===================== ARGUMENTS =====================
+        final String configFile  = args[0];
+        final String dataPath    = args[1];
+        final String queryPath   = args[2];
+        final String keysFile    = args[3];
+        final List<Integer> dims =
+                Arrays.stream(args[4].split(",")).map(Integer::parseInt).toList();
+        final int dimension      = dims.get(0);
+        final Path metadataPath  = Paths.get(args[5]);
+        String groundtruth       = args[6];
+        final int batchSize      = (args.length >= 8)
+                ? Integer.parseInt(args[7])
+                : 100_000;
 
-        logger.info("Configuration:");
-        logger.info("  configFile: {}", configFile);
-        logger.info("  dataPath: {}", dataPath);
-        logger.info("  queryPath: {}", queryPath);
-        logger.info("  dimension (int): {}", dimension);
-        logger.info("  metadataPath: {}", metadataPath);
-        logger.info("  batchSize: {}", batchSize);
+        logger.info("FSP-ANN start | dim={} | batchSize={}", dimension, batchSize);
 
-        // === SETUP ===
+        // ===================== FILESYSTEM =====================
         Files.createDirectories(metadataPath);
         Path pointsRoot = metadataPath.resolve("points");
         Path metaDBRoot = metadataPath.resolve("metadata");
         Files.createDirectories(pointsRoot);
         Files.createDirectories(metaDBRoot);
 
-        logger.info("✓ Created directories");
+        // ===================== MODE =====================
+        boolean queryOnlyMode =
+                "POINTS_ONLY".equalsIgnoreCase(dataPath)
+                        || Boolean.getBoolean("query.only");
 
-        RocksDBMetadataManager metadataManager =
-                RocksDBMetadataManager.create(metaDBRoot.toString(), pointsRoot.toString());
-        logger.info("✓ Metadata manager created");
-
-        Path resolvedKS = resolveKeyStorePath(keysFile, metadataPath);
-        Files.createDirectories(resolvedKS.getParent());
-        KeyManager keyManager = new KeyManager(resolvedKS.toString());
-        logger.info("✓ Key manager created");
-
-        ApiSystemConfig apiCfg = new ApiSystemConfig(configFile);
-        SystemConfig cfg = apiCfg.getConfig();
-        logger.info("✓ System config loaded");
-
-        boolean queryOnlyMode = "POINTS_ONLY".equalsIgnoreCase(dataPath)
-                || Boolean.getBoolean("query.only");
         int restoreVer = Integer.getInteger("restore.version", -1);
-
         if (queryOnlyMode && restoreVer <= 0) {
             restoreVer = detectLatestVersion(pointsRoot);
         }
 
-        Path baseVecs = Paths.get(dataPath);
+        Path baseVecs  = Paths.get(dataPath);
         Path queryVecs = Paths.get(queryPath);
-
-        int kMax = Arrays.stream(
-                (cfg.getEval() != null && cfg.getEval().kVariants != null)
-                        ? cfg.getEval().kVariants
-                        : new int[]{100}
-        ).max().orElse(100);
-
-        boolean needAutoGT = "AUTO".equalsIgnoreCase(groundtruth)
-                || !Files.exists(Paths.get(groundtruth));
-
-        if (needAutoGT) {
-            if (!queryOnlyMode) {
-                int threads = Math.max(1, Runtime.getRuntime().availableProcessors() / 2);
-                Path outGt = GroundtruthPrecompute.defaultOutputForQuery(queryVecs);
-
-                try {
-                    logger.info("Auto-computing ground truth with {} threads...", threads);
-                    Path gtComputed = GroundtruthPrecompute.run(baseVecs, queryVecs, outGt, kMax, threads);
-                    groundtruth = gtComputed.toString();
-                    logger.info("✓ Ground truth computed: {}", groundtruth);
-                } catch (Exception e) {
-                    logger.error("Ground truth computation failed", e);
-                    System.exit(2);
-                }
-            } else {
-                logger.error("AUTO GT not allowed in POINTS_ONLY mode");
-                System.exit(2);
-            }
-        }
 
         if (!queryOnlyMode && Files.exists(baseVecs)) {
             System.setProperty("base.path", baseVecs.toString());
         }
 
-        int opsCap = (int) Math.min(Integer.MAX_VALUE, cfg.getOpsThreshold());
-        long ageMs = cfg.getAgeThresholdMs();
+        // ===================== METADATA + CRYPTO =====================
+        RocksDBMetadataManager metadataManager =
+                RocksDBMetadataManager.create(
+                        metaDBRoot.toString(),
+                        pointsRoot.toString()
+                );
 
-        KeyRotationPolicy policy = new KeyRotationPolicy(
-                queryOnlyMode ? Integer.MAX_VALUE : opsCap,
-                queryOnlyMode ? Long.MAX_VALUE : ageMs
-        );
+        Path resolvedKS = resolveKeyStorePath(keysFile, metadataPath);
+        Files.createDirectories(resolvedKS.getParent());
+        KeyManager keyManager = new KeyManager(resolvedKS.toString());
 
-        KeyRotationServiceImpl keyService = new KeyRotationServiceImpl(
-                keyManager, policy, metaDBRoot.toString(), metadataManager, null
-        );
+        // NOTE: ops / age policy is finalized AFTER config load
+        KeyRotationServiceImpl keyService =
+                new KeyRotationServiceImpl(
+                        keyManager,
+                        new KeyRotationPolicy(Integer.MAX_VALUE, Long.MAX_VALUE),
+                        metaDBRoot.toString(),
+                        metadataManager,
+                        null
+                );
 
-        CryptoService crypto = new AesGcmCryptoService(
-                new SimpleMeterRegistry(), keyService, metadataManager
-        );
+        CryptoService crypto =
+                new AesGcmCryptoService(
+                        new SimpleMeterRegistry(),
+                        keyService,
+                        metadataManager
+                );
         keyService.setCryptoService(crypto);
-        logger.info("✓ Crypto service initialized");
 
         if (queryOnlyMode && restoreVer > 0) {
             keyService.activateVersion(restoreVer);
         }
 
-        ForwardSecureANNSystem sys = new ForwardSecureANNSystem(
-                configFile, dataPath, keysFile, dims, metadataPath,
-                false, metadataManager, crypto, batchSize
+        // ===================== SYSTEM (SINGLE CONFIG LOAD) =====================
+        ForwardSecureANNSystem sys =
+                new ForwardSecureANNSystem(
+                        configFile,
+                        dataPath,
+                        keysFile,
+                        dims,
+                        metadataPath,
+                        false,
+                        metadataManager,
+                        crypto,
+                        batchSize
+                );
+
+        // >>> SINGLE SOURCE OF TRUTH <<<
+        SystemConfig cfg = sys.config;
+
+        // ===================== FIX KEY ROTATION POLICY =====================
+        int opsCap = (int) Math.min(Integer.MAX_VALUE, cfg.getOpsThreshold());
+        long ageMs = cfg.getAgeThresholdMs();
+
+        keyService.setPolicy(
+                new KeyRotationPolicy(
+                        queryOnlyMode ? Integer.MAX_VALUE : opsCap,
+                        queryOnlyMode ? Long.MAX_VALUE : ageMs
+                )
         );
-        logger.info("✓ ForwardSecureANNSystem initialized");
+
+        // ===================== GROUND TRUTH =====================
+        boolean needAutoGT =
+                "AUTO".equalsIgnoreCase(groundtruth)
+                        || !Files.exists(Paths.get(groundtruth));
+
+        if (needAutoGT) {
+            if (queryOnlyMode) {
+                throw new IllegalStateException(
+                        "AUTO GT not allowed in QUERY-ONLY mode"
+                );
+            }
+
+            int kMax = Arrays.stream(
+                    (cfg.getEval() != null && cfg.getEval().kVariants != null)
+                            ? cfg.getEval().kVariants
+                            : new int[]{100}
+            ).max().orElse(100);
+
+            int threads =
+                    Math.max(1, Runtime.getRuntime().availableProcessors() / 2);
+
+            groundtruth =
+                    GroundtruthPrecompute.run(
+                            baseVecs,
+                            queryVecs,
+                            GroundtruthPrecompute.defaultOutputForQuery(queryVecs),
+                            kMax,
+                            threads
+                    ).toString();
+        }
 
         // =====================================================================
-        //                        QUERY ONLY MODE
+        // QUERY-ONLY MODE
         // =====================================================================
         if (queryOnlyMode) {
-            logger.info("");
-            logger.info("=".repeat(80));
-            logger.info("QUERY ONLY MODE");
-            logger.info("=".repeat(80));
 
             sys.setQueryOnlyMode(true);
 
             if (restoreVer > 0) {
                 int restored = sys.restoreIndexFromDisk(restoreVer);
-                logger.info("✓ Restored {} points from disk (version {})", restored, restoreVer);
+                logger.info(
+                        "Restored index | version={} | points={}",
+                        restoreVer,
+                        restored
+                );
             }
 
             sys.finalizeForSearch();
-            logger.info("✓ Index finalized for search");
 
-            // Load and execute queries
             GroundtruthManager gt = new GroundtruthManager();
             gt.load(groundtruth);
-            logger.info("✓ Ground truth loaded");
 
-            logger.info("");
-            logger.info("=".repeat(80));
-            logger.info("EXECUTING QUERIES");
-            logger.info("=".repeat(80));
-
-            try {
-                Path resultsPath = Paths.get(sys.resultsDir.toString());
-                // evalBatch(List<double[]> queries, int dimension, GroundtruthManager gt, Path resultsDir, boolean writeOutput)
-                sys.engine.evalBatch(
-                        new ArrayList<>(),  // Empty list for query-only (queries loaded internally?)
-                        dimension,          // MUST be primitive int, not Integer!
-                        gt,
-                        resultsPath,        // MUST be Path, not String!
-                        true                // writeOutput
-                );
-                logger.info("✓ Query execution completed");
-            } catch (Exception e) {
-                logger.error("Query execution failed", e);
-                throw e;
-            }
+            sys.engine.evalBatch(
+                    new ArrayList<>(),
+                    dimension,
+                    gt,
+                    sys.resultsDir,
+                    true
+            );
 
             sys.shutdown();
-            logger.info("✓ System shutdown");
 
             if (cfg.getOutput() != null && cfg.getOutput().exportArtifacts) {
                 sys.exportArtifacts(sys.resultsDir);
-                logger.info("✓ Artifacts exported");
             }
 
-            logger.info("");
-            logger.info("=".repeat(80));
-            logger.info("QUERY ONLY MODE COMPLETE");
-            logger.info("=".repeat(80));
+            logger.info("FSP-ANN complete | QUERY-ONLY");
             return;
         }
 
         // =====================================================================
-        //                    FULL INDEX + QUERY + EVALUATE
+        // FULL MODE
         // =====================================================================
-        logger.info("");
-        logger.info("=".repeat(80));
-        logger.info("FULL MODE: INDEX → FINALIZE → QUERY → EVALUATE");
-        logger.info("=".repeat(80));
 
-        // PHASE 1: INDEX
-        logger.info("");
-        logger.info("PHASE 1: INDEXING DATA");
-        logger.info("-".repeat(80));
+        // ---- INDEX ----
+        long t0 = System.currentTimeMillis();
+        sys.indexStream(dataPath, dimension);
+        metadataManager.flush();
+        logger.info(
+                "Index complete | time={}s",
+                (System.currentTimeMillis() - t0) / 1000.0
+        );
 
-        long indexStartTime = System.currentTimeMillis();
-        sys.indexStream(dataPath, dimension);  // Use indexStream, NOT indexVector
-        long indexEndTime = System.currentTimeMillis();
-
-        logger.info("✓ Indexing complete in {} seconds",
-                (indexEndTime - indexStartTime) / 1000.0);
-
-        try {
-            metadataManager.flush();
-            logger.info("✓ Metadata flushed");
-        } catch (Exception e) {
-            logger.warn("Metadata flush failed: {}", e.getMessage());
-        }
-
-        // PHASE 2: FINALIZE
-        logger.info("");
-        logger.info("PHASE 2: FINALIZING INDEX");
-        logger.info("-".repeat(80));
-
+        // ---- FINALIZE INDEX ----
         sys.finalizeForSearch();
-        logger.info("✓ Index finalized for search");
 
-        // PHASE 3: QUERY & EVALUATE
-        logger.info("");
-        logger.info("PHASE 3: QUERY & EVALUATE");
-        logger.info("-".repeat(80));
-
+        // ---- QUERY + EVALUATE ----
         GroundtruthManager gt = new GroundtruthManager();
         gt.load(groundtruth);
-        logger.info("✓ Ground truth loaded");
 
-        // Create empty list - queries should be loaded internally by evalBatch
-        // OR if evalBatch expects populated list, you'll need to load them here
-        List<double[]> queries = new ArrayList<>();
+        long q0 = System.currentTimeMillis();
+        sys.engine.evalBatch(
+                new ArrayList<>(),
+                dimension,
+                gt,
+                sys.resultsDir,
+                true
+        );
+        logger.info(
+                "Query complete | time={}s",
+                (System.currentTimeMillis() - q0) / 1000.0
+        );
 
-        try {
-            long queryStartTime = System.currentTimeMillis();
+        // ---- SELECTIVE RE-ENCRYPT ----
+        sys.runSelectiveReencryptionIfNeeded();
 
-            Path resultsPath = Paths.get(sys.resultsDir.toString());
-            sys.engine.evalBatch(
-                    queries,            // List<double[]>
-                    dimension,          // int primitive! NOT dims.get(0) which is Integer
-                    gt,                 // GroundtruthManager
-                    resultsPath,        // Path! NOT String!
-                    true                // boolean
-            );
-
-            long queryEndTime = System.currentTimeMillis();
-            logger.info("✓ Query evaluation complete in {} seconds",
-                    (queryEndTime - queryStartTime) / 1000.0);
-
-        } catch (Exception e) {
-            logger.error("Query evaluation failed", e);
-            throw e;
-        }
-
-        // SHUTDOWN
-        logger.info("");
-        logger.info("SHUTTING DOWN");
-        logger.info("-".repeat(80));
-
+        // ---- SHUTDOWN ----
         sys.shutdown();
-        logger.info("✓ System shutdown");
 
+        // ---- EXPORT ----
         if (cfg.getOutput() != null && cfg.getOutput().exportArtifacts) {
             sys.exportArtifacts(sys.resultsDir);
-            logger.info("✓ Artifacts exported");
         }
 
-        logger.info("");
-        logger.info("=".repeat(80));
-        logger.info("EXECUTION COMPLETE");
-        logger.info("=".repeat(80));
+        logger.info("FSP-ANN complete");
     }
 
 

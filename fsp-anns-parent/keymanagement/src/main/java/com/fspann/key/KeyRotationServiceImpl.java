@@ -31,7 +31,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
     private static final Logger logger = LoggerFactory.getLogger(KeyRotationServiceImpl.class);
 
     private final KeyManager keyManager;
-    private final KeyRotationPolicy policy;
+    private volatile KeyRotationPolicy policy;
     private final String rotationMetaDir;
     private final RocksDBMetadataManager metadataManager;
 
@@ -322,6 +322,14 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
             logger.error("Failed to finalize rotation / delete old keys", e);
         }
     }
+
+    public synchronized void setPolicy(KeyRotationPolicy policy) {
+        if (policy == null) {
+            throw new IllegalArgumentException("KeyRotationPolicy cannot be null");
+        }
+        this.policy = policy;
+    }
+
 
     public KeyManager getKeyManager() {
         return this.keyManager;

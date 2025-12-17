@@ -5,8 +5,6 @@ import com.fspann.config.SystemConfig;
 import com.fspann.crypto.CryptoService;
 import com.fspann.crypto.ReencryptionTracker;
 import com.fspann.index.paper.PartitionedIndexService;
-import com.fspann.loader.GroundtruthManager;
-import com.fspann.query.core.QueryEvaluationResult;
 import com.fspann.query.core.QueryTokenFactory;
 
 import org.slf4j.Logger;
@@ -14,7 +12,6 @@ import org.slf4j.LoggerFactory;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collectors;
 
 /**
  * QueryServiceImpl (Partitioned / Peng-style)
@@ -52,7 +49,7 @@ public final class QueryServiceImpl implements QueryService {
     private volatile int  lastCandKept = 0;          // after limiter
     private volatile int  lastCandDecrypted = 0;     // refined
     private volatile int  lastReturned = 0;          // |results|
-    private volatile List<String> lastCandIds = Collections.emptyList();
+    private volatile Set<String> lastCandIds = Collections.emptySet();
 
     private volatile ReencryptionTracker reencTracker;
     private StabilizationCallback stabilizationCallback;
@@ -183,7 +180,7 @@ public final class QueryServiceImpl implements QueryService {
         long clientOnlyNs = Math.max(0L, totalNs - lastServerNs);
         lastClientNs = clientOnlyNs;
 
-        lastCandIds = new ArrayList<>(touchedThisSession);
+        lastCandIds = new HashSet<>(touchedThisSession);
 
         if (reencTracker != null && !touchedThisSession.isEmpty()) {
             reencTracker.record(touchedThisSession);
@@ -305,7 +302,7 @@ public final class QueryServiceImpl implements QueryService {
         lastCandKept = 0;
         lastCandDecrypted = 0;
         lastReturned = 0;
-        lastCandIds = Collections.emptyList();
+        lastCandIds = Collections.emptySet();
     }
 
     private int prefixTokenBytes(QueryToken t) {
@@ -338,7 +335,7 @@ public final class QueryServiceImpl implements QueryService {
         return lastCandKept;  // Alias for backward compatibility
     }
     public Set<String> getLastCandidateIds() {
-        return new HashSet<>(lastCandIds);
+        return Collections.unmodifiableSet(lastCandIds);
     }
     public int  getLastCandDecrypted() { return lastCandDecrypted; }
     public int  getLastReturned() { return lastReturned; }
