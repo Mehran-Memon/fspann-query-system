@@ -393,7 +393,7 @@ public class ForwardSecureANNSystem {
         // ==== QueryTokenFactories (disables LSH entirely) ====
 
         for (int dim : dimensions) {
-            int ell = Math.max(1, config.getPaper().divisions);
+            int lambda = Math.max(1, config.getPaper().lambda);
             int m = Math.max(1, config.getPaper().m);
             long seed = config.getPaper().seed;
 
@@ -418,7 +418,7 @@ public class ForwardSecureANNSystem {
                         )
                 );
 
-                logger.info("TokenFactory created (MSANNP): dim={} m={} lambda={} divisions={} seed={}", dim, m, ell, divisions, seed);
+                logger.info("TokenFactory created (MSANNP): dim={} m={} lambda={} divisions={} seed={}", dim, m, lambda, divisions, seed);
             }
 
         int primaryDim = dimensions.get(0);
@@ -1927,6 +1927,9 @@ public class ForwardSecureANNSystem {
     public QueryExecutionEngine getEngine() {
         return this.engine;
     }
+    public int[] getKVariants() {
+        return K_VARIANTS.clone();
+    }
 
     public void setStabilizationStats(int raw, int fin) {
         this.lastStabilizedRaw = raw;
@@ -2066,6 +2069,12 @@ public class ForwardSecureANNSystem {
         Path baseVecs  = Paths.get(dataPath);
         Path queryVecs = Paths.get(queryPath);
 
+        List<double[]> queries = loadQueriesWithValidation(Paths.get(queryPath), dimension);
+
+        if (queries.isEmpty()) {
+            throw new IllegalStateException("No queries loaded from " + queryPath);
+        }
+
         if (!queryOnlyMode && Files.exists(baseVecs)) {
             System.setProperty("base.path", baseVecs.toString());
         }
@@ -2120,7 +2129,7 @@ public class ForwardSecureANNSystem {
         // >>> SINGLE SOURCE OF TRUTH <<<
         SystemConfig cfg = sys.config;
 
-        // ===================== FIX KEY ROTATION POLICY =====================
+        // =====================  KEY ROTATION POLICY =====================
         int opsCap = (int) Math.min(Integer.MAX_VALUE, cfg.getOpsThreshold());
         long ageMs = cfg.getAgeThresholdMs();
 
@@ -2184,7 +2193,7 @@ public class ForwardSecureANNSystem {
             gt.load(groundtruth);
 
             sys.engine.evalBatch(
-                    new ArrayList<>(),
+                    queries,
                     dimension,
                     gt,
                     sys.resultsDir,
@@ -2221,9 +2230,17 @@ public class ForwardSecureANNSystem {
         GroundtruthManager gt = new GroundtruthManager();
         gt.load(groundtruth);
 
+
+        logger.info(
+                "Running evalBatch: queries={}, kVariants={}",
+                queries.size(),
+                Arrays.toString(sys.getKVariants())
+        );
+
+
         long q0 = System.currentTimeMillis();
         sys.engine.evalBatch(
-                new ArrayList<>(),
+                queries,
                 dimension,
                 gt,
                 sys.resultsDir,
