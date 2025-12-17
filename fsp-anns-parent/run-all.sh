@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 # =========================
-# FSP-ANN MULTI-DATASET RUNNER (FINAL)
+# FSP-ANN MULTI-DATASET RUNNER
 # =========================
 
 JarPath="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/api/target/api-0.0.1-SNAPSHOT-shaded.jar"
@@ -29,33 +29,33 @@ mkdir -p "$OutRoot"
 # ================= DATASETS =================
 
 declare -A DATASET_CONFIG=(
+  ["RedCaps"]="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/config/src/main/resources/config_redcaps.json"
   ["SIFT1M"]="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/config/src/main/resources/config_sift1m.json"
   ["glove-100"]="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/config/src/main/resources/config_glove100.json"
-  ["RedCaps"]="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/config/src/main/resources/config_redcaps.json"
 )
 
 declare -A DATASET_DIM=(
+  ["RedCaps"]=512
   ["SIFT1M"]=128
   ["glove-100"]=100
-  ["RedCaps"]=512
 )
 
 declare -A DATASET_BASE=(
+  ["RedCaps"]="/mnt/data/mehran/Datasets/redcaps/redcaps_base.fvecs"
   ["SIFT1M"]="/mnt/data/mehran/Datasets/SIFT1M/sift_base.fvecs"
   ["glove-100"]="/mnt/data/mehran/Datasets/glove-100/glove-100_base.fvecs"
-  ["RedCaps"]="/mnt/data/mehran/Datasets/redcaps/redcaps_base.fvecs"
 )
 
 declare -A DATASET_QUERY=(
+  ["RedCaps"]="/mnt/data/mehran/Datasets/redcaps/redcaps_query.fvecs"
   ["SIFT1M"]="/mnt/data/mehran/Datasets/SIFT1M/sift_query.fvecs"
   ["glove-100"]="/mnt/data/mehran/Datasets/glove-100/glove-100_query.fvecs"
-  ["RedCaps"]="/mnt/data/mehran/Datasets/redcaps/redcaps_query.fvecs"
 )
 
 declare -A DATASET_GT=(
+  ["RedCaps"]="/mnt/data/mehran/Datasets/redcaps/redcaps_query_groundtruth.ivecs"
   ["SIFT1M"]="/mnt/data/mehran/Datasets/SIFT1M/sift_query_groundtruth.ivecs"
   ["glove-100"]="/mnt/data/mehran/Datasets/glove-100/glove-100_groundtruth.ivecs"
-  ["RedCaps"]="/mnt/data/mehran/Datasets/redcaps/redcaps_query_groundtruth.ivecs"
 )
 
 # ================= METRICS =================
