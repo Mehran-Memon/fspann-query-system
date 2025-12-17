@@ -10,7 +10,8 @@
       "lambda": 2,
       "divisions": 4,
       "seed": 13,
-      "safetyMaxCandidates": 0
+      "safetyMaxCandidates": 0,
+      "probeLimit": 6
     },
 
     "stabilization": {

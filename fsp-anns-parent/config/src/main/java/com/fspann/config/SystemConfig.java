@@ -345,6 +345,9 @@ public class SystemConfig {
         @JsonProperty("safetyMaxCandidates")
         public int safetyMaxCandidates = 0;
 
+        @JsonProperty("probeLimit")
+        public int probeLimit = 6;
+
         public boolean isEnabled() {
             return enabled;
         }
@@ -368,6 +371,9 @@ public class SystemConfig {
         public int getSafetyMaxCandidates() {
             return Math.max(0, safetyMaxCandidates);
         }
+
+        public int getProbeLimit() { return Math.max(1, probeLimit); }
+
     }
 
     /** Evaluation knobs (precision, K-variants, etc.). */
