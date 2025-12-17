@@ -31,7 +31,7 @@ public final class PartitionedIndexService implements IndexService {
     // =====================================================
 
     /** Build trigger threshold: create partitions when staged >= this */
-    private static final int DEFAULT_BUILD_THRESHOLD = 1000;
+    private static final int DEFAULT_BUILD_THRESHOLD = 50000;
 
     // =====================================================
     // FIELDS
@@ -47,7 +47,6 @@ public final class PartitionedIndexService implements IndexService {
 
     // Finalization state
     private volatile boolean frozen = false;
-
     // =====================================================
     // INNER CLASSES
     // =====================================================
@@ -178,10 +177,11 @@ public final class PartitionedIndexService implements IndexService {
                         S.stagedCodes.get(i)[d]
                 ));
             }
+            int codeBits = pc.m * pc.lambda;
 
             var br = GreedyPartitioner.build(
                     items,
-                    m,
+                    codeBits,
                     pc.seed + d
             );
 
@@ -211,6 +211,7 @@ public final class PartitionedIndexService implements IndexService {
         if (S == null) return Collections.emptyList();
 
         BitSet[] qcodes = token.getCodes();
+        int lambda = token.getLambda();
 
         LinkedHashMap<String, EncryptedPoint> out = new LinkedHashMap<>();
 
@@ -218,30 +219,40 @@ public final class PartitionedIndexService implements IndexService {
             DivisionState div = S.divisions.get(d);
             BitSet qc = qcodes[d];
 
+            int probesUsed = 0;
+            int probeLimit = cfg.getPaper().probeLimit;
+
             for (GreedyPartitioner.SubsetBounds sb : div.I) {
-                if (covers(sb, qc)) {
-                    List<String> ids = div.tagToIds.get(sb.tag);
-                    if (ids == null) continue;
 
-                    for (String id : ids) {
-                        if (out.containsKey(id)) continue;
-                        if (metadata.isDeleted(id)) continue;
+                if (!covers(sb, qc)) continue;
 
-                        try {
-                            EncryptedPoint ep = metadata.loadEncryptedPoint(id);
-                            if (ep == null) continue;
-                            if (ep.getVersion() < keyService.getCurrentVersion().getVersion()) {
-                                continue;
-                            }
-                            if (ep != null) {
-                                out.put(id, ep);
-                            }
-                        } catch (Exception e) {
-                            logger.warn("Failed to load encrypted point {}", id, e);
+                if (probesUsed >= probeLimit) break;
+                probesUsed++;
+
+                List<String> ids = div.tagToIds.get(sb.tag);
+                if (ids == null) continue;
+
+                for (String id : ids) {
+                    if (out.containsKey(id)) continue;
+                    if (metadata.isDeleted(id)) continue;
+
+                    try {
+                        EncryptedPoint ep = metadata.loadEncryptedPoint(id);
+                        if (ep == null) continue;
+                        if (ep.getVersion() < keyService.getCurrentVersion().getVersion()) {
+                            continue;
                         }
+                        out.put(id, ep);
+                    } catch (Exception e) {
+                        logger.warn("Failed to load encrypted point {}", id, e);
                     }
                 }
             }
+
+            logger.debug(
+                    "lookup: dim={} division={} probeLimit={} probesUsed={}",
+                    dim, d, probeLimit, probesUsed
+            );
         }
 
         return new ArrayList<>(out.values());
@@ -620,18 +631,34 @@ public final class PartitionedIndexService implements IndexService {
     // =====================================================
     /**
      * Generate bit-interleaved codes for all divisions.
-     *
-     * ✅ FIX #4: Calls Coding.code() which now has proper overloads
-     * in the corrected Coding class.
      */
     public BitSet[] code(double[] vec) {
+        SystemConfig.PaperConfig pc = cfg.getPaper();
+
+        int m = pc.m;
+        int lambda = pc.lambda;
+        int divisions = pc.divisions;
+        long seed = pc.seed;
+
+        logger.info(
+                "Coding: dim={} m={} lambda={} divisions={} seed={}",
+                vec.length,
+                m,
+                lambda,
+                divisions,
+                seed
+        );
+
         return Coding.code(
                 vec,
-                cfg.getPaper().divisions,
-                cfg.getPaper().m,
-                cfg.getPaper().seed
+                divisions,
+                m,
+                lambda,
+                seed
         );
+
     }
+
 
     // =====================================================
     // REQUIRED IndexService METHODS

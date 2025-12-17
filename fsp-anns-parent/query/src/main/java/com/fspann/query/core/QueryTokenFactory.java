@@ -47,27 +47,32 @@ public final class QueryTokenFactory {
 
         int dim = vec.length;
 
-        // 1) Partition codes (Peng MSANNP)
+        // 1) MSANNP codes
         BitSet[] codes = partition.code(vec);
 
-        // 2) Encrypt query (ephemeral, NO AAD, NO point semantics)
+        // 2) Encrypt query
         KeyVersion kv = keyService.getCurrentVersion();
-        SecretKey sk = kv.getKey();
-
         byte[] iv = EncryptionUtils.generateIV();
-        byte[] ct = crypto.encryptQuery(vec, sk, iv);
+        byte[] ct = crypto.encryptQuery(vec, kv.getKey(), iv);
 
-        // 3) Build token
+        int lambda = cfg.getPaper().lambda;   // <<< CRITICAL
+
+        log.info(
+                "QueryTokenFactory create: dim={} K={} λ={}",
+                dim, topK, lambda
+        );
+
         return new QueryToken(
-                Collections.emptyList(),   // no LSH
-                codes,                     // MSANNP codes
+                Collections.emptyList(),
+                codes,
                 iv,
                 ct,
                 topK,
                 divisions,
                 "dim_" + dim + "_v" + kv.getVersion(),
                 dim,
-                kv.getVersion()
+                kv.getVersion(),
+                lambda
         );
     }
 
@@ -81,7 +86,8 @@ public final class QueryTokenFactory {
                 tok.getNumTables(),
                 tok.getEncryptionContext(),
                 tok.getDimension(),
-                tok.getVersion()
+                tok.getVersion(),
+                tok.getLambda()
         );
     }
 }

@@ -27,7 +27,6 @@ public final class Coding {
     private Coding() {}
 
     // Default parameters
-    private static final int DEFAULT_LAMBDA = 8;
     private static final double DEFAULT_OMEGA = 1.0;
 
     // ============================================================
@@ -238,38 +237,6 @@ public final class Coding {
     // ============================================================
     // Wrapper method: code() - generates codes for all divisions
     // ============================================================
-
-    /**
-     * Generate bit-interleaved codes for all divisions.
-     *
-     * Creates a separate GFunction for each division using a unique seed,
-     * then computes the code for each division independently.
-     *
-     * @param vec the vector to code
-     * @param divisions number of divisions
-     * @param m projections per division
-     * @param seed base seed (division-specific seeds derived from this)
-     * @return array of BitSets, one per division
-     */
-    public static BitSet[] code(double[] vec, int divisions, int m, long seed) {
-        if (vec == null || vec.length == 0)
-            throw new IllegalArgumentException("vec empty");
-        if (divisions <= 0)
-            throw new IllegalArgumentException("divisions ≤ 0");
-        if (m <= 0)
-            throw new IllegalArgumentException("m ≤ 0");
-
-        BitSet[] result = new BitSet[divisions];
-
-        // For each division, create a GFunction with unique seed
-        for (int d = 0; d < divisions; d++) {
-            long divisionSeed = seed + d;  // Unique seed per division
-            GFunction G = buildRandomG(vec.length, m, DEFAULT_LAMBDA, DEFAULT_OMEGA, divisionSeed);
-            result[d] = C(vec, G);
-        }
-
-        return result;
-    }
 
     /**
      * Advanced variant: generate codes with custom lambda.

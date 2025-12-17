@@ -26,6 +26,7 @@ public class QueryToken implements Serializable {
     private final String encryptionContext;
     private final int dimension;
     private final int version;
+    private final int lambda;
 
     public QueryToken(List<List<Integer>> tableBuckets,
                       BitSet[] codes,
@@ -35,7 +36,8 @@ public class QueryToken implements Serializable {
                       int numTables,
                       String encryptionContext,
                       int dimension,
-                      int version) {
+                      int version,
+                      int lambda) {
         this.tableBuckets = List.copyOf(Objects.requireNonNull(tableBuckets, "tableBuckets"));
         this.numTables = Math.max(1, numTables);
         this.codes = (codes == null) ? null : deepCloneCodes(codes);
@@ -48,6 +50,7 @@ public class QueryToken implements Serializable {
         );
         this.dimension = Math.max(1, dimension);
         this.version = version;
+        this.lambda = Math.max(1, lambda);
 
         if (this.iv.length != 12) {
             throw new IllegalArgumentException("iv must be 12 bytes for AES-GCM");
@@ -96,6 +99,10 @@ public class QueryToken implements Serializable {
 
     public int getVersion() {
         return version;
+    }
+
+    public int getLambda() {
+        return lambda;
     }
 
     public int estimateSerializedSizeBytes() {
