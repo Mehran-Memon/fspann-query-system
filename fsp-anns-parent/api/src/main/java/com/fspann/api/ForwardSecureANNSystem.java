@@ -507,7 +507,6 @@ public class ForwardSecureANNSystem {
      * Removes encryptVector() and generateIV() helper methods.
      * Keeps facade clean - no low-level crypto details in main system class.
      */
-
     public void batchInsert(List<double[]> vectors, int dim) {
         Objects.requireNonNull(vectors, "Vectors cannot be null");
         if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
@@ -708,6 +707,93 @@ public class ForwardSecureANNSystem {
         if (qtf == null)
             throw new IllegalStateException("No QueryTokenFactory for dim=" + dim);
         return qtf;
+    }
+
+    public void runQueries(
+            List<double[]> queries,
+            int dim,
+            GroundtruthManager gt,
+            boolean trustedGT
+    ) {
+        Objects.requireNonNull(queries, "queries");
+        Objects.requireNonNull(gt, "groundtruth");
+
+        QueryServiceImpl qs = getQueryServiceImpl();
+
+        logger.info("Running explicit query loop: queries={}, dim={}", queries.size(), dim);
+
+        for (int qi = 0; qi < queries.size(); qi++) {
+            double[] q = queries.get(qi);
+            recordRecentVector(q);
+
+            for (int k : K_VARIANTS) {
+
+                long t0 = System.nanoTime();
+
+                // 1. Token creation
+                QueryToken token = createToken(q, k, dim);
+
+                // 2. ANN search
+                List<QueryResult> results = qs.search(token);
+
+                long t1 = System.nanoTime();
+                addQueryTime(t1 - t0);
+
+                // 3. Metrics
+                double ratio = computeRatio(q, results, k, qi, gt, trustedGT);
+                double precision = computePrecision(
+                        results,
+                        gt.getGroundtruth(qi, k)
+                );
+
+                long serverMs  = (long) boundedServerMs(qs, t0, t1);
+                long clientMs  = (t1 - t0) / 1_000_000L;
+                long decryptMs = qs.getLastDecryptNs() / 1_000_000L;
+
+                int tokenBytes =
+                        token.getEncryptedQuery().length +
+                                token.getIv().length;
+
+                // 4. PROFILER — FULL, CORRECT
+                profiler.recordQueryRow(
+                        "Q" + qi + "_K" + k,
+                        serverMs,
+                        clientMs,
+                        clientMs,
+                        decryptMs,
+                        lastInsertMs(),
+                        ratio,
+                        precision,
+                        qs.getLastCandTotal(),
+                        qs.getLastCandKept(),
+                        qs.getLastCandDecrypted(),
+                        qs.getLastReturned(),
+                        tokenBytes,
+                        dim,
+                        k,
+                        baseKForToken(),
+                        qi,
+                        totalFlushed(),
+                        flushThreshold(),
+                        touchedGlobal.size(),
+                        reencTracker.uniqueCount(),
+                        0L,      // reencTimeMs (end-of-run only)
+                        0L,      // reencBytesDelta
+                        0L,      // reencBytesAfter
+                        ratioDenomLabelPublic(trustedGT),
+                        "partitioned",
+                        getLastStabilizedRaw(),
+                        getLastStabilizedFinal()
+                );
+
+                // 5. Forward-security accounting
+                doReencrypt("Q" + qi + "_K" + k, qs);
+            }
+
+            if (kAdaptiveProbeEnabled()) {
+                runKAdaptiveProbeOnly(qi, q, dim, qs);
+            }
+        }
     }
 
     /* ---------------------- Utilities & Lifecycle ---------------------- */
@@ -1245,7 +1331,6 @@ public class ForwardSecureANNSystem {
         return sb.toString();
     }
 
-
     // --- storage helpers ---
     private static long safeSize(Path p) {
         try {
@@ -1683,7 +1768,6 @@ public class ForwardSecureANNSystem {
         return queries;
     }
 
-
     // ==================== K-ADAPTIVE PROBE-ONLY (ABLATION) ====================
 
     /**
@@ -1847,6 +1931,7 @@ public class ForwardSecureANNSystem {
             totalQueryTimeNs += Math.max(0L, ns);
         }
     }
+
     /** Façade: compute ratio@K */
     public double computeRatio(double[] q,
                                List<QueryResult> prefix,
@@ -1871,11 +1956,6 @@ public class ForwardSecureANNSystem {
         return (double) hits / truth.length;
     }
 
-    /** Façade: GT / BASE label exposure */
-    public String ratioDenomLabelPublic(boolean trusted) {
-        return ratioDenomLabel(trusted);
-    }
-
     /** Façade: expose selective re-encryption hook */
     public ReencOutcome doReencrypt(String label, QueryServiceImpl qs) {
         Set<String> ids = qs.getLastCandidateIds(); // must exist
@@ -1884,7 +1964,6 @@ public class ForwardSecureANNSystem {
         }
         return maybeReencryptTouched(label, qs);
     }
-
 
     private void runSelectiveReencryptionIfNeeded() {
         if (!reencEnabled) {
@@ -1926,6 +2005,7 @@ public class ForwardSecureANNSystem {
     public QueryExecutionEngine getEngine() {
         return this.engine;
     }
+
     public int[] getKVariants() {
         return K_VARIANTS.clone();
     }
@@ -1936,6 +2016,9 @@ public class ForwardSecureANNSystem {
     }
     public int getLastStabilizedRaw() { return lastStabilizedRaw; }
     public int getLastStabilizedFinal() { return lastStabilizedFinal; }
+    public String ratioDenomLabelPublic(boolean trusted) {
+        return ratioDenomLabel(trusted);
+    }
 
     public void flushAll() throws IOException {
         com.fspann.common.EncryptedPointBuffer buf = indexService.getPointBuffer();
@@ -2191,11 +2274,10 @@ public class ForwardSecureANNSystem {
             GroundtruthManager gt = new GroundtruthManager();
             gt.load(groundtruth);
 
-            sys.engine.evalBatch(
+            sys.runQueries(
                     queries,
                     dimension,
                     gt,
-                    sys.resultsDir,
                     true
             );
 
@@ -2238,11 +2320,10 @@ public class ForwardSecureANNSystem {
 
 
         long q0 = System.currentTimeMillis();
-        sys.engine.evalBatch(
+        sys.runQueries(
                 queries,
                 dimension,
                 gt,
-                sys.resultsDir,
                 true
         );
         logger.info(

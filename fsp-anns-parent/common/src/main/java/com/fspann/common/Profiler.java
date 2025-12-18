@@ -188,7 +188,6 @@ public final class Profiler {
         }
     }
 
-    public void exportToCsv(String fp) throws IOException { exportQueryMetricsCsv(fp); }
     public void exportToCSV(String fp) throws IOException { exportQueryMetricsCsv(fp); }
 
     /* -----------------------------------------------------
