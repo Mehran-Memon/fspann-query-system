@@ -53,7 +53,6 @@ public final class PartitionedIndexService implements IndexService {
             ThreadLocal.withInitial(() -> 0);
     private final ThreadLocal<Set<String>> lastTouchedIds =
             ThreadLocal.withInitial(() -> new HashSet<>(2048));
-    int touched = 0;
 
     // =====================================================
     // INNER CLASSES
@@ -226,7 +225,6 @@ public final class PartitionedIndexService implements IndexService {
         if (S == null) return Collections.emptyList();
 
         BitSet[] qcodes = token.getCodes();
-        int lambda = token.getLambda();
 
         LinkedHashMap<String, EncryptedPoint> out = new LinkedHashMap<>();
 
