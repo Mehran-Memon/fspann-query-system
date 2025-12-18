@@ -58,6 +58,10 @@ declare -A DATASET_GT=(
   ["glove-100"]="/mnt/data/mehran/Datasets/glove-100/glove-100_groundtruth.ivecs"
 )
 
+# ================= SINGLE-RUN DEBUG SWITCHES =================
+ONLY_DATASET="SIFT1M"
+ONLY_PROFILE="M24"
+
 # ================= METRICS =================
 
 extract_metrics() {
@@ -80,7 +84,12 @@ echo "dataset,profile,ART_ms,AvgRatio" > "$GLOBAL_SUMMARY"
 
 # ================= MAIN LOOP =================
 
-for ds in SIFT1M glove-100 RedCaps; do
+DATASETS=(SIFT1M glove-100 RedCaps)
+if [[ -n "$ONLY_DATASET" ]]; then
+  DATASETS=("$ONLY_DATASET")
+fi
+
+for ds in "${DATASETS[@]}"; do
   cfg="${DATASET_CONFIG[$ds]}"
   dim="${DATASET_DIM[$ds]}"
   base="${DATASET_BASE[$ds]}"
@@ -102,9 +111,17 @@ for ds in SIFT1M glove-100 RedCaps; do
   BASE_JSON="$(jq -c 'del(.profiles)' <<<"$CFG_JSON")"
   PROFILE_COUNT="$(jq '.profiles | length' <<<"$CFG_JSON")"
 
+  ran_any_profile=false
+
   for ((i=0; i<PROFILE_COUNT; i++)); do
     profile="$(jq -c ".profiles[$i]" <<<"$CFG_JSON")"
     name="$(jq -r '.name' <<<"$profile")"
+
+    if [[ -n "$ONLY_PROFILE" && "$name" != "$ONLY_PROFILE" ]]; then
+      continue
+    fi
+
+    ran_any_profile=true
     overrides="$(jq -c '.overrides // {}' <<<"$profile")"
 
     run_dir="$ds_root/$name"
@@ -126,38 +143,35 @@ for ds in SIFT1M glove-100 RedCaps; do
       | .ratio.gtPath = $gtpath
       | .ratio.autoComputeGT = false
     ' \
-    --argjson base "$BASE_JSON" \
-    --argjson ovr  "$overrides" \
-    --arg resdir "$run_dir/results" \
-    --arg gtpath "$gt"
+      --argjson base "$BASE_JSON" \
+      --argjson ovr  "$overrides" \
+      --arg resdir "$run_dir/results" \
+      --arg gtpath "$gt"
     )"
 
     echo "$final_cfg" > "$run_dir/config.json"
 
     # Guard: ensure overrides applied
-  expected_div="$(jq -r '.paper.divisions' "$run_dir/config.json")"
-  [[ "$expected_div" != "8" ]] \
-  || die "paper.divisions still default(8) for $ds / $name"
-
+    expected_div="$(jq -r '.paper.divisions' "$run_dir/config.json")"
+    [[ "$expected_div" != "8" ]] \
+      || die "paper.divisions still default(8) for $ds / $name"
 
     log="$run_dir/run.log"
 
-    if ! java "${JvmArgs[@]}" \
-        -Dcli.dataset="$ds" \
-        -Dcli.profile="$name" \
-        -jar "$JarPath" \
-        "$run_dir/config.json" \
-        "$base" \
-        "$query" \
-        "$run_dir/keys.blob" \
-        "$dim" \
-        "$run_dir" \
-        "$gt" \
-        "$Batch" \
-        >"$log" 2>&1; then
-      echo "FAILED: $ds / $name" >&2
-      continue
-    fi
+    java "${JvmArgs[@]}" \
+      -Dcli.dataset="$ds" \
+      -Dcli.profile="$name" \
+      -jar "$JarPath" \
+      "$run_dir/config.json" \
+      "$base" \
+      "$query" \
+      "$run_dir/keys.blob" \
+      "$dim" \
+      "$run_dir" \
+      "$gt" \
+      "$Batch" \
+      >"$log" 2>&1 \
+      || die "FAILED: $ds / $name"
 
     metrics=$(extract_metrics "$run_dir/results")
     IFS=',' read -r art ratio <<<"$metrics"
@@ -166,7 +180,17 @@ for ds in SIFT1M glove-100 RedCaps; do
     echo "$ds,$name,$art,$ratio" >> "$GLOBAL_SUMMARY"
 
     printf "%-10s | ART=%8s ms | Ratio=%s\n" "$name" "$art" "$ratio"
+
+    if [[ -n "$ONLY_PROFILE" ]]; then
+      echo "DEBUG MODE: completed single profile ($ONLY_PROFILE)"
+      break
+    fi
   done
+
+  [[ "$ran_any_profile" == true ]] \
+    || die "No profile matched ONLY_PROFILE=$ONLY_PROFILE for dataset $ds"
+
+  [[ -n "$ONLY_PROFILE" ]] && break
 done
 
 echo "DONE"

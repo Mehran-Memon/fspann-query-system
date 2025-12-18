@@ -15,13 +15,13 @@
       "divisions": 3,
       "seed": 13,
       "safetyMaxCandidates": 0,
-      "probeLimit": 6
+      "probeLimit": 10
     },
 
     "stabilization": {
       "enabled": true,
       "alpha": 0.15,
-      "minCandidates": 2000
+      "minCandidates": 8000
     },
 
     "eval": {
