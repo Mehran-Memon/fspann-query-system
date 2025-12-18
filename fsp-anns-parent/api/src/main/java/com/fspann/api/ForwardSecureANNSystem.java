@@ -2322,14 +2322,6 @@ public class ForwardSecureANNSystem {
         GroundtruthManager gt = new GroundtruthManager();
         gt.load(groundtruth);
 
-
-        logger.info(
-                "Running evalBatch: queries={}, kVariants={}",
-                queries.size(),
-                Arrays.toString(sys.getKVariants())
-        );
-
-
         long q0 = System.currentTimeMillis();
         sys.runQueries(
                 queries,
