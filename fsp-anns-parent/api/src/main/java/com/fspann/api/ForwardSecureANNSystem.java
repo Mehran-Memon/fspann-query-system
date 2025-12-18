@@ -736,6 +736,12 @@ public class ForwardSecureANNSystem {
                 // 2. ANN search
                 List<QueryResult> results = qs.search(token);
 
+                // ===== GLOBAL TOUCH ACCUMULATION (POST-RELAXATION SAFE) =====
+                Set<String> annTouched = indexService.getLastTouchedIds();
+                if (annTouched != null && !annTouched.isEmpty()) {
+                    touchedGlobal.addAll(annTouched);
+                }
+
                 long t1 = System.nanoTime();
                 if (indexService.getLastTouchedIds().isEmpty()) {
 
@@ -751,11 +757,6 @@ public class ForwardSecureANNSystem {
                     results = qs.search(token);
                     indexService.clearProbeOverride();
 
-                    if (indexService.getLastTouchedIds().isEmpty()) {
-                        throw new IllegalStateException(
-                                "ANN query failed after forced probe widening — aborting for safety"
-                        );
-                    }
                 }
 
                 addQueryTime(t1 - t0);

@@ -215,6 +215,8 @@ public final class PartitionedIndexService implements IndexService {
     public List<EncryptedPoint> lookup(QueryToken token) {
         Objects.requireNonNull(token, "token cannot be null");
 
+        final int maxRelaxSteps = cfg.getPaper().lambda;
+
         Set<String> touchedIds = lastTouchedIds.get();
         touchedIds.clear();
 
@@ -230,6 +232,8 @@ public final class PartitionedIndexService implements IndexService {
 
         LinkedHashMap<String, EncryptedPoint> out = new LinkedHashMap<>();
 
+        boolean anyTouched = false;
+
         for (int d = 0; d < S.divisions.size(); d++) {
             DivisionState div = S.divisions.get(d);
             BitSet qc = qcodes[d];
@@ -243,6 +247,7 @@ public final class PartitionedIndexService implements IndexService {
             for (GreedyPartitioner.SubsetBounds sb : div.I) {
 
                 if (!covers(sb, qc)) continue;
+                anyTouched = true;
 
                 if (probesUsed >= probeLimit) break;
                 probesUsed++;
@@ -277,7 +282,39 @@ public final class PartitionedIndexService implements IndexService {
             );
         }
 
-        lastTouched.set(touchedIds.size());
+        // ---- PREFIX RELAXATION FALLBACK (ZERO-TOUCH FIX) ----
+        if (!anyTouched) {
+            for (int relax = 1; relax <= maxRelaxSteps; relax++) {
+
+                for (int d = 0; d < S.divisions.size(); d++) {
+                    DivisionState div = S.divisions.get(d);
+                    BitSet qc = qcodes[d];
+
+                    int relaxedBits = Math.max(1, qc.length() - relax);
+                    for (GreedyPartitioner.SubsetBounds sb : div.I) {
+                        if (!coversRelaxed(sb, qc, relaxedBits)) continue;
+
+                        List<String> ids = div.tagToIds.get(sb.tag);
+                        if (ids == null) continue;
+                        for (String id : ids) {
+                            touchedIds.add(id);
+                            if (out.containsKey(id)) continue;
+                            if (metadata.isDeleted(id)) continue;
+                            try {
+                                EncryptedPoint ep = metadata.loadEncryptedPoint(id);
+                                if (ep != null) out.put(id, ep);
+                            } catch (Exception e) {
+                                // safe: skip corrupt/missing entry
+                            }
+                        }
+                    }
+                }
+                if (!out.isEmpty()) break;
+            }
+        }
+
+
+            lastTouched.set(touchedIds.size());
         return new ArrayList<>(out.values());
     }
 
@@ -703,5 +740,9 @@ public final class PartitionedIndexService implements IndexService {
     public void clearProbeOverride() {
         probeOverride.remove();
     }
-
+    private boolean coversRelaxed(GreedyPartitioner.SubsetBounds sb, BitSet c, int bits) {
+        var cmp = new GreedyPartitioner.CodeComparator(bits);
+        return cmp.compare(sb.lower, c) <= 0 &&
+                cmp.compare(c, sb.upper) <= 0;
+    }
 }
