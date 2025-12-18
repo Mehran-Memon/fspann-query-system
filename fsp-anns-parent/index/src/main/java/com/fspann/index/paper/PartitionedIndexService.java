@@ -31,7 +31,7 @@ public final class PartitionedIndexService implements IndexService {
     // =====================================================
 
     /** Build trigger threshold: create partitions when staged >= this */
-    private static final int DEFAULT_BUILD_THRESHOLD = 50000;
+    private static final int DEFAULT_BUILD_THRESHOLD = 10000;
 
     // =====================================================
     // FIELDS
@@ -47,6 +47,11 @@ public final class PartitionedIndexService implements IndexService {
 
     // Finalization state
     private volatile boolean frozen = false;
+
+    // ===== Query metrics =====
+    private final ThreadLocal<Integer> lastTouched =
+            ThreadLocal.withInitial(() -> 0);
+
     // =====================================================
     // INNER CLASSES
     // =====================================================
@@ -205,6 +210,11 @@ public final class PartitionedIndexService implements IndexService {
     @Override
     public List<EncryptedPoint> lookup(QueryToken token) {
         Objects.requireNonNull(token, "token cannot be null");
+        lastTouched.set(0);
+
+        if (!frozen) {
+            throw new IllegalStateException("Index not finalized before lookup");
+        }
 
         int dim = token.getDimension();
         DimensionState S = dims.get(dim);
@@ -233,6 +243,7 @@ public final class PartitionedIndexService implements IndexService {
                 if (ids == null) continue;
 
                 for (String id : ids) {
+                    lastTouched.set(lastTouched.get() + 1);
                     if (out.containsKey(id)) continue;
                     if (metadata.isDeleted(id)) continue;
 
@@ -255,6 +266,15 @@ public final class PartitionedIndexService implements IndexService {
                     "lookup: dim={} division={} probeLimit={} probesUsed={}",
                     dim, d, probeLimit, probesUsed
             );
+        }
+
+        for (EncryptedPoint ep : S.staged) {
+            String id = ep.getId();
+            lastTouched.set(lastTouched.get() + 1);
+            if (out.containsKey(id)) continue;
+            if (metadata.isDeleted(id)) continue;
+
+            out.put(id, ep);
         }
 
         return new ArrayList<>(out.values());
@@ -642,7 +662,7 @@ public final class PartitionedIndexService implements IndexService {
         int divisions = pc.divisions;
         long seed = pc.seed;
 
-        logger.info(
+        logger.debug(
                 "Coding: dim={} m={} lambda={} divisions={} seed={}",
                 vec.length,
                 m,
