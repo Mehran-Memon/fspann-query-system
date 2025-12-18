@@ -52,7 +52,7 @@ public final class PartitionedIndexService implements IndexService {
     private final ThreadLocal<Integer> lastTouched =
             ThreadLocal.withInitial(() -> 0);
     private final ThreadLocal<Set<String>> lastTouchedIds =
-            ThreadLocal.withInitial(HashSet::new);
+            ThreadLocal.withInitial(() -> new HashSet<>(2048));
     int touched = 0;
 
     // =====================================================
@@ -213,8 +213,7 @@ public final class PartitionedIndexService implements IndexService {
     @Override
     public List<EncryptedPoint> lookup(QueryToken token) {
         Objects.requireNonNull(token, "token cannot be null");
-        lastTouched.set(0);
-        int touched =0;
+
         Set<String> touchedIds = lastTouchedIds.get();
         touchedIds.clear();
 
@@ -249,8 +248,8 @@ public final class PartitionedIndexService implements IndexService {
                 if (ids == null) continue;
 
                 for (String id : ids) {
-                    touched++;
                     touchedIds.add(id);
+
                     if (out.containsKey(id)) continue;
                     if (metadata.isDeleted(id)) continue;
 
@@ -275,15 +274,7 @@ public final class PartitionedIndexService implements IndexService {
             );
         }
 
-        for (EncryptedPoint ep : S.staged) {
-            String id = ep.getId();
-            lastTouched.set(lastTouched.get() + 1);
-            if (out.containsKey(id)) continue;
-            if (metadata.isDeleted(id)) continue;
-
-            out.put(id, ep);
-        }
-        lastTouched.set(touched);
+        lastTouched.set(touchedIds.size());
         return new ArrayList<>(out.values());
     }
 
