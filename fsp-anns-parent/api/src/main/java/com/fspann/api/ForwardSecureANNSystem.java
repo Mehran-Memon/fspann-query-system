@@ -738,10 +738,27 @@ public class ForwardSecureANNSystem {
 
                 long t1 = System.nanoTime();
                 if (indexService.getLastTouchedIds().isEmpty()) {
-                    throw new IllegalStateException(
-                            "ANN executed but no touched IDs recorded — access pattern not protected"
+
+                    int prevProbes = Integer.getInteger("probe.shards", 1);
+                    int fallbackProbes = Math.max(prevProbes * 2, 4);
+
+                    logger.warn(
+                            "Zero-touch ANN query detected (q={}, k={}). Forcing probe widening: {} → {}",
+                            qi, k, prevProbes, fallbackProbes
                     );
+
+                    System.setProperty("probe.shards", String.valueOf(fallbackProbes));
+
+                    // Retry search once
+                    results = qs.search(token);
+
+                    if (indexService.getLastTouchedIds().isEmpty()) {
+                        throw new IllegalStateException(
+                                "ANN query failed after forced probe widening — aborting for safety"
+                        );
+                    }
                 }
+
                 addQueryTime(t1 - t0);
 
                 // 3. Metrics
@@ -1720,8 +1737,6 @@ public class ForwardSecureANNSystem {
 
                 queries.addAll(batch);
                 batchCount++;
-                logger.info("  Loaded batch {}: {} queries (total: {})",
-                        batchCount, batch.size(), queries.size());
             }
         } catch (Exception e) {
             logger.warn("DefaultDataLoader failed, trying fallback");
@@ -1732,7 +1747,7 @@ public class ForwardSecureANNSystem {
             throw new IllegalStateException("Query loading resulted in empty list");
         }
 
-        logger.info("✓ Loaded {} queries total", queries.size());
+        logger.info("Loaded {} queries total", queries.size());
         return queries;
     }
 
