@@ -739,18 +739,17 @@ public class ForwardSecureANNSystem {
                 long t1 = System.nanoTime();
                 if (indexService.getLastTouchedIds().isEmpty()) {
 
-                    int prevProbes = Integer.getInteger("probe.shards", 1);
-                    int fallbackProbes = Math.max(prevProbes * 2, 4);
+                    int baseProbes = config.getPaper().probeLimit;
+                    int fallbackProbes = Math.max(baseProbes * 2, 4);
 
                     logger.warn(
-                            "Zero-touch ANN query detected (q={}, k={}). Forcing probe widening: {} → {}",
-                            qi, k, prevProbes, fallbackProbes
+                            "Zero-touch ANN query detected (q={}, k={}). Forcing probe widening {} to {}",
+                            qi,  k, baseProbes, fallbackProbes
                     );
 
-                    System.setProperty("probe.shards", String.valueOf(fallbackProbes));
-
-                    // Retry search once
+                    indexService.setProbeOverride(fallbackProbes);
                     results = qs.search(token);
+                    indexService.clearProbeOverride();
 
                     if (indexService.getLastTouchedIds().isEmpty()) {
                         throw new IllegalStateException(

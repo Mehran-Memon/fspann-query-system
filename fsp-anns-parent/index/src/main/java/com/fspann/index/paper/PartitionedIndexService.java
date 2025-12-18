@@ -53,6 +53,8 @@ public final class PartitionedIndexService implements IndexService {
             ThreadLocal.withInitial(() -> 0);
     private final ThreadLocal<Set<String>> lastTouchedIds =
             ThreadLocal.withInitial(() -> new HashSet<>(2048));
+    private final ThreadLocal<Integer> probeOverride =
+            ThreadLocal.withInitial(() -> -1);
 
     // =====================================================
     // INNER CLASSES
@@ -233,7 +235,10 @@ public final class PartitionedIndexService implements IndexService {
             BitSet qc = qcodes[d];
 
             int probesUsed = 0;
-            int probeLimit = cfg.getPaper().probeLimit;
+
+            int probeLimit = probeOverride.get() > 0
+                    ? probeOverride.get()
+                    : cfg.getPaper().probeLimit;
 
             for (GreedyPartitioner.SubsetBounds sb : div.I) {
 
@@ -692,4 +697,11 @@ public final class PartitionedIndexService implements IndexService {
     public int getLastTouchedCount() {
         return lastTouched.get();
     }
+    public void setProbeOverride(int probes) {
+        probeOverride.set(probes);
+    }
+    public void clearProbeOverride() {
+        probeOverride.remove();
+    }
+
 }
