@@ -155,7 +155,7 @@ public final class Profiler {
     }
 
     /* -----------------------------------------------------
-     * OPTIONAL: Top-K debug rows
+     * Top-K debug rows
      * ----------------------------------------------------- */
 
     public synchronized void addTopKRecord(String... cols) {

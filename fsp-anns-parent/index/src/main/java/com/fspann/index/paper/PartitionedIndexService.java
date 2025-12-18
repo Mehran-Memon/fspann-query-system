@@ -51,6 +51,9 @@ public final class PartitionedIndexService implements IndexService {
     // ===== Query metrics =====
     private final ThreadLocal<Integer> lastTouched =
             ThreadLocal.withInitial(() -> 0);
+    private final ThreadLocal<Set<String>> lastTouchedIds =
+            ThreadLocal.withInitial(HashSet::new);
+    int touched = 0;
 
     // =====================================================
     // INNER CLASSES
@@ -211,6 +214,9 @@ public final class PartitionedIndexService implements IndexService {
     public List<EncryptedPoint> lookup(QueryToken token) {
         Objects.requireNonNull(token, "token cannot be null");
         lastTouched.set(0);
+        int touched =0;
+        Set<String> touchedIds = lastTouchedIds.get();
+        touchedIds.clear();
 
         if (!frozen) {
             throw new IllegalStateException("Index not finalized before lookup");
@@ -243,7 +249,8 @@ public final class PartitionedIndexService implements IndexService {
                 if (ids == null) continue;
 
                 for (String id : ids) {
-                    lastTouched.set(lastTouched.get() + 1);
+                    touched++;
+                    touchedIds.add(id);
                     if (out.containsKey(id)) continue;
                     if (metadata.isDeleted(id)) continue;
 
@@ -276,7 +283,7 @@ public final class PartitionedIndexService implements IndexService {
 
             out.put(id, ep);
         }
-
+        lastTouched.set(touched);
         return new ArrayList<>(out.values());
     }
 
@@ -686,40 +693,14 @@ public final class PartitionedIndexService implements IndexService {
     // REQUIRED IndexService METHODS
     // =====================================================
 
-    public EncryptedPoint getEncryptedPoint(String id) {
-        try {
-            return metadata.loadEncryptedPoint(id);
-        } catch (Exception e) {
-            logger.warn("Failed to load encrypted point {}: {}", id, e.getMessage());
-            return null;
-        }
-    }
-
     @Override
     public EncryptedPointBuffer getPointBuffer() {
         return null; // No buffer in this implementation
     }
-
-    public int getIndexedVectorCount() {
-        return dims.values().stream()
-                .mapToInt(this::countDimensionVectors)
-                .sum();
+    public Set<String> getLastTouchedIds() {
+        return Collections.unmodifiableSet(lastTouchedIds.get());
     }
-
-    private int countDimensionVectors(DimensionState S) {
-        if (S.divisions.isEmpty()) return 0;
-        return S.divisions.get(0).tagToIds.values().stream()
-                .mapToInt(List::size).sum();
-    }
-
-    public Set<Integer> getRegisteredDimensions() {
-        return new HashSet<>(dims.keySet());
-    }
-
-    public int getVectorCountForDimension(int dim) {
-        DimensionState S = dims.get(dim);
-        if (S == null || S.divisions.isEmpty()) return 0;
-        return S.divisions.get(0).tagToIds.values().stream()
-                .mapToInt(List::size).sum();
+    public int getLastTouchedCount() {
+        return lastTouched.get();
     }
 }

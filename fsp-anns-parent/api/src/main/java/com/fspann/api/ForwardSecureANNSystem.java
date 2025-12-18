@@ -737,6 +737,11 @@ public class ForwardSecureANNSystem {
                 List<QueryResult> results = qs.search(token);
 
                 long t1 = System.nanoTime();
+                if (indexService.getLastTouchedIds().isEmpty()) {
+                    throw new IllegalStateException(
+                            "ANN executed but no touched IDs recorded — access pattern not protected"
+                    );
+                }
                 addQueryTime(t1 - t0);
 
                 // 3. Metrics
@@ -775,7 +780,7 @@ public class ForwardSecureANNSystem {
                         qi,
                         totalFlushed(),
                         flushThreshold(),
-                        touchedGlobal.size(),
+                        indexService.getLastTouchedCount(),
                         reencTracker.uniqueCount(),
                         0L,      // reencTimeMs (end-of-run only)
                         0L,      // reencBytesDelta
@@ -1428,7 +1433,7 @@ public class ForwardSecureANNSystem {
             logger.error(
                     "finalizeReencryptionAtEnd: touchedGlobal is EMPTY! " +
                             "This indicates candidate tracking failed. " +
-                            "Check QueryServiceImpl.getLastCandidateIds() and ensure " +
+                            "Check QueryServiceImpl.getLastTouchedIds() and ensure " +
                             "lastCandIds is populated in search()."
             );
 
@@ -1958,9 +1963,15 @@ public class ForwardSecureANNSystem {
 
     /** Façade: expose selective re-encryption hook */
     public ReencOutcome doReencrypt(String label, QueryServiceImpl qs) {
-        Set<String> ids = qs.getLastCandidateIds(); // must exist
-        if (ids != null && !ids.isEmpty()) {
-            touchedGlobal.addAll(ids);
+        // SECURITY: re-encrypt ALL ANN-touched candidates (not only returned)
+        Set<String> annTouched = indexService.getLastTouchedIds();
+        if (annTouched == null || annTouched.isEmpty()) {
+            logger.warn(
+                    "[{}] ANN search returned results but touched set is empty — check lookup()",
+                    label
+            );
+        } else {
+            touchedGlobal.addAll(annTouched);
         }
         return maybeReencryptTouched(label, qs);
     }
@@ -2344,6 +2355,4 @@ public class ForwardSecureANNSystem {
 
         logger.info("FSP-ANN complete");
     }
-
-
 }
