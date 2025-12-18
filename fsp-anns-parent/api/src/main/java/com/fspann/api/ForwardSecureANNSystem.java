@@ -1047,11 +1047,10 @@ public class ForwardSecureANNSystem {
                     if (cols.length < 7) continue;
 
                     try {
-                        double serverMs = Double.parseDouble(cols[1]);
-                        double clientMs = Double.parseDouble(cols[2]);
+                        double runMs = Double.parseDouble(cols[3]);
                         double ratio = Double.parseDouble(cols[6]);
 
-                        sumArt += (serverMs + clientMs);
+                        sumArt += runMs;
                         sumRatio += ratio;
                         count++;
 

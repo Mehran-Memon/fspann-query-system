@@ -7,12 +7,16 @@ import java.util.*;
  * Aggregates extracted from Profiler.QueryRow for EvaluationSummaryPrinter.
  */
 public final class Aggregates {
+
     public double avgRatio;
     public double avgServerMs;
     public double avgClientMs;
+    public double avgRunMs;          // TRUE ART
     public double avgDecryptMs;
+
     public double avgTokenBytes;
     public double avgWorkUnits;
+
     public double avgCandTotal;
     public double avgCandKept;
     public double avgCandDecrypted;
@@ -29,67 +33,95 @@ public final class Aggregates {
 
     public Aggregates() {}
 
+    /** ART = average runMs (end-to-end), NOT server+client */
     public double getAvgArtMs() {
-        return avgServerMs + avgClientMs;
+        return avgRunMs;
     }
 
     public static Aggregates fromProfiler(Profiler p) {
         Aggregates a = new Aggregates();
 
-        var rows = p.getQueryRows();
+        List<Profiler.QueryRow> rows = p.getQueryRows();
         if (rows.isEmpty()) return a;
-
-        double sumRatio = 0, sumServer = 0, sumClient = 0, sumDecrypt = 0;
-        double sumTokenBytes = 0, sumWorkUnits = 0;
-        double sumCandT = 0, sumCandK = 0, sumCandD = 0, sumRet = 0;
 
         int count = rows.size();
 
+        double sumRatio = 0;
+        double sumServer = 0;
+        double sumClient = 0;
+        double sumRun = 0;
+        double sumDecrypt = 0;
+
+        double sumTokenBytes = 0;
+        double sumWorkUnits = 0;
+
+        double sumCandT = 0;
+        double sumCandK = 0;
+        double sumCandD = 0;
+        double sumRet   = 0;
+
         Map<Integer, List<Double>> pAtK = new HashMap<>();
 
-        for (var r : rows) {
-            sumRatio   += r.ratio;
-            sumServer  += r.serverMs;
-            sumClient  += r.clientMs;
-            sumDecrypt += r.decryptMs;
+        for (Profiler.QueryRow r : rows) {
 
-            sumTokenBytes += r.tokenBytes;
-            sumWorkUnits  += r.vectorDim; // define work-units = dimension, Option-C compliant
+            // ---------------- Core metrics ----------------
+            sumRatio   += nz(r.ratio);
+            sumServer  += nz(r.serverMs);
+            sumClient  += nz(r.clientMs);
+            sumDecrypt += nz(r.decryptMs);
 
-            sumCandT += r.candTotal;
-            sumCandK += r.candKept;
-            sumCandD += r.candDecrypted;
-            sumRet   += r.candReturned;
+            if (r.runMs > 0) sumRun += r.runMs;
 
-            // Extract precision@K from mode=full rows only
+            sumTokenBytes += nz(r.tokenBytes);
+            sumWorkUnits  += r.vectorDim;   // Option-C definition
+
+            // ---------------- Candidate pipeline ----------------
+            if (r.candTotal >= 0)      sumCandT += r.candTotal;
+            if (r.candKept >= 0)       sumCandK += r.candKept;
+            if (r.candDecrypted >= 0)  sumCandD += r.candDecrypted;
+            if (r.candReturned >= 0)   sumRet   += r.candReturned;
+
+            // ---------------- Precision@K ----------------
             if ("full".equalsIgnoreCase(r.mode)) {
-                pAtK.computeIfAbsent(r.tokenK, z -> new ArrayList<>()).add(r.precision);
+                pAtK.computeIfAbsent(r.tokenK, z -> new ArrayList<>())
+                        .add(nz(r.precision));
             }
 
-            // collect re-encryption
-            a.reencryptCount += r.reencCount;
-            a.reencryptBytes += r.reencBytesDelta;
-            a.reencryptMs    += r.reencTimeMs;
+            // ---------------- Re-encryption (clamped) ----------------
+            if (r.reencCount > 0) {
+                a.reencryptCount += r.reencCount;
+                a.reencryptBytes += Math.max(0, r.reencBytesDelta);
+                a.reencryptMs    += Math.max(0, r.reencTimeMs);
+            }
         }
 
-        a.avgRatio   = sumRatio / count;
-        a.avgServerMs = sumServer / count;
-        a.avgClientMs = sumClient / count;
-        a.avgDecryptMs = sumDecrypt / count;
-        a.avgTokenBytes = sumTokenBytes / count;
-        a.avgWorkUnits  = sumWorkUnits / count;
+        // ---------------- Averages ----------------
+        a.avgRatio       = sumRatio / count;
+        a.avgServerMs    = sumServer / count;
+        a.avgClientMs    = sumClient / count;
+        a.avgRunMs       = sumRun / count;
+        a.avgDecryptMs   = sumDecrypt / count;
 
-        a.avgCandTotal = sumCandT / count;
-        a.avgCandKept = sumCandK / count;
-        a.avgCandDecrypted = sumCandD / count;
-        a.avgReturned = sumRet / count;
+        a.avgTokenBytes  = sumTokenBytes / count;
+        a.avgWorkUnits   = sumWorkUnits / count;
 
-        // average P@K
+        a.avgCandTotal      = sumCandT / count;
+        a.avgCandKept       = sumCandK / count;
+        a.avgCandDecrypted  = sumCandD / count;
+        a.avgReturned       = sumRet   / count;
+
+        // ---------------- Avg Precision@K ----------------
         for (var e : pAtK.entrySet()) {
-            a.precisionAtK.put(e.getKey(),
-                    e.getValue().stream().mapToDouble(Double::doubleValue).average().orElse(0.0));
+            a.precisionAtK.put(
+                    e.getKey(),
+                    e.getValue().stream().mapToDouble(Double::doubleValue).average().orElse(0.0)
+            );
         }
 
         return a;
+    }
+
+    private static double nz(double v) {
+        return Double.isFinite(v) ? v : 0.0;
     }
 }

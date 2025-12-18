@@ -113,8 +113,8 @@ public final class QueryExecutionEngine {
             int returned = 0;
 
             int touchedCount = 0;
-            int reencCount = -1;
-            long reencMs = -1;
+            int reencCount = 0;
+            long reencMs = 0;
             long reencDelta = 0;
             long reencAfter = 0;
 
@@ -145,6 +145,8 @@ public final class QueryExecutionEngine {
                     touchedCount = Math.max(0, ro.cumulativeUnique);
                     reencDelta  = ro.rep.getBytesDelta();
                     reencAfter  = ro.rep.getBytesAfter();
+                    reencCount = ro.rep.getReencryptedCount();
+                    reencMs    = ro.rep.getTimeMs();
 
                     // ART accumulation once per query
                     sys.addQueryTime(serverNs + clientNs);

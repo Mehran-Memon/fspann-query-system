@@ -239,9 +239,11 @@ public final class PartitionedIndexService implements IndexService {
                     try {
                         EncryptedPoint ep = metadata.loadEncryptedPoint(id);
                         if (ep == null) continue;
-                        if (ep.getVersion() < keyService.getCurrentVersion().getVersion()) {
-                            continue;
+                        KeyVersion kvp = keyService.getVersion(ep.getKeyVersion());
+                        if (kvp == null) {
+                            continue; // truly unrecoverable
                         }
+
                         out.put(id, ep);
                     } catch (Exception e) {
                         logger.warn("Failed to load encrypted point {}", id, e);

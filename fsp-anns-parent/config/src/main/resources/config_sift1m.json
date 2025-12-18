@@ -1,6 +1,6 @@
 {
   "base": {
-    "numShards": 32,
+    "numShards": 48,
     "opsThreshold": 500000000,
     "ageThresholdMs": 86400000,
     "reencryptionEnabled": true,
@@ -10,20 +10,18 @@
 
     "paper": {
       "enabled": true,
-      "m": 20,
+      "m": 32,
       "lambda": 2,
-      "divisions": 3,
+      "divisions": 4,
       "seed": 13,
       "safetyMaxCandidates": 0,
       "probeLimit": 6
     },
 
-    "lsh": { "numTables": 0 },
-
     "stabilization": {
       "enabled": true,
-      "alpha": 0.10,
-      "minCandidates": 1200
+      "alpha": 0.15,
+      "minCandidates": 2000
     },
 
     "eval": {
@@ -32,27 +30,26 @@
       "kVariants": [1, 5, 10, 20, 50, 100]
     },
 
-    "output": {
-      "resultsDir": "results",
-      "exportArtifacts": true,
-      "suppressLegacyMetrics": true
-    },
-
     "ratio": {
       "source": "gt",
-      "gtPath": null,
       "gtSample": 10000,
       "autoComputeGT": false
+    },
+
+    "output": {
+      "exportArtifacts": true,
+      "suppressLegacyMetrics": true
     }
-  },
 
-  "profiles": [
+},
 
-    { "name": "M12", "overrides": { "paper": { "m": 12, "lambda": 2, "divisions": 3, "seed": 13, "safetyMaxCandidates": 0 } } },
+"profiles": [
+
     { "name": "M16", "overrides": { "paper": { "m": 16, "lambda": 2, "divisions": 3, "seed": 13, "safetyMaxCandidates": 0 } } },
     { "name": "M20", "overrides": { "paper": { "m": 20, "lambda": 2, "divisions": 3, "seed": 13, "safetyMaxCandidates": 0 } } },
     { "name": "M24", "overrides": { "paper": { "m": 24, "lambda": 2, "divisions": 3, "seed": 13, "safetyMaxCandidates": 0 } } },
     { "name": "M28", "overrides": { "paper": { "m": 28, "lambda": 2, "divisions": 3, "seed": 13, "safetyMaxCandidates": 0 } } },
+    { "name": "M32", "overrides": { "paper": { "m": 32, "lambda": 2, "divisions": 3, "seed": 13, "safetyMaxCandidates": 0 } } },
 
     { "name": "L1", "overrides": { "paper": { "m": 20, "lambda": 1, "divisions": 3, "seed": 13, "safetyMaxCandidates": 0 } } },
     { "name": "L2", "overrides": { "paper": { "m": 20, "lambda": 2, "divisions": 3, "seed": 13, "safetyMaxCandidates": 0 } } },
@@ -61,7 +58,7 @@
 
     { "name": "D2", "overrides": { "paper": { "m": 20, "lambda": 2, "divisions": 2, "seed": 13, "safetyMaxCandidates": 0 } } },
     { "name": "D3", "overrides": { "paper": { "m": 20, "lambda": 2, "divisions": 3, "seed": 13, "safetyMaxCandidates": 0 } } },
-    { "name": "D4", "overrides": { "paper": { "m": 20, "lambda": 2, "divisions": 4, "seed": 13, "safetyMaxCandidates": 0 } } },
+    { "name": "D4", "overrides": { "paper": { "m": 32, "lambda": 2, "divisions": 4, "seed": 13, "safetyMaxCandidates": 0 } } },
 
     { "name": "A0.05", "overrides": { "stabilization": { "alpha": 0.05 } } },
     { "name": "A0.10", "overrides": { "stabilization": { "alpha": 0.10 } } },

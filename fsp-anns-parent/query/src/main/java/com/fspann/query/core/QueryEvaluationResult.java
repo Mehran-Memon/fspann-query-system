@@ -206,4 +206,13 @@ public final class QueryEvaluationResult {
     public long getReencBytesAfter() { return reencBytesAfter; }
 
     public String getRatioDenomSource() { return ratioDenomSource; }
+
+    public int getSafeReencCount() {
+        return Math.max(0, reencryptedCount);
+    }
+
+    public long getSafeReencTimeMs() {
+        return Math.max(0, reencTimeMs);
+    }
+
 }
