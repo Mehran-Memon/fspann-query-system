@@ -730,44 +730,57 @@ public class ForwardSecureANNSystem {
 
                 long t0 = System.nanoTime();
 
-                // 1. Token creation
+                // --------------------------------------------------
+                // 1. Token creation (per-K, paper-consistent)
+                // --------------------------------------------------
                 QueryToken token = createToken(q, k, dim);
 
+                // --------------------------------------------------
                 // 2. ANN search
+                // --------------------------------------------------
                 List<QueryResult> results = qs.search(token);
 
-                // ===== GLOBAL TOUCH ACCUMULATION (POST-RELAXATION SAFE) =====
+                // --------------------------------------------------
+                // 3. Touch accounting
+                // --------------------------------------------------
                 Set<String> annTouched = indexService.getLastTouchedIds();
                 if (annTouched != null && !annTouched.isEmpty()) {
                     touchedGlobal.addAll(annTouched);
                 }
 
-                long t1;
+                // --------------------------------------------------
+                // 4. Zero-touch fallback (per-K)
+                // --------------------------------------------------
                 if (indexService.getLastTouchedIds().isEmpty()) {
 
                     int baseProbes = config.getPaper().probeLimit;
                     int fallbackProbes = Math.max(baseProbes * 2, 4);
 
                     logger.warn(
-                            "Zero-touch ANN query detected (q={}, k={}). Forcing probe widening {} to {}",
-                            qi,  k, baseProbes, fallbackProbes
+                            "Zero-touch ANN query detected (q={}, k={}). Forcing probe widening {} → {}",
+                            qi, k, baseProbes, fallbackProbes
                     );
 
                     indexService.setProbeOverride(fallbackProbes);
                     results = qs.search(token);
                     indexService.clearProbeOverride();
                 }
-                t1 = System.nanoTime();
 
+                long t1 = System.nanoTime();
                 addQueryTime(t1 - t0);
 
-                // 3. Metrics
+                // --------------------------------------------------
+                // 5. Metrics (single source of truth)
+                // --------------------------------------------------
                 QueryMetrics m = computeMetricsAtK(
                         results,
                         k,
-                        gt != null ? gt.getGroundtruth(qi, k) : null
+                        gt.getGroundtruth(qi, k)
                 );
 
+                // --------------------------------------------------
+                // 6. Timing
+                // --------------------------------------------------
                 long serverMs  = (long) boundedServerMs(qs, t0, t1);
                 long clientMs  = (t1 - t0) / 1_000_000L;
                 long decryptMs = qs.getLastDecryptNs() / 1_000_000L;
@@ -776,7 +789,9 @@ public class ForwardSecureANNSystem {
                         token.getEncryptedQuery().length +
                                 token.getIv().length;
 
-                // 4. PROFILER — FULL, CORRECT
+                // --------------------------------------------------
+                // 7. PROFILER (per-K row, paper-style)
+                // --------------------------------------------------
                 profiler.recordQueryRow(
                         "Q" + qi + "_K" + k,
                         serverMs,
@@ -784,38 +799,83 @@ public class ForwardSecureANNSystem {
                         clientMs,
                         decryptMs,
                         lastInsertMs(),
+
                         m.ratioAtK(),
                         m.precisionAtK(),
+
                         qs.getLastCandTotal(),
                         qs.getLastCandKept(),
                         qs.getLastCandDecrypted(),
                         qs.getLastReturned(),
+
                         tokenBytes,
                         dim,
                         k,
-                        baseKForToken(),
+                        k,
                         qi,
+
                         totalFlushed(),
                         flushThreshold(),
+
                         indexService.getLastTouchedCount(),
                         reencTracker.uniqueCount(),
-                        0L,      // reencTimeMs (end-of-run only)
-                        0L,      // reencBytesDelta
-                        0L,      // reencBytesAfter
+
+                        0L,
+                        0L,
+                        0L,
+
                         ratioDenomLabelPublic(trustedGT),
                         "partitioned",
+
                         getLastStabilizedRaw(),
                         getLastStabilizedFinal()
                 );
 
-                // 5. Forward-security accounting
+                // --------------------------------------------------
+                // 8. Forward-security (per-K, correct)
+                // --------------------------------------------------
                 doReencrypt("Q" + qi + "_K" + k, qs);
             }
 
+            // Optional ablation
             if (kAdaptiveProbeEnabled()) {
                 runKAdaptiveProbeOnly(qi, q, dim, qs);
             }
         }
+    }
+
+    public QueryMetrics computeMetricsAtK(
+            List<QueryResult> results,
+            int k,
+            int[] groundtruth
+    ) {
+        if (k <= 0) {
+            return new QueryMetrics(0.0, 0.0);
+        }
+
+        int refined = results == null ? 0 : results.size();
+
+        // ---- Peng-style ratio@K ----
+        double ratioAtK = refined / (double) k;
+
+        // ---- Precision@K ----
+        double precisionAtK = 0.0;
+        if (groundtruth != null && groundtruth.length > 0 && results != null) {
+            int hits = 0;
+            int upto = Math.min(refined, k);
+
+            for (int i = 0; i < upto; i++) {
+                try {
+                    int id = Integer.parseInt(results.get(i).getId());
+                    if (containsInt(groundtruth, id)) {
+                        hits++;
+                    }
+                } catch (Exception ignore) {}
+            }
+            precisionAtK = hits / (double) groundtruth.length;
+        }
+
+        return new QueryMetrics(ratioAtK, precisionAtK);
     }
 
     /* ---------------------- Utilities & Lifecycle ---------------------- */
@@ -1920,31 +1980,6 @@ public class ForwardSecureANNSystem {
         if (!queryOnlyMode) {
             totalQueryTimeNs += Math.max(0L, ns);
         }
-    }
-
-    public QueryMetrics computeMetricsAtK(
-            List<QueryResult> results,
-            int k,
-            int[] groundtruth
-    ) {
-        // Peng ratio: refined / K
-        int refined = getQueryServiceImpl().getLastCandDecrypted();
-        double ratio = k > 0 ? refined / (double) k : 0.0;
-        // Precision@K
-        double precision = 0.0;
-        if (groundtruth != null && groundtruth.length > 0) {
-            int hits = 0;
-            int upto = Math.min(k, results.size());
-            for (int i = 0; i < upto; i++) {
-                try {
-                    int id = Integer.parseInt(results.get(i).getId());
-                    if (containsInt(groundtruth, id)) hits++;
-                } catch (Exception ignore) {}
-            }
-            precision = hits / (double) k;
-        }
-
-        return new QueryMetrics(ratio, precision);
     }
 
     /** Façade: expose selective re-encryption hook */
