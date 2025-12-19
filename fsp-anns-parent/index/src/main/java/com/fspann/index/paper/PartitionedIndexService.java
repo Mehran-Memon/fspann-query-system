@@ -186,7 +186,7 @@ public final class PartitionedIndexService implements IndexService {
                         S.stagedCodes.get(i)[d]
                 ));
             }
-            int codeBits = pc.m * pc.lambda;
+            int codeBits = pc.m;
 
             var br = GreedyPartitioner.build(
                     items,
