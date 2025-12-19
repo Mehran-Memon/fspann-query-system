@@ -112,5 +112,4 @@ public class QueryToken implements Serializable {
         }
         return sum;
     }
-
 }

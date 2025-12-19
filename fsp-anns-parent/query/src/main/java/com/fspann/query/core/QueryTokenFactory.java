@@ -14,12 +14,10 @@ import java.util.*;
 public final class QueryTokenFactory {
 
     private static final Logger log = LoggerFactory.getLogger(QueryTokenFactory.class);
-
     private final CryptoService crypto;
     private final KeyLifeCycleService keyService;
     private final PartitionedIndexService partition;
     private final SystemConfig cfg;
-
     private final int divisions;
 
     public QueryTokenFactory(

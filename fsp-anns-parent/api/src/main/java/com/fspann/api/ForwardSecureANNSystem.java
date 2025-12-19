@@ -742,7 +742,7 @@ public class ForwardSecureANNSystem {
                     touchedGlobal.addAll(annTouched);
                 }
 
-                long t1 = System.nanoTime();
+                long t1;
                 if (indexService.getLastTouchedIds().isEmpty()) {
 
                     int baseProbes = config.getPaper().probeLimit;
@@ -756,16 +756,16 @@ public class ForwardSecureANNSystem {
                     indexService.setProbeOverride(fallbackProbes);
                     results = qs.search(token);
                     indexService.clearProbeOverride();
-
                 }
+                t1 = System.nanoTime();
 
                 addQueryTime(t1 - t0);
 
                 // 3. Metrics
-                double ratio = computeRatio(q, results, k, qi, gt, trustedGT);
-                double precision = computePrecision(
+                QueryMetrics m = computeMetricsAtK(
                         results,
-                        gt.getGroundtruth(qi, k)
+                        k,
+                        gt != null ? gt.getGroundtruth(qi, k) : null
                 );
 
                 long serverMs  = (long) boundedServerMs(qs, t0, t1);
@@ -784,8 +784,8 @@ public class ForwardSecureANNSystem {
                         clientMs,
                         decryptMs,
                         lastInsertMs(),
-                        ratio,
-                        precision,
+                        m.ratioAtK(),
+                        m.precisionAtK(),
                         qs.getLastCandTotal(),
                         qs.getLastCandKept(),
                         qs.getLastCandDecrypted(),
@@ -1892,36 +1892,6 @@ public class ForwardSecureANNSystem {
         return (QueryServiceImpl) this.queryService;
     }
 
-    private double ratioAtKMetric(double[] q,
-                                  List<QueryResult> prefix,
-                                  int k,
-                                  int qIndex,
-                                  GroundtruthManager gt,
-                                  BaseVectorReader base,
-                                  boolean trusted) {
-
-        if (prefix == null || prefix.isEmpty() || k <= 0) return 0.0;
-
-        int[] truth;
-        if (ratioSource == RatioSource.GT || (ratioSource == RatioSource.AUTO && trusted)) {
-            truth = gt.getGroundtruth(qIndex, k);
-        } else {
-            truth = topKFromBase(base, q, k);
-        }
-
-        if (truth == null || truth.length == 0) return 0.0;
-
-        int hits = 0;
-        int upto = Math.min(k, prefix.size());
-        for (int i = 0; i < upto; i++) {
-            try {
-                int id = Integer.parseInt(prefix.get(i).getId());
-                if (containsInt(truth, id)) hits++;
-            } catch (Exception ignore) {}
-        }
-        return (double) hits / (double) truth.length;
-    }
-
     /** Façade: compute server-ms bounded to client window */
     public double boundedServerMs(QueryServiceImpl qs, long startNs, long endNs) {
         final long clientWin = Math.max(0L, endNs - startNs);
@@ -1952,28 +1922,29 @@ public class ForwardSecureANNSystem {
         }
     }
 
-    /** Façade: compute ratio@K */
-    public double computeRatio(double[] q,
-                               List<QueryResult> prefix,
-                               int k,
-                               int qIndex,
-                               GroundtruthManager gt,
-                               boolean trusted) {
-        if (baseReader == null) return Double.NaN;
-        return ratioAtKMetric(q, prefix, k, qIndex, gt, baseReader, trusted);
-    }
-
-    /** Façade: compute precision@K */
-    public double computePrecision(List<QueryResult> prefix, int[] truth) {
-        if (truth == null || truth.length == 0) return 0.0;
-        int hits = 0;
-        for (int i = 0; i < prefix.size() && i < truth.length; i++) {
-            try {
-                int id = Integer.parseInt(prefix.get(i).getId());
-                if (containsInt(truth, id)) hits++;
-            } catch (Exception ignore) {}
+    public QueryMetrics computeMetricsAtK(
+            List<QueryResult> results,
+            int k,
+            int[] groundtruth
+    ) {
+        // Peng ratio: refined / K
+        int refined = getQueryServiceImpl().getLastCandDecrypted();
+        double ratio = k > 0 ? refined / (double) k : 0.0;
+        // Precision@K
+        double precision = 0.0;
+        if (groundtruth != null && groundtruth.length > 0) {
+            int hits = 0;
+            int upto = Math.min(k, results.size());
+            for (int i = 0; i < upto; i++) {
+                try {
+                    int id = Integer.parseInt(results.get(i).getId());
+                    if (containsInt(groundtruth, id)) hits++;
+                } catch (Exception ignore) {}
+            }
+            precision = hits / (double) k;
         }
-        return (double) hits / truth.length;
+
+        return new QueryMetrics(ratio, precision);
     }
 
     /** Façade: expose selective re-encryption hook */

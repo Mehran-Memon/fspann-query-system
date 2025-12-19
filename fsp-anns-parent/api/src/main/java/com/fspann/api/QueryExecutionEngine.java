@@ -1,6 +1,7 @@
 package com.fspann.api;
 
 import com.fspann.common.Profiler;
+import com.fspann.common.QueryMetrics;
 import com.fspann.common.QueryResult;
 import com.fspann.common.QueryToken;
 import com.fspann.loader.GroundtruthManager;
@@ -157,18 +158,17 @@ public final class QueryExecutionEngine {
                 int upto = Math.min(k, retK.size());
                 List<QueryResult> prefix = retK.subList(0, upto);
 
-                double ratio = (k > 0)
-                        ? (candDec / (double) k)
-                        : 0.0;
-
-                int[] truth = gt.getGroundtruth(qIndex, k);
-                double precision = sys.computePrecision(prefix, truth);
+                QueryMetrics m = sys.computeMetricsAtK(
+                        prefix,
+                        k,
+                        gt != null ? gt.getGroundtruth(qIndex, k) : null
+                );
 
                 perK.add(new QueryEvaluationResult(
                         k,
                         upto,
-                        ratio,
-                        precision,
+                        m.ratioAtK(),
+                        m.precisionAtK(),
                         Math.round(serverNs / 1e6),
                         Math.round(clientNs / 1e6),
                         Math.round((serverNs + clientNs) / 1e6),

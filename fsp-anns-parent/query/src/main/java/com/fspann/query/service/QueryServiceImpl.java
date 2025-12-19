@@ -339,5 +339,4 @@ public final class QueryServiceImpl implements QueryService {
     }
     public int  getLastCandDecrypted() { return lastCandDecrypted; }
     public int  getLastReturned() { return lastReturned; }
-
 }
