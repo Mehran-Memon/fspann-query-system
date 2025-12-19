@@ -283,6 +283,8 @@ public final class PartitionedIndexService implements IndexService {
         }
 
         // ---- PREFIX RELAXATION FALLBACK (ZERO-TOUCH FIX) ----
+        boolean relaxedTouched = false;
+
         if (!anyTouched) {
             for (int relax = 1; relax <= maxRelaxSteps; relax++) {
 
@@ -291,30 +293,39 @@ public final class PartitionedIndexService implements IndexService {
                     BitSet qc = qcodes[d];
 
                     int relaxedBits = Math.max(1, qc.length() - relax);
+
                     for (GreedyPartitioner.SubsetBounds sb : div.I) {
                         if (!coversRelaxed(sb, qc, relaxedBits)) continue;
 
                         List<String> ids = div.tagToIds.get(sb.tag);
                         if (ids == null) continue;
+
                         for (String id : ids) {
                             touchedIds.add(id);
+                            relaxedTouched = true;   // <<< touch happens here
+
                             if (out.containsKey(id)) continue;
                             if (metadata.isDeleted(id)) continue;
+
                             try {
                                 EncryptedPoint ep = metadata.loadEncryptedPoint(id);
-                                if (ep != null) out.put(id, ep);
-                            } catch (Exception e) {
-                                // safe: skip corrupt/missing entry
+                                if (ep != null) {
+                                    out.put(id, ep);
+                                }
+                            } catch (Exception ignore) {
                             }
                         }
                     }
                 }
+
                 if (!out.isEmpty()) break;
             }
         }
 
-
-            lastTouched.set(touchedIds.size());
+        if (relaxedTouched) {
+            anyTouched = true;
+        }
+        lastTouched.set(touchedIds.size());
         return new ArrayList<>(out.values());
     }
 
