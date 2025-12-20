@@ -126,10 +126,37 @@ public final class QueryServiceImpl implements QueryService {
 
         try {
             // 2.1 raw candidates from partitioned index
-            List<EncryptedPoint> raw = index.lookup(token);
-            raw = (raw != null) ? raw : Collections.emptyList();
+            List<EncryptedPoint> raw = Collections.emptyList();
 
+            SystemConfig.StabilizationConfig sc = cfg.getStabilization();
+            int minCand = (sc != null && sc.isEnabled()) ? sc.getMinCandidates() : 0;
+
+            int baseProbe = cfg.getPaper().probeLimit;
+            int probe = baseProbe;
+            int attempts = 0;
+            final int MAX_ATTEMPTS = 4;
+
+            while (attempts == 0 || (raw.size() < minCand && attempts < MAX_ATTEMPTS)) {
+
+                index.setProbeOverride(probe);
+                raw = index.lookup(token);
+                raw = (raw != null) ? raw : Collections.emptyList();
+
+                if (raw.size() >= minCand) break;
+
+                probe *= 2;          // widen probes exponentially
+                attempts++;
+            }
+
+            index.clearProbeOverride();
             lastCandTotal = raw.size();
+
+            if (raw.size() < minCand) {
+                logger.warn(
+                        "minCandidates={} not reached (got {}). Final probeLimit={}",
+                        minCand, raw.size(), probe
+                );
+            }
 
             if (raw.isEmpty()) {
                 lastCandKept = 0;
