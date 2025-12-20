@@ -24,6 +24,9 @@ class QueryServiceImplStabilizationIT {
     private QueryServiceImpl queryService;
     private SecretKey k;
 
+    private SystemConfig config;
+    private SystemConfig.StabilizationConfig stab;
+
     @BeforeEach
     void init() {
         crypto = mock(CryptoService.class);
@@ -35,9 +38,21 @@ class QueryServiceImplStabilizationIT {
         when(keys.getCurrentVersion()).thenReturn(new KeyVersion(1, k));
         when(keys.getVersion(anyInt())).thenReturn(new KeyVersion(1, k));
 
-        SystemConfig config = mock(SystemConfig.class);
-        SystemConfig.StabilizationConfig stab = mock(SystemConfig.StabilizationConfig.class);
+        // -------- REAL PaperConfig (NOT MOCKED) --------
+        SystemConfig.PaperConfig paper = new SystemConfig.PaperConfig();
+        paper.probeLimit = 10;
+        paper.lambda = 1;
+        paper.m = 4;
+        paper.divisions = 2;
+        paper.seed = 13;
+
+        // -------- Mock SystemConfig --------
+        config = mock(SystemConfig.class);
+        stab   = mock(SystemConfig.StabilizationConfig.class);
+
+        when(config.getPaper()).thenReturn(paper);
         when(config.getStabilization()).thenReturn(stab);
+
         when(stab.isEnabled()).thenReturn(true);
         when(stab.getAlpha()).thenReturn(0.2);
         when(stab.getMinCandidates()).thenReturn(5);
@@ -53,6 +68,7 @@ class QueryServiceImplStabilizationIT {
 
     @Test
     void testStabilizationAppliesAlphaAndMinCandidates() {
+
         byte[] iv = new byte[12];
         byte[] ct = new byte[32];
 
@@ -76,35 +92,28 @@ class QueryServiceImplStabilizationIT {
         when(token.getTopK()).thenReturn(100);
         when(token.getEncryptedQuery()).thenReturn(new byte[32]);
         when(token.getIv()).thenReturn(iv);
+        when(token.getDimension()).thenReturn(2);
+        when(token.getCodes()).thenReturn(new BitSet[]{new BitSet(), new BitSet()});
 
         when(crypto.decryptQuery(any(), any(), any()))
                 .thenReturn(new double[]{0.5, 0.5});
         when(index.lookup(token)).thenReturn(raw);
 
         for (EncryptedPoint p : raw) {
-            when(crypto.decryptFromPoint(eq(p), any(SecretKey.class)))
+            when(crypto.decryptFromPoint(eq(p), any()))
                     .thenReturn(new double[]{1.0, 1.0});
         }
 
         List<QueryResult> results = queryService.search(token);
 
-        assertEquals(5, results.size()); // minCandidates enforced
+        // raw=6, alpha=0.2 → ceil(1.2)=2 → minCandidates=5 enforced
+        assertEquals(5, results.size());
     }
 
     @Test
     void testStabilizationDisabledKeepsAllCandidates() {
-        SystemConfig config = mock(SystemConfig.class);
-        SystemConfig.StabilizationConfig stab = mock(SystemConfig.StabilizationConfig.class);
-        when(config.getStabilization()).thenReturn(stab);
-        when(stab.isEnabled()).thenReturn(false);
 
-        queryService = new QueryServiceImpl(
-                index,
-                crypto,
-                keys,
-                mock(QueryTokenFactory.class),
-                config
-        );
+        when(stab.isEnabled()).thenReturn(false);
 
         byte[] iv = new byte[12];
         byte[] ct = new byte[32];
@@ -129,13 +138,15 @@ class QueryServiceImplStabilizationIT {
         when(token.getTopK()).thenReturn(100);
         when(token.getEncryptedQuery()).thenReturn(new byte[32]);
         when(token.getIv()).thenReturn(iv);
+        when(token.getDimension()).thenReturn(2);
+        when(token.getCodes()).thenReturn(new BitSet[]{new BitSet(), new BitSet()});
 
         when(crypto.decryptQuery(any(), any(), any()))
                 .thenReturn(new double[]{0.5, 0.5});
         when(index.lookup(token)).thenReturn(raw);
 
         for (EncryptedPoint p : raw) {
-            when(crypto.decryptFromPoint(eq(p), any(SecretKey.class)))
+            when(crypto.decryptFromPoint(eq(p), any()))
                     .thenReturn(new double[]{1.0, 1.0});
         }
 
