@@ -115,14 +115,6 @@ public class ForwardSecureANNSystemUtilityTest {
         system.shutdown();
     }
 
-    @Test
-    @DisplayName("Test record recent query vector")
-    public void testRecordRecentVector() throws Exception {
-        double[] query = new double[128];
-        system.recordRecentVector(query);
-
-        system.shutdown();
-    }
 
     @Test
     @DisplayName("Test add query time")

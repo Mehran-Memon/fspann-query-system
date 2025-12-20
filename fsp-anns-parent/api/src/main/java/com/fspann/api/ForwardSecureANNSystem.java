@@ -100,9 +100,6 @@ public class ForwardSecureANNSystem {
     private final Path metaDBPath;
     private final Path pointsPath;
     private final Path keyStorePath;
-    private final java.util.List<double[]> recentQueries =
-            java.util.Collections.synchronizedList(new java.util.ArrayList<>());
-
     private final ExecutorService executor;
     private boolean exitOnShutdown = false;
     private final boolean reencEnabled;
@@ -722,7 +719,6 @@ public class ForwardSecureANNSystem {
 
         for (int qi = 0; qi < queries.size(); qi++) {
             double[] q = queries.get(qi);
-            recordRecentVector(q);
 
             for (int k : K_VARIANTS) {
 
@@ -777,32 +773,6 @@ public class ForwardSecureANNSystem {
                         qi,
                         gt
                 );
-
-                // ================= SANITY CHECK (ONE-TIME) =================
-                if (qi == 0 && k == K_VARIANTS[0]) {
-
-                    double[] qvec = q;  // already in memory
-
-                    int annId = Integer.parseInt(results.get(0).getId());
-                    int gtId  = gt.getGroundtruthIds(0, k)[0];
-
-                    double dAnn = results.get(0).getDistance();
-                    double dGt  = baseReader.l2(qvec, gtId);
-
-                    logger.info(
-                            "[SANITY] q=0 k={} | annId={} gtId={} | dAnn={} dGt={} | ratio={} precision={} | returned={} touched={}",
-                            k,
-                            annId,
-                            gtId,
-                            dAnn,
-                            dGt,
-                            m.ratioAtK(),
-                            m.precisionAtK(),
-                            qs.getLastReturned(),
-                            indexService.getLastTouchedCount()
-                    );
-                }
-                    // ===========================================================
 
                 // --------------------------------------------------
                 // 6. Timing
@@ -891,23 +861,28 @@ public class ForwardSecureANNSystem {
 
         if (gtIds != null && gtIds.length > 0) {
             for (int i = 0; i < upto; i++) {
-                int annId = Integer.parseInt(annResults.get(i).getId());
-                if (containsInt(gtIds, annId)) {
-                    hits++;
+                try {
+                    int annId = Integer.parseInt(annResults.get(i).getId());
+                    if (containsInt(gtIds, annId)) hits++;
+                } catch (NumberFormatException ignore) {
+                    // opaque ANN id → cannot match GT
                 }
             }
         }
 
-        double precision = hits / (double) upto;
+        double precision = hits / (double) k;
 
         /* =============================
          * Distance Ratio@K (Peng)
          * ============================= */
+        if (baseReader == null) {
+            return new QueryMetrics(Double.NaN, precision);
+        }
+
         double ratioSum = 0.0;
         int count = 0;
 
         for (int i = 0; i < upto && i < gtIds.length; i++) {
-
             int gtId = gtIds[i];
             double dGt  = baseReader.l2(queryVector, gtId);
             double dAnn = annResults.get(i).getDistance();
@@ -920,13 +895,10 @@ public class ForwardSecureANNSystem {
 
         double ratio = (count > 0) ? (ratioSum / count) : Double.NaN;
 
-        /* =============================
-         * One-time sanity log
-         * ============================= */
         if (queryIndex == 0 && k == K_VARIANTS[0]) {
             logger.info(
-                    "[SANITY] q=0 k={} | upto={} | ratio={} | precision={} | hits={}",
-                    k, upto, ratio, precision, hits
+                    "[SANITY] q=0 k={} | returned={} | hits={} | precision={} | ratio={}",
+                    k, upto, hits, precision, ratio
             );
         }
 
@@ -934,15 +906,50 @@ public class ForwardSecureANNSystem {
     }
 
 
-    private static double l2(double[] a, double[] b) {
-        double s = 0.0;
-        for (int i = 0; i < a.length; i++) {
-            double d = a[i] - b[i];
-            s += d * d;
+    // --- FOR INTEGRATION TESTS
+    private QueryFacade queryFacade;
+
+    public final class QueryFacade {
+
+        private final ForwardSecureANNSystem sys;
+
+        QueryFacade(ForwardSecureANNSystem sys) {
+            this.sys = sys;
         }
-        return Math.sqrt(s);
+
+        /** Simple query path used by ITs */
+        public List<QueryResult> evalSimple(
+                double[] q,
+                int topK,
+                int dim,
+                boolean cloak
+        ) {
+            QueryToken tok = cloak
+                    ? sys.cloakQuery(q, dim, topK)
+                    : sys.createToken(q, topK, dim);
+
+            QueryServiceImpl qs = sys.getQueryServiceImpl();
+            return qs.search(tok);
+        }
+
+        /** Batch path used by RatioPipelineIT */
+        public void evalBatch(
+                List<double[]> queries,
+                int dim,
+                GroundtruthManager gt,
+                Path outDir,
+                boolean trustedGT
+        ) {
+            sys.runQueries(queries, dim, gt, trustedGT);
+        }
     }
 
+    public QueryFacade getEngine() {
+        if (queryFacade == null) {
+            queryFacade = new QueryFacade(this);
+        }
+        return queryFacade;
+    }
 
     /* ---------------------- Utilities & Lifecycle ---------------------- */
 
@@ -1019,14 +1026,6 @@ public class ForwardSecureANNSystem {
 
     private static String normalizePath(String path) {
         return Paths.get(path).normalize().toString();
-    }
-
-    private void recordRecent(double[] v) {
-        double[] copy = v.clone();
-        synchronized (recentQueries) {
-            if (recentQueries.size() >= 1000) recentQueries.remove(0);
-            recentQueries.add(copy);
-        }
     }
 
     public void setQueryOnlyMode(boolean b) {
@@ -1339,27 +1338,8 @@ public class ForwardSecureANNSystem {
         } catch (Exception ignore) {
         }
 
-
         /* ====================================================================== */
-        /*                         5. WRITE QUERIES SNAPSHOT                      */
-        /* ====================================================================== */
-
-        if (!recentQueries.isEmpty()) {
-            Path qcsv = outDir.resolve("queries.csv");
-            try (var w = Files.newBufferedWriter(qcsv)) {
-                for (double[] q : recentQueries) {
-                    for (int i = 0; i < q.length; i++) {
-                        if (i > 0) w.write(",");
-                        w.write(Double.toString(q[i]));
-                    }
-                    w.write("\n");
-                }
-            }
-        }
-
-
-        /* ====================================================================== */
-        /*                      6. STORAGE SUMMARY + PRINTER                      */
+        /*                      5. STORAGE SUMMARY + PRINTER                      */
         /* ====================================================================== */
 
         try {
@@ -1384,7 +1364,7 @@ public class ForwardSecureANNSystem {
             throw new RuntimeException(e);
         }
         /* ====================================================================== */
-        /*                      7. EvaluationSummaryPrinter CSVs                  */
+        /*                      6. EvaluationSummaryPrinter CSVs                  */
         /* ====================================================================== */
 
         try {
@@ -2034,11 +2014,6 @@ public class ForwardSecureANNSystem {
     /** Façade: expose the logical-result cache */
     public Map<String, List<QueryResult>> getQueryCache() {
         return this.queryCache;
-    }
-
-    /** Façade: record most recent queries for artifact export */
-    public void recordRecentVector(double[] q) {
-        recordRecent(q);
     }
 
     /** Façade: global query-time accumulator */
