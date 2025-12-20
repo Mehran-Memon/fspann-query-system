@@ -60,7 +60,6 @@ public class ForwardSecureANNSystem {
     private BaseVectorReader baseReader = null;
     private final ReencryptionTracker reencTracker;
     private final SelectiveReencCoordinator reencCoordinator;
-    private QueryExecutionEngine engine;
     private final MicrometerProfiler microProfiler;
 
     // Config-driven toggles
@@ -432,7 +431,6 @@ public class ForwardSecureANNSystem {
             qs.setReencryptionTracker(reencTracker);
             qs.setStabilizationCallback(this::setStabilizationStats);
         }
-        this.engine = new QueryExecutionEngine(this, profiler, K_VARIANTS);
 
         this.reencCoordinator = new SelectiveReencCoordinator(
                 indexService,
@@ -775,8 +773,36 @@ public class ForwardSecureANNSystem {
                 QueryMetrics m = computeMetricsAtK(
                         results,
                         k,
-                        gt.getGroundtruth(qi, k)
+                        q,
+                        qi,
+                        gt
                 );
+
+                // ================= SANITY CHECK (ONE-TIME) =================
+                if (qi == 0 && k == K_VARIANTS[0]) {
+
+                    double[] qvec = q;  // already in memory
+
+                    int annId = Integer.parseInt(results.get(0).getId());
+                    int gtId  = gt.getGroundtruthIds(0, k)[0];
+
+                    double dAnn = results.get(0).getDistance();
+                    double dGt  = baseReader.l2(qvec, gtId);
+
+                    logger.info(
+                            "[SANITY] q=0 k={} | annId={} gtId={} | dAnn={} dGt={} | ratio={} precision={} | returned={} touched={}",
+                            k,
+                            annId,
+                            gtId,
+                            dAnn,
+                            dGt,
+                            m.ratioAtK(),
+                            m.precisionAtK(),
+                            qs.getLastReturned(),
+                            indexService.getLastTouchedCount()
+                    );
+                }
+                    // ===========================================================
 
                 // --------------------------------------------------
                 // 6. Timing
@@ -845,38 +871,78 @@ public class ForwardSecureANNSystem {
     }
 
     public QueryMetrics computeMetricsAtK(
-            List<QueryResult> results,
+            List<QueryResult> annResults,
             int k,
-            int[] groundtruth
+            double[] queryVector,
+            int queryIndex,
+            GroundtruthManager gt
     ) {
-        if (k <= 0) {
-            return new QueryMetrics(0.0, 0.0);
+        if (annResults == null || annResults.isEmpty() || k <= 0) {
+            return new QueryMetrics(Double.NaN, 0.0);
         }
 
-        int refined = results == null ? 0 : results.size();
+        final int upto = Math.min(k, annResults.size());
 
-        // ---- Peng-style ratio@K ----
-        double ratioAtK = refined / (double) k;
+        /* =============================
+         * Precision@K
+         * ============================= */
+        int[] gtIds = gt.getGroundtruthIds(queryIndex, k);
+        int hits = 0;
 
-        // ---- Precision@K ----
-        double precisionAtK = 0.0;
-        if (groundtruth != null && groundtruth.length > 0 && results != null) {
-            int hits = 0;
-            int upto = Math.min(refined, k);
-
+        if (gtIds != null && gtIds.length > 0) {
             for (int i = 0; i < upto; i++) {
-                try {
-                    int id = Integer.parseInt(results.get(i).getId());
-                    if (containsInt(groundtruth, id)) {
-                        hits++;
-                    }
-                } catch (Exception ignore) {}
+                int annId = Integer.parseInt(annResults.get(i).getId());
+                if (containsInt(gtIds, annId)) {
+                    hits++;
+                }
             }
-            precisionAtK = hits / (double) groundtruth.length;
         }
 
-        return new QueryMetrics(ratioAtK, precisionAtK);
+        double precision = hits / (double) upto;
+
+        /* =============================
+         * Distance Ratio@K (Peng)
+         * ============================= */
+        double ratioSum = 0.0;
+        int count = 0;
+
+        for (int i = 0; i < upto && i < gtIds.length; i++) {
+
+            int gtId = gtIds[i];
+            double dGt  = baseReader.l2(queryVector, gtId);
+            double dAnn = annResults.get(i).getDistance();
+
+            if (dGt > 0 && dAnn > 0) {
+                ratioSum += (dAnn / dGt);
+                count++;
+            }
+        }
+
+        double ratio = (count > 0) ? (ratioSum / count) : Double.NaN;
+
+        /* =============================
+         * One-time sanity log
+         * ============================= */
+        if (queryIndex == 0 && k == K_VARIANTS[0]) {
+            logger.info(
+                    "[SANITY] q=0 k={} | upto={} | ratio={} | precision={} | hits={}",
+                    k, upto, ratio, precision, hits
+            );
+        }
+
+        return new QueryMetrics(ratio, precision);
     }
+
+
+    private static double l2(double[] a, double[] b) {
+        double s = 0.0;
+        for (int i = 0; i < a.length; i++) {
+            double d = a[i] - b[i];
+            s += d * d;
+        }
+        return Math.sqrt(s);
+    }
+
 
     /* ---------------------- Utilities & Lifecycle ---------------------- */
 
@@ -2033,10 +2099,6 @@ public class ForwardSecureANNSystem {
         return kAdaptive != null && kAdaptive.enabled;
     }
 
-    /** Test-only: expose evaluation engine */
-    public QueryExecutionEngine getEngine() {
-        return this.engine;
-    }
 
     public int[] getKVariants() {
         return K_VARIANTS.clone();
