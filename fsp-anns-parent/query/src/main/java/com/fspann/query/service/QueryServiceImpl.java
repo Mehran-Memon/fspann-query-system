@@ -126,39 +126,45 @@ public final class QueryServiceImpl implements QueryService {
 
         try {
             // 2.1 raw candidates from partitioned index
-            List<EncryptedPoint> raw = Collections.emptyList();
+            List<EncryptedPoint> raw;
 
-            SystemConfig.StabilizationConfig sc = cfg.getStabilization();
-            int minCand = (sc != null && sc.isEnabled()) ? sc.getMinCandidates() : 0;
+            if (cfg.getSearchMode() == com.fspann.config.SearchMode.PAPER_BASELINE) {
 
-            int baseProbe = cfg.getPaper().probeLimit;
-            int probe = baseProbe;
-            int attempts = 0;
-            final int MAX_ATTEMPTS = 4;
-
-            while (attempts == 0 || (raw.size() < minCand && attempts < MAX_ATTEMPTS)) {
-
-                index.setProbeOverride(probe);
+                // ===== PAPER BASELINE: SINGLE LOOKUP =====
                 raw = index.lookup(token);
                 raw = (raw != null) ? raw : Collections.emptyList();
-                if (cfg.getSearchMode() == com.fspann.config.SearchMode.PAPER_BASELINE) {
-                    logger.debug(
-                            "[PAPER] rawCandidates={} refined={}",
-                            lastCandTotal,
-                            lastCandDecrypted
-                    );
+                lastCandTotal = index.getLastTouchedCount();
+
+            } else {
+
+                // ===== OPTIMIZED MODE =====
+                SystemConfig.StabilizationConfig sc = cfg.getStabilization();
+                int minCand = (sc != null && sc.isEnabled()) ? sc.getMinCandidates() : 0;
+
+                int baseProbe = cfg.getPaper().probeLimit;
+                int probe = baseProbe;
+                int attempts = 0;
+                final int MAX_ATTEMPTS = 4;
+
+                raw = Collections.emptyList();
+
+//                while (attempts == 0 || (raw.size() < minCand && attempts < MAX_ATTEMPTS)) {
+                while (attempts < MAX_ATTEMPTS) {
+
+                    index.setProbeOverride(probe);
+                    raw = index.lookup(token);
+                    raw = (raw != null) ? raw : Collections.emptyList();
+
+                    if (raw.size() >= minCand) break;
+
+                    probe *= 2;
+                    attempts++;
                 }
-                if (raw.size() >= minCand) break;
 
-                probe *= 2;          // widen probes exponentially
-                attempts++;
-            }
+                index.clearProbeOverride();
+                lastCandTotal = raw.size();
 
-            index.clearProbeOverride();
-            lastCandTotal = raw.size();
-
-            if (raw.size() < minCand) {
-                if (cfg.getSearchMode() == com.fspann.config.SearchMode.OPTIMIZED) {
+                if (raw.size() < minCand) {
                     logger.warn(
                             "minCandidates={} not reached (got {}). Final probeLimit={}",
                             minCand, raw.size(), probe
@@ -177,6 +183,8 @@ public final class QueryServiceImpl implements QueryService {
             if (limited.isEmpty()) {
                 return Collections.emptyList();
             }
+
+            touchedThisSession.addAll(index.getLastTouchedIds());
 
             // 2.3 decrypt + score (L2)
             final long decStart = System.nanoTime();
@@ -216,7 +224,6 @@ public final class QueryServiceImpl implements QueryService {
         lastClientNs = clientOnlyNs;
 
         lastCandIds = new HashSet<>(touchedThisSession);
-
         if (reencTracker != null && !touchedThisSession.isEmpty()) {
             reencTracker.record(touchedThisSession);
         }

@@ -31,7 +31,7 @@ public final class PartitionedIndexService implements IndexService {
     // =====================================================
 
     /** Build trigger threshold: create partitions when staged >= this */
-    private static final int DEFAULT_BUILD_THRESHOLD = 10000;
+    private static final int DEFAULT_BUILD_THRESHOLD = Integer.MAX_VALUE;
 
     // =====================================================
     // FIELDS
@@ -186,7 +186,7 @@ public final class PartitionedIndexService implements IndexService {
                         S.stagedCodes.get(i)[d]
                 ));
             }
-            int codeBits = pc.m;
+            int codeBits = pc.m * pc.lambda;
 
             var br = GreedyPartitioner.build(
                     items,
@@ -215,14 +215,18 @@ public final class PartitionedIndexService implements IndexService {
     public List<EncryptedPoint> lookup(QueryToken token) {
         Objects.requireNonNull(token, "token cannot be null");
 
-        final int maxRelaxSteps = cfg.getPaper().lambda;
-
-        Set<String> touchedIds = lastTouchedIds.get();
-        touchedIds.clear();
-
         if (!frozen) {
             throw new IllegalStateException("Index not finalized before lookup");
         }
+
+        final SystemConfig.PaperConfig pc = cfg.getPaper();
+        final boolean paperBaseline =
+                cfg.getSearchMode() == com.fspann.config.SearchMode.PAPER_BASELINE;
+
+        final int maxRelaxSteps = pc.lambda;
+
+        Set<String> touchedIds = lastTouchedIds.get();
+        touchedIds.clear();
 
         int dim = token.getDimension();
         DimensionState S = dims.get(dim);
@@ -232,104 +236,70 @@ public final class PartitionedIndexService implements IndexService {
 
         LinkedHashMap<String, EncryptedPoint> out = new LinkedHashMap<>();
 
-        boolean anyTouched = false;
+        // ================================
+        // PAPER-FAITHFUL PREFIX SCAN
+        // ================================
+        for (int relax = 0; relax < pc.lambda; relax++) {
 
-        for (int d = 0; d < S.divisions.size(); d++) {
-            DivisionState div = S.divisions.get(d);
-            BitSet qc = qcodes[d];
+            int toalBits = pc.m * pc.lambda;
+            int relaxedBits = toalBits - (relax * pc.m);
+            if (relaxedBits <= 0) continue;
 
-            int probesUsed = 0;
+            for (int d = 0; d < S.divisions.size(); d++) {
+                DivisionState div = S.divisions.get(d);
+                BitSet qc = qcodes[d];
 
-            int probeLimit;
-            if (cfg.getSearchMode() == com.fspann.config.SearchMode.PAPER_BASELINE) {
-                probeLimit = Integer.MAX_VALUE; // paper: no probe cap
-            } else {
-                probeLimit = probeOverride.get() > 0
+                int probesUsed = 0;
+                int probeLimit = paperBaseline
+                        ? Integer.MAX_VALUE
+                        : (probeOverride.get() > 0
                         ? probeOverride.get()
-                        : cfg.getPaper().probeLimit;
-            }
+                        : pc.probeLimit);
 
-            for (GreedyPartitioner.SubsetBounds sb : div.I) {
+                for (GreedyPartitioner.SubsetBounds sb : div.I) {
 
-                if (!covers(sb, qc)) continue;
-                anyTouched = true;
+                    boolean match = (relax == 0)
+                            ? covers(sb, qc)
+                            : coversRelaxed(sb, qc, relaxedBits);
 
-                if (probesUsed >= probeLimit) break;
-                probesUsed++;
+                    if (!match) continue;
 
-                List<String> ids = div.tagToIds.get(sb.tag);
-                if (ids == null) continue;
-
-                for (String id : ids) {
-                    touchedIds.add(id);
-
-                    if (out.containsKey(id)) continue;
-                    if (metadata.isDeleted(id)) continue;
-
-                    try {
-                        EncryptedPoint ep = metadata.loadEncryptedPoint(id);
-                        if (ep == null) continue;
-                        KeyVersion kvp = keyService.getVersion(ep.getKeyVersion());
-                        if (kvp == null) {
-                            continue; // truly unrecoverable
-                        }
-
-                        out.put(id, ep);
-                    } catch (Exception e) {
-                        logger.warn("Failed to load encrypted point {}", id, e);
+                    if (!paperBaseline) {
+                        if (probesUsed >= probeLimit) break;
+                        probesUsed++;
                     }
-                }
-            }
 
-            logger.debug(
-                    "lookup: dim={} division={} probeLimit={} probesUsed={}",
-                    dim, d, probeLimit, probesUsed
-            );
-        }
+                    List<String> ids = div.tagToIds.get(sb.tag);
+                    if (ids == null) continue;
 
-        // ---- PREFIX RELAXATION FALLBACK (ZERO-TOUCH FIX) ----
-        boolean relaxedTouched = false;
+                    for (String id : ids) {
+                        touchedIds.add(id);
 
-        if (!anyTouched) {
-            for (int relax = 1; relax <= maxRelaxSteps; relax++) {
+                        if (out.containsKey(id)) continue;
+                        if (metadata.isDeleted(id)) continue;
 
-                for (int d = 0; d < S.divisions.size(); d++) {
-                    DivisionState div = S.divisions.get(d);
-                    BitSet qc = qcodes[d];
-
-                    int relaxedBits = Math.max(1, qc.length() - relax);
-
-                    for (GreedyPartitioner.SubsetBounds sb : div.I) {
-                        if (!coversRelaxed(sb, qc, relaxedBits)) continue;
-
-                        List<String> ids = div.tagToIds.get(sb.tag);
-                        if (ids == null) continue;
-
-                        for (String id : ids) {
-                            touchedIds.add(id);
-                            relaxedTouched = true;   // <<< touch happens here
-
-                            if (out.containsKey(id)) continue;
-                            if (metadata.isDeleted(id)) continue;
-
-                            try {
-                                EncryptedPoint ep = metadata.loadEncryptedPoint(id);
-                                if (ep != null) {
-                                    out.put(id, ep);
-                                }
-                            } catch (Exception ignore) {
+                        try {
+                            EncryptedPoint ep = metadata.loadEncryptedPoint(id);
+                            if (ep != null) {
+                                out.put(id, ep);
                             }
+                        } catch (Exception ignore) {
                         }
                     }
                 }
+            }
 
-                if (!out.isEmpty()) break;
+            // In optimized mode, stop once something is found
+            if (!paperBaseline) {
+                SystemConfig.StabilizationConfig sc = cfg.getStabilization();
+                int minCand = (sc != null && sc.isEnabled()) ? sc.getMinCandidates() : Integer.MAX_VALUE;
+
+                if (out.size() >= minCand) {
+                    break;
+                }
             }
         }
 
-        if (relaxedTouched) {
-            anyTouched = true;
-        }
         lastTouched.set(touchedIds.size());
         return new ArrayList<>(out.values());
     }
