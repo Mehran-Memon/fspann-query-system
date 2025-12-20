@@ -141,7 +141,13 @@ public final class QueryServiceImpl implements QueryService {
                 index.setProbeOverride(probe);
                 raw = index.lookup(token);
                 raw = (raw != null) ? raw : Collections.emptyList();
-
+                if (cfg.getSearchMode() == com.fspann.config.SearchMode.PAPER_BASELINE) {
+                    logger.debug(
+                            "[PAPER] rawCandidates={} refined={}",
+                            lastCandTotal,
+                            lastCandDecrypted
+                    );
+                }
                 if (raw.size() >= minCand) break;
 
                 probe *= 2;          // widen probes exponentially
@@ -152,10 +158,12 @@ public final class QueryServiceImpl implements QueryService {
             lastCandTotal = raw.size();
 
             if (raw.size() < minCand) {
-                logger.warn(
-                        "minCandidates={} not reached (got {}). Final probeLimit={}",
-                        minCand, raw.size(), probe
-                );
+                if (cfg.getSearchMode() == com.fspann.config.SearchMode.OPTIMIZED) {
+                    logger.warn(
+                            "minCandidates={} not reached (got {}). Final probeLimit={}",
+                            minCand, raw.size(), probe
+                    );
+                }
             }
 
             if (raw.isEmpty()) {
@@ -237,6 +245,15 @@ public final class QueryServiceImpl implements QueryService {
             return Collections.emptyList();
         }
 
+        // ================= PAPER BASELINE =================
+        if (cfg.getSearchMode() == com.fspann.config.SearchMode.PAPER_BASELINE) {
+            if (stabilizationCallback != null) {
+                stabilizationCallback.accept(candidates.size(), candidates.size());
+            }
+            return candidates;   // no truncation
+        }
+
+        // ================= OPTIMIZED MODE =================
         SystemConfig.StabilizationConfig sc = cfg.getStabilization();
         if (sc == null || !sc.isEnabled()) {
             if (stabilizationCallback != null) {

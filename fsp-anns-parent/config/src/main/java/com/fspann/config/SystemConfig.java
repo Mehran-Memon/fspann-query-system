@@ -31,6 +31,8 @@ public class SystemConfig {
     private static final ObjectMapper MAPPER = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
+    private SearchMode searchMode = SearchMode.PAPER_BASELINE;
+
     /** Per-path cache for loaded configs. */
     private static final ConcurrentMap<String, SystemConfig> configCache = new ConcurrentHashMap<>();
 
@@ -211,6 +213,14 @@ public class SystemConfig {
 
     public KAwareConfig getKAware() {
         return kAware;
+    }
+
+    public SearchMode getSearchMode() {
+        return searchMode;
+    }
+
+    public void setSearchMode(SearchMode mode) {
+        this.searchMode = mode;
     }
 
     /* ======================== Nested config types ======================== */

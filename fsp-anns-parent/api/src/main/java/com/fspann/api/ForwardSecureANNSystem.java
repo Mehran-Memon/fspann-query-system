@@ -712,12 +712,13 @@ public class ForwardSecureANNSystem {
     ) {
         Objects.requireNonNull(queries, "queries");
         Objects.requireNonNull(gt, "groundtruth");
+        int maxQueries = Integer.getInteger("query.limit", queries.size());
 
         QueryServiceImpl qs = getQueryServiceImpl();
 
         logger.info("Running explicit query loop: queries={}, dim={}", queries.size(), dim);
 
-        for (int qi = 0; qi < queries.size(); qi++) {
+        for (int qi = 0; qi < Math.min(queries.size(), maxQueries); qi++) {
             double[] q = queries.get(qi);
 
             for (int k : K_VARIANTS) {
@@ -745,20 +746,19 @@ public class ForwardSecureANNSystem {
                 // --------------------------------------------------
                 // 4. Zero-touch fallback (per-K)
                 // --------------------------------------------------
-                if (indexService.getLastTouchedIds().isEmpty()) {
-
+                if (config.getSearchMode() == com.fspann.config.SearchMode.OPTIMIZED &&
+                        indexService.getLastTouchedIds().isEmpty()) {
                     int baseProbes = config.getPaper().probeLimit;
                     int fallbackProbes = Math.max(baseProbes * 2, 4);
-
                     logger.warn(
                             "Zero-touch ANN query detected (q={}, k={}). Forcing probe widening {} → {}",
                             qi, k, baseProbes, fallbackProbes
                     );
-
                     indexService.setProbeOverride(fallbackProbes);
                     results = qs.search(token);
                     indexService.clearProbeOverride();
                 }
+
 
                 long t1 = System.nanoTime();
                 addQueryTime(t1 - t0);

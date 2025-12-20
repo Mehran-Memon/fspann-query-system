@@ -240,9 +240,14 @@ public final class PartitionedIndexService implements IndexService {
 
             int probesUsed = 0;
 
-            int probeLimit = probeOverride.get() > 0
-                    ? probeOverride.get()
-                    : cfg.getPaper().probeLimit;
+            int probeLimit;
+            if (cfg.getSearchMode() == com.fspann.config.SearchMode.PAPER_BASELINE) {
+                probeLimit = Integer.MAX_VALUE; // paper: no probe cap
+            } else {
+                probeLimit = probeOverride.get() > 0
+                        ? probeOverride.get()
+                        : cfg.getPaper().probeLimit;
+            }
 
             for (GreedyPartitioner.SubsetBounds sb : div.I) {
 
