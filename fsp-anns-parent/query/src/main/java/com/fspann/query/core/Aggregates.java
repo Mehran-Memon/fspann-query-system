@@ -45,6 +45,7 @@ public final class Aggregates {
         if (rows.isEmpty()) return a;
 
         int count = rows.size();
+        int runCount = 0;
 
         double sumRatio = 0;
         double sumServer = 0;
@@ -70,8 +71,10 @@ public final class Aggregates {
             sumClient  += nz(r.clientMs);
             sumDecrypt += nz(r.decryptMs);
 
-            if (r.runMs > 0) sumRun += r.runMs;
-
+            if (r.runMs > 0) {
+                sumRun += r.runMs;
+                runCount++;
+            }
             sumTokenBytes += nz(r.tokenBytes);
             sumWorkUnits  += r.vectorDim;   // Option-C definition
 
@@ -99,7 +102,7 @@ public final class Aggregates {
         a.avgRatio       = sumRatio / count;
         a.avgServerMs    = sumServer / count;
         a.avgClientMs    = sumClient / count;
-        a.avgRunMs       = sumRun / count;
+        a.avgRunMs = runCount > 0 ? sumRun / runCount : 0.0;
         a.avgDecryptMs   = sumDecrypt / count;
 
         a.avgTokenBytes  = sumTokenBytes / count;

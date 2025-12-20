@@ -853,9 +853,7 @@ public class ForwardSecureANNSystem {
 
         final int upto = Math.min(k, annResults.size());
 
-        /* =============================
-         * Precision@K
-         * ============================= */
+        // ---------------- Precision@K ----------------
         int[] gtIds = gt.getGroundtruthIds(queryIndex, k);
         int hits = 0;
 
@@ -864,44 +862,31 @@ public class ForwardSecureANNSystem {
                 try {
                     int annId = Integer.parseInt(annResults.get(i).getId());
                     if (containsInt(gtIds, annId)) hits++;
-                } catch (NumberFormatException ignore) {
-                    // opaque ANN id → cannot match GT
-                }
+                } catch (NumberFormatException ignore) {}
             }
         }
 
         double precision = hits / (double) k;
 
-        /* =============================
-         * Distance Ratio@K (Peng)
-         * ============================= */
-        if (baseReader == null) {
+        // ---------------- Ratio@K ----------------
+        if (baseReader == null || gtIds == null || gtIds.length == 0) {
             return new QueryMetrics(Double.NaN, precision);
         }
 
         double ratioSum = 0.0;
-        int count = 0;
+        int cnt = 0;
 
         for (int i = 0; i < upto && i < gtIds.length; i++) {
             int gtId = gtIds[i];
             double dGt  = baseReader.l2(queryVector, gtId);
             double dAnn = annResults.get(i).getDistance();
-
             if (dGt > 0 && dAnn > 0) {
                 ratioSum += (dAnn / dGt);
-                count++;
+                cnt++;
             }
         }
 
-        double ratio = (count > 0) ? (ratioSum / count) : Double.NaN;
-
-        if (queryIndex == 0 && k == K_VARIANTS[0]) {
-            logger.info(
-                    "[SANITY] q=0 k={} | returned={} | hits={} | precision={} | ratio={}",
-                    k, upto, hits, precision, ratio
-            );
-        }
-
+        double ratio = (cnt > 0) ? ratioSum / cnt : Double.NaN;
         return new QueryMetrics(ratio, precision);
     }
 
@@ -1246,131 +1231,72 @@ public class ForwardSecureANNSystem {
         Files.createDirectories(outDir);
 
         /* ====================================================================== */
-        /*                      1. RAW PROFILER CSV EXPORT                         */
+        /* 1. RAW PROFILER CSV (single source of truth for queries)                */
         /* ====================================================================== */
 
         Path profilerCsv = outDir.resolve("profiler_metrics.csv");
-
         if (profiler != null) {
             profiler.exportToCSV(profilerCsv.toString());
         }
 
         /* ====================================================================== */
-        /*                 2. COMPUTE ART + AvgRatio BY READING CSV               */
+        /* 2. AGGREGATES (ART, AvgRatio, counts) — IN MEMORY                       */
         /* ====================================================================== */
 
-        double avgArt = 0.0;
-        double avgRatio = 0.0;
+        Aggregates agg = Aggregates.fromProfiler(this.profiler);
 
-        if (Files.exists(profilerCsv)) {
-
-            List<String> lines = Files.readAllLines(profilerCsv)
-                    .stream()
-                    .filter(s -> !s.trim().isEmpty())
-                    .collect(Collectors.toList());
-
-            if (lines.size() > 1) { // skip header
-                double sumArt = 0.0;
-                double sumRatio = 0.0;
-                int count = 0;
-
-                for (int i = 1; i < lines.size(); i++) {
-                    String[] cols = lines.get(i).split(",");
-
-                    if (cols.length < 7) continue;
-
-                    try {
-                        double runMs = Double.parseDouble(cols[3]);
-                        double ratio = Double.parseDouble(cols[6]);
-
-                        sumArt += runMs;
-                        sumRatio += ratio;
-                        count++;
-
-                    } catch (Exception ignore) {
-                    }
-                }
-
-                if (count > 0) {
-                    avgArt = sumArt / count;
-                    avgRatio = sumRatio / count;
-                }
-            }
-        }
+        double avgArtMs   = agg.avgRunMs;        // canonical ART
+        double avgRatio   = agg.avgRatio;     // canonical ratio
 
         /* ====================================================================== */
-        /*                   3. WRITE METRICS SUMMARY (REPRODUCIBLE)              */
+        /* 3. REPRODUCIBLE METRICS SUMMARY                                        */
         /* ====================================================================== */
-
-        String mode = "partitioned";
 
         String cfgHash = "NA";
         try {
             Path cfgPath = Paths.get(this.configPath);
             if (Files.exists(cfgPath)) {
-                byte[] bytes = Files.readAllBytes(cfgPath);
-                cfgHash = toHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+                cfgHash = toHex(
+                        MessageDigest.getInstance("SHA-256")
+                                .digest(Files.readAllBytes(cfgPath))
+                );
             }
-        } catch (Exception ignore) {
-        }
+        } catch (Exception ignore) {}
 
         int keyVer = -1;
         try {
             keyVer = keyService.getCurrentVersion().getVersion();
-        } catch (Exception ignore) {
-        }
+        } catch (Exception ignore) {}
 
         Files.writeString(
                 outDir.resolve("metrics_summary.txt"),
-                String.format(Locale.ROOT,
-                        "mode=%s  config_sha256=%s  key_version=v%d%nART(ms)=%.3f%nAvgRatio=%.6f%n",
-                        mode, cfgHash, keyVer, avgArt, avgRatio),
-                StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING
+                String.format(
+                        Locale.ROOT,
+                        "mode=partitioned%nconfig_sha256=%s%nkey_version=v%d%nART(ms)=%.3f%nAvgRatio=%.6f%n",
+                        cfgHash,
+                        keyVer,
+                        avgArtMs,
+                        avgRatio
+                ),
+                StandardOpenOption.CREATE,
+                StandardOpenOption.TRUNCATE_EXISTING
         );
 
-
         /* ====================================================================== */
-        /*                         4. EXPORT TOP-K EVALUATION                     */
+        /* 4. TOP-K PRECISION / RATIO EXPORT                                      */
         /* ====================================================================== */
 
         try {
             topKProfiler.export(outDir.resolve("topk_evaluation.csv").toString());
-        } catch (Exception ignore) {
-        }
-
-        /* ====================================================================== */
-        /*                      5. STORAGE SUMMARY + PRINTER                      */
-        /* ====================================================================== */
-
-        try {
-            Aggregates agg = Aggregates.fromProfiler(this.profiler);
-
-            // -----------------------
-            // DATASET NAME (fallback)
-            // -----------------------
-            String dataset;
-            String cliDataset = System.getProperty("cli.dataset", "");
-            if (!cliDataset.isBlank()) {
-                dataset = cliDataset;
-            } else {
-                String baseProp = System.getProperty("base.path", "");
-                if (!baseProp.isBlank()) {
-                    dataset = Paths.get(baseProp).getFileName().toString();
-                } else {
-                    dataset = this.resultsDir.getFileName().toString();
-                }
-            }
         } catch (Exception e) {
-            throw new RuntimeException(e);
+            logger.warn("Failed to export top-K evaluation", e);
         }
+
         /* ====================================================================== */
-        /*                      6. EvaluationSummaryPrinter CSVs                  */
+        /* 5. PAPER-READY SUMMARY CSV                                             */
         /* ====================================================================== */
 
         try {
-            Aggregates agg = Aggregates.fromProfiler(this.profiler);
-
-            // dataset identification fallback
             String dataset;
             String baseProp = System.getProperty("base.path", "");
             if (!baseProp.isBlank()) {
@@ -1379,33 +1305,27 @@ public class ForwardSecureANNSystem {
                 dataset = this.resultsDir.getFileName().toString();
             }
 
-            String profile;
-            String cliProfile = System.getProperty("cli.profile", "");
-            if (!cliProfile.isBlank()) {
-                profile = cliProfile;
-            } else {
-                profile = "ideal-system";
-            }
-            int m = config.getPaper().m;
-            int lambda = config.getPaper().lambda;
-            int divisions = config.getPaper().divisions;
+            String profile =
+                    System.getProperty("cli.profile", "ideal-system");
 
-            long totalIndexMs = Math.round(totalIndexingTimeNs / 1_000_000.0);
+            long totalIndexMs =
+                    Math.round(totalIndexingTimeNs / 1_000_000.0);
 
-            Path summaryCsv = outDir.resolve("summary.csv");
+            agg.spaceMetaBytes   = Math.max(0, dirSize(FsPaths.metadataDb()));
+            agg.spacePointsBytes = Math.max(0, dirSize(FsPaths.pointsDir()));
 
             EvaluationSummaryPrinter.printAndWriteCsv(
                     dataset,
                     profile,
-                    m,
-                    lambda,
-                    divisions,
+                    config.getPaper().m,
+                    config.getPaper().lambda,
+                    config.getPaper().divisions,
                     totalIndexMs,
                     agg,
-                    summaryCsv
+                    outDir.resolve("summary.csv")
             );
         } catch (Exception e) {
-            logger.warn("Failed to run EvaluationSummaryPrinter", e);
+            logger.warn("Failed to write summary.csv", e);
         }
     }
 
