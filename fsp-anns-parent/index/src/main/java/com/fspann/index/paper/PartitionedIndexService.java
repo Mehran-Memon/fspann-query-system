@@ -31,7 +31,8 @@ public final class PartitionedIndexService implements IndexService {
     // =====================================================
 
     /** Build trigger threshold: create partitions when staged >= this */
-    private static final int DEFAULT_BUILD_THRESHOLD = Integer.MAX_VALUE;
+    private static final int DEFAULT_BUILD_THRESHOLD =
+            Math.max(20_000, Runtime.getRuntime().availableProcessors() * 20_000);
 
     // =====================================================
     // FIELDS
@@ -211,6 +212,13 @@ public final class PartitionedIndexService implements IndexService {
     // LOOKUP (Algorithm-3 prefix order)
     // =====================================================
 
+//    @Override
+//    public List<EncryptedPoint> lookup(QueryToken token) {
+//        throw new UnsupportedOperationException(
+//                "lookup() is disabled. Use lookupCandidateIds() instead."
+//        );
+//    }
+
     @Override
     public List<EncryptedPoint> lookup(QueryToken token) {
         Objects.requireNonNull(token, "token cannot be null");
@@ -239,7 +247,7 @@ public final class PartitionedIndexService implements IndexService {
         // ================================
         // PAPER-FAITHFUL PREFIX SCAN
         // ================================
-        for (int relax = 0; relax < pc.lambda; relax++) {
+        for (int relax = 0; relax <= pc.lambda; relax++) {
 
             int toalBits = pc.m * pc.lambda;
             int relaxedBits = toalBits - (relax * pc.m);
@@ -250,11 +258,11 @@ public final class PartitionedIndexService implements IndexService {
                 BitSet qc = qcodes[d];
 
                 int probesUsed = 0;
-                int probeLimit = paperBaseline
-                        ? Integer.MAX_VALUE
-                        : (probeOverride.get() > 0
-                        ? probeOverride.get()
-                        : pc.probeLimit);
+                  int probeLimit = Integer.MAX_VALUE;
+                  if (!paperBaseline && probeOverride.get() > 0) {
+                  probeLimit = probeOverride.get();
+                      }
+
 
                 for (GreedyPartitioner.SubsetBounds sb : div.I) {
 
@@ -288,20 +296,89 @@ public final class PartitionedIndexService implements IndexService {
                     }
                 }
             }
-
-            // In optimized mode, stop once something is found
-            if (!paperBaseline) {
-                SystemConfig.StabilizationConfig sc = cfg.getStabilization();
-                int minCand = (sc != null && sc.isEnabled()) ? sc.getMinCandidates() : Integer.MAX_VALUE;
-
-                if (out.size() >= minCand) {
-                    break;
-                }
-            }
         }
 
         lastTouched.set(touchedIds.size());
         return new ArrayList<>(out.values());
+    }
+
+    public List<String> lookupCandidateIds(QueryToken token) {
+        Objects.requireNonNull(token, "token");
+
+        if (!frozen) {
+            throw new IllegalStateException("Index not finalized");
+        }
+
+        SystemConfig.PaperConfig pc = cfg.getPaper();
+        int K = token.getTopK();
+
+        final int MAX_IDS = Math.max(
+                K,
+                cfg.getRuntime().getMaxCandidateFactor() * K
+        );
+
+        Set<String> seen = new LinkedHashSet<>(MAX_IDS);
+        Set<String> deletedCache = new HashSet<>();
+
+        DimensionState S = dims.get(token.getDimension());
+        if (S == null) return List.of();
+
+        BitSet[] qcodes = token.getCodes();
+
+        for (int relax = 0; relax <= pc.lambda; relax++) {
+            int totalBits = pc.m * pc.lambda;
+            int bits = totalBits - relax * pc.m;
+            if (bits <= 0) continue;
+
+            for (int d = 0; d < S.divisions.size(); d++) {
+                DivisionState div = S.divisions.get(d);
+                BitSet qc = qcodes[d];
+
+                for (GreedyPartitioner.SubsetBounds sb : div.I) {
+                    boolean ok = (relax == 0)
+                            ? covers(sb, qc)
+                            : coversRelaxed(sb, qc, bits);
+
+                    if (!ok) continue;
+
+                    List<String> ids = div.tagToIds.get(sb.tag);
+                    if (ids == null) continue;
+
+                    for (String id : ids) {
+                        if (deletedCache.contains(id)) continue;
+                        if (metadata.isDeleted(id)) {
+                            deletedCache.add(id);
+                            continue;
+                        }
+
+                        seen.add(id);
+                        if (seen.size() >= MAX_IDS) {
+                            lastTouched.set(seen.size());
+                            lastTouchedIds.get().clear();
+                            lastTouchedIds.get().addAll(seen);
+                            return new ArrayList<>(seen);
+                        }
+                    }
+                }
+            }
+
+            if (seen.size() >= K) break;
+        }
+
+        lastTouched.set(seen.size());
+        lastTouchedIds.get().clear();
+        lastTouchedIds.get().addAll(seen);
+
+        return new ArrayList<>(seen);
+    }
+
+    public EncryptedPoint loadPointIfActive(String id) {
+        if (metadata.isDeleted(id)) return null;
+        try {
+            return metadata.loadEncryptedPoint(id);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private boolean covers(GreedyPartitioner.SubsetBounds sb, BitSet c) {

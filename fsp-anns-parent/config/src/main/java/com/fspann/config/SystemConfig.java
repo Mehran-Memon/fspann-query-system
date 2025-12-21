@@ -223,6 +223,17 @@ public class SystemConfig {
         this.searchMode = mode;
     }
 
+    public static final class RuntimeConfig {
+        private int maxCandidateFactor = 50;   // paper-faithful
+        private int maxRefinementFactor = 20;  // crypto-aware
+
+        public int getMaxCandidateFactor() { return maxCandidateFactor; }
+        public int getMaxRefinementFactor() { return maxRefinementFactor; }
+    }
+
+    private RuntimeConfig runtime = new RuntimeConfig();
+    public RuntimeConfig getRuntime() { return runtime; }
+
     /* ======================== Nested config types ======================== */
 
     @JsonIgnoreProperties(ignoreUnknown = true)

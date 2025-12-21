@@ -99,9 +99,7 @@ public final class QueryServiceImpl implements QueryService {
 
         final long clientStart = System.nanoTime();
 
-        // --------------------------
-        // 1) Decrypt query (client)
-        // --------------------------
+        // -------- 1) decrypt query --------
         KeyVersion kv;
         try {
             kv = keyService.getVersion(token.getVersion());
@@ -113,122 +111,81 @@ public final class QueryServiceImpl implements QueryService {
                 token.getEncryptedQuery(), token.getIv(), kv.getKey());
 
         if (!isValid(qVec)) {
-            logger.warn("Query decryption failed or invalid vector; aborting search");
-            lastClientNs = Math.max(0L, System.nanoTime() - clientStart);
+            lastClientNs = System.nanoTime() - clientStart;
             return Collections.emptyList();
         }
 
-        // --------------------------
-        // 2) Server-side path
-        // --------------------------
         final long serverStart = System.nanoTime();
-        List<QueryResult> finalResults = Collections.emptyList();
 
         try {
-            // 2.1 raw candidates from partitioned index
-            List<EncryptedPoint> raw;
+            // -------- 2) PHASE-1: candidate ID collection --------
+            List<String> candidateIds = index.lookupCandidateIds(token);
+            lastCandTotal = candidateIds.size();
 
-            if (cfg.getSearchMode() == com.fspann.config.SearchMode.PAPER_BASELINE) {
-
-                // ===== PAPER BASELINE: SINGLE LOOKUP =====
-                raw = index.lookup(token);
-                raw = (raw != null) ? raw : Collections.emptyList();
-                lastCandTotal = index.getLastTouchedCount();
-
-            } else {
-
-                // ===== OPTIMIZED MODE =====
-                SystemConfig.StabilizationConfig sc = cfg.getStabilization();
-                int minCand = (sc != null && sc.isEnabled()) ? sc.getMinCandidates() : 0;
-
-                int baseProbe = cfg.getPaper().probeLimit;
-                int probe = baseProbe;
-                int attempts = 0;
-                final int MAX_ATTEMPTS = 4;
-
-                raw = Collections.emptyList();
-
-//                while (attempts == 0 || (raw.size() < minCand && attempts < MAX_ATTEMPTS)) {
-                while (attempts < MAX_ATTEMPTS) {
-
-                    index.setProbeOverride(probe);
-                    raw = index.lookup(token);
-                    raw = (raw != null) ? raw : Collections.emptyList();
-
-                    if (raw.size() >= minCand) break;
-
-                    probe *= 2;
-                    attempts++;
-                }
-
-                index.clearProbeOverride();
-                lastCandTotal = raw.size();
-
-                if (raw.size() < minCand) {
-                    logger.warn(
-                            "minCandidates={} not reached (got {}). Final probeLimit={}",
-                            minCand, raw.size(), probe
-                    );
-                }
-            }
-
-            if (raw.isEmpty()) {
-                lastCandKept = 0;
+            if (candidateIds.isEmpty()) {
                 return Collections.emptyList();
             }
 
-            List<EncryptedPoint> limited = applyCandidateLimiter(raw);
-            lastCandKept = limited.size();
+            // -------- 3) PHASE-2: bounded refinement --------
+            final int K = token.getTopK();
 
-            if (limited.isEmpty()) {
-                return Collections.emptyList();
-            }
+            // hard upper bound — YOUR CONTRIBUTION
+            final int MAX_REFINEMENT =
+                    Math.min(candidateIds.size(),
+                            cfg.getRuntime().getMaxRefinementFactor() * K);
 
-            touchedThisSession.addAll(index.getLastTouchedIds());
+            int refineLimit = Math.max(K, MAX_REFINEMENT);
 
-            // 2.3 decrypt + score (L2)
             final long decStart = System.nanoTime();
-            List<QueryScored> scored = decryptAndScore(limited, qVec, kv);
-            final long decEnd = System.nanoTime();
-            lastDecryptNs = Math.max(0L, decEnd - decStart);
+            List<QueryScored> scored = new ArrayList<>(refineLimit);
 
-            if (scored.isEmpty()) {
-                return Collections.emptyList();
+            for (int i = 0; i < refineLimit; i++) {
+                String id = candidateIds.get(i);
+                try {
+                    EncryptedPoint ep = index.loadPointIfActive(id);
+                    if (ep == null) continue;
+
+                    KeyVersion kvp = keyService.getVersion(ep.getKeyVersion());
+                    double[] v = cryptoService.decryptFromPoint(ep, kvp.getKey());
+
+                    if (!isValid(v)) continue;
+
+                    scored.add(new QueryScored(id, l2(qVec, v)));
+                    touchedThisSession.add(id);
+
+                } catch (Exception ignore) {}
             }
 
-            // sort by L2 ascending
+            lastCandDecrypted = scored.size();
+            lastDecryptNs = System.nanoTime() - decStart;
+
+            if (scored.isEmpty()) return Collections.emptyList();
+
             scored.sort(Comparator.comparingDouble(QueryScored::dist));
 
-            // 2.4 top-K cut
-            int k = token.getTopK();
-            int eff = Math.min(k, scored.size());
+            int eff = Math.min(K, scored.size());
             lastReturned = eff;
 
             List<QueryResult> out = new ArrayList<>(eff);
             for (int i = 0; i < eff; i++) {
-                QueryScored qs = scored.get(i);
-                out.add(new QueryResult(qs.id(), qs.dist()));
+                QueryScored s = scored.get(i);
+                out.add(new QueryResult(s.id(), s.dist()));
             }
-            finalResults = out;
+
             return out;
 
         } finally {
-        long serverEnd = System.nanoTime();
-        lastServerNs = Math.max(0L, serverEnd - serverStart);
+            long serverEnd = System.nanoTime();
+            lastServerNs = serverEnd - serverStart;
+            lastClientNs = System.nanoTime() - clientStart - lastServerNs;
 
-        long clientEnd = System.nanoTime();
-        long totalNs = Math.max(0L, clientEnd - clientStart);
-
-        // client-only = total - server
-        long clientOnlyNs = Math.max(0L, totalNs - lastServerNs);
-        lastClientNs = clientOnlyNs;
-
-        lastCandIds = new HashSet<>(touchedThisSession);
-        if (reencTracker != null && !touchedThisSession.isEmpty()) {
-            reencTracker.record(touchedThisSession);
+            lastCandIds = new HashSet<>(touchedThisSession);
+            if (reencTracker != null && !touchedThisSession.isEmpty()) {
+                reencTracker.record(touchedThisSession);
+            }
         }
     }
-}
+
 
     // =====================================================================
     // CANDIDATE LIMITER (D1-like) ON ENCRYPTED POINTS
