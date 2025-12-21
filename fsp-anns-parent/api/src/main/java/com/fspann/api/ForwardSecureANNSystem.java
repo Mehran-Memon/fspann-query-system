@@ -1883,16 +1883,29 @@ public class ForwardSecureANNSystem {
 
     /** Façade: produce a token for (q, k, dim) */
     public QueryToken createToken(double[] q, int k, int dim) {
-        QueryToken token = tokenFactories.get(dim).create(q, k);
-        return token;
+
+        Objects.requireNonNull(q, "Query vector cannot be null");
+
+        if (q.length != dim) {
+            throw new IllegalArgumentException(
+                    "Query dimension mismatch: expected=" + dim +
+                            " actual=" + q.length
+            );
+        }
+
+        QueryTokenFactory factory = tokenFactories.get(dim);
+        if (factory == null) {
+            throw new IllegalStateException(
+                    "No QueryTokenFactory registered for dimension=" + dim
+            );
+        }
+
+        return factory.create(q, k);
     }
 
     /** Façade: produce a cloaked token (noise only if enabled) */
     public QueryToken cloakQuery(double[] q, int dim, int k) {
-        if (configuredNoiseScale <= 0) {
-            return createToken(q, k, dim);
-        }
-        return factoryForDim(dim).create(q, k); // QueryExecutionEngine adds cloak noise separately
+        return createToken(q, k, dim);
     }
 
     /** Façade: expose QueryTokenFactory */

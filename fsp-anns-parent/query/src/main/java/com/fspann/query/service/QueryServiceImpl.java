@@ -123,16 +123,39 @@ public final class QueryServiceImpl implements QueryService {
             lastCandTotal = candidateIds.size();
 
             if (candidateIds.isEmpty()) {
+                lastCandKept = 0;
                 return Collections.emptyList();
+            }
+
+            // ---------- APPLY STABILIZATION ----------
+            List<String> limitedIds;
+
+            SystemConfig.StabilizationConfig sc = cfg.getStabilization();
+            if (sc != null && sc.isEnabled()) {
+                int raw = candidateIds.size();
+                int alphaCap = (int) Math.ceil(sc.getAlpha() * raw);
+                int finalSize = Math.min(raw, Math.max(sc.getMinCandidates(), alphaCap));
+
+                limitedIds = candidateIds.subList(0, finalSize);
+                lastCandKept = limitedIds.size();
+            } else {
+                limitedIds = candidateIds;
+                lastCandKept = candidateIds.size();
             }
 
             // -------- 3) PHASE-2: bounded refinement --------
             final int K = token.getTopK();
 
             // hard upper bound — YOUR CONTRIBUTION
+            int maxRefineFactor = 1;
+
+            SystemConfig.RuntimeConfig rt = cfg.getRuntime();
+            if (rt != null && rt.getMaxRefinementFactor() > 0) {
+                maxRefineFactor = rt.getMaxRefinementFactor();
+            }
+
             final int MAX_REFINEMENT =
-                    Math.min(candidateIds.size(),
-                            cfg.getRuntime().getMaxRefinementFactor() * K);
+                    Math.min(candidateIds.size(), maxRefineFactor * K);
 
             int refineLimit = Math.max(K, MAX_REFINEMENT);
             lastCandKept = refineLimit;
@@ -140,8 +163,8 @@ public final class QueryServiceImpl implements QueryService {
             final long decStart = System.nanoTime();
             List<QueryScored> scored = new ArrayList<>(refineLimit);
 
-            for (int i = 0; i < refineLimit; i++) {
-                String id = candidateIds.get(i);
+            for (int i = 0; i < limitedIds.size(); i++) {
+                String id = limitedIds.get(i);
                 try {
                     EncryptedPoint ep = index.loadPointIfActive(id);
                     if (ep == null) continue;

@@ -248,6 +248,11 @@ public final class PartitionedIndexService implements IndexService {
         if (S == null) return Collections.emptyList();
 
         BitSet[] qcodes = token.getCodes();
+        if (qcodes == null || qcodes.length == 0) {
+            lastTouched.set(0);
+            lastTouchedIds.get().clear();
+            return List.of();
+        }
         LinkedHashMap<String, EncryptedPoint> out = new LinkedHashMap<>(HARD_CAP);
 
         final int totalBits = totalCodeBits();
@@ -258,7 +263,9 @@ public final class PartitionedIndexService implements IndexService {
             int relaxedBits = totalBits - (relax * pc.m);
             if (relaxedBits <= 0) continue;
 
-            for (int d = 0; d < S.divisions.size(); d++) {
+            int safeDivs = Math.min(S.divisions.size(), qcodes.length);
+
+            for (int d = 0; d < safeDivs; d++) {
                 DivisionState div = S.divisions.get(d);
                 BitSet qc = qcodes[d];
 
@@ -330,7 +337,9 @@ public final class PartitionedIndexService implements IndexService {
             if (bits <= 0) continue;
 
 
-            for (int d = 0; d < S.divisions.size(); d++) {
+            int safeDivs = Math.min(S.divisions.size(), qcodes.length);
+
+            for (int d = 0; d < safeDivs; d++) {
                 DivisionState div = S.divisions.get(d);
                 BitSet qc = qcodes[d];
 
