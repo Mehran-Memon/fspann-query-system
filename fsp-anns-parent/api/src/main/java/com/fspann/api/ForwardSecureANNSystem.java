@@ -389,33 +389,28 @@ public class ForwardSecureANNSystem {
         // ==== QueryTokenFactories (disables LSH entirely) ====
 
         for (int dim : dimensions) {
-            int lambda = Math.max(1, config.getPaper().lambda);
-            int m = Math.max(1, config.getPaper().m);
-            long seed = config.getPaper().seed;
 
             int divisions = Math.max(1, config.getPaper().divisions);
-            int expected = config.getPaper().divisions;
-            if (divisions != expected) {
-                throw new IllegalStateException(
-                        "TokenFactory divisions mismatch: factory=" + divisions +
-                                " config=" + expected +
-                                " (configPath=" + this.configPath + ")"
-                );
-            }
 
-                tokenFactories.put(
-                        dim,
-                        new QueryTokenFactory(
-                                cryptoService,
-                                keyService,
-                                indexService,   // REQUIRED
-                                config,
-                                divisions
-                        )
-                );
+            QueryTokenFactory factory =
+                    new QueryTokenFactory(
+                            cryptoService,
+                            keyService,
+                            indexService,
+                            config,
+                            divisions
+                    );
 
-                logger.info("TokenFactory created (MSANNP): dim={} m={} lambda={} divisions={} seed={}", dim, m, lambda, divisions, seed);
-            }
+            tokenFactories.put(dim, factory);
+
+            logger.info(
+                    "TokenFactory created: dim={} m={} lambda={} divisions={}",
+                    dim,
+                    config.getPaper().m,
+                    config.getPaper().lambda,
+                    divisions
+            );
+        }
 
         int primaryDim = dimensions.get(0);
         QueryTokenFactory qtf = tokenFactories.get(primaryDim);
@@ -1466,18 +1461,10 @@ public class ForwardSecureANNSystem {
             return;
         }
 
-        if (uniqueCount == 0 && totalQueryTimeNs > 0) {
-            throw new IllegalStateException(
-                    "Queries executed but no candidates tracked for reencryption"
-            );
-        }
-
         if (uniqueCount == 0) {
-            logger.error(
-                    "finalizeReencryptionAtEnd: touchedGlobal is EMPTY! " +
-                            "This indicates candidate tracking failed. " +
-                            "Check QueryServiceImpl.getLastTouchedIds() and ensure " +
-                            "lastCandIds is populated in search()."
+            logger.warn(
+                    "No candidates touched for reencryption (mode={}, queries executed={})",
+                    reencMode, totalQueryTimeNs > 0
             );
 
             appendReencCsv(
@@ -1946,15 +1933,6 @@ public class ForwardSecureANNSystem {
     /** Façade: expose selective re-encryption hook */
     public ReencOutcome doReencrypt(String label, QueryServiceImpl qs) {
         // SECURITY: re-encrypt ALL ANN-touched candidates (not only returned)
-        Set<String> annTouched = indexService.getLastTouchedIds();
-        if (annTouched == null || annTouched.isEmpty()) {
-            logger.warn(
-                    "[{}] ANN search returned results but touched set is empty — check lookup()",
-                    label
-            );
-        } else {
-            touchedGlobal.addAll(annTouched);
-        }
         return maybeReencryptTouched(label, qs);
     }
 

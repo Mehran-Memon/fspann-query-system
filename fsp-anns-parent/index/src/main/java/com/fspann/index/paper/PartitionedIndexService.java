@@ -227,11 +227,18 @@ public final class PartitionedIndexService implements IndexService {
             throw new IllegalStateException("Index not finalized before lookup");
         }
 
-        final SystemConfig.PaperConfig pc = cfg.getPaper();
-        final boolean paperBaseline =
-                cfg.getSearchMode() == com.fspann.config.SearchMode.PAPER_BASELINE;
+        // ===== SAFETY: lookup() is PAPER ONLY =====
+        if (cfg.getSearchMode() != com.fspann.config.SearchMode.PAPER_BASELINE) {
+            throw new IllegalStateException(
+                    "lookup() is restricted to PAPER_BASELINE. Use lookupCandidateIds() for real runs."
+            );
+        }
 
-        final int maxRelaxSteps = pc.lambda;
+        final SystemConfig.PaperConfig pc = cfg.getPaper();
+        final int HARD_CAP = Math.max(
+                cfg.getRuntime().getMaxCandidateFactor() * token.getTopK(),
+                1000
+        );
 
         Set<String> touchedIds = lastTouchedIds.get();
         touchedIds.clear();
@@ -241,28 +248,19 @@ public final class PartitionedIndexService implements IndexService {
         if (S == null) return Collections.emptyList();
 
         BitSet[] qcodes = token.getCodes();
+        LinkedHashMap<String, EncryptedPoint> out = new LinkedHashMap<>(HARD_CAP);
 
-        LinkedHashMap<String, EncryptedPoint> out = new LinkedHashMap<>();
+        final int totalBits = totalCodeBits();
 
-        // ================================
-        // PAPER-FAITHFUL PREFIX SCAN
-        // ================================
+        // ===== PAPER-FAITHFUL PREFIX SCAN (BOUNDED) =====
         for (int relax = 0; relax <= pc.lambda; relax++) {
 
-            int toalBits = pc.m * pc.lambda;
-            int relaxedBits = toalBits - (relax * pc.m);
+            int relaxedBits = totalBits - (relax * pc.m);
             if (relaxedBits <= 0) continue;
 
             for (int d = 0; d < S.divisions.size(); d++) {
                 DivisionState div = S.divisions.get(d);
                 BitSet qc = qcodes[d];
-
-                int probesUsed = 0;
-                  int probeLimit = Integer.MAX_VALUE;
-                  if (!paperBaseline && probeOverride.get() > 0) {
-                  probeLimit = probeOverride.get();
-                      }
-
 
                 for (GreedyPartitioner.SubsetBounds sb : div.I) {
 
@@ -271,11 +269,6 @@ public final class PartitionedIndexService implements IndexService {
                             : coversRelaxed(sb, qc, relaxedBits);
 
                     if (!match) continue;
-
-                    if (!paperBaseline) {
-                        if (probesUsed >= probeLimit) break;
-                        probesUsed++;
-                    }
 
                     List<String> ids = div.tagToIds.get(sb.tag);
                     if (ids == null) continue;
@@ -291,7 +284,12 @@ public final class PartitionedIndexService implements IndexService {
                             if (ep != null) {
                                 out.put(id, ep);
                             }
-                        } catch (Exception ignore) {
+                        } catch (Exception ignore) {}
+
+                        // ===== HARD STOP =====
+                        if (out.size() >= HARD_CAP) {
+                            lastTouched.set(touchedIds.size());
+                            return new ArrayList<>(out.values());
                         }
                     }
                 }
@@ -325,10 +323,12 @@ public final class PartitionedIndexService implements IndexService {
 
         BitSet[] qcodes = token.getCodes();
 
+        final int totalBits = totalCodeBits();
+
         for (int relax = 0; relax <= pc.lambda; relax++) {
-            int totalBits = pc.m * pc.lambda;
             int bits = totalBits - relax * pc.m;
             if (bits <= 0) continue;
+
 
             for (int d = 0; d < S.divisions.size(); d++) {
                 DivisionState div = S.divisions.get(d);
@@ -385,6 +385,11 @@ public final class PartitionedIndexService implements IndexService {
         var cmp = new GreedyPartitioner.CodeComparator(sb.codeBits);
         return cmp.compare(sb.lower, c) <= 0 &&
                 cmp.compare(c, sb.upper) <= 0;
+    }
+
+    private int totalCodeBits() {
+        SystemConfig.PaperConfig pc = cfg.getPaper();
+        return pc.m * pc.lambda;
     }
 
     // =====================================================

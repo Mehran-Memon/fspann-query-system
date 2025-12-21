@@ -135,6 +135,7 @@ public final class QueryServiceImpl implements QueryService {
                             cfg.getRuntime().getMaxRefinementFactor() * K);
 
             int refineLimit = Math.max(K, MAX_REFINEMENT);
+            lastCandKept = refineLimit;
 
             final long decStart = System.nanoTime();
             List<QueryScored> scored = new ArrayList<>(refineLimit);
@@ -184,60 +185,6 @@ public final class QueryServiceImpl implements QueryService {
                 reencTracker.record(touchedThisSession);
             }
         }
-    }
-
-
-    // =====================================================================
-    // CANDIDATE LIMITER (D1-like) ON ENCRYPTED POINTS
-    // =====================================================================
-
-    /**
-     * Apply D1-style stabilization limiter on candidate list.
-     *
-     * raw       = |candidates|
-     * alphaCap  = ceil(alpha * raw)
-     * finalSize = max(minCandidates, min(alphaCap, raw))
-     *
-     * We take the first finalSize points in the natural arrival order
-     * from the partitioned index.
-     */
-    private List<EncryptedPoint> applyCandidateLimiter(List<EncryptedPoint> candidates) {
-        if (candidates == null || candidates.isEmpty()) {
-            if (stabilizationCallback != null) {
-                stabilizationCallback.accept(0, 0);
-            }
-            return Collections.emptyList();
-        }
-
-        // ================= PAPER BASELINE =================
-        if (cfg.getSearchMode() == com.fspann.config.SearchMode.PAPER_BASELINE) {
-            if (stabilizationCallback != null) {
-                stabilizationCallback.accept(candidates.size(), candidates.size());
-            }
-            return candidates;   // no truncation
-        }
-
-        // ================= OPTIMIZED MODE =================
-        SystemConfig.StabilizationConfig sc = cfg.getStabilization();
-        if (sc == null || !sc.isEnabled()) {
-            if (stabilizationCallback != null) {
-                stabilizationCallback.accept(candidates.size(), candidates.size());
-            }
-            return candidates;
-        }
-
-        int uniqueCandidates = candidates.size();
-        int minCand = sc.getMinCandidates();
-        double alpha = sc.getAlpha();
-
-        int alphaCap = (int) Math.ceil(alpha * uniqueCandidates);
-        int finalSize = Math.min(uniqueCandidates, Math.max(minCand, alphaCap));
-
-        if (stabilizationCallback != null) {
-            stabilizationCallback.accept(uniqueCandidates, finalSize);
-        }
-
-        return candidates.subList(0, finalSize);
     }
 
     // =====================================================================

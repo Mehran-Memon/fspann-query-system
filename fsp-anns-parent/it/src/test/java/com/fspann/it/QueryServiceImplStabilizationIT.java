@@ -97,7 +97,18 @@ class QueryServiceImplStabilizationIT {
 
         when(crypto.decryptQuery(any(), any(), any()))
                 .thenReturn(new double[]{0.5, 0.5});
-        when(index.lookup(token)).thenReturn(raw);
+        when(index.lookupCandidateIds(token))
+                .thenReturn(
+                        raw.stream().map(EncryptedPoint::getId).toList()
+                );
+        when(index.loadPointIfActive(anyString()))
+                .thenAnswer(inv -> {
+                    String id = inv.getArgument(0);
+                    return raw.stream()
+                            .filter(p -> p.getId().equals(id))
+                            .findFirst()
+                            .orElse(null);
+                });
 
         for (EncryptedPoint p : raw) {
             when(crypto.decryptFromPoint(eq(p), any()))
@@ -143,7 +154,18 @@ class QueryServiceImplStabilizationIT {
 
         when(crypto.decryptQuery(any(), any(), any()))
                 .thenReturn(new double[]{0.5, 0.5});
-        when(index.lookup(token)).thenReturn(raw);
+        when(index.lookupCandidateIds(token))
+                .thenReturn(
+                        raw.stream().map(EncryptedPoint::getId).toList()
+                );
+        when(index.loadPointIfActive(anyString()))
+                .thenAnswer(inv -> {
+                    String id = inv.getArgument(0);
+                    return raw.stream()
+                            .filter(p -> p.getId().equals(id))
+                            .findFirst()
+                            .orElse(null);
+                });
 
         for (EncryptedPoint p : raw) {
             when(crypto.decryptFromPoint(eq(p), any()))
