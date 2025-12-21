@@ -236,10 +236,15 @@ public final class PartitionedIndexService implements IndexService {
         }
 
         final SystemConfig.PaperConfig pc = cfg.getPaper();
-        final int HARD_CAP = Math.max(
-                cfg.getRuntime().getMaxCandidateFactor() * token.getTopK(),
-                1000
-        );
+        int runtimeCap = cfg.getRuntime().getMaxCandidateFactor() * token.getTopK();
+        int paperCap = cfg.getPaper().getSafetyMaxCandidates();
+
+        final int HARD_CAP;
+        if (paperCap > 0) {
+            HARD_CAP = Math.min(runtimeCap, paperCap);
+        } else {
+            HARD_CAP = runtimeCap;
+        }
 
         Set<String> touchedIds = lastTouchedIds.get();
         touchedIds.clear();
@@ -261,8 +266,8 @@ public final class PartitionedIndexService implements IndexService {
         // ===== PAPER-FAITHFUL PREFIX SCAN (BOUNDED) =====
         int maxRelax = cfg.getRuntime().getMaxRelaxationDepth();
         for (int relax = 0; relax <= Math.min(pc.lambda, maxRelax); relax++){
-
-            if (out.size() >= cfg.getRuntime().getEarlyStopCandidates()) {
+            int earlyStop = cfg.getRuntime().getEarlyStopCandidates();
+            if (earlyStop > 0 && out.size() >= earlyStop) {
                 break;
             }
 
