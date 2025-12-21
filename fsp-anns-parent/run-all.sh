@@ -60,7 +60,7 @@ declare -A DATASET_GT=(
 
 # ================= SINGLE-RUN DEBUG SWITCHES =================
 ONLY_DATASET="SIFT1M"
-ONLY_PROFILE="D9"
+ONLY_PROFILE="D3"
 
 # ================= METRICS =================
 

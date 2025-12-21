@@ -19,21 +19,14 @@
     "stabilization": {
       "enabled": true,
       "alpha": 0.15,
-      "minCandidates": 2000,
-      "candidateFloor" : 2000 ,
-      "maxWidenRounds": 6
+      "minCandidates": 2000
     },
 
     "runtime": {
-      "maxCandidateFactor": 20,
-      "maxRefinementFactor" : 8
-    },
-
-    "runtime": {
-      "maxCandidateFactor": 20,
-      "maxRefinementFactor": 8,
+      "maxCandidateFactor": 8,
+      "maxRefinementFactor": 2,
       "maxRelaxationDepth": 1,
-      "earlyStopCandidates": 4000
+      "earlyStopCandidates": 6000
     },
 
     "eval": {
@@ -43,7 +36,8 @@
     },
 
     "ratio": {
-      "source": "base"
+      "source": "gt",
+      "gtSample": 10000
     },
 
     "output": {
