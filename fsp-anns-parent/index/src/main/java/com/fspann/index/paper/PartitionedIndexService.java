@@ -222,6 +222,7 @@ public final class PartitionedIndexService implements IndexService {
     @Override
     public List<EncryptedPoint> lookup(QueryToken token) {
         Objects.requireNonNull(token, "token cannot be null");
+        Set<String> deletedCache = new HashSet<>();
 
         if (!frozen) {
             throw new IllegalStateException("Index not finalized before lookup");
@@ -255,12 +256,17 @@ public final class PartitionedIndexService implements IndexService {
         }
         LinkedHashMap<String, EncryptedPoint> out = new LinkedHashMap<>(HARD_CAP);
 
-        final int totalBits = totalCodeBits();
+        final int perDivBits = perDivisionBits();
 
         // ===== PAPER-FAITHFUL PREFIX SCAN (BOUNDED) =====
-        for (int relax = 0; relax <= pc.lambda; relax++) {
+        int maxRelax = cfg.getRuntime().getMaxRelaxationDepth();
+        for (int relax = 0; relax <= Math.min(pc.lambda, maxRelax); relax++){
 
-            int relaxedBits = totalBits - (relax * pc.m);
+            if (out.size() >= cfg.getRuntime().getEarlyStopCandidates()) {
+                break;
+            }
+
+            int relaxedBits = perDivBits - (relax * pc.m);
             if (relaxedBits <= 0) continue;
 
             int safeDivs = Math.min(S.divisions.size(), qcodes.length);
@@ -284,7 +290,11 @@ public final class PartitionedIndexService implements IndexService {
                         touchedIds.add(id);
 
                         if (out.containsKey(id)) continue;
-                        if (metadata.isDeleted(id)) continue;
+                        if (deletedCache.contains(id)) continue;
+                        if (metadata.isDeleted(id)) {
+                            deletedCache.add(id);
+                            continue;
+                        }
 
                         try {
                             EncryptedPoint ep = metadata.loadEncryptedPoint(id);
@@ -309,6 +319,7 @@ public final class PartitionedIndexService implements IndexService {
 
     public List<String> lookupCandidateIds(QueryToken token) {
         Objects.requireNonNull(token, "token");
+        int touched = 0;
 
         if (!frozen) {
             throw new IllegalStateException("Index not finalized");
@@ -330,12 +341,17 @@ public final class PartitionedIndexService implements IndexService {
 
         BitSet[] qcodes = token.getCodes();
 
-        final int totalBits = totalCodeBits();
+        final int perDivBits = perDivisionBits();
+        int maxRelax = cfg.getRuntime().getMaxRelaxationDepth();
+        for (int relax = 0; relax <= Math.min(pc.lambda, maxRelax); relax++) {
 
-        for (int relax = 0; relax <= pc.lambda; relax++) {
-            int bits = totalBits - relax * pc.m;
+            if (seen.size() >= cfg.getRuntime().getEarlyStopCandidates()) {
+                break;
+            }
+
+            int bits = perDivBits - relax * pc.m;
             if (bits <= 0) continue;
-
+            if (bits < pc.m) break;
 
             int safeDivs = Math.min(S.divisions.size(), qcodes.length);
 
@@ -354,15 +370,16 @@ public final class PartitionedIndexService implements IndexService {
                     if (ids == null) continue;
 
                     for (String id : ids) {
+                        touched++;
                         if (deletedCache.contains(id)) continue;
                         if (metadata.isDeleted(id)) {
                             deletedCache.add(id);
                             continue;
                         }
-
                         seen.add(id);
+
                         if (seen.size() >= MAX_IDS) {
-                            lastTouched.set(seen.size());
+                            lastTouched.set(touched);
                             lastTouchedIds.get().clear();
                             lastTouchedIds.get().addAll(seen);
                             return new ArrayList<>(seen);
@@ -374,7 +391,7 @@ public final class PartitionedIndexService implements IndexService {
             if (seen.size() >= K) break;
         }
 
-        lastTouched.set(seen.size());
+        lastTouched.set(touched);
         lastTouchedIds.get().clear();
         lastTouchedIds.get().addAll(seen);
 
@@ -396,10 +413,11 @@ public final class PartitionedIndexService implements IndexService {
                 cmp.compare(c, sb.upper) <= 0;
     }
 
-    private int totalCodeBits() {
+    private int perDivisionBits() {
         SystemConfig.PaperConfig pc = cfg.getPaper();
         return pc.m * pc.lambda;
     }
+
 
     // =====================================================
     // DELETE
