@@ -11,7 +11,7 @@
     "paper": {
       "enabled": true,
       "m": 18,
-      "lambda": 3,
+      "lambda": 2,
       "divisions": 3,
       "seed": 13,
       "safetyMaxCandidates": 0,
@@ -22,6 +22,13 @@
       "enabled": true,
       "alpha": 0.15,
       "minCandidates": 8000
+    },
+
+    "runtime": {
+      "maxCandidateFactor": 20,
+      "maxRefinementFactor": 8,
+      "maxRelaxationDepth": 1,
+      "earlyStopCandidates": 4000
     },
 
     "eval": {
@@ -41,7 +48,7 @@
       "suppressLegacyMetrics": true
     }
 
-},
+  },
 
   "profiles": [
 

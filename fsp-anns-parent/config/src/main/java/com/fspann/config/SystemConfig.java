@@ -224,14 +224,58 @@ public class SystemConfig {
     }
 
     public static final class RuntimeConfig {
-        private int maxCandidateFactor = 50;   // paper-faithful
-        private int maxRefinementFactor = 20;  // crypto-aware
 
-        public int getMaxCandidateFactor() { return maxCandidateFactor; }
-        public int getMaxRefinementFactor() { return maxRefinementFactor; }
+        /**
+         * Upper bound on candidate fanout relative to K
+         * (used in candidate-id collection)
+         */
+        @JsonProperty("maxCandidateFactor")
+        private int maxCandidateFactor = 50;   // paper-faithful default
+
+        /**
+         * Upper bound on refinement (decrypt+L2) relative to K
+         * (crypto-aware safety)
+         */
+        @JsonProperty("maxRefinementFactor")
+        private int maxRefinementFactor = 20;
+
+        /**
+         * NEW — hard cap on relaxation depth (≤ paper.lambda).
+         * Controls how many relaxed prefix rounds are allowed.
+         *
+         * 0 = exact match only
+         * 1 = first relaxation
+         * 2 = deeper relaxation
+         */
+        @JsonProperty("maxRelaxationDepth")
+        private int maxRelaxationDepth = Integer.MAX_VALUE;
+
+        /**
+         * NEW — early stop once this many candidates are collected.
+         * Prevents scanning all divisions unnecessarily.
+         */
+        @JsonProperty("earlyStopCandidates")
+        private int earlyStopCandidates = Integer.MAX_VALUE;
+
+        public int getMaxCandidateFactor() {
+            return Math.max(1, maxCandidateFactor);
+        }
+
+        public int getMaxRefinementFactor() {
+            return Math.max(1, maxRefinementFactor);
+        }
+
+        public int getMaxRelaxationDepth() {
+            return Math.max(0, maxRelaxationDepth);
+        }
+
+        public int getEarlyStopCandidates() {
+            return Math.max(1, earlyStopCandidates);
+        }
     }
 
     private RuntimeConfig runtime = new RuntimeConfig();
+
     public RuntimeConfig getRuntime() { return runtime; }
 
     /* ======================== Nested config types ======================== */
@@ -506,6 +550,7 @@ public class SystemConfig {
         if (v > max) return max;
         return v;
     }
+
     @JsonProperty("kAdaptive")
     private KAdaptiveConfig kAdaptive = new KAdaptiveConfig();
     public KAdaptiveConfig getKAdaptive() { return kAdaptive; }

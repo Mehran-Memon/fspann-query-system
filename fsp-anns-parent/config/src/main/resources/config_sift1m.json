@@ -24,6 +24,13 @@
       "minCandidates": 8000
     },
 
+    "runtime": {
+      "maxCandidateFactor": 20,
+      "maxRefinementFactor": 8,
+      "maxRelaxationDepth": 1,
+      "earlyStopCandidates": 4000
+    },
+
     "eval": {
       "computePrecision": true,
       "writeGlobalPrecisionCsv": true,
