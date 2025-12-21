@@ -328,10 +328,15 @@ public final class PartitionedIndexService implements IndexService {
         SystemConfig.PaperConfig pc = cfg.getPaper();
         int K = token.getTopK();
 
-        final int MAX_IDS = Math.max(
-                K,
-                cfg.getRuntime().getMaxCandidateFactor() * K
-        );
+        int runtimeCap = cfg.getRuntime().getMaxCandidateFactor() * K;
+        int paperCap = cfg.getPaper().getSafetyMaxCandidates();
+
+        final int MAX_IDS;
+        if (paperCap > 0) {
+            MAX_IDS = Math.min(runtimeCap, paperCap);
+        } else {
+            MAX_IDS = runtimeCap;
+        }
 
         Set<String> seen = new LinkedHashSet<>(MAX_IDS);
         Set<String> deletedCache = new HashSet<>();
@@ -344,14 +349,14 @@ public final class PartitionedIndexService implements IndexService {
         final int perDivBits = perDivisionBits();
         int maxRelax = cfg.getRuntime().getMaxRelaxationDepth();
         for (int relax = 0; relax <= Math.min(pc.lambda, maxRelax); relax++) {
-
-            if (seen.size() >= cfg.getRuntime().getEarlyStopCandidates()) {
+            int earlyStop = cfg.getRuntime().getEarlyStopCandidates();
+            if (earlyStop > 0 && seen.size() >= earlyStop) {
                 break;
             }
 
+
             int bits = perDivBits - relax * pc.m;
-            if (bits <= 0) continue;
-            if (bits < pc.m) break;
+            if (bits <= 0) break;
 
             int safeDivs = Math.min(S.divisions.size(), qcodes.length);
 
@@ -387,8 +392,6 @@ public final class PartitionedIndexService implements IndexService {
                     }
                 }
             }
-
-            if (seen.size() >= K) break;
         }
 
         lastTouched.set(touched);
