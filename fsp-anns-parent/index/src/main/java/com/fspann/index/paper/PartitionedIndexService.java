@@ -283,7 +283,7 @@ public final class PartitionedIndexService implements IndexService {
                 for (GreedyPartitioner.SubsetBounds sb : div.I) {
 
                     boolean match = (relax == 0)
-                            ? covers(sb, qc)
+                            ? covers(sb, qc, relaxedBits)
                             : coversRelaxed(sb, qc, relaxedBits);
 
                     if (!match) continue;
@@ -351,16 +351,14 @@ public final class PartitionedIndexService implements IndexService {
 
         BitSet[] qcodes = token.getCodes();
 
-        final int totalBits = totalCodeBits();
+        final int perDivBits = perDivisionBits();
         int maxRelax = cfg.getRuntime().getMaxRelaxationDepth();
+
         for (int relax = 0; relax <= Math.min(pc.lambda, maxRelax); relax++) {
             int earlyStop = cfg.getRuntime().getEarlyStopCandidates();
-            if (earlyStop > 0 && seen.size() >= earlyStop) {
-                break;
-            }
+            if (earlyStop > 0 && seen.size() >= earlyStop) break;
 
-
-            int bits = totalBits - relax * pc.m;
+            int bits = perDivBits - relax * pc.m;
             if (bits <= 0) break;
 
             int safeDivs = Math.min(S.divisions.size(), qcodes.length);
@@ -370,11 +368,7 @@ public final class PartitionedIndexService implements IndexService {
                 BitSet qc = qcodes[d];
 
                 for (GreedyPartitioner.SubsetBounds sb : div.I) {
-                    boolean ok = (relax == 0)
-                            ? covers(sb, qc)
-                            : coversRelaxed(sb, qc, bits);
-
-                    if (!ok) continue;
+                    if (!covers(sb, qc, bits)) continue;
 
                     List<String> ids = div.tagToIds.get(sb.tag);
                     if (ids == null) continue;
@@ -386,8 +380,8 @@ public final class PartitionedIndexService implements IndexService {
                             deletedCache.add(id);
                             continue;
                         }
-                        seen.add(id);
 
+                        seen.add(id);
                         if (seen.size() >= MAX_IDS) {
                             lastTouched.set(touched);
                             lastTouchedIds.get().clear();
@@ -415,8 +409,8 @@ public final class PartitionedIndexService implements IndexService {
         }
     }
 
-    private boolean covers(GreedyPartitioner.SubsetBounds sb, BitSet c) {
-        var cmp = new GreedyPartitioner.CodeComparator(sb.codeBits);
+    private boolean covers(GreedyPartitioner.SubsetBounds sb, BitSet c, int bits) {
+        var cmp = new GreedyPartitioner.CodeComparator(bits);
         return cmp.compare(sb.lower, c) <= 0 &&
                 cmp.compare(c, sb.upper) <= 0;
     }
