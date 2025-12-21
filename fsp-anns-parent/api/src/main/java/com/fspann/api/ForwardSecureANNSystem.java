@@ -863,7 +863,7 @@ public class ForwardSecureANNSystem {
 
         double precision = hits / (double) k;
 
-        // ---------------- Ratio@K ----------------
+// ---------------- Ratio@K (Peng: d(ANN)/d(GT) >= 1) ----------------
         if (baseReader == null || gtIds == null || gtIds.length == 0) {
             return new QueryMetrics(Double.NaN, precision);
         }
@@ -873,15 +873,24 @@ public class ForwardSecureANNSystem {
 
         for (int i = 0; i < upto && i < gtIds.length; i++) {
             int gtId = gtIds[i];
+
+            int annId;
+            try {
+                annId = Integer.parseInt(annResults.get(i).getId());
+            } catch (NumberFormatException nfe) {
+                continue;
+            }
+
             double dGt  = baseReader.l2(queryVector, gtId);
-            double dAnn = annResults.get(i).getDistance();
-            if (dGt > 0 && dAnn > 0) {
+            double dAnn = baseReader.l2(queryVector, annId);
+
+            if (dGt > RATIO_EPS && dAnn >= 0.0) {
                 ratioSum += (dAnn / dGt);
                 cnt++;
             }
         }
 
-        double ratio = (cnt > 0) ? ratioSum / cnt : Double.NaN;
+        double ratio = (cnt > 0) ? (ratioSum / cnt) : Double.NaN;
         return new QueryMetrics(ratio, precision);
     }
 
