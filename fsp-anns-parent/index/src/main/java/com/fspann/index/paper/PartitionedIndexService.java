@@ -351,7 +351,7 @@ public final class PartitionedIndexService implements IndexService {
 
         BitSet[] qcodes = token.getCodes();
 
-        final int perDivBits = perDivisionBits();
+        final int totalBits = totalCodeBits();
         int maxRelax = cfg.getRuntime().getMaxRelaxationDepth();
         for (int relax = 0; relax <= Math.min(pc.lambda, maxRelax); relax++) {
             int earlyStop = cfg.getRuntime().getEarlyStopCandidates();
@@ -360,7 +360,7 @@ public final class PartitionedIndexService implements IndexService {
             }
 
 
-            int bits = perDivBits - relax * pc.m;
+            int bits = totalBits - relax * pc.m;
             if (bits <= 0) break;
 
             int safeDivs = Math.min(S.divisions.size(), qcodes.length);
@@ -822,6 +822,10 @@ public final class PartitionedIndexService implements IndexService {
 
     }
 
+    private int totalCodeBits() {
+        SystemConfig.PaperConfig pc = cfg.getPaper();
+        return pc.divisions * pc.m * pc.lambda;
+    }
 
     // =====================================================
     // REQUIRED IndexService METHODS
