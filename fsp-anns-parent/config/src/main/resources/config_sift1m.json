@@ -13,15 +13,20 @@
       "m": 24,
       "lambda": 2,
       "divisions": 3,
-      "seed": 13,
-      "safetyMaxCandidates": 0,
-      "probeLimit": 10
+      "seed": 13
     },
 
     "stabilization": {
       "enabled": true,
       "alpha": 0.15,
-      "minCandidates": 8000
+      "minCandidates": 2000,
+      "candidateFloor" : 2000 ,
+      "maxWidenRounds": 6
+    },
+
+    "runtime": {
+      "maxCandidateFactor": 20,
+      "maxRefinementFactor" : 8
     },
 
     "eval": {
@@ -31,9 +36,7 @@
     },
 
     "ratio": {
-      "source": "gt",
-      "gtSample": 10000,
-      "autoComputeGT": false
+      "source": "base"
     },
 
     "output": {
@@ -58,6 +61,7 @@
     { "name": "D2", "overrides": { "paper": { "m": 24, "lambda": 2, "divisions": 2, "seed": 13, "safetyMaxCandidates": 0 } } },
     { "name": "D3", "overrides": { "paper": { "m": 24, "lambda": 2, "divisions": 3, "seed": 13, "safetyMaxCandidates": 0 } } },
     { "name": "D4", "overrides": { "paper": { "m": 24, "lambda": 2, "divisions": 4, "seed": 13, "safetyMaxCandidates": 0 } } },
+    { "name": "D9", "overrides": { "paper": { "m": 20, "lambda": 3, "divisions": 9, "seed": 13, "safetyMaxCandidates": 0 } } },
 
     { "name": "A0.05", "overrides": { "stabilization": { "alpha": 0.05 } } },
     { "name": "A0.10", "overrides": { "stabilization": { "alpha": 0.10 } } },

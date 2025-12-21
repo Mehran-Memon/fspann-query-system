@@ -60,7 +60,7 @@ declare -A DATASET_GT=(
 
 # ================= SINGLE-RUN DEBUG SWITCHES =================
 ONLY_DATASET="SIFT1M"
-ONLY_PROFILE="M24"
+ONLY_PROFILE="D9"
 
 # ================= METRICS =================
 
@@ -161,6 +161,7 @@ for ds in "${DATASETS[@]}"; do
     java "${JvmArgs[@]}" \
       -Dcli.dataset="$ds" \
       -Dcli.profile="$name" \
+      -Dquery.limit=200 \
       -jar "$JarPath" \
       "$run_dir/config.json" \
       "$base" \
