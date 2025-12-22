@@ -94,6 +94,14 @@ public class SystemConfig {
     private StabilizationConfig stabilization = new StabilizationConfig();
     public StabilizationConfig getStabilization() { return stabilization; }
 
+    @JsonProperty("tables")
+    public int tables = 8; // Default value can be adjusted as needed
+
+    // Getter for tables
+    public int getTables() {
+        return Math.max(1, tables);
+    }
+
     /* ======================== Static loading API ======================== */
 
     public static SystemConfig load(String path, boolean refresh) throws ConfigLoadException {
@@ -413,6 +421,10 @@ public class SystemConfig {
         @JsonProperty("probeLimit")
         public int probeLimit = 6;
 
+        // Added the "tables" configuration here
+        @JsonProperty("tables")
+        public int tables = 8; // Default value can be adjusted as needed
+
         public boolean isEnabled() {
             return enabled;
         }
@@ -437,8 +449,14 @@ public class SystemConfig {
             return Math.max(0, safetyMaxCandidates);
         }
 
-        public int getProbeLimit() { return Math.max(1, probeLimit); }
+        public int getProbeLimit() {
+            return Math.max(1, probeLimit);
+        }
 
+        // Getter for tables
+        public int getTables() {
+            return Math.max(1, tables);
+        }
     }
 
     /** Evaluation knobs (precision, K-variants, etc.). */

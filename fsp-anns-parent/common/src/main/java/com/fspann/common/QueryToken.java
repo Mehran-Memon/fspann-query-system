@@ -8,7 +8,7 @@ import java.util.Objects;
 /**
  * Unified query token supporting:
  *  - per-table LSH bucket expansions (legacy multiprobe path)
- *  - precomputed codes (one BitSet per division) for partitioned indexing
+ *  - per-table precomputed codes (BitSet per division) for partitioned indexing (mSANNP)
  *
  * NOTE: This token is encryption-only on the wire:
  *  - It carries IV + encryptedQuery bytes.
@@ -17,9 +17,12 @@ import java.util.Objects;
 public class QueryToken implements Serializable {
     private static final long serialVersionUID = 1L;
 
-    private final List<List<Integer>> tableBuckets;  // per-table expansions
+    private final List<List<Integer>> tableBuckets;  // legacy
     private final int numTables;
-    private final BitSet[] codes;                    // one BitSet per division (ℓ)
+
+    // mSANNP: [table][division]
+    private final BitSet[][] codesByTable;
+
     private final byte[] iv;
     private final byte[] encryptedQuery;
     private final int topK;
@@ -28,22 +31,26 @@ public class QueryToken implements Serializable {
     private final int version;
     private final int lambda;
 
-    public QueryToken(List<List<Integer>> tableBuckets,
-                      BitSet[] codes,
-                      byte[] iv,
-                      byte[] encryptedQuery,
-                      int topK,
-                      int numTables,
-                      String encryptionContext,
-                      int dimension,
-                      int version,
-                      int lambda) {
+    public QueryToken(
+            List<List<Integer>> tableBuckets,
+            BitSet[][] codesByTable,
+            byte[] iv,
+            byte[] encryptedQuery,
+            int topK,
+            int numTables,
+            String encryptionContext,
+            int dimension,
+            int version,
+            int lambda
+    ) {
         this.tableBuckets = List.copyOf(Objects.requireNonNull(tableBuckets, "tableBuckets"));
         this.numTables = Math.max(1, numTables);
-        this.codes = (codes == null) ? null : deepCloneCodes(codes);
+        this.codesByTable = deepCloneCodes2D(codesByTable);
+
         this.iv = Objects.requireNonNull(iv, "iv").clone();
         this.encryptedQuery = Objects.requireNonNull(encryptedQuery, "encryptedQuery").clone();
         this.topK = Math.max(1, topK);
+
         this.encryptionContext = Objects.requireNonNullElseGet(
                 encryptionContext,
                 () -> "epoch_" + version + "_dim_" + dimension
@@ -57,10 +64,19 @@ public class QueryToken implements Serializable {
         }
     }
 
-    private static BitSet[] deepCloneCodes(BitSet[] src) {
-        BitSet[] out = new BitSet[src.length];
-        for (int i = 0; i < src.length; i++) {
-            out[i] = (src[i] == null) ? null : (BitSet) src[i].clone();
+    private static BitSet[][] deepCloneCodes2D(BitSet[][] src) {
+        if (src == null) return null;
+        BitSet[][] out = new BitSet[src.length][];
+        for (int t = 0; t < src.length; t++) {
+            BitSet[] row = src[t];
+            if (row == null) {
+                out[t] = null;
+                continue;
+            }
+            out[t] = new BitSet[row.length];
+            for (int d = 0; d < row.length; d++) {
+                out[t][d] = (row[d] == null) ? null : (BitSet) row[d].clone();
+            }
         }
         return out;
     }
@@ -69,8 +85,19 @@ public class QueryToken implements Serializable {
         return tableBuckets;
     }
 
+    // mSANNP: per-table codes
+    public BitSet[][] getCodesByTable() {
+        return deepCloneCodes2D(codesByTable);
+    }
+
+    // Legacy: returns table-0 codes only
     public BitSet[] getCodes() {
-        return (codes == null) ? null : deepCloneCodes(codes);
+        if (codesByTable == null || codesByTable.length == 0) return null;
+        BitSet[] row = codesByTable[0];
+        if (row == null) return null;
+        BitSet[] out = new BitSet[row.length];
+        for (int i = 0; i < row.length; i++) out[i] = (row[i] == null) ? null : (BitSet) row[i].clone();
+        return out;
     }
 
     public byte[] getIv() {
@@ -107,8 +134,11 @@ public class QueryToken implements Serializable {
 
     public int estimateSerializedSizeBytes() {
         int sum = 0;
-        if (codes != null) {
-            for (BitSet bs : codes) sum += (bs == null ? 1 : (bs.toByteArray().length + 1));
+        if (codesByTable != null) {
+            for (BitSet[] row : codesByTable) {
+                if (row == null) continue;
+                for (BitSet bs : row) sum += (bs == null ? 1 : (bs.toByteArray().length + 1));
+            }
         }
         return sum;
     }

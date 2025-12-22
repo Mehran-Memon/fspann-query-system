@@ -45,28 +45,39 @@ public final class QueryTokenFactory {
 
         int dim = vec.length;
 
-        // 1) MSANNP codes
-        BitSet[] codes = partition.code(vec);
+        SystemConfig.PaperConfig pc = cfg.getPaper();
+        int L = pc.getTables();              // ℓ
+        int j = pc.divisions;                // divisions per table
+        long baseSeed = pc.seed;
+
+        // 1) mSANNP per-table codes
+        BitSet[][] codesByTable = new BitSet[L][];
+        for (int t = 0; t < L; t++) {
+            // each table must be independent => distinct seed stream
+            long seedT = baseSeed + (t * 1_000_003L);
+            codesByTable[t] = partition.code(vec, seedT); // j divisions
+            if (codesByTable[t] == null || codesByTable[t].length != j) {
+                throw new IllegalStateException("Partition code() returned invalid codes for table=" + t);
+            }
+        }
 
         // 2) Encrypt query
         KeyVersion kv = keyService.getCurrentVersion();
         byte[] iv = EncryptionUtils.generateIV();
         byte[] ct = crypto.encryptQuery(vec, kv.getKey(), iv);
 
-        int lambda = cfg.getPaper().lambda;   // <<< CRITICAL
+        int lambda = pc.lambda;
 
-        log.info(
-                "QueryTokenFactory create: dim={} K={} λ={}",
-                dim, topK, lambda
-        );
+        log.info("QueryTokenFactory create: dim={} K={} λ={} tables={} divisions={}",
+                dim, topK, lambda, L, j);
 
         return new QueryToken(
                 Collections.emptyList(),
-                codes,
+                codesByTable,
                 iv,
                 ct,
                 topK,
-                divisions,
+                L,
                 "dim_" + dim + "_v" + kv.getVersion(),
                 dim,
                 kv.getVersion(),
@@ -77,7 +88,7 @@ public final class QueryTokenFactory {
     public QueryToken derive(QueryToken tok, int newTopK) {
         return new QueryToken(
                 tok.getTableBuckets(),
-                tok.getCodes(),
+                tok.getCodesByTable(),
                 tok.getIv(),
                 tok.getEncryptedQuery(),
                 newTopK,

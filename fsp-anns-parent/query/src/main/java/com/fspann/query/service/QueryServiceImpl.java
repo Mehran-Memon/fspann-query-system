@@ -70,7 +70,7 @@ public final class QueryServiceImpl implements QueryService {
         this.tokenFactory = tf; // may be null if created elsewhere
         this.cfg = Objects.requireNonNull(cfg, "cfg");
 
-        logger.info("QueryServiceImpl: partitioned/Peng mode (L2 + D1 limiter)");
+        logger.info("QueryServiceImpl: partitioned mode (L2 + D1 limiter)");
     }
 
     public void setReencryptionTracker(ReencryptionTracker tr) {
