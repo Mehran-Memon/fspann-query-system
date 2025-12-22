@@ -1,26 +1,42 @@
-04:25:55.441 INFO  [c.f.a.ForwardSecureANNSystem] - FSP-ANN start | dim=128 | batchSize=100000
-04:25:55.445 INFO  [c.f.a.ForwardSecureANNSystem] - Loading queries from: /mnt/data/mehran/Datasets/SIFT1M/sift_query.fvecs
-04:25:55.541 INFO  [c.f.a.ForwardSecureANNSystem] - Loaded 10000 queries total
-04:25:56.048 INFO  [c.f.a.ForwardSecureANNSystem] - TokenFactory created: dim=128 m=24 lambda=2 divisions=3
-04:25:56.104 INFO  [c.f.a.ForwardSecureANNSystem] - BaseVectorReader mapped: (dim=128, type=fvecs)
-04:27:18.362 INFO  [c.f.a.ForwardSecureANNSystem] - batchInsert complete: 100000 vectors inserted this call
-04:28:36.049 INFO  [c.f.a.ForwardSecureANNSystem] - batchInsert complete: 200000 vectors inserted this call
-04:29:52.776 INFO  [c.f.a.ForwardSecureANNSystem] - batchInsert complete: 300000 vectors inserted this call
-04:31:07.358 INFO  [c.f.a.ForwardSecureANNSystem] - batchInsert complete: 400000 vectors inserted this call
-04:32:23.336 INFO  [c.f.a.ForwardSecureANNSystem] - batchInsert complete: 500000 vectors inserted this call
-04:33:36.738 INFO  [c.f.a.ForwardSecureANNSystem] - batchInsert complete: 600000 vectors inserted this call
-04:34:52.989 INFO  [c.f.a.ForwardSecureANNSystem] - batchInsert complete: 700000 vectors inserted this call
-04:36:25.937 INFO  [c.f.a.ForwardSecureANNSystem] - batchInsert complete: 800000 vectors inserted this call
-04:37:38.531 INFO  [c.f.a.ForwardSecureANNSystem] - batchInsert complete: 900000 vectors inserted this call
-04:38:51.339 INFO  [c.f.a.ForwardSecureANNSystem] - batchInsert complete: 1000000 vectors inserted this call
-04:38:51.340 INFO  [c.f.a.ForwardSecureANNSystem] - Indexing completed: indexedInThisRun=1000000, totalIndexed=1000000
-04:38:51.363 INFO  [c.f.a.ForwardSecureANNSystem] - Index complete | time=775.259s
-04:39:09.154 INFO  [c.f.a.ForwardSecureANNSystem] - Partitioned index finalized for search
-04:39:09.203 INFO  [c.f.a.ForwardSecureANNSystem] - Running explicit query loop: queries=10000, dim=128
-04:44:16.794 INFO  [c.f.a.ForwardSecureANNSystem] - Query complete | time=307.591s
-04:44:16.795 WARN  [c.f.a.ForwardSecureANNSystem] - No candidates touched; skipping selective re-encryption
-04:44:23.418 INFO  [c.f.a.ForwardSecureANNSystem] - Shutting down executor service...
-04:44:23.661 INFO  [c.f.a.ForwardSecureANNSystem] - FSP-ANN complete
+05:37:50.053 INFO  [c.f.a.ForwardSecureANNSystem] - FSP-ANN start | dim=128 | batchSize=100000
+05:37:50.057 INFO  [c.f.a.ForwardSecureANNSystem] - Loading queries from: /mnt/data/mehran/Datasets/SIFT1M/sift_query.fvecs
+05:37:50.140 INFO  [c.f.a.ForwardSecureANNSystem] - Loaded 10000 queries total
+05:37:50.734 INFO  [c.f.a.ForwardSecureANNSystem] - TokenFactory created: dim=128 m=24 lambda=2 divisions=3
+05:37:50.806 INFO  [c.f.a.ForwardSecureANNSystem] - BaseVectorReader mapped: (dim=128, type=fvecs)
+05:39:16.175 INFO  [c.f.a.ForwardSecureANNSystem] - batchInsert complete: 100000 vectors inserted this call
+05:40:31.989 INFO  [c.f.a.ForwardSecureANNSystem] - batchInsert complete: 200000 vectors inserted this call
+05:41:46.054 INFO  [c.f.a.ForwardSecureANNSystem] - batchInsert complete: 300000 vectors inserted this call
+05:43:02.299 INFO  [c.f.a.ForwardSecureANNSystem] - batchInsert complete: 400000 vectors inserted this call
+05:44:17.153 INFO  [c.f.a.ForwardSecureANNSystem] - batchInsert complete: 500000 vectors inserted this call
+05:45:31.013 INFO  [c.f.a.ForwardSecureANNSystem] - batchInsert complete: 600000 vectors inserted this call
+05:46:43.835 INFO  [c.f.a.ForwardSecureANNSystem] - batchInsert complete: 700000 vectors inserted this call
+05:48:17.413 INFO  [c.f.a.ForwardSecureANNSystem] - batchInsert complete: 800000 vectors inserted this call
+05:49:32.432 INFO  [c.f.a.ForwardSecureANNSystem] - batchInsert complete: 900000 vectors inserted this call
+05:50:45.085 INFO  [c.f.a.ForwardSecureANNSystem] - batchInsert complete: 1000000 vectors inserted this call
+05:50:45.086 INFO  [c.f.a.ForwardSecureANNSystem] - Indexing completed: indexedInThisRun=1000000, totalIndexed=1000000
+05:50:45.110 INFO  [c.f.a.ForwardSecureANNSystem] - Index complete | time=774.303s
+05:51:02.486 INFO  [c.f.a.ForwardSecureANNSystem] - Partitioned index finalized for search
+05:51:02.548 INFO  [c.f.a.ForwardSecureANNSystem] - Running explicit query loop: queries=10000, dim=128
+05:52:13.213 INFO  [c.f.a.ForwardSecureANNSystem] - Query complete | time=70.665s
+05:52:13.213 INFO  [c.f.a.ForwardSecureANNSystem] - Running selective re-encryption on 5 touched points
+05:52:27.468 INFO  [c.f.a.ForwardSecureANNSystem] - Key rotation finalized: deleted all keys older than v2
+05:52:41.380 INFO  [c.f.a.ForwardSecureANNSystem] - Shutting down executor service...
+05:52:41.540 INFO  [c.f.a.ForwardSecureANNSystem] - FSP-ANN complete
 
-dataset,profile,ART_ms,AvgRatio
-SIFT1M,D3,191.698,0.000000
+PS /home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent> ./run-all.sh
+D3         | ART=  43.641 ms | Ratio=0.096830
+DEBUG MODE: completed single profile (D3)
+DONE
+Per-dataset CSVs: /mnt/data/mehran/*/dataset_summary.csv
+Global CSV:       /mnt/data/mehran/global_summary.csv
+PS /home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent>
+
+
+
+
+
+
+
+
+
+
