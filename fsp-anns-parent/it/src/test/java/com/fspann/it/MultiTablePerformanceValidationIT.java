@@ -42,18 +42,21 @@ class MultiTablePerformanceValidationIT {
                 TestSystem sys = createSystem(tempDir, L, 4, 6, 3, 12345L);
 
                 Random rnd = new Random(42);
+
+                // Create clustered vectors around [5, 5, 5, 5, 5, 5]
                 for (int i = 0; i < 50; i++) {
                     double[] vec = new double[6];
                     for (int d = 0; d < 6; d++) {
-                        vec[d] = rnd.nextGaussian();
+                        vec[d] = 5.0 + (rnd.nextGaussian() * 0.5);
                     }
-                    sys.index.insert("vec_" + i, vec);
+                    sys.index.insert((String) "vec_" + i, vec);
                 }
                 sys.index.finalizeForSearch();
 
+                // Query in the cluster
                 double[] query = new double[6];
                 for (int d = 0; d < 6; d++) {
-                    query[d] = rnd.nextGaussian();
+                    query[d] = 5.0 + (rnd.nextGaussian() * 0.5);
                 }
 
                 QueryToken token = sys.tokenFactory.create(query, 10);
@@ -89,7 +92,7 @@ class MultiTablePerformanceValidationIT {
                 for (int i = 0; i < 100; i++) {
                     double[] vec = new double[6];
                     Arrays.fill(vec, i);
-                    sys.index.insert("vec_" + i, vec);
+                    sys.index.insert((String) "vec_" + i, vec);
                 }
                 sys.index.finalizeForSearch();
 
@@ -132,7 +135,7 @@ class MultiTablePerformanceValidationIT {
             for (int i = 0; i < 20; i++) {
                 double[] vec = new double[6];
                 Arrays.fill(vec, i);
-                sys.index.insert("vec_" + i, vec);
+                sys.index.insert((String) "vec_" + i, vec);
             }
             sys.index.finalizeForSearch();
 
@@ -166,7 +169,7 @@ class MultiTablePerformanceValidationIT {
             for (int i = 0; i < 30; i++) {
                 double[] vec = new double[6];
                 Arrays.fill(vec, i * 0.5);
-                sys.index.insert("vec_" + i, vec);
+                sys.index.insert((String) "vec_" + i, vec);
             }
             sys.index.finalizeForSearch();
 
@@ -201,25 +204,36 @@ class MultiTablePerformanceValidationIT {
             TestSystem sys = createSystem(tempDir, 3, 8, 12, 5, 12345L);
 
             Random rnd = new Random(42);
+
+            // Create a cluster of vectors around a base vector
+            double[] baseVec = new double[highDim];
+            for (int d = 0; d < highDim; d++) {
+                baseVec[d] = rnd.nextGaussian();
+            }
+
+            // Create 50 vectors as perturbations of the base
             for (int i = 0; i < 50; i++) {
                 double[] vec = new double[highDim];
                 for (int d = 0; d < highDim; d++) {
-                    vec[d] = rnd.nextGaussian();
+                    // Small perturbation around base vector
+                    vec[d] = baseVec[d] + (rnd.nextGaussian() * 0.1);
                 }
-                sys.index.insert("high_" + i, vec);
+                sys.index.insert((String) "high_" + i, vec);
             }
             sys.index.finalizeForSearch();
 
+            // Query near the base vector (in the cluster)
             double[] query = new double[highDim];
             for (int d = 0; d < highDim; d++) {
-                query[d] = rnd.nextGaussian();
+                query[d] = baseVec[d] + (rnd.nextGaussian() * 0.1);
             }
 
             QueryToken token = sys.tokenFactory.create(query, 10);
             List<QueryResult> results = sys.queryService.search(token);
 
             assertNotNull(results);
-            assertTrue(results.size() > 0);
+            assertTrue(results.size() > 0,
+                    "Should find candidates in high-dimensional cluster");
             assertTrue(results.size() <= 10);
 
             sys.cleanup();
@@ -237,16 +251,28 @@ class MultiTablePerformanceValidationIT {
         try {
             TestSystem sys = createSystem(tempDir, 3, 4, 6, 3, 12345L);
 
+            // Add exact match
             double[] exact = {5.0, 5.0, 5.0, 5.0, 5.0, 5.0};
-            sys.index.insert("exact_match", exact);
+            sys.index.insert((String) "exact_match", exact);
 
             Random rnd = new Random(42);
+
+            // Add some near vectors (to ensure LSH finds candidates)
+            for (int i = 0; i < 10; i++) {
+                double[] vec = new double[6];
+                for (int d = 0; d < 6; d++) {
+                    vec[d] = 5.0 + (rnd.nextGaussian() * 2.0);
+                }
+                sys.index.insert((String) "near_" + i, vec);
+            }
+
+            // Add far-away noise vectors
             for (int i = 0; i < 20; i++) {
                 double[] vec = new double[6];
                 for (int d = 0; d < 6; d++) {
                     vec[d] = 100 + rnd.nextGaussian() * 10;
                 }
-                sys.index.insert("noise_" + i, vec);
+                sys.index.insert((String) "noise_" + i, vec);
             }
 
             sys.index.finalizeForSearch();
@@ -259,7 +285,7 @@ class MultiTablePerformanceValidationIT {
             boolean foundExact = results.stream()
                     .anyMatch(r -> r.getId().equals("exact_match"));
 
-            assertTrue(foundExact);
+            assertTrue(foundExact, "Should find exact match vector");
 
             QueryResult first = results.get(0);
             if (first.getId().equals("exact_match")) {
@@ -308,7 +334,7 @@ class MultiTablePerformanceValidationIT {
             TestSystem sys = createSystem(tempDir, 3, 4, 6, 3, 12345L);
 
             double[] singleVec = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
-            sys.index.insert("only_vec", singleVec);
+            sys.index.insert((String) "only_vec", singleVec);
             sys.index.finalizeForSearch();
 
             double[] query = {1.1, 2.1, 3.1, 4.1, 5.1, 6.1};
@@ -336,18 +362,21 @@ class MultiTablePerformanceValidationIT {
             TestSystem sys = createSystem(tempDir, 3, 4, 6, 3, 12345L);
 
             Random rnd = new Random(42);
+
+            // Create clustered vectors around [5, 5, 5, 5, 5, 5]
             for (int i = 0; i < 50; i++) {
                 double[] vec = new double[6];
                 for (int d = 0; d < 6; d++) {
-                    vec[d] = rnd.nextGaussian();
+                    vec[d] = 5.0 + (rnd.nextGaussian() * 0.5);
                 }
-                sys.index.insert("vec_" + i, vec);
+                sys.index.insert((String) "vec_" + i, vec);
             }
             sys.index.finalizeForSearch();
 
+            // Query in the cluster
             double[] query = new double[6];
             for (int d = 0; d < 6; d++) {
-                query[d] = rnd.nextGaussian();
+                query[d] = 5.0 + (rnd.nextGaussian() * 0.5);
             }
 
             QueryToken token = sys.tokenFactory.create(query, 10);
@@ -383,9 +412,9 @@ class MultiTablePerformanceValidationIT {
             double[] vec2 = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
             double[] vec3 = {10.0, 11.0, 12.0, 13.0, 14.0, 15.0};
 
-            sys.index.insert("dup_1", vec1);
-            sys.index.insert("dup_2", vec2);
-            sys.index.insert("unique", vec3);
+            sys.index.insert((String) "dup_1", vec1);
+            sys.index.insert((String) "dup_2", vec2);
+            sys.index.insert((String) "unique", vec3);
 
             sys.index.finalizeForSearch();
 

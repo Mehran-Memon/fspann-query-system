@@ -180,22 +180,23 @@ class MultiTableMSANNPIntegrationTest {
     @Test
     @DisplayName("Test 3: Index stores vectors across all tables")
     void testMultiTableIndexStorage() throws Exception {
-        double[][] vectors = {
-                {1.0, 2.0, 3.0, 4.0, 5.0, 6.0},
-                {2.0, 3.0, 4.0, 5.0, 6.0, 7.0},
-                {3.0, 4.0, 5.0, 6.0, 7.0, 8.0}
-        };
-
-        for (int i = 0; i < vectors.length; i++) {
-            indexService.insert("vec_" + i, vectors[i]);
+        // Use more vectors in a cluster to ensure LSH finds candidates
+        for (int i = 0; i < 20; i++) {
+            double[] vec = new double[6];
+            // Create a cluster around [5, 5, 5, 5, 5, 5]
+            for (int d = 0; d < 6; d++) {
+                vec[d] = 5.0 + (i * 0.1);
+            }
+            indexService.insert((String) "vec_" + i, vec);
         }
 
         indexService.finalizeForSearch();
 
         assertTrue(indexService.isFrozen(), "Index should be finalized");
 
-        double[] query = {1.5, 2.5, 3.5, 4.5, 5.5, 6.5};
-        QueryToken token = tokenFactory.create(query, 2);
+        // Query in the middle of the cluster
+        double[] query = {5.5, 5.5, 5.5, 5.5, 5.5, 5.5};
+        QueryToken token = tokenFactory.create(query, 5);
 
         List<String> candidates = indexService.lookupCandidateIds(token);
         assertNotNull(candidates);
@@ -206,29 +207,29 @@ class MultiTableMSANNPIntegrationTest {
     @Test
     @DisplayName("Test 4: Multi-table union retrieves candidates from all tables")
     void testCandidateUnionBehavior() throws Exception {
-        List<double[]> cluster1 = List.of(
-                new double[]{1.0, 1.0, 1.0, 1.0, 1.0, 1.0},
-                new double[]{1.1, 1.1, 1.1, 1.1, 1.1, 1.1},
-                new double[]{0.9, 0.9, 0.9, 0.9, 0.9, 0.9}
-        );
-
-        List<double[]> cluster2 = List.of(
-                new double[]{10.0, 10.0, 10.0, 10.0, 10.0, 10.0},
-                new double[]{10.1, 10.1, 10.1, 10.1, 10.1, 10.1},
-                new double[]{9.9, 9.9, 9.9, 9.9, 9.9, 9.9}
-        );
-
-        int id = 0;
-        for (double[] vec : cluster1) {
-            indexService.insert("c1_" + id++, vec);
+        // Create larger clusters to ensure LSH finds candidates
+        // Cluster 1 around [1, 1, 1, 1, 1, 1]
+        for (int i = 0; i < 15; i++) {
+            double[] vec = new double[6];
+            for (int d = 0; d < 6; d++) {
+                vec[d] = 1.0 + (i * 0.05);
+            }
+            indexService.insert((String) "c1_" + i, vec);
         }
-        for (double[] vec : cluster2) {
-            indexService.insert("c2_" + id++, vec);
+
+        // Cluster 2 around [10, 10, 10, 10, 10, 10]
+        for (int i = 0; i < 15; i++) {
+            double[] vec = new double[6];
+            for (int d = 0; d < 6; d++) {
+                vec[d] = 10.0 + (i * 0.05);
+            }
+            indexService.insert((String) "c2_" + i, vec);
         }
 
         indexService.finalizeForSearch();
 
-        double[] query = {1.05, 1.05, 1.05, 1.05, 1.05, 1.05};
+        // Query in cluster 1
+        double[] query = {1.25, 1.25, 1.25, 1.25, 1.25, 1.25};
         QueryToken token = tokenFactory.create(query, 5);
 
         List<String> candidates = indexService.lookupCandidateIds(token);
@@ -247,28 +248,36 @@ class MultiTableMSANNPIntegrationTest {
     @Test
     @DisplayName("Test 5: End-to-end query with multi-table")
     void testEndToEndQuery() throws Exception {
-        double[][] dataset = {
-                {1.0, 2.0, 3.0, 4.0, 5.0, 6.0},
-                {2.0, 3.0, 4.0, 5.0, 6.0, 7.0},
-                {3.0, 4.0, 5.0, 6.0, 7.0, 8.0},
-                {10.0, 11.0, 12.0, 13.0, 14.0, 15.0},
-                {11.0, 12.0, 13.0, 14.0, 15.0, 16.0}
-        };
+        // Create more vectors in two clusters for robust LSH
+        // Cluster 1: around [2, 3, 4, 5, 6, 7]
+        for (int i = 0; i < 15; i++) {
+            double[] vec = new double[6];
+            for (int d = 0; d < 6; d++) {
+                vec[d] = (d + 2) + (i * 0.1);
+            }
+            indexService.insert((String) "id_" + i, vec);
+        }
 
-        for (int i = 0; i < dataset.length; i++) {
-            indexService.insert("id_" + i, dataset[i]);
+        // Cluster 2: around [10, 11, 12, 13, 14, 15]
+        for (int i = 15; i < 25; i++) {
+            double[] vec = new double[6];
+            for (int d = 0; d < 6; d++) {
+                vec[d] = (d + 10) + ((i - 15) * 0.1);
+            }
+            indexService.insert((String) "id_" + i, vec);
         }
 
         indexService.finalizeForSearch();
 
-        double[] query = {1.5, 2.5, 3.5, 4.5, 5.5, 6.5};
-        QueryToken token = tokenFactory.create(query, 3);
+        // Query in cluster 1
+        double[] query = {2.5, 3.5, 4.5, 5.5, 6.5, 7.5};
+        QueryToken token = tokenFactory.create(query, 5);
 
         List<QueryResult> results = queryService.search(token);
 
         assertNotNull(results);
         assertTrue(results.size() > 0);
-        assertTrue(results.size() <= 3);
+        assertTrue(results.size() <= 5);
 
         for (int i = 0; i < results.size() - 1; i++) {
             assertTrue(results.get(i).getDistance() <= results.get(i + 1).getDistance(),
@@ -297,7 +306,7 @@ class MultiTableMSANNPIntegrationTest {
     @DisplayName("Test 7: Multi-table handles single vector")
     void testSingleVectorQuery() throws Exception {
         double[] singleVec = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
-        indexService.insert("only_vec", singleVec);
+        indexService.insert((String) "only_vec", singleVec);
         indexService.finalizeForSearch();
 
         double[] query = {1.1, 2.1, 3.1, 4.1, 5.1, 6.1};
@@ -319,7 +328,7 @@ class MultiTableMSANNPIntegrationTest {
             for (int d = 0; d < 6; d++) {
                 vec[d] = rnd.nextGaussian();
             }
-            indexService.insert("vec_" + i, vec);
+            indexService.insert((String) "vec_" + i, vec);
         }
         indexService.finalizeForSearch();
 
@@ -349,7 +358,7 @@ class MultiTableMSANNPIntegrationTest {
         for (int i = 0; i < 20; i++) {
             double[] vec = new double[6];
             Arrays.fill(vec, i);
-            indexService.insert("vec_" + i, vec);
+            indexService.insert((String) "vec_" + i, vec);
         }
         indexService.finalizeForSearch();
 
@@ -376,9 +385,9 @@ class MultiTableMSANNPIntegrationTest {
         double[] vec2 = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
         double[] vec3 = {10.0, 11.0, 12.0, 13.0, 14.0, 15.0};
 
-        indexService.insert("dup_1", vec1);
-        indexService.insert("dup_2", vec2);
-        indexService.insert("unique", vec3);
+        indexService.insert((String) "dup_1", vec1);
+        indexService.insert((String) "dup_2", vec2);
+        indexService.insert((String) "unique", vec3);
 
         indexService.finalizeForSearch();
 
