@@ -1,17 +1,17 @@
 package com.fspann.query;
 
-import com.fspann.common.EncryptedPoint;
-import com.fspann.common.RocksDBMetadataManager;
+import com.fspann.common.*;
 import com.fspann.config.SystemConfig;
 import com.fspann.crypto.AesGcmCryptoService;
 import com.fspann.index.paper.PartitionedIndexService;
 import com.fspann.key.KeyRotationServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import static org.mockito.Mockito.*;
 
-import java.io.IOException;
-import java.util.List;
+import javax.crypto.SecretKey;
+import java.util.concurrent.ConcurrentHashMap;
+
+import static org.mockito.Mockito.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 public class MPartitionedIndexServiceTest {
@@ -19,43 +19,145 @@ public class MPartitionedIndexServiceTest {
     private PartitionedIndexService indexService;
     private RocksDBMetadataManager mockMetadataManager;
     private SystemConfig mockConfig;
-    private KeyRotationServiceImpl mockKeyService;
+    private KeyRotationServiceImpl mockKeyRotationService;
     private AesGcmCryptoService mockCryptoService;
 
     @BeforeEach
     void setUp() {
+        // Mock dependencies
         mockMetadataManager = mock(RocksDBMetadataManager.class);
         mockConfig = mock(SystemConfig.class);
-        mockKeyService = mock(KeyRotationServiceImpl.class);
+        mockKeyRotationService = mock(KeyRotationServiceImpl.class);
         mockCryptoService = mock(AesGcmCryptoService.class);
 
-        indexService = new PartitionedIndexService(mockMetadataManager, mockConfig, mockKeyService, mockCryptoService);
+        // CRITICAL: Mock StorageMetrics to prevent IllegalStateException
+        StorageMetrics mockStorageMetrics = mock(StorageMetrics.class);
+
+        // Setup BEFORE calling getStorageMetrics()
+        when(mockMetadataManager.getStorageMetrics()).thenReturn(mockStorageMetrics);
+
+        // Mock StorageSnapshot for the metrics
+        StorageMetrics.StorageSnapshot mockSnapshot = new StorageMetrics.StorageSnapshot(
+                0L, 0L, 0L,
+                new ConcurrentHashMap<>(),
+                new ConcurrentHashMap<>()
+        );
+        when(mockStorageMetrics.getSnapshot()).thenReturn(mockSnapshot);
+        when(mockStorageMetrics.getSummary()).thenReturn("mock-storage-summary");
+
+        // Create a REAL PaperConfig because PartitionedIndexService accesses fields directly
+        SystemConfig.PaperConfig realPaperConfig = new SystemConfig.PaperConfig() {
+            @Override
+            public int getTables() { return 3; }
+        };
+        realPaperConfig.divisions = 8;
+        realPaperConfig.seed = 42L;
+        realPaperConfig.lambda = 10;
+        realPaperConfig.m = 5;
+
+        when(mockConfig.getPaper()).thenReturn(realPaperConfig);
+
+        // Mock Runtime config
+        SystemConfig.RuntimeConfig mockRuntimeConfig = mock(SystemConfig.RuntimeConfig.class);
+        when(mockRuntimeConfig.getMaxCandidateFactor()).thenReturn(5);
+        when(mockRuntimeConfig.getMaxRelaxationDepth()).thenReturn(3);
+        when(mockRuntimeConfig.getEarlyStopCandidates()).thenReturn(1000);
+        when(mockConfig.getRuntime()).thenReturn(mockRuntimeConfig);
+
+        // Initialize PartitionedIndexService with mocked dependencies
+        // This should NOT throw IllegalStateException anymore
+        indexService = new PartitionedIndexService(
+                mockMetadataManager,
+                mockConfig,
+                mockKeyRotationService,
+                mockCryptoService
+        );
     }
 
     @Test
-    void testInsertEncryptedPoint() throws IOException {
-        // Setup test data
-        String id = "test-id";
+    void testInsertWithStringId() throws Exception {
+        // Test the insert(String, double[]) method
+        String vectorId = "test-vector-1";
         double[] vector = new double[]{1.0, 2.0, 3.0};
 
-        // Mock encryption process
+        // Mock encryption result
         EncryptedPoint mockEncryptedPoint = mock(EncryptedPoint.class);
-        when(mockCryptoService.encrypt(anyString(), any(), any())).thenReturn(mockEncryptedPoint);
+        when(mockEncryptedPoint.getId()).thenReturn(vectorId);
+        when(mockEncryptedPoint.getVersion()).thenReturn(1);
+        when(mockEncryptedPoint.getKeyVersion()).thenReturn(1);
+        when(mockEncryptedPoint.getShardId()).thenReturn(0);
+        when(mockEncryptedPoint.getVectorLength()).thenReturn(3);
 
-        // Call insert method
-        indexService.insert(id, vector);
+        // Mock KeyVersion
+        SecretKey mockKey = mock(SecretKey.class);
+        KeyVersion mockKeyVersion = new KeyVersion(1, mockKey);
+        when(mockKeyRotationService.getCurrentVersion()).thenReturn(mockKeyVersion);
 
-        // Verify interactions
-        verify(mockMetadataManager, times(1)).saveEncryptedPoint(mockEncryptedPoint);
+        // Mock encryption
+        when(mockCryptoService.encrypt(eq(vectorId), eq(vector), any(KeyVersion.class)))
+                .thenReturn(mockEncryptedPoint);
+
+        // Mock metadata save (should not throw)
+        doNothing().when(mockMetadataManager).saveEncryptedPoint(any(EncryptedPoint.class));
+
+        // Explicitly call insert(String, double[]) - no ambiguity with direct call
+        indexService.insert((String) vectorId, vector);
+
+        // Verify encryption was called
+        verify(mockCryptoService).encrypt(eq(vectorId), eq(vector), any(KeyVersion.class));
+
+        // Verify metadata save was called
+        verify(mockMetadataManager).saveEncryptedPoint(mockEncryptedPoint);
     }
 
+    @Test
+    void testInsertWithEncryptedPoint() throws Exception {
+        // Test the insert(EncryptedPoint, double[]) method directly
+        double[] vector = new double[]{1.0, 2.0, 3.0};
+
+        // Create mock encrypted point
+        EncryptedPoint mockEncryptedPoint = mock(EncryptedPoint.class);
+        when(mockEncryptedPoint.getId()).thenReturn("test-vector-2");
+        when(mockEncryptedPoint.getVersion()).thenReturn(1);
+        when(mockEncryptedPoint.getKeyVersion()).thenReturn(1);
+        when(mockEncryptedPoint.getShardId()).thenReturn(0);
+        when(mockEncryptedPoint.getVectorLength()).thenReturn(3);
+
+        // Mock metadata save
+        doNothing().when(mockMetadataManager).saveEncryptedPoint(any(EncryptedPoint.class));
+
+        // Explicitly call insert(EncryptedPoint, double[])
+        indexService.insert((EncryptedPoint) mockEncryptedPoint, vector);
+
+        // Verify metadata save was called
+        verify(mockMetadataManager).saveEncryptedPoint(mockEncryptedPoint);
+    }
 
     @Test
     void testInsertInvalidVector() {
-        String id = "test-id";
-        double[] invalidVector = null; // Invalid vector
+        // Test with null ID - should throw NullPointerException
+        assertThrows(NullPointerException.class, () -> {
+            indexService.insert((String) null, new double[]{1.0, 2.0});
+        });
 
-        assertThrows(IllegalArgumentException.class, () -> indexService.insert(id, invalidVector));
+        // Test with null vector - should throw NullPointerException
+        assertThrows(NullPointerException.class, () -> {
+            indexService.insert((String) "test-id", (double[]) null);
+        });
+    }
+
+    @Test
+    void testInsertWithEncryptedPointNullInputs() {
+        // Test insert(EncryptedPoint, double[]) with null inputs
+        double[] vector = new double[]{1.0, 2.0, 3.0};
+
+        assertThrows(NullPointerException.class, () -> {
+            indexService.insert((EncryptedPoint) null, vector);
+        });
+
+        EncryptedPoint mockPoint = mock(EncryptedPoint.class);
+        assertThrows(NullPointerException.class, () -> {
+            indexService.insert(mockPoint, (double[]) null);
+        });
     }
 }
-
