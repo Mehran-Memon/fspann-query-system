@@ -183,6 +183,17 @@ public final class QueryServiceImpl implements QueryService {
             lastCandDecrypted = scored.size();
             lastDecryptNs = System.nanoTime() - decStart;
 
+            if (logger.isDebugEnabled()) {
+                logger.debug(
+                        "k{}: candTotal={}, candKept={}, refined={}, returned={}",
+                        token.getTopK(),
+                        lastCandTotal,
+                        lastCandKept,
+                        lastCandDecrypted,
+                        lastReturned
+                );
+            }
+
             if (scored.isEmpty()) return Collections.emptyList();
 
             scored.sort(Comparator.comparingDouble(QueryScored::dist));

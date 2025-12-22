@@ -244,7 +244,11 @@ public final class PartitionedIndexService implements IndexService {
 
         int dim = token.getDimension();
         DimensionState S = dims.get(dim);
-        if (S == null) return Collections.emptyList();
+        if (S == null || S.divisions.isEmpty()) {
+            lastTouched.set(0);
+            lastTouchedIds.get().clear();
+            return List.of();
+        }
 
         BitSet[] qcodes = token.getCodes();
         if (qcodes == null || qcodes.length == 0) {
@@ -339,8 +343,13 @@ public final class PartitionedIndexService implements IndexService {
         Set<String> seen = new LinkedHashSet<>(MAX_IDS);
         Set<String> deletedCache = new HashSet<>();
 
-        DimensionState S = dims.get(token.getDimension());
-        if (S == null) return List.of();
+        int dim = token.getDimension();
+        DimensionState S = dims.get(dim);
+        if (S == null || S.divisions.isEmpty()) {
+            lastTouched.set(0);
+            lastTouchedIds.get().clear();
+            return List.of();
+        }
 
         BitSet[] qcodes = token.getCodes();
 
@@ -363,6 +372,11 @@ public final class PartitionedIndexService implements IndexService {
                     if (ids == null) continue;
 
                     for (String id : ids) {
+                        if (metadata.isDeleted(id)) {
+                            deletedCache.add(id);
+                            continue;
+                        }
+
                         if (seen.add(id)) {
                             touched++;
                             if (seen.size() >= MAX_IDS) {
