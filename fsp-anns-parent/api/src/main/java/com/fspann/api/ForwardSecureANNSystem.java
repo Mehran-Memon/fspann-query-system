@@ -506,16 +506,11 @@ public class ForwardSecureANNSystem {
         if (profiler != null) profiler.start("batchInsert");
 
         for (int offset = 0; offset < vectors.size(); offset += BATCH_SIZE) {
-            List<double[]> slice = vectors.subList(offset, Math.min(offset + BATCH_SIZE, vectors.size()));
+            List<double[]> slice =
+                    vectors.subList(offset, Math.min(offset + BATCH_SIZE, vectors.size()));
 
             List<double[]> valid = new ArrayList<>(slice.size());
             List<String> ids = new ArrayList<>(slice.size());
-
-            // Create a NEW list for THIS batch only
-            List<EncryptedPoint> batchEncrypted = new ArrayList<>();
-
-            // Get current key version ONCE per batch
-            KeyVersion currentKV = keyService.getCurrentVersion();
 
             for (int j = 0; j < slice.size(); j++) {
                 double[] v = slice.get(j);
@@ -526,48 +521,16 @@ public class ForwardSecureANNSystem {
                     continue;
                 }
                 if (v.length != dim) {
-                    logger.warn("Skipping vector at ordinal={} with dim={} (expected {})", ord, v.length, dim);
+                    logger.warn(
+                            "Skipping vector at ordinal={} with dim={} (expected {})",
+                            ord, v.length, dim
+                    );
                     continue;
                 }
 
                 String pointId = Long.toString(ord);
                 ids.add(pointId);
                 valid.add(v);
-
-                // ===== USE CRYPTOSERVICE DIRECTLY - No duplicate encryption =====
-                try {
-                    EncryptedPoint ep = cryptoService.encryptToPoint(
-                            pointId,                    // id
-                            v,                          // plaintext vector
-                            currentKV.getKey()          // secret key
-                    );
-
-                    if (ep == null) {
-                        logger.error("cryptoService.encryptToPoint returned null for ordinal {}", ord);
-                        ids.remove(ids.size() - 1);
-                        valid.remove(valid.size() - 1);
-                        continue;
-                    }
-
-                    if (ep.getCiphertext() == null || ep.getCiphertext().length == 0) {
-                        logger.error("Encryption produced empty ciphertext for ordinal {}", ord);
-                        ids.remove(ids.size() - 1);
-                        valid.remove(valid.size() - 1);
-                        continue;
-                    }
-
-                    // Add to batch
-                    batchEncrypted.add(ep);
-                    if (verbose) {
-                        logger.debug("Encrypted vector {} (key v{})", pointId, ep.getKeyVersion());
-                    }
-
-                } catch (Exception e) {
-                    logger.error("Failed to encrypt vector at ordinal {}", ord, e);
-                    ids.remove(ids.size() - 1);
-                    valid.remove(valid.size() - 1);
-                    continue;
-                }
             }
 
             if (valid.isEmpty()) {
@@ -575,34 +538,46 @@ public class ForwardSecureANNSystem {
                 continue;
             }
 
-            // ===== Rotate keys BEFORE indexing =====
+            // ===== Rotate keys ONCE per batch =====
             keyService.rotateIfNeeded();
 
-            // ===== Index all valid vectors =====
+            // ===== Index plaintext vectors ONLY =====
             try {
                 for (int j = 0; j < valid.size(); j++) {
                     indexService.insert(ids.get(j), valid.get(j));
                 }
+
                 indexedCount.addAndGet(valid.size());
                 totalInserted += valid.size();
 
                 if (verbose) {
-                    logger.debug("Indexed {} vectors from batch at offset {}", valid.size(), offset);
+                    logger.debug(
+                            "Indexed {} vectors from batch at offset {}",
+                            valid.size(), offset
+                    );
                 }
             } catch (Exception e) {
                 logger.error("Failed to index batch starting at offset {}", offset, e);
-                throw new RuntimeException("Batch indexing failed at offset " + offset, e);
+                throw new RuntimeException(
+                        "Batch indexing failed at offset " + offset, e
+                );
             }
         }
 
         if (profiler != null) {
             profiler.stop("batchInsert");
             List<Long> timings = profiler.getTimings("batchInsert");
-            long durationNs = (!timings.isEmpty() ? timings.get(timings.size() - 1) : (System.nanoTime() - startNs));
+            long durationNs =
+                    (!timings.isEmpty())
+                            ? timings.get(timings.size() - 1)
+                            : (System.nanoTime() - startNs);
             totalIndexingTimeNs += durationNs;
         }
 
-        logger.info("batchInsert complete: {} vectors inserted this call", totalInserted);
+        logger.info(
+                "batchInsert complete: {} vectors inserted this call",
+                totalInserted
+        );
     }
 
     public int getIndexedVectorCount() {
@@ -613,38 +588,16 @@ public class ForwardSecureANNSystem {
         Objects.requireNonNull(id, "ID cannot be null");
         Objects.requireNonNull(vector, "Vector cannot be null");
         if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
-        if (vector.length != dim) throw new IllegalArgumentException("Vector length must match dimension");
+        if (vector.length != dim) {
+            throw new IllegalArgumentException("Vector length must match dimension");
+        }
 
         if (profiler != null) profiler.start("insert");
         try {
+            // Rotate keys if required (actual encryption happens inside index)
             keyService.rotateIfNeeded();
 
-            // ===== Get current key version =====
-            KeyVersion currentKV = keyService.getCurrentVersion();
-
-            // ===== USE CRYPTOSERVICE DIRECTLY - single encryption operation =====
-            EncryptedPoint encryptedPoint;
-            try {
-                encryptedPoint = cryptoService.encryptToPoint(
-                        id,                         // id
-                        vector,                     // plaintext vector
-                        currentKV.getKey()          // secret key
-                );
-
-                if (encryptedPoint == null) {
-                    throw new RuntimeException("cryptoService.encryptToPoint returned null");
-                }
-
-                if (encryptedPoint.getCiphertext() == null || encryptedPoint.getCiphertext().length == 0) {
-                    throw new RuntimeException("Encryption produced empty ciphertext");
-                }
-
-            } catch (Exception e) {
-                logger.error("Vector encryption failed for id={}", id, e);
-                throw new RuntimeException("Vector encryption failed for " + id, e);
-            }
-
-            // ===== Index the plaintext vector =====
+            // ===== Index plaintext vector ONLY =====
             indexService.insert(id, vector);
             indexedCount.incrementAndGet();
 
@@ -655,7 +608,13 @@ public class ForwardSecureANNSystem {
                 if (!timings.isEmpty()) {
                     long durationNs = timings.get(timings.size() - 1);
                     totalIndexingTimeNs += durationNs;
-                    if (verbose) logger.debug("Insert complete for id={} in {} ms", id, durationNs / 1_000_000.0);
+
+                    if (verbose) {
+                        logger.debug(
+                                "Insert complete for id={} in {} ms",
+                                id, durationNs / 1_000_000.0
+                        );
+                    }
                 }
             }
         }
