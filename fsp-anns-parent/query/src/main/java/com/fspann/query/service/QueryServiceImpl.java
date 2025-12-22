@@ -158,7 +158,7 @@ public final class QueryServiceImpl implements QueryService {
                     Math.min(candidateIds.size(), maxRefineFactor * K);
 
             int refineLimit = Math.max(K, MAX_REFINEMENT);
-            lastCandKept = refineLimit;
+            lastCandKept = limitedIds.size();
 
             final long decStart = System.nanoTime();
             List<QueryScored> scored = new ArrayList<>(refineLimit);

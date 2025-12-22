@@ -212,13 +212,6 @@ public final class PartitionedIndexService implements IndexService {
     // LOOKUP (Algorithm-3 prefix order)
     // =====================================================
 
-//    @Override
-//    public List<EncryptedPoint> lookup(QueryToken token) {
-//        throw new UnsupportedOperationException(
-//                "lookup() is disabled. Use lookupCandidateIds() instead."
-//        );
-//    }
-
     @Override
     public List<EncryptedPoint> lookup(QueryToken token) {
         Objects.requireNonNull(token, "token cannot be null");
@@ -353,15 +346,11 @@ public final class PartitionedIndexService implements IndexService {
 
         final int perDivBits = perDivisionBits();
         int maxRelax = cfg.getRuntime().getMaxRelaxationDepth();
+        int safeDivs = Math.min(S.divisions.size(), qcodes.length);
 
         for (int relax = 0; relax <= Math.min(pc.lambda, maxRelax); relax++) {
-            int earlyStop = cfg.getRuntime().getEarlyStopCandidates();
-            if (earlyStop > 0 && seen.size() >= earlyStop) break;
-
             int bits = perDivBits - relax * pc.m;
             if (bits <= 0) break;
-
-            int safeDivs = Math.min(S.divisions.size(), qcodes.length);
 
             for (int d = 0; d < safeDivs; d++) {
                 DivisionState div = S.divisions.get(d);
@@ -374,25 +363,19 @@ public final class PartitionedIndexService implements IndexService {
                     if (ids == null) continue;
 
                     for (String id : ids) {
-                        touched++;
-                        if (deletedCache.contains(id)) continue;
-                        if (metadata.isDeleted(id)) {
-                            deletedCache.add(id);
-                            continue;
-                        }
-
-                        seen.add(id);
-                        if (seen.size() >= MAX_IDS) {
-                            lastTouched.set(touched);
-                            lastTouchedIds.get().clear();
-                            lastTouchedIds.get().addAll(seen);
-                            return new ArrayList<>(seen);
+                        if (seen.add(id)) {
+                            touched++;
+                            if (seen.size() >= MAX_IDS) {
+                                lastTouched.set(touched);
+                                lastTouchedIds.get().clear();
+                                lastTouchedIds.get().addAll(seen);
+                                return new ArrayList<>(seen);
+                            }
                         }
                     }
                 }
             }
         }
-
         lastTouched.set(touched);
         lastTouchedIds.get().clear();
         lastTouchedIds.get().addAll(seen);

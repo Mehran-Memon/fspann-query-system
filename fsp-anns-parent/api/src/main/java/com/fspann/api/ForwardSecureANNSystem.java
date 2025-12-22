@@ -390,7 +390,7 @@ public class ForwardSecureANNSystem {
 
         for (int dim : dimensions) {
 
-            int divisions = Math.max(1, config.getPaper().divisions);
+            int divisions = config.getPaper().divisions;
 
             QueryTokenFactory factory =
                     new QueryTokenFactory(
@@ -575,23 +575,6 @@ public class ForwardSecureANNSystem {
                 continue;
             }
 
-            // ===== CRITICAL: Persist THIS batch BEFORE indexing =====
-            try {
-                for (EncryptedPoint ep : batchEncrypted) {
-                    metadataManager.saveEncryptedPoint(ep);
-                }
-                // Flush to ensure durability
-                metadataManager.flush();
-
-                if (verbose) {
-                    logger.debug("Persisted and flushed {} encrypted points to metadata", batchEncrypted.size());
-                }
-            } catch (Exception e) {
-                logger.error("Failed to persist {} encrypted points in batch starting at {}",
-                        batchEncrypted.size(), offset, e);
-                throw new RuntimeException("Batch metadata persistence failed at offset " + offset, e);
-            }
-
             // ===== Rotate keys BEFORE indexing =====
             keyService.rotateIfNeeded();
 
@@ -659,18 +642,6 @@ public class ForwardSecureANNSystem {
             } catch (Exception e) {
                 logger.error("Vector encryption failed for id={}", id, e);
                 throw new RuntimeException("Vector encryption failed for " + id, e);
-            }
-
-            // ===== CRITICAL: Persist to metadata BEFORE indexing =====
-            try {
-                metadataManager.saveEncryptedPoint(encryptedPoint);
-                if (verbose) {
-                    logger.debug("Persisted encrypted point {} to metadata (key v{})",
-                            id, encryptedPoint.getKeyVersion());
-                }
-            } catch (Exception e) {
-                logger.error("Failed to persist encrypted point {} to metadata", id, e);
-                throw new RuntimeException("Metadata persistence failed for " + id, e);
             }
 
             // ===== Index the plaintext vector =====
@@ -848,7 +819,7 @@ public class ForwardSecureANNSystem {
 
         final int upto = Math.min(k, annResults.size());
 
-        // ---------------- Precision@K ----------------
+// ---------------- Precision@K ----------------
         int[] gtIds = gt.getGroundtruthIds(queryIndex, k);
         int hits = 0;
 
@@ -862,30 +833,37 @@ public class ForwardSecureANNSystem {
         }
 
         double precision = hits / (double) k;
-
-// ---------------- Ratio@K (Peng: d(ANN)/d(GT) >= 1) ----------------
+// ---------------- Ratio@K (Peng definition) ----------------
         if (baseReader == null || gtIds == null || gtIds.length == 0) {
             return new QueryMetrics(Double.NaN, precision);
         }
 
+// 1) Compute BEST ground-truth distance (single denominator)
+        double bestGt = Double.POSITIVE_INFINITY;
+        for (int gtId : gtIds) {
+            double d = baseReader.l2(queryVector, gtId);
+            if (d < bestGt) bestGt = d;
+        }
+
+        if (!Double.isFinite(bestGt) || bestGt <= RATIO_EPS) {
+            return new QueryMetrics(Double.NaN, precision);
+        }
+
+// 2) Average ANN distances relative to best GT
         double ratioSum = 0.0;
         int cnt = 0;
 
-        for (int i = 0; i < upto && i < gtIds.length; i++) {
-            int gtId = gtIds[i];
-
+        for (int i = 0; i < upto; i++) {
             int annId;
             try {
                 annId = Integer.parseInt(annResults.get(i).getId());
-            } catch (NumberFormatException nfe) {
+            } catch (NumberFormatException ignore) {
                 continue;
             }
 
-            double dGt  = baseReader.l2(queryVector, gtId);
             double dAnn = baseReader.l2(queryVector, annId);
-
-            if (dGt > RATIO_EPS && dAnn >= 0.0) {
-                ratioSum += (dAnn / dGt);
+            if (dAnn >= 0.0) {
+                ratioSum += (dAnn / bestGt);
                 cnt++;
             }
         }
@@ -893,7 +871,6 @@ public class ForwardSecureANNSystem {
         double ratio = (cnt > 0) ? (ratioSum / cnt) : Double.NaN;
         return new QueryMetrics(ratio, precision);
     }
-
 
     // --- FOR INTEGRATION TESTS
     private QueryFacade queryFacade;
