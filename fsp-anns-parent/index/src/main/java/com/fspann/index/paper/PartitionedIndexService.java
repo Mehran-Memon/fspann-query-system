@@ -80,6 +80,7 @@ public final class PartitionedIndexService implements IndexService {
     // =====================================================
     // INSERT
     // =====================================================
+
     @Override
     public void insert(String id, double[] vector) {
         Objects.requireNonNull(id, "id cannot be null");
@@ -91,6 +92,13 @@ public final class PartitionedIndexService implements IndexService {
         try {
             ep = cryptoService.encrypt(id, vector, keyService.getCurrentVersion());
             if (ep == null) throw new RuntimeException("encrypt() returned null");
+
+            // DIAGNOSTIC: Verify tracking happened
+            if (keyService instanceof com.fspann.key.KeyRotationServiceImpl kr) {
+                int tracked = kr.getKeyManager().getUsageTracker().getVectorCount(ep.getKeyVersion());
+                logger.debug("After encrypt: id={}, keyVersion={}, trackedCount={}",
+                        id, ep.getKeyVersion(), tracked);
+            }
         } catch (Exception e) {
             logger.error("Failed to encrypt vector {}: {}", id, e.getMessage());
             throw new RuntimeException("Encryption failed for vector " + id, e);

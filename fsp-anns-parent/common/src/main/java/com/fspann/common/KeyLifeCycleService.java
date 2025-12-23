@@ -55,4 +55,27 @@ public interface KeyLifeCycleService {
      * This is part of the forward-security pipeline and must ensure versioned metadata is updated.
      */
     void reEncryptAll();
+
+    /**
+     * Record that a vector was encrypted with a specific key version.
+     * This is used for safe key deletion tracking.
+     *
+     * @param vectorId the vector ID
+     * @param keyVersion the key version used for encryption
+     */
+    default void trackEncryption(String vectorId, int keyVersion) {
+        // Default: no-op (for implementations that don't support tracking)
+    }
+
+    /**
+     * Record that a vector was re-encrypted from one version to another.
+     * This is used for safe key deletion tracking.
+     *
+     * @param vectorId the vector ID
+     * @param oldVersion the old key version
+     * @param newVersion the new key version
+     */
+    default void trackReencryption(String vectorId, int oldVersion, int newVersion) {
+        // Default: no-op (for implementations that don't support tracking)
+    }
 }

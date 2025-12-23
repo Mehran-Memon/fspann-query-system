@@ -44,6 +44,8 @@ public class KeyManager {
     // Track when keys were created for retention policy
     private final ConcurrentMap<Integer, Long> keyCreationTimes = new ConcurrentHashMap<>();
 
+    private final KeyUsageTracker usageTracker = new KeyUsageTracker();
+
     public KeyManager(String keyStorePath) throws IOException {
         Path p;
         if (keyStorePath == null || keyStorePath.isBlank()) {
@@ -262,6 +264,9 @@ public class KeyManager {
      * Delete all keys strictly older than keepVersion.
      * Uses secure deletion and updates all auxiliary maps.
      *
+     * SAFETY: Verifies no vectors are bound to keys before deletion.
+     * If vectors are still bound, logs warning and skips deletion.
+     *
      * NOTE: All versions can be deleted (including v1) because the master key
      * is stored separately and is never deleted. Session keys are derived from
      * the master key on-demand, so deleting v1 doesn't prevent us from deriving it again.
@@ -276,23 +281,44 @@ public class KeyManager {
             }
             Collections.sort(toDelete);
 
+            int deleted = 0;
+            int skipped = 0;
+
             for (Integer v : toDelete) {
+                // SAFETY CHECK: Verify key is safe to delete
+                if (!usageTracker.isSafeToDelete(v)) {
+                    logger.warn("SKIPPING deletion of key v{}: {} vectors still bound",
+                            v, usageTracker.getVectorCount(v));
+                    skipped++;
+                    continue;
+                }
+
                 SecretKey old = sessionKeys.remove(v);
                 derived.remove(v);
                 keyCreationTimes.remove(v);
 
                 if (old != null) {
                     SecureKeyDeletion.wipeKey(old);
-                    logger.info("Securely deleted key v{} (explicit deleteKeysOlderThan)", v);
+                    deleted++;
+                    logger.info("✓ Securely deleted key v{} (verified safe)", v);
                 }
             }
 
-            persistSync();
+            if (deleted > 0) {
+                persistSync();
+            }
+
+            logger.info("Key deletion complete: {} deleted, {} skipped (still in use)",
+                    deleted, skipped);
+
         } catch (Exception e) {
             logger.error("deleteKeysOlderThan({}) failed", keepVersion, e);
         }
     }
 
+    public KeyUsageTracker getUsageTracker() {
+        return usageTracker;
+    }
 
     private static class KeyStoreBlob implements java.io.Serializable {
         private static final long serialVersionUID = 1L;

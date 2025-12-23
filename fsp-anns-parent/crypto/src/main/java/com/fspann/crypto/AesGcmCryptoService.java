@@ -85,6 +85,14 @@ public class AesGcmCryptoService implements CryptoService {
             // Record encryption event
             notifyListeners(id, 0);
 
+            // TRACK ENCRYPTION (via interface - no cyclic dependency)
+            if (keyService != null) {
+                keyService.trackEncryption(id, version);
+                log.debug("✓ Tracked encryption: id={}, version={}", id, version);
+            } else {
+                log.warn("✗ Cannot track encryption for id={}: keyService is null", id);
+            }
+
             // Construct with ALL fields including shardId and buckets
             return new EncryptedPoint(
                     id,                    // id
@@ -102,7 +110,6 @@ public class AesGcmCryptoService implements CryptoService {
             throw new RuntimeException("Encryption failed for id=" + id, e);
         }
     }
-
 
     /**
      * FIXED: Decrypt using the CORRECT key version

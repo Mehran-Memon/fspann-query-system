@@ -346,6 +346,7 @@ public class ForwardSecureANNSystem {
                 String p = (String) km.getClass().getMethod("getStorePath").invoke(km);
                 if (p != null && !p.isBlank()) resolvedKeyStore = Paths.get(p);
             } catch (Throwable ignore) {}
+            kr.initializeUsageTracking();
         }
         this.keyStorePath = resolvedKeyStore;
 
