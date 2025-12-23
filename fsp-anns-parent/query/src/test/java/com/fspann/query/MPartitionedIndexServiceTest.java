@@ -28,7 +28,9 @@ public class MPartitionedIndexServiceTest {
         mockMetadataManager = mock(RocksDBMetadataManager.class);
         mockConfig = mock(SystemConfig.class);
         mockKeyRotationService = mock(KeyRotationServiceImpl.class);
-        mockCryptoService = mock(AesGcmCryptoService.class);
+
+        // Use spy instead of mock to preserve default interface methods
+        mockCryptoService = mock(AesGcmCryptoService.class, CALLS_REAL_METHODS);
 
         // CRITICAL: Mock StorageMetrics to prevent IllegalStateException
         StorageMetrics mockStorageMetrics = mock(StorageMetrics.class);
@@ -65,7 +67,6 @@ public class MPartitionedIndexServiceTest {
         when(mockConfig.getRuntime()).thenReturn(mockRuntimeConfig);
 
         // Initialize PartitionedIndexService with mocked dependencies
-        // This should NOT throw IllegalStateException anymore
         indexService = new PartitionedIndexService(
                 mockMetadataManager,
                 mockConfig,
@@ -93,18 +94,18 @@ public class MPartitionedIndexServiceTest {
         KeyVersion mockKeyVersion = new KeyVersion(1, mockKey);
         when(mockKeyRotationService.getCurrentVersion()).thenReturn(mockKeyVersion);
 
-        // Mock encryption
-        when(mockCryptoService.encrypt(eq(vectorId), eq(vector), any(KeyVersion.class)))
+        // CRITICAL: Mock the encryptToPoint method (which is what the default method calls)
+        when(mockCryptoService.encryptToPoint(eq(vectorId), eq(vector), any(SecretKey.class)))
                 .thenReturn(mockEncryptedPoint);
 
         // Mock metadata save (should not throw)
         doNothing().when(mockMetadataManager).saveEncryptedPoint(any(EncryptedPoint.class));
 
-        // Explicitly call insert(String, double[]) - no ambiguity with direct call
-        indexService.insert((String) vectorId, vector);
+        // Call insert
+        indexService.insert(vectorId, vector);
 
-        // Verify encryption was called
-        verify(mockCryptoService).encrypt(eq(vectorId), eq(vector), any(KeyVersion.class));
+        // Verify encryptToPoint was called (the underlying method)
+        verify(mockCryptoService).encryptToPoint(eq(vectorId), eq(vector), any(SecretKey.class));
 
         // Verify metadata save was called
         verify(mockMetadataManager).saveEncryptedPoint(mockEncryptedPoint);
@@ -126,8 +127,8 @@ public class MPartitionedIndexServiceTest {
         // Mock metadata save
         doNothing().when(mockMetadataManager).saveEncryptedPoint(any(EncryptedPoint.class));
 
-        // Explicitly call insert(EncryptedPoint, double[])
-        indexService.insert((EncryptedPoint) mockEncryptedPoint, vector);
+        // Call insert with EncryptedPoint
+        indexService.insert(mockEncryptedPoint, vector);
 
         // Verify metadata save was called
         verify(mockMetadataManager).saveEncryptedPoint(mockEncryptedPoint);
@@ -142,7 +143,7 @@ public class MPartitionedIndexServiceTest {
 
         // Test with null vector - should throw NullPointerException
         assertThrows(NullPointerException.class, () -> {
-            indexService.insert((String) "test-id", (double[]) null);
+            indexService.insert("test-id", (double[]) null);
         });
     }
 

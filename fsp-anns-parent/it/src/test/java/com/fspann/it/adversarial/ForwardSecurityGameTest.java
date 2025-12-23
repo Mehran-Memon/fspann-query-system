@@ -115,7 +115,6 @@ public class ForwardSecurityGameTest {
     @Test
     void forwardSecrecyGame_oldKeysCannotDecrypt() {
 
-        // --- Key evolution ---
         keyService.rotateKeyOnly();
         keyService.reEncryptAll();
 
@@ -124,11 +123,10 @@ public class ForwardSecurityGameTest {
         for (EncryptedPoint p : metadata.getAllEncryptedPoints()) {
             try {
                 crypto.decryptFromPoint(p, compromisedKey);
-                wins++; // adversary success
+                wins++;
             } catch (Exception ignored) {}
         }
 
-        // Adversary advantage must be zero
         assertEquals(
                 0,
                 wins,
@@ -188,6 +186,53 @@ public class ForwardSecurityGameTest {
         }
     }
 
+    /**
+     * NEW TEST: Key tracking validation in security game
+     */
+    @Test
+    void gameKeyTrackingIntegrity() {
+        KeyManager km = keyService.getKeyManager();
+        KeyUsageTracker tracker = km.getUsageTracker();
+
+        // Initial state: 2 vectors with v1
+        assertEquals(2, tracker.getVectorCount(compromisedVersion));
+        assertFalse(tracker.isSafeToDelete(compromisedVersion));
+
+        // Rotate and re-encrypt
+        keyService.rotateKeyOnly();
+        int newVersion = keyService.getCurrentVersion().getVersion();
+        keyService.reEncryptAll();
+
+        // After re-encryption: old version should have 0 vectors
+        assertEquals(0, tracker.getVectorCount(compromisedVersion));
+        assertTrue(tracker.isSafeToDelete(compromisedVersion));
+
+        // New version should have 2 vectors
+        assertEquals(2, tracker.getVectorCount(newVersion));
+        assertFalse(tracker.isSafeToDelete(newVersion));
+    }
+
+    /**
+     * NEW TEST: Safe deletion after rotation
+     */
+    @Test
+    void gameSafeDeletionAfterReencryption() {
+        KeyManager km = keyService.getKeyManager();
+
+        // Rotate and re-encrypt
+        keyService.rotateKeyOnly();
+        keyService.reEncryptAll();
+
+        // Try to delete old key (should succeed)
+        km.deleteKeysOlderThan(compromisedVersion + 1);
+
+        // Verify old key is deleted
+        assertNull(km.getSessionKey(compromisedVersion));
+
+        // Verify new key still exists
+        assertNotNull(km.getSessionKey(compromisedVersion + 1));
+    }
+
     private Map<String, byte[]> snapshot() {
         Map<String, byte[]> m = new HashMap<>();
         for (EncryptedPoint p : metadata.getAllEncryptedPoints()) {
@@ -205,4 +250,3 @@ public class ForwardSecurityGameTest {
         try { metadata.close(); } catch (Exception ignore) {}
     }
 }
-

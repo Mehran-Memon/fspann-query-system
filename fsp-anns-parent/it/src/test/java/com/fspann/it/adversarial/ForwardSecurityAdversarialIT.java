@@ -108,7 +108,6 @@ public class ForwardSecurityAdversarialIT {
         }
 
         assertEquals(0, ok, "Old key must not decrypt any re-encrypted point");
-
     }
 
     @Test
@@ -127,7 +126,11 @@ public class ForwardSecurityAdversarialIT {
         var touched = List.of(ids.get(0));
 
         var before = snapshot();
-        var rep = keySvc.reencryptTouched(touched, keySvc.getCurrentVersion().getVersion(), () -> meta.sizePointsDir());
+        var rep = keySvc.reencryptTouched(
+                touched,
+                keySvc.getCurrentVersion().getVersion(),
+                () -> meta.sizePointsDir()
+        );
         assertTrue(rep.reencryptedCount() > 0);
 
         var after = snapshot();
@@ -136,6 +139,64 @@ public class ForwardSecurityAdversarialIT {
 
         for (int i = 1; i < ids.size(); i++)
             assertArrayEquals(before.get(ids.get(i)), after.get(ids.get(i)));
+    }
+
+    /**
+     * NEW TEST: Verify key tracking works correctly
+     *
+     * CRITICAL: Must re-initialize tracking after inserts because
+     * initializeUsageTracking() was called during system construction
+     * before any vectors were inserted.
+     */
+    @Test
+    void keyTrackingPreventsUnsafeDeletion() {
+
+        // Re-initialize tracking from stored encrypted points
+        keySvc.initializeUsageTracking();
+
+        KeyManager km = keySvc.getKeyManager();
+        KeyUsageTracker tracker = km.getUsageTracker();
+
+        int currentVersion = keySvc.getCurrentVersion().getVersion();
+
+        System.out.println("=== BEFORE initializeUsageTracking() ===");
+        System.out.println("Current version: v" + currentVersion);
+        System.out.println("Tracker count for v" + currentVersion + ": " + tracker.getVectorCount(currentVersion));
+        System.out.println("Total encrypted points in metadata: " + meta.getAllEncryptedPoints().size());
+        System.out.println("Tracker summary:");
+        System.out.println(tracker.getSummary());
+
+        // Re-initialize tracking from stored encrypted points
+        keySvc.initializeUsageTracking();
+
+        System.out.println("\n=== AFTER initializeUsageTracking() ===");
+        System.out.println("Tracker count for v" + currentVersion + ": " + tracker.getVectorCount(currentVersion));
+        System.out.println("Tracker summary:");
+        System.out.println(tracker.getSummary());
+
+        int v1 = keySvc.getCurrentVersion().getVersion();
+
+        // v1 should have 3 vectors
+        assertEquals(3, tracker.getVectorCount(v1),
+                "Tracker should have 3 vectors after re-initialization");
+        assertFalse(tracker.isSafeToDelete(v1));
+
+        // Try to delete v1 (should fail - vectors still using it)
+        km.deleteKeysOlderThan(v1 + 1);
+        assertNotNull(km.getSessionKey(v1), "v1 should not be deleted");
+
+        // Re-encrypt all vectors to v2
+        keySvc.reEncryptAll();
+
+        // Now v1 should have 0 vectors (all moved to v2)
+        assertEquals(0, tracker.getVectorCount(v1),
+                "v1 should have 0 vectors after re-encryption");
+        assertTrue(tracker.isSafeToDelete(v1));
+
+        // Now deletion should succeed
+        km.deleteKeysOlderThan(v1 + 1);
+        assertNull(km.getSessionKey(v1),
+                "v1 should be deleted after re-encryption");
     }
 
     @AfterEach
