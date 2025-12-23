@@ -1,100 +1,193 @@
 {
   "base": {
-    "numShards": 48,
+    "_comment_1": "===== CORE THRESHOLDS =====",
     "opsThreshold": 500000000,
     "ageThresholdMs": 86400000,
     "reencryptionEnabled": true,
     "forwardSecurityEnabled": true,
-    "partitionedIndexingEnabled": true,
     "profilerEnabled": true,
 
+    "_comment_2": "===== PAPER-MSANNP PARAMETERS =====",
     "paper": {
       "enabled": true,
       "m": 24,
       "lambda": 1,
       "divisions": 3,
       "seed": 13,
-      "safetyMaxCandidates": 600,
+      "safetyMaxCandidates": 0,
       "tables": 6
     },
 
+    "_comment_3": "===== STABILIZATION =====",
+    "_comment_4": "alpha=0.02 (2%, down from 15%) + minCandidates=100 (K-relative floor)",
     "stabilization": {
       "enabled": true,
-      "alpha": 0.15,
-      "minCandidates": 600
+      "alpha": 0.02,
+      "minCandidates": 100
     },
 
+    "_comment_5": "===== RUNTIME =====",
+    "_comment_6": "maxRefinementFactor=3 allows refining 3*K candidates",
     "runtime": {
-      "maxCandidateFactor": 10,
-      "maxRefinementFactor": 1,
+      "maxCandidateFactor": 50,
+      "maxRefinementFactor": 3,
       "maxRelaxationDepth": 1,
-      "earlyStopCandidates": 300
+      "earlyStopCandidates": 5000
     },
 
+    "_comment_7": "===== EVALUATION =====",
     "eval": {
       "computePrecision": true,
       "writeGlobalPrecisionCsv": true,
       "kVariants": [1, 5, 10, 20, 50, 100]
     },
 
+    "_comment_8": "===== RATIO COMPUTATION + GT VALIDATION =====",
     "ratio": {
       "source": "gt",
-      "gtSample": 10000
+      "gtSample": 1000,
+      "gtMismatchTolerance": 0.05,
+      "allowComputeIfMissing": true
     },
 
+    "_comment_9": "===== OUTPUT =====",
     "output": {
       "exportArtifacts": true,
-      "suppressLegacyMetrics": true
-    }
-
-},
-
-"profiles": [
-
-    { "name": "M18", "overrides": { "paper": { "m": 18, "lambda": 3, "divisions": 4, "seed": 13, "safetyMaxCandidates": 0 } } },
-    { "name": "M20", "overrides": { "paper": { "m": 20, "lambda": 2, "divisions": 3, "seed": 13, "safetyMaxCandidates": 0 } } },
-    { "name": "M24", "overrides": { "paper": { "m": 24, "lambda": 2, "divisions": 3, "seed": 13, "safetyMaxCandidates": 1200 } } },
-    { "name": "M28", "overrides": { "paper": { "m": 28, "lambda": 2, "divisions": 3, "seed": 13, "safetyMaxCandidates": 0 } } },
-    { "name": "M32", "overrides": { "paper": { "m": 32, "lambda": 1, "divisions": 3, "seed": 13, "safetyMaxCandidates": 600 } } },
-  { "name": "M24_lambda3", "overrides": { "paper": { "m": 24, "lambda": 3, "divisions": 3, "seed": 13, "safetyMaxCandidates": 600 } } },
-
-    { "name": "L1", "overrides": { "paper": { "m": 24, "lambda": 1, "divisions": 3, "seed": 13, "safetyMaxCandidates": 0 } } },
-    { "name": "L2", "overrides": { "paper": { "m": 24, "lambda": 2, "divisions": 3, "seed": 13, "safetyMaxCandidates": 0 } } },
-    { "name": "L3", "overrides": { "paper": { "m": 24, "lambda": 3, "divisions": 3, "seed": 13, "safetyMaxCandidates": 0 } } },
-
-    { "name": "D2", "overrides": { "paper": { "m": 24, "lambda": 2, "divisions": 2, "seed": 13, "safetyMaxCandidates": 0 } } },
-    { "name": "D3", "overrides": { "paper": { "m": 24, "lambda": 2, "divisions": 3, "seed": 13, "safetyMaxCandidates": 0 } } },
-    { "name": "D4", "overrides": { "paper": { "m": 20, "lambda": 2, "divisions": 4, "seed": 13, "safetyMaxCandidates": 0 } } },
-    { "name": "D9", "overrides": { "paper": { "m": 20, "lambda": 3, "divisions": 9, "seed": 13, "safetyMaxCandidates": 0 } } },
-
-    { "name": "A0.05", "overrides": { "stabilization": { "alpha": 0.05 } } },
-    { "name": "A0.10", "overrides": { "stabilization": { "alpha": 0.10 } } },
-    { "name": "A0.15", "overrides": { "stabilization": { "alpha": 0.15 } } },
-
-  {
-    "name": "R1",
-    "overrides": {
-      "paper": { "m": 20, "lambda": 2, "divisions": 4 },
-      "runtime": { "maxRefinementFactor": 4, "maxRelaxationDepth": 3 }
+      "suppressLegacyMetrics": false,
+      "resultsDir": "results"
     }
   },
 
-  {
-    "name": "R2",
-    "overrides": {
-      "paper": { "m": 18, "lambda": 3, "divisions": 4 },
-      "runtime": { "maxRefinementFactor": 4, "maxRelaxationDepth": 3 }
+  "_comment_10": "===== PARAMETER SWEEP PROFILES =====",
+  "profiles": [
+    {
+      "name": "M18",
+      "overrides": {
+        "paper": { "m": 18, "lambda": 3, "divisions": 4, "seed": 13 }
+      }
+    },
+    {
+      "name": "M20",
+      "overrides": {
+        "paper": { "m": 20, "lambda": 2, "divisions": 3, "seed": 13 }
+      }
+    },
+    {
+      "name": "M24",
+      "overrides": {
+        "paper": { "m": 24, "lambda": 2, "divisions": 3, "seed": 13 }
+      }
+    },
+    {
+      "name": "M28",
+      "overrides": {
+        "paper": { "m": 28, "lambda": 2, "divisions": 3, "seed": 13 }
+      }
+    },
+    {
+      "name": "M32",
+      "overrides": {
+        "paper": { "m": 32, "lambda": 1, "divisions": 3, "seed": 13 }
+      }
+    },
+    {
+      "name": "M24_lambda3",
+      "overrides": {
+        "paper": { "m": 24, "lambda": 3, "divisions": 3, "seed": 13 }
+      }
+    },
+    {
+      "name": "L1",
+      "overrides": {
+        "paper": { "m": 24, "lambda": 1, "divisions": 3, "seed": 13 }
+      }
+    },
+    {
+      "name": "L2",
+      "overrides": {
+        "paper": { "m": 24, "lambda": 2, "divisions": 3, "seed": 13 }
+      }
+    },
+    {
+      "name": "L3",
+      "overrides": {
+        "paper": { "m": 24, "lambda": 3, "divisions": 3, "seed": 13 }
+      }
+    },
+    {
+      "name": "D2",
+      "overrides": {
+        "paper": { "m": 24, "lambda": 2, "divisions": 2, "seed": 13 }
+      }
+    },
+    {
+      "name": "D3",
+      "overrides": {
+        "paper": { "m": 24, "lambda": 2, "divisions": 3, "seed": 13 }
+      }
+    },
+    {
+      "name": "D4",
+      "overrides": {
+        "paper": { "m": 20, "lambda": 2, "divisions": 4, "seed": 13 }
+      }
+    },
+    {
+      "name": "D9",
+      "overrides": {
+        "paper": { "m": 20, "lambda": 3, "divisions": 9, "seed": 13 }
+      }
+    },
+    {
+      "name": "A0.01",
+      "overrides": {
+        "stabilization": { "alpha": 0.01 }
+      }
+    },
+    {
+      "name": "A0.02",
+      "overrides": {
+        "stabilization": { "alpha": 0.02 }
+      }
+    },
+    {
+      "name": "A0.03",
+      "overrides": {
+        "stabilization": { "alpha": 0.03 }
+      }
+    },
+    {
+      "name": "A0.05",
+      "overrides": {
+        "stabilization": { "alpha": 0.05 }
+      }
+    },
+    {
+      "name": "R1",
+      "overrides": {
+        "paper": { "m": 20, "lambda": 2, "divisions": 4 },
+        "runtime": { "maxRefinementFactor": 4, "maxRelaxationDepth": 3 }
+      }
+    },
+    {
+      "name": "R2",
+      "overrides": {
+        "paper": { "m": 18, "lambda": 3, "divisions": 4 },
+        "runtime": { "maxRefinementFactor": 4, "maxRelaxationDepth": 3 }
+      }
+    },
+    {
+      "name": "R3",
+      "overrides": {
+        "paper": { "m": 20, "lambda": 2, "divisions": 3 }
+      }
+    },
+    {
+      "name": "R4",
+      "overrides": {
+        "paper": { "m": 20, "lambda": 2, "divisions": 3, "seed": 13 },
+        "runtime": { "maxRefinementFactor": 2 }
+      }
     }
-  },
-
-  {
-    "name": "R3",
-    "overrides": {
-      "paper": { "m": 20, "lambda": 2, "divisions": 3 }
-    }
-  },
-
-  { "name": "R4", "overrides": { "paper": { "m": 20, "lambda": 2, "divisions": 3, "seed": 13, "safetyMaxCandidates": 2000 } } }
-
-]
+  ]
 }
