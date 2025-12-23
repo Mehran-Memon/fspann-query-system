@@ -794,7 +794,15 @@ public class ForwardSecureANNSystem {
 
         double precision = hits / (double) k;
 // ---------------- Ratio@K (Peng definition) ----------------
-        if (baseReader == null || gtIds == null || gtIds.length == 0) {
+        if (baseReader == null) {
+            if (logger.isDebugEnabled()) {
+                logger.debug("BaseReader unavailable, using candidate-count ratio");
+            }
+            double fallbackRatio = (double) annResults.size() / k;
+            return new QueryMetrics(fallbackRatio, precision);
+        }
+
+        if (gtIds == null || gtIds.length == 0) {
             return new QueryMetrics(Double.NaN, precision);
         }
 
@@ -2083,8 +2091,10 @@ public class ForwardSecureANNSystem {
             throw new IllegalStateException("No queries loaded from " + queryPath);
         }
 
-        if (!queryOnlyMode && Files.exists(baseVecs)) {
+        if (Files.exists(baseVecs)) {
             System.setProperty("base.path", baseVecs.toString());
+            logger.info("Set base.path={} for ratio computation (mode={})",
+                    baseVecs, queryOnlyMode ? "query-only" : "full");
         }
 
         // ===================== METADATA + CRYPTO =====================
@@ -2213,7 +2223,25 @@ public class ForwardSecureANNSystem {
 
                         logger.info("Validating groundtruth against base vectors...");
 
-                        int sampleSize = Math.min(cfg.getRatio().gtSample, queries.size());
+                        int gtSampleConfig = 1000;
+                        double gtToleranceConfig = 0.05;
+
+                        try {
+                            if (cfg.getRatio() != null) {
+                                if (cfg.getRatio().gtSample > 0) {
+                                    gtSampleConfig = cfg.getRatio().gtSample;
+                                }
+                                if (cfg.getRatio().gtMismatchTolerance > 0) {
+                                    gtToleranceConfig = cfg.getRatio().gtMismatchTolerance;
+                                }
+                            }
+                        } catch (Exception e) {
+                            logger.warn("Using default GT validation config", e);
+                        }
+
+                        int sampleSize = Math.min(gtSampleConfig, queries.size());
+                        double tolerance = gtToleranceConfig;
+
                         int mismatches = 0;
                         List<Integer> mismatchQueries = new ArrayList<>();
 
@@ -2257,17 +2285,16 @@ public class ForwardSecureANNSystem {
                         }
 
                         double mismatchRate = (double) mismatches / sampleSize;
-                        double tolerance = cfg.getRatio().gtMismatchTolerance;
 
                         logger.info("GT Validation Results:");
                         logger.info("  Samples: {}", sampleSize);
                         logger.info("  Matches: {}", sampleSize - mismatches);
-                        logger.info("  Mismatches: {} ({:.2f}%)", mismatches, mismatchRate * 100);
-                        logger.info("  Tolerance: {:.2f}%", tolerance * 100);
-
+                        logger.info("  Mismatches: {} ({}%)",
+                                mismatches, String.format("%.2f", mismatchRate * 100));
+                        logger.info("  Tolerance: {}%", String.format("%.2f", tolerance * 100));
                         if (mismatchRate > tolerance) {
                             logger.error("GT VALIDATION FAILED!");
-                            logger.error("Mismatch rate {:.2f}% exceeds tolerance {:.2f}%",
+                            logger.error("Mismatch rate ({}%) exceeds tolerance ({}%)",
                                     mismatchRate * 100, tolerance * 100);
                             logger.error("Example mismatch queries: {}", mismatchQueries);
 
@@ -2280,8 +2307,8 @@ public class ForwardSecureANNSystem {
                             throw new IllegalStateException(errorMsg);
                         }
 
-                        logger.info("✓ GT VALIDATION PASSED ({:.2f}% match rate)", (1 - mismatchRate) * 100);
-
+                        logger.info("GT VALIDATION PASSED ({}% match rate)",
+                                String.format("%.2f", (1 - mismatchRate) * 100));
                     } else {
                         logger.warn("Base vectors not found at {}, skipping GT validation", baseVecs);
                     }
