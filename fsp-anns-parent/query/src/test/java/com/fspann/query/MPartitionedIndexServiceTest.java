@@ -4,7 +4,9 @@ import com.fspann.common.*;
 import com.fspann.config.SystemConfig;
 import com.fspann.crypto.AesGcmCryptoService;
 import com.fspann.index.paper.PartitionedIndexService;
+import com.fspann.key.KeyManager;
 import com.fspann.key.KeyRotationServiceImpl;
+import com.fspann.key.KeyUsageTracker;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -29,8 +31,17 @@ public class MPartitionedIndexServiceTest {
         mockConfig = mock(SystemConfig.class);
         mockKeyRotationService = mock(KeyRotationServiceImpl.class);
 
+        KeyManager mockKeyManager = mock(KeyManager.class);
+        KeyUsageTracker mockTracker = mock(KeyUsageTracker.class);
+
+        when(mockKeyRotationService.getKeyManager()).thenReturn(mockKeyManager);
+        when(mockKeyManager.getUsageTracker()).thenReturn(mockTracker);
+
+        when(mockTracker.getVectorCount(anyInt())).thenReturn(0);
+        when(mockTracker.isSafeToDelete(anyInt())).thenReturn(false);
+
         // Use spy instead of mock to preserve default interface methods
-        mockCryptoService = mock(AesGcmCryptoService.class, CALLS_REAL_METHODS);
+        mockCryptoService = mock(AesGcmCryptoService.class);
 
         // CRITICAL: Mock StorageMetrics to prevent IllegalStateException
         StorageMetrics mockStorageMetrics = mock(StorageMetrics.class);
@@ -77,11 +88,10 @@ public class MPartitionedIndexServiceTest {
 
     @Test
     void testInsertWithStringId() throws Exception {
-        // Test the insert(String, double[]) method
+
         String vectorId = "test-vector-1";
         double[] vector = new double[]{1.0, 2.0, 3.0};
 
-        // Mock encryption result
         EncryptedPoint mockEncryptedPoint = mock(EncryptedPoint.class);
         when(mockEncryptedPoint.getId()).thenReturn(vectorId);
         when(mockEncryptedPoint.getVersion()).thenReturn(1);
@@ -89,25 +99,21 @@ public class MPartitionedIndexServiceTest {
         when(mockEncryptedPoint.getShardId()).thenReturn(0);
         when(mockEncryptedPoint.getVectorLength()).thenReturn(3);
 
-        // Mock KeyVersion
         SecretKey mockKey = mock(SecretKey.class);
         KeyVersion mockKeyVersion = new KeyVersion(1, mockKey);
         when(mockKeyRotationService.getCurrentVersion()).thenReturn(mockKeyVersion);
 
-        // CRITICAL: Mock the encryptToPoint method (which is what the default method calls)
-        when(mockCryptoService.encryptToPoint(eq(vectorId), eq(vector), any(SecretKey.class)))
-                .thenReturn(mockEncryptedPoint);
+        when(mockCryptoService.encrypt(
+                eq(vectorId),
+                eq(vector),
+                any(KeyVersion.class)
+        )).thenReturn(mockEncryptedPoint);
 
-        // Mock metadata save (should not throw)
-        doNothing().when(mockMetadataManager).saveEncryptedPoint(any(EncryptedPoint.class));
+        doNothing().when(mockMetadataManager).saveEncryptedPoint(any());
 
-        // Call insert
         indexService.insert(vectorId, vector);
 
-        // Verify encryptToPoint was called (the underlying method)
-        verify(mockCryptoService).encryptToPoint(eq(vectorId), eq(vector), any(SecretKey.class));
-
-        // Verify metadata save was called
+        verify(mockCryptoService).encrypt(eq(vectorId), eq(vector), any(KeyVersion.class));
         verify(mockMetadataManager).saveEncryptedPoint(mockEncryptedPoint);
     }
 

@@ -151,53 +151,99 @@ public class ForwardSecurityAdversarialIT {
     @Test
     void keyTrackingPreventsUnsafeDeletion() {
 
-        // Re-initialize tracking from stored encrypted points
+        // Rebuild usage tracking from metadata
         keySvc.initializeUsageTracking();
 
         KeyManager km = keySvc.getKeyManager();
         KeyUsageTracker tracker = km.getUsageTracker();
 
-        int currentVersion = keySvc.getCurrentVersion().getVersion();
+        int current = keySvc.getCurrentVersion().getVersion();
+        int previous = current - 1;
 
-        System.out.println("=== BEFORE initializeUsageTracking() ===");
-        System.out.println("Current version: v" + currentVersion);
-        System.out.println("Tracker count for v" + currentVersion + ": " + tracker.getVectorCount(currentVersion));
-        System.out.println("Total encrypted points in metadata: " + meta.getAllEncryptedPoints().size());
-        System.out.println("Tracker summary:");
+        System.out.println("=== KEY TRACKING STATE ===");
+        System.out.println("Current key: v" + current);
+        System.out.println("Previous key: v" + previous);
         System.out.println(tracker.getSummary());
 
-        // Re-initialize tracking from stored encrypted points
-        keySvc.initializeUsageTracking();
+        // --- Core invariants after rotateKeyOnly() ---
+        assertEquals(3, tracker.getVectorCount(previous),
+                "All vectors must remain on previous key after rotateKeyOnly()");
+        assertEquals(0, tracker.getVectorCount(current),
+                "No vectors should use the new key before re-encryption");
 
-        System.out.println("\n=== AFTER initializeUsageTracking() ===");
-        System.out.println("Tracker count for v" + currentVersion + ": " + tracker.getVectorCount(currentVersion));
-        System.out.println("Tracker summary:");
-        System.out.println(tracker.getSummary());
+        assertFalse(tracker.isSafeToDelete(previous),
+                "Previous key must NOT be deletable while vectors still use it");
 
-        int v1 = keySvc.getCurrentVersion().getVersion();
+        // Attempt deletion (must fail)
+        km.deleteKeysOlderThan(previous + 1);
+        assertNotNull(km.getSessionKey(previous),
+                "Previous key must not be deleted while vectors exist");
 
-        // v1 should have 3 vectors
-        assertEquals(3, tracker.getVectorCount(v1),
-                "Tracker should have 3 vectors after re-initialization");
-        assertFalse(tracker.isSafeToDelete(v1));
-
-        // Try to delete v1 (should fail - vectors still using it)
-        km.deleteKeysOlderThan(v1 + 1);
-        assertNotNull(km.getSessionKey(v1), "v1 should not be deleted");
-
-        // Re-encrypt all vectors to v2
+        // --- Full re-encryption ---
         keySvc.reEncryptAll();
 
-        // Now v1 should have 0 vectors (all moved to v2)
-        assertEquals(0, tracker.getVectorCount(v1),
-                "v1 should have 0 vectors after re-encryption");
-        assertTrue(tracker.isSafeToDelete(v1));
+        // Tracker must now reflect migration
+        assertEquals(0, tracker.getVectorCount(previous),
+                "Previous key must have zero vectors after re-encryption");
+        assertEquals(3, tracker.getVectorCount(current),
+                "All vectors must migrate to current key after re-encryption");
 
-        // Now deletion should succeed
-        km.deleteKeysOlderThan(v1 + 1);
-        assertNull(km.getSessionKey(v1),
-                "v1 should be deleted after re-encryption");
+        assertTrue(tracker.isSafeToDelete(previous),
+                "Previous key must be safe to delete after migration");
+
+        // Now deletion must succeed
+        km.deleteKeysOlderThan(previous + 1);
+        assertNull(km.getSessionKey(previous),
+                "Previous key must be deleted after all vectors migrate");
     }
+
+    @Test
+    void selectiveReencryptionMigratesOnlyTouchedVectors() throws Exception{
+
+        keySvc.initializeUsageTracking();
+
+        KeyUsageTracker tracker = keySvc.getKeyManager().getUsageTracker();
+
+        int current = keySvc.getCurrentVersion().getVersion();
+        int previous = current - 1;
+
+        List<String> ids = meta.getAllVectorIds();
+        assertEquals(3, ids.size());
+
+        String touchedId = ids.get(0);
+        List<String> touched = List.of(touchedId);
+
+        // --- Selective re-encryption ---
+        var report = keySvc.reencryptTouched(
+                touched,
+                current,
+                () -> meta.sizePointsDir()
+        );
+
+        assertEquals(1, report.reencryptedCount(),
+                "Exactly one vector must be selectively re-encrypted");
+
+        // --- Tracker invariants ---
+        assertEquals(1, tracker.getVectorCount(current),
+                "Only touched vector must migrate to new key");
+        assertEquals(2, tracker.getVectorCount(previous),
+                "Untouched vectors must remain on previous key");
+
+        // --- Verify which ID moved ---
+        EncryptedPoint migrated = meta.loadEncryptedPoint(touchedId);
+        assertEquals(current, migrated.getKeyVersion(),
+                "Touched vector must use new key");
+
+        for (int i = 1; i < ids.size(); i++) {
+            EncryptedPoint untouched = meta.loadEncryptedPoint(ids.get(i));
+            assertEquals(previous, untouched.getKeyVersion(),
+                    "Untouched vectors must remain on old key");
+        }
+
+        assertFalse(tracker.isSafeToDelete(previous),
+                "Old key must NOT be deletable while untouched vectors exist");
+    }
+
 
     @AfterEach
     void cleanup() {

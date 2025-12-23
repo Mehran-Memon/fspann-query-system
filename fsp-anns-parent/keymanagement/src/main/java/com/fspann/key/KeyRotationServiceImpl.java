@@ -350,7 +350,10 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
             return;
         }
 
-        logger.info("Initializing key usage tracking from existing data...");
+        logger.info("Initializing key usage tracking from metadata...");
+
+        // CRITICAL FIX: reset state
+        tracker.clear();
 
         try {
             int tracked = 0;
@@ -368,7 +371,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
                 versionCounts.merge(version, 1, Integer::sum);
             }
 
-            logger.info("Usage tracking initialized: {} vectors across {} versions",
+            logger.info("Usage tracking rebuilt: {} vectors across {} key versions",
                     tracked, versionCounts.size());
 
             for (Map.Entry<Integer, Integer> e : versionCounts.entrySet()) {
@@ -377,6 +380,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
 
         } catch (Exception e) {
             logger.error("Failed to initialize usage tracking", e);
+            throw e;
         }
     }
 
