@@ -161,7 +161,6 @@ for ds in "${DATASETS[@]}"; do
     java "${JvmArgs[@]}" \
       -Dcli.dataset="$ds" \
       -Dcli.profile="$name" \
-      -Dquery.limit=1000 \
       -jar "$JarPath" \
       "$run_dir/config.json" \
       "$base" \
