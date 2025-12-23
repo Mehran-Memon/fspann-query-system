@@ -2200,7 +2200,105 @@ public class ForwardSecureANNSystem {
             GroundtruthManager gt = new GroundtruthManager();
             gt.load(groundtruth);
 
-            sys.runQueries(
+// ========== GROUNDTRUTH VALIDATION GATE (CORRECTED) ==========
+            if ("gt".equalsIgnoreCase(cfg.getRatio().source)) {
+                // Create local BaseVectorReader for validation
+                BaseVectorReader validationReader = null;
+
+                try {
+                    // Check if base vectors exist
+                    if (Files.exists(baseVecs)) {
+                        boolean isBvecs = baseVecs.toString().toLowerCase().endsWith(".bvecs");
+                        validationReader = BaseVectorReader.open(baseVecs, dimension, isBvecs);
+
+                        logger.info("Validating groundtruth against base vectors...");
+
+                        int sampleSize = Math.min(cfg.getRatio().gtSample, queries.size());
+                        int mismatches = 0;
+                        List<Integer> mismatchQueries = new ArrayList<>();
+
+                        Random validationRnd = new Random(42); // Deterministic sampling
+
+                        for (int i = 0; i < sampleSize; i++) {
+                            int queryIdx = validationRnd.nextInt(queries.size());
+                            double[] q = queries.get(queryIdx);
+
+                            // Get GT top-1
+                            int[] gtIds = gt.getGroundtruthIds(queryIdx, 1);
+                            if (gtIds == null || gtIds.length == 0) {
+                                logger.warn("GT missing for query {}, skipping validation", queryIdx);
+                                continue;
+                            }
+                            int gtTop1 = gtIds[0];
+
+                            // Compute TRUE top-1 via brute force on base
+                            int trueTop1 = -1;
+                            double bestDist = Double.POSITIVE_INFINITY;
+
+                            for (int candidateId = 0; candidateId < validationReader.count; candidateId++) {
+                                try {
+                                    double dist = validationReader.l2sq(q, candidateId);
+                                    if (dist < bestDist) {
+                                        bestDist = dist;
+                                        trueTop1 = candidateId;
+                                    }
+                                } catch (Exception ignore) {
+                                    // Skip invalid candidates
+                                }
+                            }
+
+                            // Compare GT vs TRUE
+                            if (trueTop1 >= 0 && gtTop1 != trueTop1) {
+                                mismatches++;
+                                if (mismatchQueries.size() < 10) {
+                                    mismatchQueries.add(queryIdx);
+                                }
+                            }
+                        }
+
+                        double mismatchRate = (double) mismatches / sampleSize;
+                        double tolerance = cfg.getRatio().gtMismatchTolerance;
+
+                        logger.info("GT Validation Results:");
+                        logger.info("  Samples: {}", sampleSize);
+                        logger.info("  Matches: {}", sampleSize - mismatches);
+                        logger.info("  Mismatches: {} ({:.2f}%)", mismatches, mismatchRate * 100);
+                        logger.info("  Tolerance: {:.2f}%", tolerance * 100);
+
+                        if (mismatchRate > tolerance) {
+                            logger.error("GT VALIDATION FAILED!");
+                            logger.error("Mismatch rate {:.2f}% exceeds tolerance {:.2f}%",
+                                    mismatchRate * 100, tolerance * 100);
+                            logger.error("Example mismatch queries: {}", mismatchQueries);
+
+                            String errorMsg = String.format(
+                                    "Groundtruth validation failed: %.2f%% mismatch rate (tolerance: %.2f%%). " +
+                                            "Groundtruth file may be corrupted or computed with wrong parameters.",
+                                    mismatchRate * 100, tolerance * 100
+                            );
+
+                            throw new IllegalStateException(errorMsg);
+                        }
+
+                        logger.info("✓ GT VALIDATION PASSED ({:.2f}% match rate)", (1 - mismatchRate) * 100);
+
+                    } else {
+                        logger.warn("Base vectors not found at {}, skipping GT validation", baseVecs);
+                    }
+
+                } catch (IOException e) {
+                    logger.warn("Failed to open base vectors for GT validation: {}", e.getMessage());
+                } finally {
+                    // Clean up validation reader
+                    if (validationReader != null) {
+                        try {
+                            validationReader.close();
+                        } catch (IOException ignore) {}
+                    }
+                }
+            }
+
+                sys.runQueries(
                     queries,
                     dimension,
                     gt,

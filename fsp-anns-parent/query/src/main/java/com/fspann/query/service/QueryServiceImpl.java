@@ -133,12 +133,42 @@ public final class QueryServiceImpl implements QueryService {
             SystemConfig.StabilizationConfig sc = cfg.getStabilization();
             if (sc != null && sc.isEnabled()) {
                 int raw = candidateIds.size();
-                int alphaCap = (int) Math.ceil(sc.getAlpha() * raw);
-                int finalSize = Math.min(raw, Math.max(sc.getMinCandidates(), alphaCap));
+                final int K = token.getTopK();
 
-                limitedIds = candidateIds.subList(0, finalSize);
+                // CRITICAL FIX: K-AWARE TARGET RATIO
+                // Target: Keep ~1.25x K candidates (ratio = 1.25)
+                // This ensures we have enough candidates while staying under 1.3
+                double targetRatio = 1.25;
+                int targetCandidates = (int) Math.ceil(K * targetRatio);
+
+                // ADAPTIVE FLOOR: Use alpha*raw if it provides more than target
+                // This handles cases where raw candidates are small
+                int alphaFloor = (int) Math.ceil(sc.getAlpha() * raw);
+                int proposedSize = Math.max(targetCandidates, alphaFloor);
+
+                // HARD BOUNDS:
+                // - Never exceed raw (can't have more than available)
+                // - Never go below K (must have at least topK candidates)
+                // - Respect minCandidates as absolute floor
+                int minFloor = Math.max(K, sc.getMinCandidates());
+                int finalSize = Math.max(minFloor, Math.min(raw, proposedSize));
+
+                limitedIds = candidateIds.subList(0, Math.min(finalSize, raw));
                 lastCandKept = limitedIds.size();
+
+                // Diagnostic logging
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Stabilization: raw={}, K={}, target={}, alpha={}, final={}, ratio={:.3f}",
+                            raw, K, targetCandidates, alphaFloor, lastCandKept,
+                            (double)lastCandKept / K);
+                }
+
+                // Callback for monitoring
+                if (stabilizationCallback != null) {
+                    stabilizationCallback.accept(raw, lastCandKept);
+                }
             } else {
+                // Stabilization disabled - use all candidates
                 limitedIds = candidateIds;
                 lastCandKept = candidateIds.size();
             }
