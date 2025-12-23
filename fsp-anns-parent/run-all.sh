@@ -60,7 +60,7 @@ declare -A DATASET_GT=(
 
 # ================= SINGLE-RUN DEBUG SWITCHES =================
 ONLY_DATASET="SIFT1M"
-ONLY_PROFILE="D3"
+ONLY_PROFILE="M24_lambda3"
 
 # ================= METRICS =================
 
@@ -161,7 +161,7 @@ for ds in "${DATASETS[@]}"; do
     java "${JvmArgs[@]}" \
       -Dcli.dataset="$ds" \
       -Dcli.profile="$name" \
-      -Dquery.limit=200 \
+      -Dquery.limit=1000 \
       -jar "$JarPath" \
       "$run_dir/config.json" \
       "$base" \
@@ -183,7 +183,6 @@ for ds in "${DATASETS[@]}"; do
     printf "%-10s | ART=%8s ms | Ratio=%s\n" "$name" "$art" "$ratio"
 
     if [[ -n "$ONLY_PROFILE" ]]; then
-      echo "DEBUG MODE: completed single profile ($ONLY_PROFILE)"
       break
     fi
   done
@@ -193,7 +192,3 @@ for ds in "${DATASETS[@]}"; do
 
   [[ -n "$ONLY_PROFILE" ]] && break
 done
-
-echo "DONE"
-echo "Per-dataset CSVs: $OutRoot/*/dataset_summary.csv"
-echo "Global CSV:       $GLOBAL_SUMMARY"
