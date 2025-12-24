@@ -10,29 +10,29 @@
     "_comment_2": "===== PAPER-MSANNP PARAMETERS =====",
     "paper": {
       "enabled": true,
-      "m": 24,
-      "lambda": 1,
-      "divisions": 3,
+      "m": 20,
+      "lambda": 2,
+      "divisions": 4,
       "seed": 13,
       "safetyMaxCandidates": 0,
-      "tables": 6
+      "tables": 4
     },
 
     "_comment_3": "===== STABILIZATION =====",
     "_comment_4": "alpha=0.02 (2%, down from 15%) + minCandidates=100 (K-relative floor)",
     "stabilization": {
       "enabled": true,
-      "alpha": 0.02,
-      "minCandidates": 100
+      "alpha": 0.10,
+      "minCandidates": 150
     },
 
     "_comment_5": "===== RUNTIME =====",
     "_comment_6": "maxRefinementFactor=3 allows refining 3*K candidates",
     "runtime": {
-      "maxCandidateFactor": 50,
+      "maxCandidateFactor": 5,
       "maxRefinementFactor": 3,
       "maxRelaxationDepth": 1,
-      "earlyStopCandidates": 5000
+      "earlyStopCandidates": 1000
     },
 
     "_comment_7": "===== EVALUATION =====",
@@ -45,7 +45,7 @@
     "_comment_8": "===== RATIO COMPUTATION + GT VALIDATION =====",
     "ratio": {
       "source": "gt",
-      "gtSample": 1000,
+      "gtSample": 10,
       "gtMismatchTolerance": 0.05,
       "allowComputeIfMissing": true
     },
@@ -69,7 +69,7 @@
     {
       "name": "M20",
       "overrides": {
-        "paper": { "m": 20, "lambda": 2, "divisions": 3, "seed": 13 }
+        "paper": { "m": 20, "lambda": 2, "divisions": 4, "seed": 13 }
       }
     },
     {

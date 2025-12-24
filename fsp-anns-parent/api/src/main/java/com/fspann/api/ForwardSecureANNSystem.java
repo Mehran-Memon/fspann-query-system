@@ -766,6 +766,30 @@ public class ForwardSecureANNSystem {
         }
     }
 
+    /**
+     * Compute evaluation metrics for a single query at a given K.
+     *
+     * Metrics computed:
+     *   1. Distance Ratio: avg(dist_returned_j / dist_groundtruth_j) for j=1..K
+     *      - Measures result QUALITY
+     *      - Perfect = 1.0 (returned exactly the true k-NNs)
+     *      - Higher values indicate returned results are farther than true NNs
+     *
+     *   2. Precision@K: |true_KNN ∩ returned| / K
+     *      - Measures RECALL
+     *      - Perfect = 1.0
+     *
+     *   3. Candidate Ratio: candidates_examined / K
+     *      - Measures search EFFICIENCY
+     *      - Lower is more efficient (minimum = 1.0)
+     *
+     * @param annResults Results returned by ANN search
+     * @param k          Number of neighbors requested
+     * @param queryVector The query vector
+     * @param queryIndex Index of this query (for groundtruth lookup)
+     * @param gt         Groundtruth manager
+     * @return QueryMetrics containing all three metrics
+     */
     public QueryMetrics computeMetricsAtK(
             List<QueryResult> annResults,
             int k,
@@ -774,70 +798,83 @@ public class ForwardSecureANNSystem {
             GroundtruthManager gt
     ) {
         if (annResults == null || annResults.isEmpty() || k <= 0) {
-            return new QueryMetrics(Double.NaN, 0.0);
+            return new QueryMetrics(Double.NaN, 0.0, Double.NaN);
         }
 
         final int upto = Math.min(k, annResults.size());
 
-// ---------------- Precision@K ----------------
+        // ================== 1. Precision@K ==================
         int[] gtIds = gt.getGroundtruthIds(queryIndex, k);
         int hits = 0;
 
         if (gtIds != null && gtIds.length > 0) {
+            Set<Integer> gtSet = new HashSet<>();
+            for (int id : gtIds) gtSet.add(id);
+
             for (int i = 0; i < upto; i++) {
                 try {
                     int annId = Integer.parseInt(annResults.get(i).getId());
-                    if (containsInt(gtIds, annId)) hits++;
+                    if (gtSet.contains(annId)) hits++;
                 } catch (NumberFormatException ignore) {}
             }
         }
-
         double precision = hits / (double) k;
-// ---------------- Ratio@K (Peng definition) ----------------
-        if (baseReader == null) {
-            if (logger.isDebugEnabled()) {
-                logger.debug("BaseReader unavailable, using candidate-count ratio");
-            }
-            double fallbackRatio = (double) annResults.size() / k;
-            return new QueryMetrics(fallbackRatio, precision);
-        }
 
-        if (gtIds == null || gtIds.length == 0) {
-            return new QueryMetrics(Double.NaN, precision);
-        }
+        // ================== 2. Candidate Ratio (Efficiency) ==================
+        QueryServiceImpl qs = getQueryServiceImpl();
+        double candidateRatio = (qs != null && k > 0)
+                ? (double) qs.getLastCandKept() / k
+                : Double.NaN;
 
-// 1) Compute BEST ground-truth distance (single denominator)
-        double bestGt = Double.POSITIVE_INFINITY;
-        for (int gtId : gtIds) {
-            double d = baseReader.l2(queryVector, gtId);
-            if (d < bestGt) bestGt = d;
-        }
+        // ================== 3. Distance Ratio (Quality) ==================
+        double distanceRatio = Double.NaN;
 
-        if (!Double.isFinite(bestGt) || bestGt <= RATIO_EPS) {
-            return new QueryMetrics(Double.NaN, precision);
-        }
-
-// 2) Average ANN distances relative to best GT
-        double ratioSum = 0.0;
-        int cnt = 0;
-
-        for (int i = 0; i < upto; i++) {
-            int annId;
-            try {
-                annId = Integer.parseInt(annResults.get(i).getId());
-            } catch (NumberFormatException ignore) {
-                continue;
+        if (baseReader != null && gtIds != null && gtIds.length > 0) {
+            // Compute groundtruth distances for each position j
+            // GT must be sorted by distance (closest first)
+            double[] gtDistances = new double[Math.min(k, gtIds.length)];
+            for (int j = 0; j < gtDistances.length; j++) {
+                gtDistances[j] = baseReader.l2(queryVector, gtIds[j]);
             }
 
-            double dAnn = baseReader.l2(queryVector, annId);
-            if (dAnn >= 0.0) {
-                ratioSum += (dAnn / bestGt);
-                cnt++;
+            // Distance ratio formula: ratio_j = dist(returned_j) / dist(GT_j)
+            double ratioSum = 0.0;
+            int validCount = 0;
+
+            for (int j = 0; j < upto; j++) {
+                // Get j-th returned result distance
+                double dAnn;
+                try {
+                    int annId = Integer.parseInt(annResults.get(j).getId());
+                    dAnn = baseReader.l2(queryVector, annId);
+                } catch (NumberFormatException e) {
+                    continue;
+                }
+
+                // Get j-th groundtruth distance (per-position denominator)
+                double dGt = (j < gtDistances.length)
+                        ? gtDistances[j]
+                        : gtDistances[gtDistances.length - 1];
+
+                // Avoid division by zero
+                if (dGt > RATIO_EPS) {
+                    ratioSum += (dAnn / dGt);
+                    validCount++;
+                }
             }
+
+            distanceRatio = (validCount > 0) ? (ratioSum / validCount) : Double.NaN;
         }
 
-        double ratio = (cnt > 0) ? (ratioSum / cnt) : Double.NaN;
-        return new QueryMetrics(ratio, precision);
+        // Log diagnostic for debugging
+        if (verbose && logger.isDebugEnabled()) {
+            logger.debug(
+                    "Q{} K={}: precision={:.4f}, distRatio={:.4f}, candRatio={:.2f}, hits={}/{}",
+                    queryIndex, k, precision, distanceRatio, candidateRatio, hits, upto
+            );
+        }
+
+        return new QueryMetrics(distanceRatio, precision, candidateRatio);
     }
 
     // --- FOR INTEGRATION TESTS

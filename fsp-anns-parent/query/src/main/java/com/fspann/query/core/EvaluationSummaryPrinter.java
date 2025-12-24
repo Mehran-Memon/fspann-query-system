@@ -11,11 +11,8 @@ import java.util.*;
  *
  * Outputs:
  *   summary.csv   → original schema (kept for backward compatibility)
- *   accuracy.csv  → ratio@K (SANNP) + precision@K (PP-ANN) + ART splits
+ *   accuracy.csv  → ratio@K + precision@K + ART splits
  *   cost.csv      → re-encryption, storage, work-units, token bytes
- *
- * This ensures research reporting is consistent
- * across datasets, dimensions, partitions and alpha-variants.
  */
 public final class EvaluationSummaryPrinter {
 
@@ -41,10 +38,12 @@ public final class EvaluationSummaryPrinter {
 
         // HUMAN READABLE PAPER-LINE ------------------------------------------------
         String precLine = compactPrecision(agg.precisionAtK, STANDARD_KS);
+
         log.info(String.format(Locale.ROOT,
-                "AvgRatio=%.4f | P@K[%s] | Server=%.2f ms | Client=%.2f ms | ART=%.2f ms | Decrypt=%.2f ms | " +
+                "AvgRatio=%.4f | AvgPrecision=%.4f | P@K[%s] | Server=%.2f ms | Client=%.2f ms | ART=%.2f ms | Decrypt=%.2f ms | " +
                         "TokenB=%.1f | WorkU=%.1f | Cand{T=%d,K=%d,D=%d,R=%d} | DS=%s | Profile=%s",
                 nz(agg.avgRatio),
+                nz(agg.avgPrecision),
                 precLine,
                 nz(agg.avgServerMs),
                 nz(agg.avgClientMs),
@@ -95,7 +94,7 @@ public final class EvaluationSummaryPrinter {
     }
 
     // ---------------------------------------------------------------------
-    // SUMMARY.CSV (old schema, backward compatible)
+    // SUMMARY.CSV (old schema, backward compatible + avgPrecision)
     // ---------------------------------------------------------------------
     private static void writeSummaryCsv(
             String dataset,
@@ -143,7 +142,7 @@ public final class EvaluationSummaryPrinter {
             if (!exists) {
                 StringBuilder h = new StringBuilder();
                 h.append("dataset,profile,m,lambda,divisions,index_time_ms,");
-                h.append("avg_ratio,avg_server_ms,avg_client_ms,avg_art_ms,avg_decrypt_ms,");
+                h.append("avg_ratio,avg_precision,avg_server_ms,avg_client_ms,avg_art_ms,avg_decrypt_ms,");
                 for (int k : STANDARD_KS) h.append("p_at_").append(k).append(",");
                 String header = h.substring(0, h.length() - 1);
                 Files.write(out, (header + "\n").getBytes(StandardCharsets.UTF_8),
@@ -156,6 +155,7 @@ public final class EvaluationSummaryPrinter {
             sb.append(m).append(",").append(lambda).append(",").append(divisions).append(",");
             sb.append(indexMs).append(",");
             sb.append(fmt(nz(a.avgRatio))).append(",");
+            sb.append(fmt(nz(a.avgPrecision))).append(",");
             sb.append(fmt(nz(a.avgServerMs))).append(",");
             sb.append(fmt(nz(a.avgClientMs))).append(",");
             sb.append(fmt(nz(a.getAvgArtMs()))).append(",");
@@ -229,12 +229,12 @@ public final class EvaluationSummaryPrinter {
     }
 
     // ---------------------------------------------------------------------
-    // LEGACY SUMMARY HEADER
+    // LEGACY SUMMARY HEADER (with avgPrecision added)
     // ---------------------------------------------------------------------
     private static String csvHeader() {
         StringBuilder sb = new StringBuilder();
         sb.append("dataset,profile,m,lambda,divisions,index_time_ms,");
-        sb.append("avg_ratio,avg_server_ms,avg_client_ms,avg_art_ms,avg_decrypt_ms,");
+        sb.append("avg_ratio,avg_precision,avg_server_ms,avg_client_ms,avg_art_ms,avg_decrypt_ms,");
         sb.append("avg_token_bytes,avg_work_units,");
         sb.append("avg_cand_total,avg_cand_kept,avg_cand_decrypted,avg_returned,");
         for (int k : STANDARD_KS) sb.append("p_at_").append(k).append(",");
@@ -259,6 +259,7 @@ public final class EvaluationSummaryPrinter {
         sb.append(indexTimeMs).append(",");
 
         sb.append(fmt(nz(a.avgRatio))).append(",");
+        sb.append(fmt(nz(a.avgPrecision))).append(",");
         sb.append(fmt(nz(a.avgServerMs))).append(",");
         sb.append(fmt(nz(a.avgClientMs))).append(",");
         sb.append(fmt(nz(a.getAvgArtMs()))).append(",");

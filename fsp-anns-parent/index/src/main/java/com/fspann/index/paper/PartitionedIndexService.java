@@ -190,6 +190,14 @@ public final class PartitionedIndexService implements IndexService {
     // =====================================================
     // LOOKUP (paper baseline) - unions across tables
     // =====================================================
+
+/**
+ *
+ * PASTE THIS to replace lines 220-310 in:
+ * query/src/main/java/com/fspann/query/service/PartitionedIndexService.java
+ *
+ * Same fixes as lookupCandidateIds but for PAPER_BASELINE mode
+ */
     @Override
     public List<EncryptedPoint> lookup(QueryToken token) {
         Objects.requireNonNull(token, "token cannot be null");
@@ -202,10 +210,13 @@ public final class PartitionedIndexService implements IndexService {
         }
 
         SystemConfig.PaperConfig pc = cfg.getPaper();
+        int K = token.getTopK();
 
-        int runtimeCap = cfg.getRuntime().getMaxCandidateFactor() * token.getTopK();
+        int runtimeCap = cfg.getRuntime().getMaxCandidateFactor() * K;
         int paperCap = cfg.getPaper().getSafetyMaxCandidates();
         final int HARD_CAP = (paperCap > 0) ? Math.min(runtimeCap, paperCap) : runtimeCap;
+
+        logger.info("lookup BASELINE START: K={}, HARD_CAP={}", K, HARD_CAP);
 
         Set<String> touchedIds = lastTouchedIds.get();
         touchedIds.clear();
@@ -229,14 +240,24 @@ public final class PartitionedIndexService implements IndexService {
         int maxRelax = cfg.getRuntime().getMaxRelaxationDepth();
         int L = Math.min(tables.length, codesByTable.length);
 
-        for (int relax = 0; relax <= Math.min(pc.lambda, maxRelax); relax++) {
+        // CRITICAL FIX: Track if we hit limit
+        boolean hitLimit = false;
+
+        for (int relax = 0; relax <= Math.min(pc.lambda, maxRelax) && !hitLimit; relax++) {
             int earlyStop = cfg.getRuntime().getEarlyStopCandidates();
             if (earlyStop > 0 && out.size() >= earlyStop) break;
 
             int relaxedBits = perDivBits - (relax * pc.m);
             if (relaxedBits <= 0) continue;
 
-            for (int t = 0; t < L; t++) {
+            for (int t = 0; t < L && !hitLimit; t++) {
+                // Check limit before each table
+                if (out.size() >= HARD_CAP) {
+                    logger.info("HARD_CAP reached before table {}: size={}", t, out.size());
+                    hitLimit = true;
+                    break;
+                }
+
                 DimensionState S = tables[t];
                 if (S == null || S.divisions.isEmpty()) continue;
 
@@ -245,7 +266,7 @@ public final class PartitionedIndexService implements IndexService {
 
                 int safeDivs = Math.min(S.divisions.size(), qcodes.length);
 
-                for (int d = 0; d < safeDivs; d++) {
+                for (int d = 0; d < safeDivs && !hitLimit; d++) {
                     DivisionState div = S.divisions.get(d);
                     BitSet qc = qcodes[d];
 
@@ -275,14 +296,26 @@ public final class PartitionedIndexService implements IndexService {
                             } catch (Exception ignore) {}
 
                             if (out.size() >= HARD_CAP) {
-                                lastTouched.set(touchedIds.size());
-                                return new ArrayList<>(out.values());
+                                logger.info("HARD_CAP reached: size={}, touched={}",
+                                        out.size(), touchedIds.size());
+                                hitLimit = true;
+                                break;
                             }
                         }
+
+                        if (hitLimit) break;
                     }
+
+                    if (hitLimit) break;
                 }
+
+                if (hitLimit) break;
             }
+
+            if (hitLimit) break;
         }
+
+        logger.info("lookup BASELINE END: returned={}, touched={}", out.size(), touchedIds.size());
 
         lastTouched.set(touchedIds.size());
         return new ArrayList<>(out.values());
@@ -291,6 +324,18 @@ public final class PartitionedIndexService implements IndexService {
     // =====================================================
     // REAL RUN path: candidate IDs only (unions across tables)
     // =====================================================
+
+    /**
+     *
+     * PASTE THIS to replace lines 333-450 in:
+     * query/src/main/java/com/fspann/query/service/PartitionedIndexService.java
+     *
+     * Key fixes:
+     * 1. Breaks ALL nested loops when MAX_IDS hit (not just innermost)
+     * 2. Checks limit BEFORE processing each table/division/subset
+     * 3. INFO-level logging (not debug) to see what's happening
+     * 4. Clear diagnostics showing where limit is hit
+     */
     public List<String> lookupCandidateIds(QueryToken token) {
         Objects.requireNonNull(token, "token");
         if (!frozen) throw new IllegalStateException("Index not finalized");
@@ -298,15 +343,21 @@ public final class PartitionedIndexService implements IndexService {
         SystemConfig.PaperConfig pc = cfg.getPaper();
         int K = token.getTopK();
 
+        // Calculate hard limit
         int runtimeCap = cfg.getRuntime().getMaxCandidateFactor() * K;
         int paperCap = cfg.getPaper().getSafetyMaxCandidates();
         final int MAX_IDS = (paperCap > 0) ? Math.min(runtimeCap, paperCap) : runtimeCap;
+
+        // DIAGNOSTIC: Always log (INFO level so we can see it!)
+        logger.info("lookupCandidateIds START: K={}, maxCandFactor={}, MAX_IDS={}, lambda={}",
+                K, cfg.getRuntime().getMaxCandidateFactor(), MAX_IDS, pc.lambda);
 
         int dim = token.getDimension();
         DimensionState[] tables = dims.get(dim);
         if (tables == null) {
             lastTouched.set(0);
             lastTouchedIds.get().clear();
+            logger.info("lookupCandidateIds: No tables for dim={}, returning empty", dim);
             return List.of();
         }
 
@@ -314,6 +365,7 @@ public final class PartitionedIndexService implements IndexService {
         if (codesByTable == null || codesByTable.length == 0) {
             lastTouched.set(0);
             lastTouchedIds.get().clear();
+            logger.info("lookupCandidateIds: No codes, returning empty");
             return List.of();
         }
 
@@ -325,11 +377,24 @@ public final class PartitionedIndexService implements IndexService {
         int maxRelax = cfg.getRuntime().getMaxRelaxationDepth();
         int L = Math.min(tables.length, codesByTable.length);
 
-        for (int relax = 0; relax <= Math.min(pc.lambda, maxRelax); relax++) {
+        // Track if we hit limit to break ALL loops
+        boolean hitLimit = false;
+
+        for (int relax = 0; relax <= Math.min(pc.lambda, maxRelax) && !hitLimit; relax++) {
             int bits = perDivBits - relax * pc.m;
             if (bits <= 0) break;
 
-            for (int t = 0; t < L; t++) {
+            logger.debug("Relaxation round {}: bits={}, currentCandidates={}", relax, bits, seen.size());
+
+            for (int t = 0; t < L && !hitLimit; t++) {
+                // CRITICAL: Check limit BEFORE processing each table
+                if (seen.size() >= MAX_IDS) {
+                    logger.info("Candidate limit reached BEFORE table {}/{}: seen={}, MAX_IDS={}",
+                            t, L, seen.size(), MAX_IDS);
+                    hitLimit = true;
+                    break;
+                }
+
                 DimensionState S = tables[t];
                 if (S == null || S.divisions.isEmpty()) continue;
 
@@ -338,7 +403,7 @@ public final class PartitionedIndexService implements IndexService {
 
                 int safeDivs = Math.min(S.divisions.size(), qcodes.length);
 
-                for (int d = 0; d < safeDivs; d++) {
+                for (int d = 0; d < safeDivs && !hitLimit; d++) {
                     DivisionState div = S.divisions.get(d);
                     BitSet qc = qcodes[d];
 
@@ -348,31 +413,58 @@ public final class PartitionedIndexService implements IndexService {
                         List<String> ids = div.tagToIds.get(sb.tag);
                         if (ids == null) continue;
 
+                        // Check limit BEFORE adding IDs from this subset
+                        if (seen.size() >= MAX_IDS) {
+                            logger.info("Hit MAX_IDS mid-division: table={}, div={}, subset={}",
+                                    t, d, sb.tag);
+                            hitLimit = true;
+                            break;
+                        }
+
                         for (String id : ids) {
+                            // Skip deleted
                             if (deletedCache.contains(id)) continue;
                             if (metadata.isDeleted(id)) {
                                 deletedCache.add(id);
                                 continue;
                             }
 
+                            // Add if new
                             if (seen.add(id)) {
                                 touched++;
+
+                                // CRITICAL: Check IMMEDIATELY after each add
                                 if (seen.size() >= MAX_IDS) {
-                                    lastTouched.set(touched);
-                                    lastTouchedIds.get().clear();
-                                    lastTouchedIds.get().addAll(seen);
-                                    return new ArrayList<>(seen);
+                                    logger.info("Reached MAX_IDS: seen={}, touched={}, returning",
+                                            seen.size(), touched);
+                                    hitLimit = true;
+                                    break;
                                 }
                             }
                         }
+
+                        if (hitLimit) break; // Exit subset loop
                     }
+
+                    if (hitLimit) break; // Exit division loop
                 }
+
+                if (hitLimit) break; // Exit table loop
             }
+
+            if (hitLimit) break; // Exit relaxation loop
+
+            logger.debug("After relaxation {}: candidates={}/{}", relax, seen.size(), MAX_IDS);
         }
+
+        // Final logging
+        logger.info("lookupCandidateIds END: K={}, candidates={}, touched={}, ratio={}",
+                K, seen.size(), touched, String.format("%.3f", (double)seen.size()/K));
 
         lastTouched.set(touched);
         lastTouchedIds.get().clear();
         lastTouchedIds.get().addAll(seen);
+
         return new ArrayList<>(seen);
     }
 

@@ -127,73 +127,54 @@ public final class QueryServiceImpl implements QueryService {
                 return Collections.emptyList();
             }
 
-            // ---------- APPLY STABILIZATION ----------
+            // ---------- APPLY STABILIZATION (FIXED) ----------
             List<String> limitedIds;
+            final int K = token.getTopK();
 
             SystemConfig.StabilizationConfig sc = cfg.getStabilization();
             if (sc != null && sc.isEnabled()) {
                 int raw = candidateIds.size();
-                final int K = token.getTopK();
 
-                // CRITICAL FIX: K-AWARE TARGET RATIO
-                // Target: Keep ~1.25x K candidates (ratio = 1.25)
-                // This ensures we have enough candidates while staying under 1.3
-                double targetRatio = 1.25;
-                int targetCandidates = (int) Math.ceil(K * targetRatio);
+                // Alpha-based target
+                int alphaTarget = (int) Math.ceil(sc.getAlpha() * raw);
 
-                // ADAPTIVE FLOOR: Use alpha*raw if it provides more than target
-                // This handles cases where raw candidates are small
-                int alphaFloor = (int) Math.ceil(sc.getAlpha() * raw);
-                int proposedSize = targetCandidates;
+                // K-aware ceiling from runtime config
+                int maxRefineFactor = cfg.getRuntime().getMaxRefinementFactor();
+                int kCeiling = maxRefineFactor * K;
 
-                // HARD BOUNDS:
-                // - Never exceed raw (can't have more than available)
-                // - Never go below K (must have at least topK candidates)
-                // - Respect minCandidates as absolute floor
-                int minFloor = Math.max(K, sc.getMinCandidates());
-                int finalSize = Math.max(minFloor, Math.min(raw, proposedSize));
+                // Floor: guarantee enough candidates
+                int floor = Math.max(K, sc.getMinCandidates());
 
-                limitedIds = candidateIds.subList(0, Math.min(finalSize, raw));
+                // FIXED: Actually use alpha target with proper bounds
+                int finalSize = Math.min(raw, Math.max(floor, Math.min(alphaTarget, kCeiling)));
+
+                limitedIds = candidateIds.subList(0, finalSize);
                 lastCandKept = limitedIds.size();
 
-                // Diagnostic logging
-                if (logger.isDebugEnabled()) {
-                    logger.debug("Stabilization: raw={}, K={}, target={}, alpha={}, final={}, ratio={:.3f}",
-                            raw, K, targetCandidates, alphaFloor, lastCandKept,
-                            (double)lastCandKept / K);
-                }
+                logger.info("Stabilization: raw={}, K={}, alpha={:.3f}, target={}, floor={}, ceil={}, final={}, ratio={:.2f}",
+                        raw, K, sc.getAlpha(), alphaTarget, floor, kCeiling, lastCandKept, (double)lastCandKept/K);
 
-                // Callback for monitoring
                 if (stabilizationCallback != null) {
                     stabilizationCallback.accept(raw, lastCandKept);
                 }
             } else {
-                // Stabilization disabled - use all candidates
                 limitedIds = candidateIds;
                 lastCandKept = candidateIds.size();
             }
 
             // -------- 3) PHASE-2: bounded refinement --------
-            final int K = token.getTopK();
-
-            // hard upper bound — YOUR CONTRIBUTION
             int maxRefineFactor = 1;
-
             SystemConfig.RuntimeConfig rt = cfg.getRuntime();
             if (rt != null && rt.getMaxRefinementFactor() > 0) {
                 maxRefineFactor = rt.getMaxRefinementFactor();
             }
 
-            final int MAX_REFINEMENT =
-                    Math.min(candidateIds.size(), maxRefineFactor * K);
-
-            int refineLimit = Math.max(K, MAX_REFINEMENT);
-            lastCandKept = limitedIds.size();
+            final int MAX_REFINEMENT = Math.min(limitedIds.size(), maxRefineFactor * K);
 
             final long decStart = System.nanoTime();
-            List<QueryScored> scored = new ArrayList<>(refineLimit);
+            List<QueryScored> scored = new ArrayList<>(MAX_REFINEMENT);
 
-            for (int i = 0; i < limitedIds.size(); i++) {
+            for (int i = 0; i < MAX_REFINEMENT && i < limitedIds.size(); i++) {
                 String id = limitedIds.get(i);
                 try {
                     EncryptedPoint ep = index.loadPointIfActive(id);
@@ -213,16 +194,8 @@ public final class QueryServiceImpl implements QueryService {
             lastCandDecrypted = scored.size();
             lastDecryptNs = System.nanoTime() - decStart;
 
-            if (logger.isDebugEnabled()) {
-                logger.debug(
-                        "k{}: candTotal={}, candKept={}, refined={}, returned={}",
-                        token.getTopK(),
-                        lastCandTotal,
-                        lastCandKept,
-                        lastCandDecrypted,
-                        lastReturned
-                );
-            }
+            logger.debug("Refinement: K={}, limited={}, maxRefine={}, decrypted={}",
+                    K, limitedIds.size(), MAX_REFINEMENT, lastCandDecrypted);
 
             if (scored.isEmpty()) return Collections.emptyList();
 

@@ -9,9 +9,10 @@ import java.util.*;
 public final class Aggregates {
 
     public double avgRatio;
+    public double avgPrecision;         // NEW: direct average precision
     public double avgServerMs;
     public double avgClientMs;
-    public double avgRunMs;          // TRUE ART
+    public double avgRunMs;             // TRUE ART
     public double avgDecryptMs;
 
     public double avgTokenBytes;
@@ -29,6 +30,7 @@ public final class Aggregates {
     public long spaceMetaBytes;
     public long spacePointsBytes;
 
+    /** Precision broken down by K value */
     public Map<Integer, Double> precisionAtK = new HashMap<>();
 
     public Aggregates() {}
@@ -48,6 +50,7 @@ public final class Aggregates {
         int runCount = 0;
 
         double sumRatio = 0;
+        double sumPrecision = 0;
         double sumServer = 0;
         double sumClient = 0;
         double sumRun = 0;
@@ -61,6 +64,7 @@ public final class Aggregates {
         double sumCandD = 0;
         double sumRet   = 0;
 
+        int precisionCount = 0;
         Map<Integer, List<Double>> pAtK = new HashMap<>();
 
         for (Profiler.QueryRow r : rows) {
@@ -84,10 +88,16 @@ public final class Aggregates {
             if (r.candDecrypted >= 0)  sumCandD += r.candDecrypted;
             if (r.candReturned >= 0)   sumRet   += r.candReturned;
 
-            // ---------------- Precision@K ----------------
-            if ("full".equalsIgnoreCase(r.mode)) {
-                pAtK.computeIfAbsent(r.tokenK, z -> new ArrayList<>())
-                        .add(nz(r.precision));
+            // ---------------- Precision@K (FIXED: always aggregate) ----------------
+            double prec = nz(r.precision);
+            if (prec >= 0 && prec <= 1.0) {
+                sumPrecision += prec;
+                precisionCount++;
+
+                // Also store by K for detailed breakdown
+                if (r.tokenK > 0) {
+                    pAtK.computeIfAbsent(r.tokenK, z -> new ArrayList<>()).add(prec);
+                }
             }
 
             // ---------------- Re-encryption (clamped) ----------------
@@ -100,9 +110,10 @@ public final class Aggregates {
 
         // ---------------- Averages ----------------
         a.avgRatio       = sumRatio / count;
+        a.avgPrecision   = precisionCount > 0 ? sumPrecision / precisionCount : 0.0;
         a.avgServerMs    = sumServer / count;
         a.avgClientMs    = sumClient / count;
-        a.avgRunMs = runCount > 0 ? sumRun / runCount : 0.0;
+        a.avgRunMs       = runCount > 0 ? sumRun / runCount : 0.0;
         a.avgDecryptMs   = sumDecrypt / count;
 
         a.avgTokenBytes  = sumTokenBytes / count;
@@ -113,7 +124,7 @@ public final class Aggregates {
         a.avgCandDecrypted  = sumCandD / count;
         a.avgReturned       = sumRet   / count;
 
-        // ---------------- Avg Precision@K ----------------
+        // ---------------- Avg Precision@K by K value ----------------
         for (var e : pAtK.entrySet()) {
             a.precisionAtK.put(
                     e.getKey(),
