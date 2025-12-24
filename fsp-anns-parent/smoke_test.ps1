@@ -1,8 +1,11 @@
 # ============================================
 # FSP-ANN SMOKE TEST - Windows PowerShell
 # ============================================
-# Tests ONE profile on ONE dataset with LIMITED queries (200)
-# Use this before running full evaluation sweep
+# FIXED VERSION:
+# - Uses query-only mode (no re-indexing)
+# - Reads "precision" column (not "recall")
+# - Checks for existing index before running
+# - FIXED: Counts all files recursively (not just .enc)
 
 param(
     [string]$Dataset = "SIFT1M",
@@ -23,14 +26,15 @@ $JarPath = "F:\fspann-query-system\fsp-anns-parent\api\target\api-0.0.1-SNAPSHOT
 $OutRoot = "G:\SMOKE_TEST"
 $Batch = 100000
 
-# JVM Arguments
+# JVM Arguments with query-only mode
 $JvmArgs = @(
     "-XX:+UseG1GC",
     "-XX:MaxGCPauseMillis=200",
     "-XX:+AlwaysPreTouch",
     "-Xmx8g",
     "-Dfile.encoding=UTF-8",
-    "-Dreenc.mode=end"
+    "-Dreenc.mode=end",
+    "-Dquery.only=true"  # CRITICAL FIX: Enable query-only mode
 )
 
 # ================= DATASET CONFIG =================
@@ -91,13 +95,71 @@ Write-Host "Queries:  $QueryLimit" -ForegroundColor Green
 Write-Host "Dim:      $($ds.Dim)" -ForegroundColor Green
 Write-Host ""
 
-# ================= SETUP OUTPUT DIR =================
+# ================= CHECK FOR EXISTING INDEX =================
 
 $runDir = Join-Path $OutRoot "$($Dataset)_$($Profile)"
+$pointsDir = Join-Path $runDir "points"
+
+if (-not (Test-Path $pointsDir)) {
+    Write-Host "ERROR: No existing index found at: $pointsDir" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Query-only mode requires a pre-built index." -ForegroundColor Yellow
+    Write-Host "Build the index first using FULL mode:" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  .\smoke_test_build_index.ps1 -Dataset $Dataset -Profile $Profile" -ForegroundColor Cyan
+    Write-Host ""
+    exit 1
+}
+
+# Detect latest version
+$versions = Get-ChildItem $pointsDir -Directory | Where-Object { $_.Name -match "^v\d+$" } |
+        ForEach-Object { [int]$_.Name.Substring(1) } | Sort-Object -Descending
+
+if ($versions.Count -eq 0) {
+    Write-Host "ERROR: No version directories found in: $pointsDir" -ForegroundColor Red
+    Write-Host "Expected directories like: v1, v2, etc." -ForegroundColor Yellow
+    exit 1
+}
+
+$latestVer = $versions[0]
+$latestVerDir = Join-Path $pointsDir "v$latestVer"
+
+# CRITICAL FIX: Count all files recursively, regardless of extension
+$encFiles = @(Get-ChildItem $latestVerDir -File -Recurse -ErrorAction SilentlyContinue)
+
+Write-Host "Using existing index: $pointsDir" -ForegroundColor Green
+Write-Host "  Latest version: v$latestVer" -ForegroundColor Gray
+Write-Host "  Files found: $($encFiles.Count)" -ForegroundColor Gray
+
+# Show file extension distribution
+if ($encFiles.Count -gt 0) {
+    $extGroups = $encFiles | Group-Object Extension | Sort-Object Count -Descending
+    if ($extGroups.Count -le 3) {
+        foreach ($grp in $extGroups) {
+            $extName = if ($grp.Name -eq "") { "(no extension)" } else { $grp.Name }
+            Write-Host "    $extName : $($grp.Count) files" -ForegroundColor Gray
+        }
+    }
+}
+Write-Host ""
+
+# Enhanced error reporting showing actual directory contents
+if ($encFiles.Count -eq 0) {
+    Write-Host "WARNING: No files found in v$latestVer" -ForegroundColor Yellow
+    Write-Host "Contents of $latestVerDir :" -ForegroundColor Yellow
+    Get-ChildItem $latestVerDir -ErrorAction SilentlyContinue | Select-Object -First 10 | ForEach-Object {
+        Write-Host "  $($_.Name) ($($_.GetType().Name))" -ForegroundColor Gray
+    }
+    Write-Host ""
+}
+
+# ================= SETUP OUTPUT DIR =================
+
 $resultsDir = Join-Path $runDir "results"
 
-if (Test-Path $runDir) {
-    Remove-Item -Path $runDir -Recurse -Force
+# Clear previous results but keep index
+if (Test-Path $resultsDir) {
+    Remove-Item -Path $resultsDir -Recurse -Force
 }
 
 New-Item -ItemType Directory -Path $resultsDir -Force | Out-Null
@@ -112,11 +174,9 @@ Write-Host "Building configuration..." -ForegroundColor Cyan
 $configJson = Get-Content $ds.Config -Raw | ConvertFrom-Json
 
 if ($Profile -eq "BASE") {
-    # Use base config without profile override
     $finalConfig = $configJson
     $finalConfig.PSObject.Properties.Remove('profiles')
 } else {
-    # Find and apply specific profile
     $profileObj = $configJson.profiles | Where-Object { $_.name -eq $Profile }
 
     if (-not $profileObj) {
@@ -124,7 +184,6 @@ if ($Profile -eq "BASE") {
         exit 1
     }
 
-    # Deep merge function
     function Merge-Objects($base, $override) {
         $result = $base.PSObject.Copy()
         foreach ($prop in $override.PSObject.Properties) {
@@ -139,11 +198,9 @@ if ($Profile -eq "BASE") {
         return $result
     }
 
-    # Remove profiles from base
     $baseConfig = $configJson.PSObject.Copy()
     $baseConfig.PSObject.Properties.Remove('profiles')
 
-    # Merge with profile overrides
     $finalConfig = Merge-Objects $baseConfig $profileObj.overrides
 }
 
@@ -158,7 +215,6 @@ if (-not $finalConfig.ratio) {
 }
 $finalConfig.ratio | Add-Member -MemberType NoteProperty -Name source -Value "gt" -Force
 $finalConfig.ratio | Add-Member -MemberType NoteProperty -Name gtPath -Value $ds.GT -Force
-$finalConfig.ratio | Add-Member -MemberType NoteProperty -Name autoComputeGT -Value $false -Force
 
 # Save config
 $configPath = Join-Path $runDir "config.json"
@@ -168,7 +224,6 @@ $finalConfig | ConvertTo-Json -Depth 10 | Set-Content $configPath
 
 Write-Host "Configuration:" -ForegroundColor Cyan
 
-# Helper to get nested property
 function Get-ConfigValue($obj, $path) {
     $parts = $path -split '\.'
     $current = $obj
@@ -190,22 +245,11 @@ $configToShow = @{
     "minCand" = Get-ConfigValue $finalConfig "base.stabilization.minCandidates"
 }
 
-# Fallback to direct properties if base.* not found
-if ($configToShow.m -eq "N/A") {
-    $configToShow.m = Get-ConfigValue $finalConfig "paper.m"
-}
-if ($configToShow.lambda -eq "N/A") {
-    $configToShow.lambda = Get-ConfigValue $finalConfig "paper.lambda"
-}
-if ($configToShow.divisions -eq "N/A") {
-    $configToShow.divisions = Get-ConfigValue $finalConfig "paper.divisions"
-}
-if ($configToShow.alpha -eq "N/A") {
-    $configToShow.alpha = Get-ConfigValue $finalConfig "stabilization.alpha"
-}
-if ($configToShow.minCand -eq "N/A") {
-    $configToShow.minCand = Get-ConfigValue $finalConfig "stabilization.minCandidates"
-}
+if ($configToShow.m -eq "N/A") { $configToShow.m = Get-ConfigValue $finalConfig "paper.m" }
+if ($configToShow.lambda -eq "N/A") { $configToShow.lambda = Get-ConfigValue $finalConfig "paper.lambda" }
+if ($configToShow.divisions -eq "N/A") { $configToShow.divisions = Get-ConfigValue $finalConfig "paper.divisions" }
+if ($configToShow.alpha -eq "N/A") { $configToShow.alpha = Get-ConfigValue $finalConfig "stabilization.alpha" }
+if ($configToShow.minCand -eq "N/A") { $configToShow.minCand = Get-ConfigValue $finalConfig "stabilization.minCandidates" }
 
 foreach ($key in $configToShow.Keys) {
     Write-Host "  ${key}: $($configToShow[$key])" -ForegroundColor Gray
@@ -216,29 +260,29 @@ Write-Host ""
 
 $logPath = Join-Path $runDir "run.log"
 
-Write-Host "Starting smoke test..." -ForegroundColor Cyan
+Write-Host "Starting smoke test (query-only mode)..." -ForegroundColor Cyan
 Write-Host "Log: $logPath" -ForegroundColor Gray
 Write-Host ""
 
 $startTime = Get-Date
 
-# Build Java command
+# Build Java command (query-only mode uses POINTS_ONLY)
 $javaCmd = "java"
-# Build command with proper quoting
 $javaArgs = $JvmArgs + @(
     "-Dcli.dataset=$Dataset",
     "-Dcli.profile=$Profile",
     "-Dquery.limit=$QueryLimit",
+    "-Dbase.path=`"$($ds.Base)`"",  # CRITICAL: Set base.path for ratio computation
     "-jar",
-    "`"$JarPath`"",                                    # Quoted
-    "`"$configPath`"",                                 # Quoted
-    "`"$($ds.Base)`"",                                 # Quoted - FIX!
-    "`"$($ds.Query)`"",                                # Quoted - FIX!
-    "`"$(Join-Path $runDir 'keys.blob')`"",           # Quoted
-    $ds.Dim.ToString(),                                # No quotes (number)
-    "`"$runDir`"",                                     # Quoted
-    "`"$($ds.GT)`"",                                   # Quoted - FIX!
-    $Batch.ToString()                                  # No quotes (number)
+    "`"$JarPath`"",
+    "`"$configPath`"",
+    "POINTS_ONLY",                   # CRITICAL FIX: Skip indexing
+    "`"$($ds.Query)`"",
+    "`"$(Join-Path $runDir 'keys.blob')`"",
+    $ds.Dim.ToString(),
+    "`"$runDir`"",
+    "`"$($ds.GT)`"",
+    $Batch.ToString()
 )
 
 # Run Java process
@@ -286,7 +330,7 @@ $data = Import-Csv $profilerCsv
 
 $queries = $data.Count
 $ratios = $data | ForEach-Object { [double]$_.ratio }
-$recalls = $data | ForEach-Object { [double]$_.recall }
+$precisions = $data | ForEach-Object { [double]$_.precision }  # CRITICAL FIX: Read "precision" not "recall"
 $serverMs = $data | ForEach-Object { [double]$_.serverMs }
 $clientMs = $data | ForEach-Object { [double]$_.clientMs }
 
@@ -303,7 +347,7 @@ function Get-Stats($values) {
 }
 
 $ratioStats = Get-Stats $ratios
-$recallStats = Get-Stats $recalls
+$precisionStats = Get-Stats $precisions
 
 Write-Host "Queries:      $queries" -ForegroundColor White
 Write-Host ""
@@ -314,9 +358,9 @@ Write-Host "  Min:        $("{0:F3}" -f $ratioStats.Min)" -ForegroundColor White
 Write-Host "  Max:        $("{0:F3}" -f $ratioStats.Max)" -ForegroundColor White
 Write-Host "  Std:        $("{0:F3}" -f $ratioStats.Std)" -ForegroundColor White
 Write-Host ""
-Write-Host "Recall:" -ForegroundColor Yellow
-Write-Host "  Mean:       $("{0:F3}" -f $recallStats.Mean)" -ForegroundColor White
-Write-Host "  Min:        $("{0:F3}" -f $recallStats.Min)" -ForegroundColor White
+Write-Host "Precision:" -ForegroundColor Yellow  # CRITICAL FIX: Changed label
+Write-Host "  Mean:       $("{0:F3}" -f $precisionStats.Mean)" -ForegroundColor White
+Write-Host "  Min:        $("{0:F3}" -f $precisionStats.Min)" -ForegroundColor White
 Write-Host ""
 Write-Host "Latency (ms):" -ForegroundColor Yellow
 Write-Host "  Server:     $("{0:F1}" -f ($serverMs | Measure-Object -Average).Average)" -ForegroundColor White
@@ -329,9 +373,8 @@ Write-Host ""
 Write-Host "Status:" -ForegroundColor Cyan
 
 $passRatio = $ratioStats.Mean -le 1.30
-$passRecall = $recallStats.Mean -ge 0.85
+$passPrecision = $precisionStats.Mean -ge 0.85
 
-# FIXED: Avoid using < in strings to prevent PowerShell parsing errors
 $ratioMsg = "Ratio {0:F3}" -f $ratioStats.Mean
 if ($passRatio) {
     Write-Host "  [PASS] $ratioMsg is at most 1.30" -ForegroundColor Green
@@ -339,11 +382,11 @@ if ($passRatio) {
     Write-Host "  [FAIL] $ratioMsg exceeds 1.30" -ForegroundColor Red
 }
 
-$recallMsg = "Recall {0:F3}" -f $recallStats.Mean
-if ($passRecall) {
-    Write-Host "  [PASS] $recallMsg is at least 0.85" -ForegroundColor Green
+$precisionMsg = "Precision {0:F3}" -f $precisionStats.Mean
+if ($passPrecision) {
+    Write-Host "  [PASS] $precisionMsg is at least 0.85" -ForegroundColor Green
 } else {
-    Write-Host "  [FAIL] $recallMsg is below 0.85" -ForegroundColor Red
+    Write-Host "  [FAIL] $precisionMsg is below 0.85" -ForegroundColor Red
 }
 
 Write-Host ""
@@ -375,7 +418,7 @@ Write-Host "  Log:       $logPath" -ForegroundColor Gray
 Write-Host ""
 
 Write-Host "============================================" -ForegroundColor Cyan
-if ($passRatio -and $passRecall) {
+if ($passRatio -and $passPrecision) {
     Write-Host "Smoke test PASSED!" -ForegroundColor Green
     Write-Host "Ready for full sweep." -ForegroundColor Green
 } else {
@@ -384,4 +427,4 @@ if ($passRatio -and $passRecall) {
 }
 Write-Host "============================================" -ForegroundColor Cyan
 
-exit $(if ($passRatio -and $passRecall) { 0 } else { 1 })
+exit $(if ($passRatio -and $passPrecision) { 0 } else { 1 })
