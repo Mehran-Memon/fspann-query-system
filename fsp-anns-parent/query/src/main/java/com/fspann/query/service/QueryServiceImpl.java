@@ -144,7 +144,7 @@ public final class QueryServiceImpl implements QueryService {
                 // ADAPTIVE FLOOR: Use alpha*raw if it provides more than target
                 // This handles cases where raw candidates are small
                 int alphaFloor = (int) Math.ceil(sc.getAlpha() * raw);
-                int proposedSize = Math.max(targetCandidates, alphaFloor);
+                int proposedSize = targetCandidates;
 
                 // HARD BOUNDS:
                 // - Never exceed raw (can't have more than available)
