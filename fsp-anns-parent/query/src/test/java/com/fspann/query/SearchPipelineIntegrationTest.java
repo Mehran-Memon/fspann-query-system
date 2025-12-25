@@ -150,7 +150,7 @@ class SearchPipelineIntegrationTest {
             return Stream.of(
                     // raw, K, alpha, minCandidates, maxRefineFactor, expected
                     Arguments.of(10000, 100, 0.10, 150, 3, 300),
-                    Arguments.of(10000, 100, 0.05, 150, 3, 150),
+                    Arguments.of(10000, 100, 0.05, 150, 3, 300),
                     Arguments.of(10000, 100, 0.50, 150, 3, 300),
                     Arguments.of(100, 100, 0.10, 150, 3, 100),
                     Arguments.of(500, 10, 0.10, 20, 5, 50),

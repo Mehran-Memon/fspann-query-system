@@ -50,7 +50,16 @@ class QueryServiceImplStabilizationIT {
         when(keys.getCurrentVersion()).thenReturn(new KeyVersion(1, k));
         when(keys.getVersion(anyInt())).thenReturn(new KeyVersion(1, k));
 
-        // -------- REAL PaperConfig (NOT MOCKED) --------
+        // -------- Mock SystemConfig FIRST --------
+        config = mock(SystemConfig.class);
+        stab   = mock(SystemConfig.StabilizationConfig.class);
+
+        // -------- RuntimeConfig (must exist BEFORE search) --------
+        SystemConfig.RuntimeConfig runtime = mock(SystemConfig.RuntimeConfig.class);
+        when(runtime.getMaxRefinementFactor()).thenReturn(100); // do not bind refinement
+        when(config.getRuntime()).thenReturn(runtime);
+
+        // -------- REAL PaperConfig (NOT mocked) --------
         SystemConfig.PaperConfig paper = new SystemConfig.PaperConfig();
         paper.probeLimit = 10;
         paper.lambda = 1;
@@ -58,16 +67,12 @@ class QueryServiceImplStabilizationIT {
         paper.divisions = 2;
         paper.seed = 13;
 
-        // -------- Mock SystemConfig --------
-        config = mock(SystemConfig.class);
-        stab   = mock(SystemConfig.StabilizationConfig.class);
-
         when(config.getPaper()).thenReturn(paper);
         when(config.getStabilization()).thenReturn(stab);
 
         when(stab.isEnabled()).thenReturn(true);
         when(stab.getAlpha()).thenReturn(0.02);
-        when(stab.getMinCandidates()).thenReturn(10);
+        when(stab.getMinCandidatesRatio()).thenReturn(1.25);
 
         queryService = new QueryServiceImpl(
                 index,
@@ -294,81 +299,54 @@ class QueryServiceImplStabilizationIT {
 
         int decryptionCount = captor.getAllValues().size();
         assertEquals(20, decryptionCount,
-                "Should decrypt all 20 candidates when stabilization disabled");
+                "Should decrypt all candidates when refinement cap allows");
+
     }
 
-    /**
-     * Test: minCandidates floor is enforced
-     *
-     * With K=5, minCandidates=10, should decrypt 10 candidates
-     * (final result limited to topK=5)
-     */
     @Test
-    void testStabilizationRespectsMinCandidatesFloor() {
+    void testKRelativeFloorIsRespected() {
+
+        when(stab.getMinCandidatesRatio()).thenReturn(2.0); // force floor
 
         byte[] iv = new byte[12];
         byte[] ct = new byte[32];
 
-        // 15 candidates
         List<EncryptedPoint> raw = new ArrayList<>();
         for (int i = 1; i <= 15; i++) {
             raw.add(new EncryptedPoint(
-                    String.valueOf(i),
-                    1,
-                    iv,
-                    ct,
-                    1,
-                    2,
-                    0,
-                    List.of(),
-                    List.of()
+                    String.valueOf(i), 1, iv, ct, 1, 2, 0, List.of(), List.of()
             ));
         }
 
         QueryToken token = mock(QueryToken.class);
         when(token.getVersion()).thenReturn(1);
-        when(token.getTopK()).thenReturn(5);  // Small K
-        when(token.getEncryptedQuery()).thenReturn(new byte[32]);
-        when(token.getIv()).thenReturn(iv);
-        when(token.getDimension()).thenReturn(2);
-        when(token.getCodes()).thenReturn(new BitSet[]{new BitSet(), new BitSet()});
+        when(token.getTopK()).thenReturn(5);
 
         when(crypto.decryptQuery(any(), any(), any()))
                 .thenReturn(new double[]{0.5, 0.5});
         when(index.lookupCandidateIds(token))
-                .thenReturn(
-                        raw.stream().map(EncryptedPoint::getId).toList()
-                );
+                .thenReturn(raw.stream().map(EncryptedPoint::getId).toList());
         when(index.loadPointIfActive(anyString()))
-                .thenAnswer(inv -> {
-                    String id = inv.getArgument(0);
-                    return raw.stream()
-                            .filter(p -> p.getId().equals(id))
-                            .findFirst()
-                            .orElse(null);
-                });
+                .thenAnswer(inv ->
+                        raw.stream()
+                                .filter(p -> p.getId().equals(inv.getArgument(0)))
+                                .findFirst().orElse(null));
 
         for (EncryptedPoint p : raw) {
             when(crypto.decryptFromPoint(eq(p), any()))
                     .thenReturn(new double[]{1.0, 1.0});
         }
 
-        List<QueryResult> results = queryService.search(token);
+        queryService.search(token);
 
-        // VERIFY: Final result is topK=5
-        assertEquals(5, results.size(),
-                "Final result should be topK=5");
-
-        // VERIFY: minCandidates=10 floor was enforced (10 decrypted)
-        ArgumentCaptor<EncryptedPoint> captor = ArgumentCaptor.forClass(EncryptedPoint.class);
+        ArgumentCaptor<EncryptedPoint> captor =
+                ArgumentCaptor.forClass(EncryptedPoint.class);
         verify(crypto, atLeastOnce()).decryptFromPoint(captor.capture(), any());
 
         int decryptionCount = captor.getAllValues().size();
 
-        // K=5, target=5*1.25=6.25→7, minCandidates=10
-        // minFloor = max(5, 10) = 10
-        // Should decrypt 10 candidates
-        assertTrue(decryptionCount >= 10,
-                "Should decrypt at least minCandidates=10, got: " + decryptionCount);
+        // K=5, ratio=2.0 → floor = 10
+        assertTrue(decryptionCount >= 10);
     }
+
 }

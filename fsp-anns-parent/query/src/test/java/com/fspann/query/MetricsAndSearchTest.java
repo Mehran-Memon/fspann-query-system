@@ -690,6 +690,7 @@ class MetricsAndSearchTest {
         void testTop1() {
             MockBaseReader reader = new MockBaseReader(100, 128);
             double[] query = new double[128];
+            query[0] = 1.0;   // break zero-distance degeneracy
 
             int[] gtIds = {0};  // True NN is ID 0
 

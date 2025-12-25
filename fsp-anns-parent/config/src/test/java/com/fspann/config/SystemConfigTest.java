@@ -41,14 +41,6 @@ public class SystemConfigTest {
     }
 
     @Test
-    @DisplayName("Test getNumTables returns valid value")
-    public void testGetNumTables() {
-        int tables = config.getNumTables();
-        assertTrue(tables >= 1);
-        assertTrue(tables <= 1024);
-    }
-
-    @Test
     @DisplayName("Test getOpsThreshold returns valid value")
     public void testGetOpsThreshold() {
         long ops = config.getOpsThreshold();
@@ -154,15 +146,6 @@ public class SystemConfigTest {
     // ============ LSHCONFIG TESTS ============
 
     @Test
-    @DisplayName("Test LshConfig getNumTables")
-    public void testLshGetNumTables() {
-        SystemConfig.LshConfig lsh = config.getLsh();
-        int numTables = lsh.getNumTables();
-        assertTrue(numTables >= 1);
-        assertTrue(numTables <= 1024);
-    }
-
-    @Test
     @DisplayName("Test LshConfig getNumFunctions")
     public void testLshGetNumFunctions() {
         SystemConfig.LshConfig lsh = config.getLsh();
@@ -243,11 +226,13 @@ public class SystemConfigTest {
     }
 
     @Test
-    @DisplayName("Test StabilizationConfig getMinCandidates")
-    public void testStabilizationGetMinCandidates() {
+    @DisplayName("Test StabilizationConfig getMinCandidatesRatio")
+    public void testStabilizationGetMinCandidatesRatio() {
         SystemConfig.StabilizationConfig stab = config.getStabilization();
-        int minCand = stab.getMinCandidates();
-        assertTrue(minCand >= 1);
+        double ratio = stab.getMinCandidatesRatio();
+
+        assertTrue(ratio >= 1.0);
+        assertTrue(ratio <= 2.0);
     }
 
     // ============ REENCRYPTIONCONFIG TESTS ============
@@ -330,12 +315,17 @@ public class SystemConfigTest {
     @DisplayName("Test RatioConfig source field")
     public void testRatioConfigSource() {
         SystemConfig.RatioConfig ratio = config.getRatio();
-        // Access field directly instead of through getter
         String source = ratio.source;
+
         assertNotNull(source);
-        // Source should be one of: auto, gt, base
-        assertTrue(source.equals("auto") || source.equals("gt") || source.equals("base") || !source.isEmpty());
+        assertTrue(
+                source.equals("auto") ||
+                        source.equals("gt")   ||
+                        source.equals("base"),
+                "Invalid ratio source: " + source
+        );
     }
+
 
     // ============ CACHE TESTS ============
 
