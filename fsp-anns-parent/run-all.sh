@@ -8,6 +8,7 @@ set -Eeuo pipefail
 JarPath="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/api/target/api-0.0.1-SNAPSHOT-shaded.jar"
 OutRoot="/mnt/data/mehran"
 Batch=100000
+QUERY_LIMIT=200
 
 JvmArgs=(
   "-XX:+UseG1GC"
@@ -58,23 +59,23 @@ declare -A DATASET_GT=(
   ["glove-100"]="/mnt/data/mehran/Datasets/glove-100/glove-100_groundtruth.ivecs"
 )
 
-# ================= SINGLE-RUN DEBUG SWITCHES =================
+# ================= DEBUG SWITCHES =================
 ONLY_DATASET="SIFT1M"
 ONLY_PROFILE="M24_lambda3"
 
 # ================= METRICS =================
 
 extract_metrics() {
-  local results_dir="$1"
-  local art="NA"
-  local ratio="NA"
+  local csv="$1/profiler_metrics.csv"
+  [[ -f "$csv" ]] || { echo "NA,NA"; return; }
 
-  if [[ -f "$results_dir/metrics_summary.txt" ]]; then
-    art=$(grep -oP 'ART\(ms\)=\K[0-9.]+' "$results_dir/metrics_summary.txt" || echo "NA")
-    ratio=$(grep -oP 'AvgRatio=\K[0-9.]+' "$results_dir/metrics_summary.txt" || echo "NA")
-  fi
-
-  echo "$art,$ratio"
+  python3 <<EOF
+import pandas as pd
+df = pd.read_csv("$csv")
+art = (df['serverMs'] + df['clientMs']).mean()
+ratio = df['ratio'].mean()
+print(f"{art:.2f},{ratio:.4f}")
+EOF
 }
 
 # ================= GLOBAL SUMMARY =================
@@ -85,9 +86,7 @@ echo "dataset,profile,ART_ms,AvgRatio" > "$GLOBAL_SUMMARY"
 # ================= MAIN LOOP =================
 
 DATASETS=(SIFT1M glove-100 RedCaps)
-if [[ -n "$ONLY_DATASET" ]]; then
-  DATASETS=("$ONLY_DATASET")
-fi
+[[ -n "$ONLY_DATASET" ]] && DATASETS=("$ONLY_DATASET")
 
 for ds in "${DATASETS[@]}"; do
   cfg="${DATASET_CONFIG[$ds]}"
@@ -96,98 +95,80 @@ for ds in "${DATASETS[@]}"; do
   query="${DATASET_QUERY[$ds]}"
   gt="${DATASET_GT[$ds]}"
 
-  ensure_file "$cfg"
-  ensure_file "$base"
-  ensure_file "$query"
-  ensure_file "$gt"
-
-  ds_root="$OutRoot/$ds"
-  mkdir -p "$ds_root"
-
-  DATASET_SUMMARY="$ds_root/dataset_summary.csv"
-  echo "profile,ART_ms,AvgRatio" > "$DATASET_SUMMARY"
+  ensure_file "$cfg"; ensure_file "$base"; ensure_file "$query"; ensure_file "$gt"
 
   CFG_JSON="$(cat "$cfg")"
   BASE_JSON="$(jq -c 'del(.profiles)' <<<"$CFG_JSON")"
-  PROFILE_COUNT="$(jq '.profiles | length' <<<"$CFG_JSON")"
+
+  # Validate ONLY_PROFILE once
+  if [[ -n "$ONLY_PROFILE" ]]; then
+    jq -e ".profiles[] | select(.name == \"$ONLY_PROFILE\")" <<<"$CFG_JSON" \
+      >/dev/null || die "Profile $ONLY_PROFILE not found in $ds"
+  fi
+
+  ds_root="$OutRoot/$ds"
+  mkdir -p "$ds_root"
+  echo "profile,ART_ms,AvgRatio" > "$ds_root/dataset_summary.csv"
 
   ran_any_profile=false
+  PROFILE_COUNT="$(jq '.profiles | length' <<<"$CFG_JSON")"
 
   for ((i=0; i<PROFILE_COUNT; i++)); do
     profile="$(jq -c ".profiles[$i]" <<<"$CFG_JSON")"
     name="$(jq -r '.name' <<<"$profile")"
 
-    if [[ -n "$ONLY_PROFILE" && "$name" != "$ONLY_PROFILE" ]]; then
-      continue
-    fi
-
+    [[ -n "$ONLY_PROFILE" && "$name" != "$ONLY_PROFILE" ]] && continue
     ran_any_profile=true
-    overrides="$(jq -c '.overrides // {}' <<<"$profile")"
 
+    overrides="$(jq -c '.overrides // {}' <<<"$profile")"
     run_dir="$ds_root/$name"
     mkdir -p "$run_dir/results"
     rm -f "$run_dir/keys.blob"
+    rm -rf "$run_dir/metadata"
 
     final_cfg="$(jq -n '
       def deepmerge(a; b):
         reduce (b | keys[]) as $k
           (a;
-           if (a[$k] | type) == "object" and (b[$k] | type) == "object"
-           then .[$k] = deepmerge(a[$k]; b[$k])
-           else .[$k] = b[$k]
-           end);
-
-      deepmerge($base; $ovr)
-      | .output.resultsDir = $resdir
-      | .ratio.source = "gt"
-      | .ratio.gtPath = $gtpath
-      | .ratio.autoComputeGT = false
-    ' \
-      --argjson base "$BASE_JSON" \
-      --argjson ovr  "$overrides" \
-      --arg resdir "$run_dir/results" \
-      --arg gtpath "$gt"
-    )"
+           if (a[$k]|type=="object" and b[$k]|type=="object"
+           then .[$k]=deepmerge(a[$k];b[$k])
+           else .[$k]=b[$k] end);
+      deepmerge($base;$ovr)
+      | .output.resultsDir=$resdir
+      | .ratio.source="gt"
+      | .ratio.gtPath=$gtpath
+      | .ratio.autoComputeGT=false
+    ' --argjson base "$BASE_JSON" --argjson ovr "$overrides" \
+       --arg resdir "$run_dir/results" --arg gtpath "$gt")"
 
     echo "$final_cfg" > "$run_dir/config.json"
-
-    # Guard: ensure overrides applied
-    expected_div="$(jq -r '.paper.divisions' "$run_dir/config.json")"
-    [[ "$expected_div" != "8" ]] \
-      || die "paper.divisions still default(8) for $ds / $name"
 
     log="$run_dir/run.log"
 
     java "${JvmArgs[@]}" \
       -Dcli.dataset="$ds" \
       -Dcli.profile="$name" \
+      -Dquery.limit="$QUERY_LIMIT" \
       -jar "$JarPath" \
       "$run_dir/config.json" \
-      "$base" \
-      "$query" \
-      "$run_dir/keys.blob" \
-      "$dim" \
-      "$run_dir" \
-      "$gt" \
-      "$Batch" \
-      >"$log" 2>&1 \
-      || die "FAILED: $ds / $name"
+      "$base" "$query" "$run_dir/keys.blob" \
+      "$dim" "$run_dir" "$gt" "$Batch" \
+      >"$log" 2>&1 || {
+        echo "FAILED: $ds / $name"
+        tail -50 "$log"
+        exit 1
+      }
 
     metrics=$(extract_metrics "$run_dir/results")
     IFS=',' read -r art ratio <<<"$metrics"
 
-    echo "$name,$art,$ratio" >> "$DATASET_SUMMARY"
+    echo "$name,$art,$ratio" >> "$ds_root/dataset_summary.csv"
     echo "$ds,$name,$art,$ratio" >> "$GLOBAL_SUMMARY"
 
-    printf "%-10s | ART=%8s ms | Ratio=%s\n" "$name" "$art" "$ratio"
+    printf "%-12s | ART=%8s ms | Ratio=%s\n" "$name" "$art" "$ratio"
 
-    if [[ -n "$ONLY_PROFILE" ]]; then
-      break
-    fi
+    [[ -n "$ONLY_PROFILE" ]] && break
   done
 
-  [[ "$ran_any_profile" == true ]] \
-    || die "No profile matched ONLY_PROFILE=$ONLY_PROFILE for dataset $ds"
-
-  [[ -n "$ONLY_PROFILE" ]] && break
+  [[ "$ran_any_profile" == true ]] || die "No profile ran for $ds"
 done

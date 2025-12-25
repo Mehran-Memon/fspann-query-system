@@ -1,26 +1,37 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# =========================
-# FSP-ANN SMOKE TEST RUNNER
-# =========================
-# Tests ONE profile on ONE dataset with LIMITED queries (200)
-# Use this before running full evaluation sweep
+# ============================================
+# FSP-ANN FULL SMOKE TEST (Linux)
+# ============================================
+# End-to-end validation:
+# 1. Verify config sanity (guards against known bad values)
+# 2. Build merged config (base + profile)
+# 3. Clean workspace
+# 4. Run full system (index + query)
+# 5. Analyze profiler CSV
+#
+# USE THIS BEFORE ANY FULL SWEEP OR PAPER RESULTS
 
 echo "============================================"
-echo "  FSP-ANN Smoke Test"
+echo "  FSP-ANN Smoke Test (Linux)"
 echo "============================================"
+echo ""
 
-# ================= CONFIGURATION =================
+# ================= USER PARAMETERS =================
 
-JarPath="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/api/target/api-0.0.1-SNAPSHOT-shaded.jar"
+TEST_DATASET="SIFT1M"
+TEST_PROFILE="M24"          # BASE or profile name
+QUERY_LIMIT=200             # Smoke test queries only
+
+# ================= PATHS =================
+
+ROOT="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent"
+JarPath="$ROOT/api/target/api-0.0.1-SNAPSHOT-shaded.jar"
 OutRoot="/mnt/data/mehran/SMOKE_TEST"
 Batch=100000
 
-# Test parameters
-TEST_DATASET="SIFT1M"
-TEST_PROFILE="BASE"  # Use "BASE" for no profile override, or "M24_lambda3" etc.
-QUERY_LIMIT=200      # Number of queries to test
+# ================= JVM SETTINGS =================
 
 JvmArgs=(
   "-XX:+UseG1GC"
@@ -31,6 +42,8 @@ JvmArgs=(
   "-Dreenc.mode=end"
 )
 
+# ================= HELPERS =================
+
 die() { echo "ERROR: $*" >&2; exit 1; }
 ensure_file() { [[ -f "$1" ]] || die "File not found: $1"; }
 
@@ -38,83 +51,80 @@ command -v java >/dev/null || die "java not found"
 command -v jq   >/dev/null || die "jq not found"
 ensure_file "$JarPath"
 
-# ================= DATASET CONFIG =================
+# ================= DATASET MAP =================
 
-declare -A DATASET_CONFIG=(
-  ["SIFT1M"]="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/config/src/main/resources/config_sift1m.json"
-  ["glove-100"]="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/config/src/main/resources/config_glove100.json"
-  ["RedCaps"]="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/config/src/main/resources/config_redcaps.json"
-)
+declare -A CFG BASE QUERY GT DIM
 
-declare -A DATASET_DIM=(
-  ["SIFT1M"]=128
-  ["glove-100"]=100
-  ["RedCaps"]=512
-)
+CFG["SIFT1M"]="$ROOT/config/src/main/resources/config_sift1m.json"
+BASE["SIFT1M"]="/mnt/data/mehran/Datasets/SIFT1M/sift_base.fvecs"
+QUERY["SIFT1M"]="/mnt/data/mehran/Datasets/SIFT1M/sift_query.fvecs"
+GT["SIFT1M"]="/mnt/data/mehran/Datasets/SIFT1M/sift_query_groundtruth.ivecs"
+DIM["SIFT1M"]=128
 
-declare -A DATASET_BASE=(
-  ["SIFT1M"]="/mnt/data/mehran/Datasets/SIFT1M/sift_base.fvecs"
-  ["glove-100"]="/mnt/data/mehran/Datasets/glove-100/glove-100_base.fvecs"
-  ["RedCaps"]="/mnt/data/mehran/Datasets/redcaps/redcaps_base.fvecs"
-)
-
-declare -A DATASET_QUERY=(
-  ["SIFT1M"]="/mnt/data/mehran/Datasets/SIFT1M/sift_query.fvecs"
-  ["glove-100"]="/mnt/data/mehran/Datasets/glove-100/glove-100_query.fvecs"
-  ["RedCaps"]="/mnt/data/mehran/Datasets/redcaps/redcaps_query.fvecs"
-)
-
-declare -A DATASET_GT=(
-  ["SIFT1M"]="/mnt/data/mehran/Datasets/SIFT1M/sift_query_groundtruth.ivecs"
-  ["glove-100"]="/mnt/data/mehran/Datasets/glove-100/glove-100_groundtruth.ivecs"
-  ["RedCaps"]="/mnt/data/mehran/Datasets/redcaps/redcaps_query_groundtruth.ivecs"
-)
-
-# ================= VALIDATE FILES =================
-
-cfg="${DATASET_CONFIG[$TEST_DATASET]}"
-dim="${DATASET_DIM[$TEST_DATASET]}"
-base="${DATASET_BASE[$TEST_DATASET]}"
-query="${DATASET_QUERY[$TEST_DATASET]}"
-gt="${DATASET_GT[$TEST_DATASET]}"
+cfg="${CFG[$TEST_DATASET]}"
+base="${BASE[$TEST_DATASET]}"
+query="${QUERY[$TEST_DATASET]}"
+gt="${GT[$TEST_DATASET]}"
+dim="${DIM[$TEST_DATASET]}"
 
 ensure_file "$cfg"
 ensure_file "$base"
 ensure_file "$query"
 ensure_file "$gt"
 
-echo ""
-echo "Dataset:  $TEST_DATASET"
-echo "Profile:  $TEST_PROFILE"
-echo "Queries:  $QUERY_LIMIT"
-echo "Dim:      $dim"
-echo ""
-
-# ================= SETUP OUTPUT DIR =================
-
-run_dir="$OutRoot/${TEST_DATASET}_${TEST_PROFILE}"
-mkdir -p "$run_dir/results"
-rm -rf "$run_dir"/*  # Clean previous run
-mkdir -p "$run_dir/results"
-
-echo "Output:   $run_dir"
+echo "Dataset : $TEST_DATASET"
+echo "Profile : $TEST_PROFILE"
+echo "Queries : $QUERY_LIMIT"
+echo "Dim     : $dim"
 echo ""
 
-# ================= BUILD CONFIG =================
+# ================= STEP 1: CONFIG SANITY =================
+
+echo "[STEP 1/5] Verifying configuration..."
+
+maxCand=$(jq '.base.runtime.maxCandidateFactor' "$cfg")
+gtSample=$(jq '.base.ratio.gtSample' "$cfg")
+alpha=$(jq '.base.stabilization.alpha' "$cfg")
+
+echo "  maxCandidateFactor = $maxCand"
+echo "  gtSample           = $gtSample"
+echo "  alpha              = $alpha"
+
+if (( $(echo "$maxCand > 3" | bc -l) )); then
+  echo "WARNING: maxCandidateFactor > 3 → ratio inflation risk"
+  echo "         Recommended: 3"
+  read -p "Press ENTER to continue anyway, Ctrl+C to abort..."
+fi
+
+if (( gtSample > 20 )); then
+  echo "WARNING: gtSample too high → long hangs"
+  echo "         Recommended: 10"
+  read -p "Press ENTER to continue anyway, Ctrl+C to abort..."
+fi
+
+if (( $(echo "$alpha > 0.05" | bc -l) )); then
+  echo "WARNING: alpha too aggressive → recall risk"
+  echo "         Recommended: 0.02"
+  read -p "Press ENTER to continue anyway, Ctrl+C to abort..."
+fi
+
+echo "  Config sanity OK"
+echo ""
+
+# ================= STEP 2: BUILD MERGED CONFIG =================
+
+echo "[STEP 2/5] Building final config..."
 
 CFG_JSON="$(cat "$cfg")"
 
 if [[ "$TEST_PROFILE" == "BASE" ]]; then
-  # Use base config without profile override
-  final_cfg="$(jq -c 'del(.profiles)' <<<"$CFG_JSON")"
+  final_cfg="$(jq 'del(.profiles)' <<<"$CFG_JSON")"
 else
-  # Find and apply specific profile
-  BASE_JSON="$(jq -c 'del(.profiles)' <<<"$CFG_JSON")"
-
-  profile="$(jq -c ".profiles[] | select(.name == \"$TEST_PROFILE\")" <<<"$CFG_JSON")"
+  base_json="$(jq 'del(.profiles)' <<<"$CFG_JSON")"
+  profile="$(jq ".profiles[] | select(.name == \"$TEST_PROFILE\")" <<<"$CFG_JSON")"
   [[ -n "$profile" ]] || die "Profile not found: $TEST_PROFILE"
 
-  overrides="$(jq -c '.overrides // {}' <<<"$profile")"
+  overrides="$(jq '.overrides' <<<"$profile")"
 
   final_cfg="$(jq -n '
     def deepmerge(a; b):
@@ -125,45 +135,30 @@ else
          else .[$k] = b[$k]
          end);
     deepmerge($base; $ovr)
-  ' \
-    --argjson base "$BASE_JSON" \
-    --argjson ovr  "$overrides"
-  )"
+  ' --argjson base "$base_json" --argjson ovr "$overrides")"
 fi
 
-# Set output paths and GT config
-final_cfg="$(jq -c '
-  .output.resultsDir = $resdir |
+run_dir="$OutRoot/${TEST_DATASET}_${TEST_PROFILE}"
+rm -rf "$run_dir"
+mkdir -p "$run_dir/results"
+
+final_cfg="$(jq '
+  .output.resultsDir = $res |
   .ratio.source = "gt" |
-  .ratio.gtPath = $gtpath |
-  .ratio.autoComputeGT = false
-' \
-  --arg resdir "$run_dir/results" \
-  --arg gtpath "$gt" \
-  <<<"$final_cfg"
-)"
+  .ratio.gtPath = $gt |
+  .ratio.gtSample = 10
+' --arg res "$run_dir/results" --arg gt "$gt" <<<"$final_cfg")"
 
 echo "$final_cfg" > "$run_dir/config.json"
 
-# ================= DISPLAY CONFIG =================
-
-echo "Configuration:"
-echo "  m:         $(jq -r '.base.paper.m // .paper.m' "$run_dir/config.json")"
-echo "  lambda:    $(jq -r '.base.paper.lambda // .paper.lambda' "$run_dir/config.json")"
-echo "  divisions: $(jq -r '.base.paper.divisions // .paper.divisions' "$run_dir/config.json")"
-echo "  alpha:     $(jq -r '.base.stabilization.alpha // .stabilization.alpha' "$run_dir/config.json")"
-echo "  minCand:   $(jq -r '.base.stabilization.minCandidates // .stabilization.minCandidates' "$run_dir/config.json")"
+echo "  Config written: $run_dir/config.json"
 echo ""
 
-# ================= RUN TEST =================
+# ================= STEP 3: RUN SYSTEM =================
 
+echo "[STEP 3/5] Running smoke test..."
 log="$run_dir/run.log"
-
-echo "Starting smoke test..."
-echo "Log: $log"
-echo ""
-
-start_time=$(date +%s)
+start=$(date +%s)
 
 java "${JvmArgs[@]}" \
   -Dcli.dataset="$TEST_DATASET" \
@@ -180,120 +175,68 @@ java "${JvmArgs[@]}" \
   "$Batch" \
   >"$log" 2>&1
 
-exit_code=$?
-end_time=$(date +%s)
-elapsed=$((end_time - start_time))
+end=$(date +%s)
+elapsed=$((end - start))
 
-echo ""
-echo "============================================"
-
-if [[ $exit_code -ne 0 ]]; then
-  echo "SMOKE TEST FAILED (exit code: $exit_code)"
-  echo "============================================"
-  echo ""
-  echo "Last 50 lines of log:"
-  tail -50 "$log"
-  exit $exit_code
-fi
-
-echo "SMOKE TEST COMPLETED"
-echo "============================================"
-echo ""
-echo "Runtime: ${elapsed}s"
+echo "  Runtime: ${elapsed}s"
 echo ""
 
-# ================= EXTRACT RESULTS =================
+# ================= STEP 4: ANALYZE RESULTS =================
 
-profiler_csv="$run_dir/results/profiler_metrics.csv"
-summary_txt="$run_dir/results/metrics_summary.txt"
+echo "[STEP 4/5] Analyzing results..."
 
-if [[ ! -f "$profiler_csv" ]]; then
-  echo "WARNING: profiler_metrics.csv not found"
-  exit 1
-fi
+csv="$run_dir/results/profiler_metrics.csv"
+ensure_file "$csv"
 
-echo "Results:"
-echo "--------"
-
-# Extract metrics using awk (more portable than Python)
-if command -v python3 >/dev/null; then
-  # Use Python if available
-  python3 <<EOF
+python3 <<EOF
 import pandas as pd
 
-try:
-    df = pd.read_csv("$profiler_csv")
+df = pd.read_csv("$csv")
 
-    print(f"Queries:      {len(df)}")
-    print(f"")
-    print(f"Ratio:")
-    print(f"  Mean:       {df['ratio'].mean():.3f}")
-    print(f"  Median:     {df['ratio'].median():.3f}")
-    print(f"  Min:        {df['ratio'].min():.3f}")
-    print(f"  Max:        {df['ratio'].max():.3f}")
-    print(f"  Std:        {df['ratio'].std():.3f}")
-    print(f"")
-    print(f"Recall:")
-    print(f"  Mean:       {df['recall'].mean():.3f}")
-    print(f"  Min:        {df['recall'].min():.3f}")
-    print(f"")
-    print(f"Latency (ms):")
-    print(f"  Server:     {df['serverMs'].mean():.1f}")
-    print(f"  Client:     {df['clientMs'].mean():.1f}")
-    print(f"  Total:      {(df['serverMs'] + df['clientMs']).mean():.1f}")
-    print(f"")
+print(f"Queries: {len(df)}")
+print("")
+print("Ratio:")
+print(f"  Mean   : {df['ratio'].mean():.3f}")
+print(f"  Median : {df['ratio'].median():.3f}")
+print(f"  Min    : {df['ratio'].min():.3f}")
+print(f"  Max    : {df['ratio'].max():.3f}")
+print("")
+print("Precision:")
+print(f"  Mean   : {df['precision'].mean():.3f}")
+print("")
+print("Latency (ms):")
+print(f"  Server : {df['serverMs'].mean():.1f}")
+print(f"  Client : {df['clientMs'].mean():.1f}")
+print(f"  Total  : {(df['serverMs']+df['clientMs']).mean():.1f}")
+print("")
 
-    # Check targets
-    avg_ratio = df['ratio'].mean()
-    avg_recall = df['recall'].mean()
+ok_ratio = df['ratio'].mean() <= 1.30
+ok_prec  = df['precision'].mean() >= 0.85
 
-    print("Status:")
-    if avg_ratio <= 1.30:
-        print(f"  ✓ Ratio {avg_ratio:.3f} <= 1.30 (PASS)")
-    else:
-        print(f"  ✗ Ratio {avg_ratio:.3f} > 1.30 (FAIL)")
+print("Status:")
+print("  Ratio     :", "PASS" if ok_ratio else "FAIL")
+print("  Precision :", "PASS" if ok_prec else "FAIL")
 
-    if avg_recall >= 0.85:
-        print(f"  ✓ Recall {avg_recall:.3f} >= 0.85 (PASS)")
-    else:
-        print(f"  ✗ Recall {avg_recall:.3f} < 0.85 (FAIL)")
-
-except Exception as e:
-    print(f"Error analyzing results: {e}")
-    exit(1)
+exit(0 if ok_ratio and ok_prec else 1)
 EOF
-else
-  # Fallback: basic awk analysis
-  echo "Queries:      $(tail -n +2 "$profiler_csv" | wc -l)"
-  echo ""
-  echo "Ratio:"
-  tail -n +2 "$profiler_csv" | awk -F',' '{sum+=$7; if(NR==1||$7<min)min=$7; if(NR==1||$7>max)max=$7} END {printf "  Mean:       %.3f\n  Min:        %.3f\n  Max:        %.3f\n", sum/NR, min, max}'
-  echo ""
-  echo "Recall:"
-  tail -n +2 "$profiler_csv" | awk -F',' '{sum+=$8; if(NR==1||$8<min)min=$8} END {printf "  Mean:       %.3f\n  Min:        %.3f\n", sum/NR, min}'
-fi
+
+# ================= STEP 5: GT CHECK =================
 
 echo ""
-echo "Files:"
-echo "  Config:    $run_dir/config.json"
-echo "  Results:   $profiler_csv"
-echo "  Log:       $log"
-echo ""
-
-# ================= CHECK GT VALIDATION =================
+echo "[STEP 5/5] GT Validation..."
 
 if grep -q "GT VALIDATION PASSED" "$log"; then
-  echo "✓ GT Validation: PASSED"
+  echo "✓ GT validation PASSED"
 elif grep -q "GT VALIDATION FAILED" "$log"; then
-  echo "✗ GT Validation: FAILED"
-  echo ""
+  echo "✗ GT validation FAILED"
   grep -A 5 "GT VALIDATION FAILED" "$log"
+  exit 1
 else
-  echo "? GT Validation: Not found in log"
+  echo "? GT validation not found in log"
 fi
 
 echo ""
 echo "============================================"
-echo "Smoke test complete!"
-echo "Review results above before full sweep."
+echo " Smoke test COMPLETE"
+echo " Results ready for evaluation"
 echo "============================================"
