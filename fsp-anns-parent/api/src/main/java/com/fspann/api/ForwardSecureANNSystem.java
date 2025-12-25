@@ -798,7 +798,7 @@ public class ForwardSecureANNSystem {
             GroundtruthManager gt
     ) {
         if (annResults == null || annResults.isEmpty() || k <= 0) {
-            return new QueryMetrics(Double.NaN, 0.0, Double.NaN);
+            return new QueryMetrics(0.0, 0.0, 0.0);
         }
 
         final int upto = Math.min(k, annResults.size());
@@ -822,9 +822,10 @@ public class ForwardSecureANNSystem {
 
         // ================== 2. Candidate Ratio (Efficiency) ==================
         QueryServiceImpl qs = getQueryServiceImpl();
-        double candidateRatio = (qs != null && k > 0)
-                ? (double) qs.getLastCandKept() / k
-                : Double.NaN;
+        double candidateRatio =
+                (qs != null && k > 0 && qs.getLastCandKept() > 0)
+                        ? (double) qs.getLastCandKept() / k
+                        : 0.0;
 
         // ================== 3. Distance Ratio (Quality) ==================
         double distanceRatio = Double.NaN;
@@ -863,7 +864,17 @@ public class ForwardSecureANNSystem {
                 }
             }
 
-            distanceRatio = (validCount > 0) ? (ratioSum / validCount) : Double.NaN;
+            distanceRatio = (validCount > 0) ? (ratioSum / validCount) : 0.0;
+
+            // ===== K=1 SAFETY FIX =====
+            if (k == 1 && !annResults.isEmpty() && gtIds != null && gtIds.length > 0) {
+                int returnedId = Integer.parseInt(annResults.get(0).getId());
+                int gtId = gtIds[0];
+                if (returnedId == gtId) {
+                    distanceRatio = 1.0;
+                }
+            }
+
         }
 
         // Log diagnostic for debugging

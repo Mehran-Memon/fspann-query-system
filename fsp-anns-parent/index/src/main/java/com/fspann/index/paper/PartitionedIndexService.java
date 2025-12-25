@@ -205,6 +205,12 @@ public final class PartitionedIndexService implements IndexService {
 
         if (!frozen) throw new IllegalStateException("Index not finalized before lookup");
 
+        if (!cfg.isPaperMode()) {
+            throw new IllegalStateException(
+                    "lookup() is PAPER BASELINE ONLY. Use lookupCandidateIds() for production runs."
+            );
+        }
+
         if (cfg.getSearchMode() != com.fspann.config.SearchMode.PAPER_BASELINE) {
             throw new IllegalStateException("lookup() is restricted to PAPER_BASELINE. Use lookupCandidateIds() for real runs.");
         }
@@ -371,7 +377,8 @@ public final class PartitionedIndexService implements IndexService {
 
         Set<String> seen = new LinkedHashSet<>(MAX_IDS);
         Set<String> deletedCache = new HashSet<>();
-        int touched = 0;
+        int visitedCount = 0;   // every ID examined
+        int uniqueAdded = 0;    // unique IDs kept
 
         final int perDivBits = perDivisionBits();
         int maxRelax = cfg.getRuntime().getMaxRelaxationDepth();
@@ -430,43 +437,53 @@ public final class PartitionedIndexService implements IndexService {
                             }
 
                             // Add if new
-                            if (seen.add(id)) {
-                                touched++;
+                            visitedCount++;
 
-                                // CRITICAL: Check IMMEDIATELY after each add
+                            if (seen.add(id)) {
+                                uniqueAdded++;
+
                                 if (seen.size() >= MAX_IDS) {
-                                    logger.info("Reached MAX_IDS: seen={}, touched={}, returning",
-                                            seen.size(), touched);
+                                    logger.info(
+                                            "Reached MAX_IDS: seen={}, visited={}",
+                                            seen.size(), visitedCount
+                                    );
                                     hitLimit = true;
                                     break;
                                 }
                             }
                         }
 
-                        if (hitLimit) break; // Exit subset loop
+                            if (hitLimit) break; // Exit subset loop
+                        }
+
+                        if (hitLimit) break; // Exit division loop
                     }
 
-                    if (hitLimit) break; // Exit division loop
+                    if (hitLimit) break; // Exit table loop
                 }
 
-                if (hitLimit) break; // Exit table loop
+                if (hitLimit) break; // Exit relaxation loop
+
+                logger.debug("After relaxation {}: candidates={}/{}", relax, seen.size(), MAX_IDS);
             }
 
-            if (hitLimit) break; // Exit relaxation loop
+            // Final logging
+        double ratio = (K > 0) ? ((double) seen.size() / K) : 0.0;
 
-            logger.debug("After relaxation {}: candidates={}/{}", relax, seen.size(), MAX_IDS);
+        logger.info(
+                "lookupCandidateIds END: K={}, candidates={}, visited={}, unique={}, ratio={}",
+                K, seen.size(), visitedCount, uniqueAdded,
+                String.format("%.3f", ratio)
+        );
+
+            lastTouched.set(visitedCount);
+            lastTouchedIds.get().clear();
+            lastTouchedIds.get().addAll(seen);
+
+            return new ArrayList<>(seen);
         }
 
-        // Final logging
-        logger.info("lookupCandidateIds END: K={}, candidates={}, touched={}, ratio={}",
-                K, seen.size(), touched, String.format("%.3f", (double)seen.size()/K));
 
-        lastTouched.set(touched);
-        lastTouchedIds.get().clear();
-        lastTouchedIds.get().addAll(seen);
-
-        return new ArrayList<>(seen);
-    }
 
     public EncryptedPoint loadPointIfActive(String id) {
         if (metadata.isDeleted(id)) return null;

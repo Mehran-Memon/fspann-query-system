@@ -127,39 +127,65 @@ public final class QueryServiceImpl implements QueryService {
                 return Collections.emptyList();
             }
 
-            // ---------- APPLY STABILIZATION (FIXED) ----------
+            // ---------- APPLY STABILIZATION ----------
             List<String> limitedIds;
             final int K = token.getTopK();
 
             SystemConfig.StabilizationConfig sc = cfg.getStabilization();
             if (sc != null && sc.isEnabled()) {
-                int raw = candidateIds.size();
 
-                // Alpha-based target
-                int alphaTarget = (int) Math.ceil(sc.getAlpha() * raw);
+                final int raw = candidateIds.size();
 
-                // K-aware ceiling from runtime config
-                int maxRefineFactor = cfg.getRuntime().getMaxRefinementFactor();
-                int kCeiling = maxRefineFactor * K;
+                // Target based on desired ratio (K-relative)
+                final double minRatio = sc.getMinCandidatesRatio();
+                final int targetByRatio = (int) Math.ceil(K * minRatio);
 
-                // Floor: guarantee enough candidates
-                int floor = Math.max(K, sc.getMinCandidates());
+                // Alpha-based soft upper bound
+                final int alphaTarget = (int) Math.ceil(sc.getAlpha() * raw);
+                final int safeAlphaTarget = Math.max(alphaTarget, K);
 
-                // FIXED: Actually use alpha target with proper bounds
-                int finalSize = Math.min(raw, Math.max(floor, Math.min(alphaTarget, kCeiling)));
+                // Runtime safety ceiling
+                final int maxRefineFactor = cfg.getRuntime().getMaxRefinementFactor();
+                final int kCeiling = maxRefineFactor * K;
+
+                // FINAL size:
+                // 1) never below K
+                // 2) never above raw
+                // 3) ratio-first, alpha-second, runtime-safe
+                final int minByRatio = Math.max(K, targetByRatio);
+                final int maxAllowed = Math.min(safeAlphaTarget, kCeiling);
+
+                final int finalSize = Math.min(
+                        raw,
+                        Math.max(minByRatio, maxAllowed)
+                );
 
                 limitedIds = candidateIds.subList(0, finalSize);
                 lastCandKept = limitedIds.size();
 
-                logger.info("Stabilization: raw={}, K={}, alpha={:.3f}, target={}, floor={}, ceil={}, final={}, ratio={:.2f}",
-                        raw, K, sc.getAlpha(), alphaTarget, floor, kCeiling, lastCandKept, (double)lastCandKept/K);
+                logger.info(
+                        "Stabilization: raw={}, K={}, ratioTarget={}, alphaTarget={}, ceiling={}, final={}, ratio={}",
+                        raw, K, targetByRatio, alphaTarget, kCeiling, finalSize,
+                        String.format("%.2f", (double) finalSize / K)
+                );
 
                 if (stabilizationCallback != null) {
                     stabilizationCallback.accept(raw, lastCandKept);
                 }
+
             } else {
                 limitedIds = candidateIds;
                 lastCandKept = candidateIds.size();
+            }
+
+            if (K > 0) {
+                double r = (double) lastCandKept / K;
+                if (r < sc.getMinCandidatesRatio() - 1e-6) {
+                    logger.error(
+                            "Stabilization violation: K={}, kept={}, ratio={}, expected>={}",
+                            K, lastCandKept, r, sc.getMinCandidatesRatio()
+                    );
+                }
             }
 
             // -------- 3) PHASE-2: bounded refinement --------

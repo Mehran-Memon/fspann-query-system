@@ -41,9 +41,6 @@ public class SystemConfig {
     @JsonProperty("numShards")
     private int numShards = 32;
 
-    @JsonProperty("numTables")
-    private int numTables = 8;
-
     @JsonProperty("opsThreshold")
     private long opsThreshold = 500_000_000L;
 
@@ -94,13 +91,6 @@ public class SystemConfig {
     private StabilizationConfig stabilization = new StabilizationConfig();
     public StabilizationConfig getStabilization() { return stabilization; }
 
-    @JsonProperty("tables")
-    public int tables = 8; // Default value can be adjusted as needed
-
-    // Getter for tables
-    public int getTables() {
-        return Math.max(1, tables);
-    }
 
     /* ======================== Static loading API ======================== */
 
@@ -135,8 +125,16 @@ public class SystemConfig {
             throw new ConfigLoadException("Failed to read/parse SystemConfig from " + key, e);
         }
 
+        cfg.runtime.maxCandidateFactor =
+                Math.max(1, cfg.runtime.maxCandidateFactor);
+
+        cfg.runtime.maxRefinementFactor =
+                Math.max(1, cfg.runtime.maxRefinementFactor);
+
+        cfg.runtime.earlyStopCandidates =
+                Math.max(1, cfg.runtime.earlyStopCandidates);
+
         cfg.numShards      = clamp(cfg.numShards, 1, MAX_SHARDS);
-        cfg.numTables      = clamp(cfg.numTables, 1, MAX_TABLES);
         cfg.opsThreshold   = clamp(cfg.opsThreshold, 1L, MAX_OPS_THRESHOLD);
         cfg.ageThresholdMs = clamp(cfg.ageThresholdMs, 0L, MAX_AGE_THRESHOLD);
 
@@ -152,10 +150,6 @@ public class SystemConfig {
 
     public int getNumShards() {
         return clamp(numShards, 1, MAX_SHARDS);
-    }
-
-    public int getNumTables() {
-        return clamp(numTables, 1, MAX_TABLES);
     }
 
     public long getOpsThreshold() {
@@ -231,6 +225,10 @@ public class SystemConfig {
         this.searchMode = mode;
     }
 
+    public boolean isPaperMode() {
+        return getSearchMode() == SearchMode.PAPER_BASELINE;
+    }
+
     public static final class RuntimeConfig {
 
         /**
@@ -265,6 +263,14 @@ public class SystemConfig {
         @JsonProperty("earlyStopCandidates")
         private int earlyStopCandidates = Integer.MAX_VALUE;
 
+        @JsonProperty("targetCandidateRatio")
+        private double targetCandidateRatio = 1.25;
+
+        public double getTargetCandidateRatio() {
+            return targetCandidateRatio > 0 ? targetCandidateRatio : 1.25;
+        }
+
+
         public int getMaxCandidateFactor() {
             return Math.max(1, maxCandidateFactor);
         }
@@ -290,11 +296,6 @@ public class SystemConfig {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class LshConfig {
-        @JsonProperty("numTables")
-        public int numTables = 8;
-
-        @JsonProperty("rowsPerBand")
-        public int rowsPerBand = 0;
 
         @JsonProperty("probeShards")
         public int probeShards = 0;
@@ -311,10 +312,6 @@ public class SystemConfig {
 
         @JsonProperty("targetRatio")
         public double targetRatio = 1.2;
-
-        public int getNumTables() {
-            return clamp(numTables, 1, MAX_TABLES);
-        }
 
         public int getProbeShards() {
             if (probeShards <= 0) return 0;
@@ -348,20 +345,25 @@ public class SystemConfig {
         public boolean enabled = true;
 
         /**
-         * Fraction of raw candidates to keep before minCandidates is applied.
-         * Example: alpha = 0.10 means "keep 10% of raw candidates".
+         * Fraction of raw candidates to keep (alpha × raw).
+         * Acts only as an upper soft bound.
          */
         @JsonProperty("alpha")
         public double alpha = 0.10;
 
         /**
-         * Hard lower bound on stabilized candidate count.
-         * Ensures K=40...100 ratios stay stable and <1.3.
+         * NEW — K-relative lower bound.
+         * 1.0 → keep at least K candidates
+         * 1.25 → keep at least 1.25*K candidates
+         *
+         * THIS replaces absolute minCandidates.
          */
-        @JsonProperty("minCandidates")
-        public int minCandidates = 1200;
+        @JsonProperty("minCandidatesRatio")
+        public double minCandidatesRatio = 1.0;
 
-        public boolean isEnabled() { return enabled; }
+        public boolean isEnabled() {
+            return enabled;
+        }
 
         public double getAlpha() {
             if (Double.isNaN(alpha) || alpha <= 0.0) return 0.01;
@@ -369,8 +371,12 @@ public class SystemConfig {
             return alpha;
         }
 
-        public int getMinCandidates() {
-            return Math.max(1, minCandidates);
+        public double getMinCandidatesRatio() {
+            if (Double.isNaN(minCandidatesRatio) || minCandidatesRatio < 1.0)
+                return 1.0;
+            if (minCandidatesRatio > 2.0)
+                return 2.0;
+            return minCandidatesRatio;
         }
     }
 
