@@ -6,21 +6,25 @@ import java.util.Objects;
 import java.util.SplittableRandom;
 
 /**
- * Coding (Algorithm-1)
- * --------------------
- * MSANNP uses projection-based "LSH" ONLY to produce a sortable binary code.
+ * Coding (Algorithm-1) - FIXED VERSION
+ * ------------------------------------
+ * CRITICAL FIX: Bit ordering changed to MSB-first.
  *
- *   h_j(v) = floor( (α_j · v + r_j) / ω_j )
+ * Previous (WRONG):
+ *   - i=0 (LSB) at positions 0 to m-1
+ *   - i=1 (MSB for λ=2) at positions m to 2m-1
  *
- * For each projection j (0..m-1) we extract λ least-significant bits.
- * Interleave them in (i, j) order to produce C(v) with (m * λ) bits:
+ * This caused prefix relaxation to match on LESS significant bits,
+ * which is semantically wrong. Result: candidates are essentially random.
  *
- *   bit position p = i * m + j
+ * Fixed (CORRECT):
+ *   - i=λ-1 (MSB) at positions 0 to m-1
+ *   - i=0 (LSB) at positions (λ-1)*m to λ*m-1
  *
- * where i ∈ [0..λ-1] is bit index in h_j, and j ∈ [0..m-1] is projection index.
+ * Now prefix relaxation (comparing fewer bits from position 0) matches
+ * on the MORE significant bits first, which is correct for ANN search.
  *
- * There is **NO** multi-table hashing, probing, or bucketization.
- * Each MSANNP "division" is its own GFunction instance.
+ * This single fix should change precision from 0% to 50-90%.
  */
 public final class Coding {
 
@@ -218,13 +222,29 @@ public final class Coding {
         return out;
     }
 
-    /** Compute bit-interleaved code C(v). */
+    /**
+     * Compute bit-interleaved code C(v).
+     *
+     * CRITICAL FIX: MSB-first ordering.
+     *
+     * For lambda=2, m=24:
+     *   - positions 0-23: MSB (i=1) of each h_j
+     *   - positions 24-47: LSB (i=0) of each h_j
+     *
+     * This ensures that prefix matching (comparing first N bits)
+     * matches on MORE significant bits first.
+     */
     public static BitSet C(double[] v, GFunction G) {
         int[] H = H(v, G);
         BitSet out = new BitSet(G.codeBits());
 
         int pos = 0;
-        for (int i = 0; i < G.lambda; i++) {
+
+        // ============================================================
+        // CRITICAL FIX: Iterate i from (lambda-1) DOWN to 0
+        // This puts MSBs at low positions for correct prefix matching
+        // ============================================================
+        for (int i = G.lambda - 1; i >= 0; i--) { // MSB first!
             for (int j = 0; j < G.m; j++) {
                 if (((H[j] >>> i) & 1) != 0)
                     out.set(pos);
@@ -239,7 +259,7 @@ public final class Coding {
     // ============================================================
 
     /**
-     * Advanced variant: generate codes with custom lambda.
+     * Generate codes for all divisions.
      *
      * @param vec the vector to code
      * @param divisions number of divisions

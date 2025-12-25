@@ -141,7 +141,7 @@ public final class PartitionedIndexService implements IndexService {
     }
 
     private DimensionState[] newTableStates(int dim) {
-        int L = cfg.getPaper().getTables(); // get the number of tables
+        int L = cfg.getPaper().getTables();
         DimensionState[] arr = new DimensionState[L];
         for (int t = 0; t < L; t++) arr[t] = new DimensionState(dim, t);
         return arr;
@@ -150,6 +150,13 @@ public final class PartitionedIndexService implements IndexService {
     private long tableSeed(int table) {
         SystemConfig.PaperConfig pc = cfg.getPaper();
         return pc.seed + (table * 1_000_003L);
+    }
+
+    /**
+     * Returns the number of tables (L) configured for the index.
+     */
+    public int numTables() {
+        return cfg.getPaper().getTables();
     }
 
     // =====================================================
@@ -191,13 +198,6 @@ public final class PartitionedIndexService implements IndexService {
     // LOOKUP (paper baseline) - unions across tables
     // =====================================================
 
-/**
- *
- * PASTE THIS to replace lines 220-310 in:
- * query/src/main/java/com/fspann/query/service/PartitionedIndexService.java
- *
- * Same fixes as lookupCandidateIds but for PAPER_BASELINE mode
- */
     @Override
     public List<EncryptedPoint> lookup(QueryToken token) {
         Objects.requireNonNull(token, "token cannot be null");
@@ -246,7 +246,6 @@ public final class PartitionedIndexService implements IndexService {
         int maxRelax = cfg.getRuntime().getMaxRelaxationDepth();
         int L = Math.min(tables.length, codesByTable.length);
 
-        // CRITICAL FIX: Track if we hit limit
         boolean hitLimit = false;
 
         for (int relax = 0; relax <= Math.min(pc.lambda, maxRelax) && !hitLimit; relax++) {
@@ -257,7 +256,6 @@ public final class PartitionedIndexService implements IndexService {
             if (relaxedBits <= 0) continue;
 
             for (int t = 0; t < L && !hitLimit; t++) {
-                // Check limit before each table
                 if (out.size() >= HARD_CAP) {
                     logger.info("HARD_CAP reached before table {}: size={}", t, out.size());
                     hitLimit = true;
@@ -332,32 +330,51 @@ public final class PartitionedIndexService implements IndexService {
     // =====================================================
 
     /**
+     * Lookup candidate IDs from partitioned index.
      *
-     * PASTE THIS to replace lines 333-450 in:
-     * query/src/main/java/com/fspann/query/service/PartitionedIndexService.java
-     *
-     * Key fixes:
-     * 1. Breaks ALL nested loops when MAX_IDS hit (not just innermost)
-     * 2. Checks limit BEFORE processing each table/division/subset
-     * 3. INFO-level logging (not debug) to see what's happening
-     * 4. Clear diagnostics showing where limit is hit
+     * Key behavior:
+     * 1. Validates that token has codes for all tables
+     * 2. Iterates through relaxation levels (0 to lambda)
+     * 3. Unions candidates across all tables
+     * 4. Stops when MAX_IDS limit is reached
      */
     public List<String> lookupCandidateIds(QueryToken token) {
         Objects.requireNonNull(token, "token");
         if (!frozen) throw new IllegalStateException("Index not finalized");
 
+        // ========== VALIDATION ==========
+        BitSet[][] codesByTable = token.getCodesByTable();
+        if (codesByTable == null || codesByTable.length == 0) {
+            logger.error(
+                    "FATAL: QueryToken has no codesByTable! Token: dim={}, topK={}, version={}",
+                    token.getDimension(), token.getTopK(), token.getVersion()
+            );
+            throw new IllegalStateException(
+                    "QueryToken.getCodesByTable() returned null or empty. " +
+                            "QueryTokenFactory must generate codes for ALL tables."
+            );
+        }
+
+        int L = numTables();
+        if (codesByTable.length < L) {
+            logger.error(
+                    "Token has {} table codes but index expects {} tables",
+                    codesByTable.length, L
+            );
+        }
+
+        // ========== CONFIGURATION ==========
         SystemConfig.PaperConfig pc = cfg.getPaper();
         int K = token.getTopK();
 
-        // Calculate hard limit
         int runtimeCap = cfg.getRuntime().getMaxCandidateFactor() * K;
         int paperCap = cfg.getPaper().getSafetyMaxCandidates();
         final int MAX_IDS = (paperCap > 0) ? Math.min(runtimeCap, paperCap) : runtimeCap;
 
-        // DIAGNOSTIC: Always log (INFO level so we can see it!)
         logger.info("lookupCandidateIds START: K={}, maxCandFactor={}, MAX_IDS={}, lambda={}",
                 K, cfg.getRuntime().getMaxCandidateFactor(), MAX_IDS, pc.lambda);
 
+        // ========== DIMENSION CHECK ==========
         int dim = token.getDimension();
         DimensionState[] tables = dims.get(dim);
         if (tables == null) {
@@ -367,24 +384,16 @@ public final class PartitionedIndexService implements IndexService {
             return List.of();
         }
 
-        BitSet[][] codesByTable = token.getCodesByTable();
-        if (codesByTable == null || codesByTable.length == 0) {
-            lastTouched.set(0);
-            lastTouchedIds.get().clear();
-            logger.info("lookupCandidateIds: No codes, returning empty");
-            return List.of();
-        }
-
+        // ========== MAIN LOOKUP LOOP ==========
         Set<String> seen = new LinkedHashSet<>(MAX_IDS);
         Set<String> deletedCache = new HashSet<>();
-        int visitedCount = 0;   // every ID examined
-        int uniqueAdded = 0;    // unique IDs kept
+        int visitedCount = 0;
+        int uniqueAdded = 0;
 
         final int perDivBits = perDivisionBits();
         int maxRelax = cfg.getRuntime().getMaxRelaxationDepth();
-        int L = Math.min(tables.length, codesByTable.length);
+        int effectiveL = Math.min(tables.length, codesByTable.length);
 
-        // Track if we hit limit to break ALL loops
         boolean hitLimit = false;
 
         for (int relax = 0; relax <= Math.min(pc.lambda, maxRelax) && !hitLimit; relax++) {
@@ -393,11 +402,11 @@ public final class PartitionedIndexService implements IndexService {
 
             logger.debug("Relaxation round {}: bits={}, currentCandidates={}", relax, bits, seen.size());
 
-            for (int t = 0; t < L && !hitLimit; t++) {
-                // CRITICAL: Check limit BEFORE processing each table
+            for (int t = 0; t < effectiveL && !hitLimit; t++) {
+                // Check limit BEFORE processing each table
                 if (seen.size() >= MAX_IDS) {
                     logger.info("Candidate limit reached BEFORE table {}/{}: seen={}, MAX_IDS={}",
-                            t, L, seen.size(), MAX_IDS);
+                            t, effectiveL, seen.size(), MAX_IDS);
                     hitLimit = true;
                     break;
                 }
@@ -436,7 +445,6 @@ public final class PartitionedIndexService implements IndexService {
                                 continue;
                             }
 
-                            // Add if new
                             visitedCount++;
 
                             if (seen.add(id)) {
@@ -453,21 +461,21 @@ public final class PartitionedIndexService implements IndexService {
                             }
                         }
 
-                            if (hitLimit) break; // Exit subset loop
-                        }
-
-                        if (hitLimit) break; // Exit division loop
+                        if (hitLimit) break;
                     }
 
-                    if (hitLimit) break; // Exit table loop
+                    if (hitLimit) break;
                 }
 
-                if (hitLimit) break; // Exit relaxation loop
-
-                logger.debug("After relaxation {}: candidates={}/{}", relax, seen.size(), MAX_IDS);
+                if (hitLimit) break;
             }
 
-            // Final logging
+            if (hitLimit) break;
+
+            logger.debug("After relaxation {}: candidates={}/{}", relax, seen.size(), MAX_IDS);
+        }
+
+        // ========== FINAL LOGGING ==========
         double ratio = (K > 0) ? ((double) seen.size() / K) : 0.0;
 
         logger.info(
@@ -476,22 +484,28 @@ public final class PartitionedIndexService implements IndexService {
                 String.format("%.3f", ratio)
         );
 
-            lastTouched.set(visitedCount);
-            lastTouchedIds.get().clear();
-            lastTouchedIds.get().addAll(seen);
+        lastTouched.set(visitedCount);
+        lastTouchedIds.get().clear();
+        lastTouchedIds.get().addAll(seen);
 
-            return new ArrayList<>(seen);
-        }
-
-
+        return new ArrayList<>(seen);
+    }
 
     public EncryptedPoint loadPointIfActive(String id) {
         if (metadata.isDeleted(id)) return null;
-        try { return metadata.loadEncryptedPoint(id); }
-        catch (Exception e) { return null; }
+        try {
+            return metadata.loadEncryptedPoint(id);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private boolean covers(GreedyPartitioner.SubsetBounds sb, BitSet c, int bits) {
+        var cmp = new GreedyPartitioner.CodeComparator(bits);
+        return cmp.compare(sb.lower, c) <= 0 && cmp.compare(c, sb.upper) <= 0;
+    }
+
+    private boolean coversRelaxed(GreedyPartitioner.SubsetBounds sb, BitSet c, int bits) {
         var cmp = new GreedyPartitioner.CodeComparator(bits);
         return cmp.compare(sb.lower, c) <= 0 && cmp.compare(c, sb.upper) <= 0;
     }
@@ -504,6 +518,7 @@ public final class PartitionedIndexService implements IndexService {
     // =====================================================
     // FINALIZATION
     // =====================================================
+
     public void finalizeForSearch() {
         if (frozen) {
             logger.info("Index already finalized");
@@ -535,17 +550,20 @@ public final class PartitionedIndexService implements IndexService {
         logger.info("Index finalization complete");
     }
 
-    public boolean isFrozen() { return frozen; }
+    public boolean isFrozen() {
+        return frozen;
+    }
 
     // =====================================================
     // CODING (Algorithm-1)
     // =====================================================
+
     public BitSet[] code(double[] vec) {
         SystemConfig.PaperConfig pc = cfg.getPaper();
         return Coding.code(vec, pc.divisions, pc.m, pc.lambda, pc.seed);
     }
 
-    /** NEW: seed override for table-independence (used by QueryTokenFactory + insert staging) */
+    /** Seed override for table-independence (used by QueryTokenFactory + insert staging) */
     public BitSet[] code(double[] vec, long seedOverride) {
         SystemConfig.PaperConfig pc = cfg.getPaper();
         return Coding.code(vec, pc.divisions, pc.m, pc.lambda, seedOverride);
@@ -554,6 +572,7 @@ public final class PartitionedIndexService implements IndexService {
     // =====================================================
     // REQUIRED IndexService METHODS
     // =====================================================
+
     @Override
     public EncryptedPointBuffer getPointBuffer() {
         return null;
@@ -573,10 +592,5 @@ public final class PartitionedIndexService implements IndexService {
 
     public void clearProbeOverride() {
         probeOverride.remove();
-    }
-
-    private boolean coversRelaxed(GreedyPartitioner.SubsetBounds sb, BitSet c, int bits) {
-        var cmp = new GreedyPartitioner.CodeComparator(bits);
-        return cmp.compare(sb.lower, c) <= 0 && cmp.compare(c, sb.upper) <= 0;
     }
 }
