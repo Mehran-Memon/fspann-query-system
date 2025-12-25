@@ -17,7 +17,7 @@ desktop.ini
 # ===========================================
 target/
 *.class
-#*.log
+*.log
 *.ser
 
 # ===========================================
@@ -39,3 +39,7 @@ Results/
 .tmp
 *.class
 api/dependency-reduced-pom.xml
+/logs/fsp-ann.log
+/it/out/reencrypt_metrics.csv
+/it/out/retrieved_samples.csv
+/it/out/retrieved_worst.csv
