@@ -96,7 +96,7 @@ public final class GreedyPartitioner {
 
         @Override
         public int compare(BitSet a, BitSet b) {
-            for (int i = codeBits - 1; i >= 0; i--) {
+            for (int i = 0; i < codeBits; i++) {
                 boolean ai = a.get(i);
                 boolean bi = b.get(i);
                 if (ai != bi) return ai ? 1 : -1;
