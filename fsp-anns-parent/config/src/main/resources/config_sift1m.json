@@ -22,14 +22,14 @@
     "_comment_4": "alpha=0.02 (2%, down from 15%) + minCandidates=100 (K-relative floor)",
     "stabilization": {
       "enabled": true,
-      "alpha": 0.10,
-      "minCandidates": 150
+      "alpha": 0.02,
+      "minCandidatesRatio": 1.25
     },
 
     "_comment_5": "===== RUNTIME =====",
     "_comment_6": "maxRefinementFactor=3 allows refining 3*K candidates",
     "runtime": {
-      "maxCandidateFactor": 5,
+      "maxCandidateFactor": 3,
       "maxRefinementFactor": 3,
       "maxRelaxationDepth": 1,
       "earlyStopCandidates": 1000
