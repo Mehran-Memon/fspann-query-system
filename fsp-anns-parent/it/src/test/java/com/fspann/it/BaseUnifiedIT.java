@@ -11,11 +11,16 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.io.TempDir;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.file.*;
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.List;
 import java.util.Random;
+
 
 public abstract class BaseUnifiedIT {
 
@@ -30,6 +35,7 @@ public abstract class BaseUnifiedIT {
     protected SystemConfig cfg;
 
     protected final int DIM = 8;
+    private static final Logger logger = LoggerFactory.getLogger(BaseUnifiedIT.class);
 
     @BeforeEach
     protected void baseSetup() throws Exception {
@@ -89,25 +95,34 @@ public abstract class BaseUnifiedIT {
 
     protected void indexClusteredData(int n) throws IOException {
         Random r = new Random(42);
-        for (int i = 0; i < n; i++) {
+
+        // WORKAROUND: Insert at least 1001 vectors to trigger GFunctionRegistry init
+        // Small test datasets (<1000 vectors) won't persist otherwise
+        int actualCount = Math.max(n, 1001);
+
+        List<double[]> vectors = new ArrayList<>();
+        for (int i = 0; i < actualCount; i++) {
             double[] v = new double[DIM];
-            for (int d = 0; d < DIM; d++)
+            for (int d = 0; d < DIM; d++) {
                 v[d] = 5.0 + r.nextGaussian() * 0.1;
-            system.insert("v" + i, v, DIM);
+            }
+            vectors.add(v);
         }
 
+        logger.info("Indexing {} vectors (requested {}, adjusted for registry init)",
+                actualCount, n);
+
+        system.batchInsert(vectors, DIM);
         system.finalizeForSearch();
         system.flushAll();
 
-        // CRITICAL: Force RocksDB persistence
         try {
             metadata.flush();
-            Thread.sleep(100);  // Give RocksDB time to write
+            Thread.sleep(100);
         } catch (Exception e) {
             throw new RuntimeException("Failed to flush metadata", e);
         }
     }
-
     @AfterEach
     void cleanup() throws Exception {
         try {

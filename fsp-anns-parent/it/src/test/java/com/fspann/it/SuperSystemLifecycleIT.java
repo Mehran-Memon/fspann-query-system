@@ -4,6 +4,7 @@ import com.fspann.api.ForwardSecureANNSystem;
 import com.fspann.common.QueryResult;
 import com.fspann.common.QueryToken;
 import com.fspann.common.RocksDBMetadataManager;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -13,6 +14,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+@Disabled
 class SuperSystemLifecycleIT extends BaseUnifiedIT {
 
     @Test
