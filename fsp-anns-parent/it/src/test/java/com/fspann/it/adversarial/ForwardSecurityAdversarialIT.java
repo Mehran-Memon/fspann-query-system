@@ -31,6 +31,8 @@ public class ForwardSecurityAdversarialIT {
     SecretKey compromisedKeyBefore;
     SecretKey keyAfterRotate;
 
+    private static final int DIM = 3;  // Use consistent dimension
+
     @BeforeEach
     void init() throws Exception {
 
@@ -59,11 +61,22 @@ public class ForwardSecurityAdversarialIT {
         Path cfg = temp.resolve("cfg.json");
         Files.writeString(cfg, """
         {
-          "paper": { "enabled": true, "m": 3, "divisions": 3, "lambda": 3, "seed": 13 },
+          "paper": { 
+            "enabled": true, 
+            "m": 3, 
+            "divisions": 3, 
+            "lambda": 3, 
+            "seed": 13 
+          },
           "lsh": { "numTables": 1, "rowsPerBand": 2, "probeShards": 1 },
           "ratio": { "source": "base" },
           "output": { "exportArtifacts": false },
-          "reencryption": { "enabled": true }
+          "reencryption": { "enabled": true },
+          "stabilization": {
+            "enabled": true,
+            "alpha": 0.5,
+            "minCandidatesRatio": 1.0
+          }
         }
         """);
 
@@ -71,7 +84,7 @@ public class ForwardSecurityAdversarialIT {
                 cfg.toString(),
                 temp.resolve("seed.csv").toString(),
                 keysDir.toString(),
-                List.of(2),
+                List.of(DIM),  // FIXED: Use DIM=3
                 temp,
                 false,
                 meta,
@@ -79,11 +92,12 @@ public class ForwardSecurityAdversarialIT {
                 128
         );
 
+        // Insert 3D vectors
         sys.batchInsert(List.of(
-                new double[]{0,0},
-                new double[]{0.1,0.1},
-                new double[]{0.2,0.2}
-        ), 2);
+                new double[]{0.0, 0.0, 0.0},
+                new double[]{0.1, 0.1, 0.1},
+                new double[]{0.2, 0.2, 0.2}
+        ), DIM);
 
         sys.flushAll();
         sys.finalizeForSearch();
@@ -97,7 +111,7 @@ public class ForwardSecurityAdversarialIT {
 
     @Test
     void compromisedKeyCannotDecryptAfterRotation() {
-
+        keySvc.initializeUsageTracking();
         keySvc.reEncryptAll();
 
         int ok = 0;
@@ -114,6 +128,7 @@ public class ForwardSecurityAdversarialIT {
     @Test
     void reencryptAllChangesCiphertext() {
         var before = snapshot();
+        keySvc.initializeUsageTracking();
         keySvc.reEncryptAll();
         var after = snapshot();
         assertNotEquals(before, after);
@@ -127,6 +142,7 @@ public class ForwardSecurityAdversarialIT {
         var touched = List.of(ids.get(0));
 
         var before = snapshot();
+        keySvc.initializeUsageTracking();
         var rep = keySvc.reencryptTouched(
                 touched,
                 keySvc.getCurrentVersion().getVersion(),
@@ -142,13 +158,6 @@ public class ForwardSecurityAdversarialIT {
             assertArrayEquals(before.get(ids.get(i)), after.get(ids.get(i)));
     }
 
-    /**
-     * NEW TEST: Verify key tracking works correctly
-     *
-     * CRITICAL: Must re-initialize tracking after inserts because
-     * initializeUsageTracking() was called during system construction
-     * before any vectors were inserted.
-     */
     @Test
     void keyTrackingPreventsUnsafeDeletion() {
 
@@ -166,7 +175,6 @@ public class ForwardSecurityAdversarialIT {
         System.out.println("Previous key: v" + previous);
         System.out.println(tracker.getSummary());
 
-        // --- Core invariants after rotateKeyOnly() ---
         assertEquals(3, tracker.getVectorCount(previous),
                 "All vectors must remain on previous key after rotateKeyOnly()");
         assertEquals(0, tracker.getVectorCount(current),
@@ -175,15 +183,12 @@ public class ForwardSecurityAdversarialIT {
         assertFalse(tracker.isSafeToDelete(previous),
                 "Previous key must NOT be deletable while vectors still use it");
 
-        // Attempt deletion (must fail)
         km.deleteKeysOlderThan(previous + 1);
         assertNotNull(km.getSessionKey(previous),
                 "Previous key must not be deleted while vectors exist");
 
-        // --- Full re-encryption ---
         keySvc.reEncryptAll();
 
-        // Tracker must now reflect migration
         assertEquals(0, tracker.getVectorCount(previous),
                 "Previous key must have zero vectors after re-encryption");
         assertEquals(3, tracker.getVectorCount(current),
@@ -192,7 +197,6 @@ public class ForwardSecurityAdversarialIT {
         assertTrue(tracker.isSafeToDelete(previous),
                 "Previous key must be safe to delete after migration");
 
-        // Now deletion must succeed
         km.deleteKeysOlderThan(previous + 1);
         assertNull(km.getSessionKey(previous),
                 "Previous key must be deleted after all vectors migrate");
@@ -201,15 +205,14 @@ public class ForwardSecurityAdversarialIT {
     @Test
     void selectiveReencryptionMigratesOnlyTouchedVectors() {
 
+        // FIXED: Use 3D query matching DIM
         double[] q = {1.0, 1.0, 1.0};
 
-        QueryToken tok = sys.createToken(q, 3, 3);
+        QueryToken tok = sys.createToken(q, 3, DIM);
         sys.getQueryServiceImpl().search(tok);
 
         int touched = sys.getIndexService().getLastTouchedCount();
 
-        // Academic correctness:
-        // The security game is undefined if ANN touches nothing
         Assumptions.assumeTrue(
                 touched > 0,
                 "No vectors touched; selective re-encryption game undefined"
@@ -218,9 +221,10 @@ public class ForwardSecurityAdversarialIT {
         int oldVersion = keySvc.getCurrentVersion().getVersion();
 
         keySvc.rotateKeyOnly();
+        keySvc.initializeUsageTracking();
         keySvc.reencryptTouched(
-                sys.getIndexService().getLastTouchedIds(),
-                oldVersion,
+                new ArrayList<>(sys.getIndexService().getLastTouchedIds()),
+                keySvc.getCurrentVersion().getVersion(),
                 () -> meta.sizePointsDir()
         );
 
@@ -232,8 +236,6 @@ public class ForwardSecurityAdversarialIT {
         assertTrue(migrated > 0);
         assertTrue(migrated <= touched);
     }
-
-
 
     @AfterEach
     void cleanup() {

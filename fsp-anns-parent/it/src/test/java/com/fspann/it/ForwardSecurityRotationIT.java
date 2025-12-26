@@ -1,34 +1,31 @@
 package com.fspann.it;
 
+import com.fspann.api.ForwardSecureANNSystem;
 import com.fspann.common.*;
-import com.fspann.config.SystemConfig;
 import com.fspann.crypto.AesGcmCryptoService;
-import com.fspann.index.paper.PartitionedIndexService;
 import com.fspann.key.*;
-
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.*;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+
 import javax.crypto.SecretKey;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class ForwardSecurityRotationIT {
-
-    private static final Logger logger =
-            LoggerFactory.getLogger(ForwardSecurityRotationIT.class);
 
     @Test
     void testOldKeyCannotDecryptAfterRotation() throws Exception {
         Path root = Files.createTempDirectory("fspann-rot");
         Path meta = root.resolve("meta");
         Path pts  = root.resolve("pts");
+        Path keys = root.resolve("keys");
 
         Files.createDirectories(meta);
         Files.createDirectories(pts);
+        Files.createDirectories(keys);
 
         RocksDBMetadataManager metadata =
                 RocksDBMetadataManager.create(meta.toString(), pts.toString());
@@ -36,19 +33,25 @@ class ForwardSecurityRotationIT {
         Path cfgFile = root.resolve("cfg.json");
         Files.writeString(cfgFile, """
         {
-          "paper": { "enabled": true, "divisions": 3, "m": 8, "seed": 7 },
-          "reencryptionEnabled": true
+          "paper": { 
+            "enabled": true, 
+            "divisions": 3, 
+            "m": 8, 
+            "lambda": 2,
+            "seed": 7 
+          },
+          "partitionedIndexingEnabled": true,
+          "reencryptionEnabled": true,
+          "output": { "exportArtifacts": false }
         }
         """);
 
-        SystemConfig cfg = SystemConfig.load(cfgFile.toString(), true);
-
-        KeyManager km = new KeyManager(root.resolve("keys.blob").toString());
+        KeyManager km = new KeyManager(keys.resolve("ks.blob").toString());
         KeyRotationServiceImpl keyService =
                 new KeyRotationServiceImpl(
                         km,
-                        new KeyRotationPolicy(1, Long.MAX_VALUE),
-                        root.resolve("rot").toString(),
+                        new KeyRotationPolicy(100000, Long.MAX_VALUE),
+                        meta.toString(),
                         metadata,
                         null
                 );
@@ -57,58 +60,59 @@ class ForwardSecurityRotationIT {
                 new AesGcmCryptoService(new SimpleMeterRegistry(), keyService, metadata);
         keyService.setCryptoService(crypto);
 
-        PartitionedIndexService index =
-                new PartitionedIndexService(
-                        metadata,
-                        cfg,
-                        keyService,
-                        crypto
-                );
+        // Use ForwardSecureANNSystem instead of PartitionedIndexService
+        ForwardSecureANNSystem system = new ForwardSecureANNSystem(
+                cfgFile.toString(),
+                root.resolve("seed.csv").toString(),
+                keys.toString(),
+                List.of(3),  // dimension
+                root,
+                false,
+                metadata,
+                crypto,
+                128
+        );
 
-            index.insert("p1", new double[]{1, 2, 3});
+        // Insert using system (ensures proper persistence)
+        String pointId = "0";
+        system.insert(pointId, new double[]{1, 2, 3}, 3);
+        system.finalizeForSearch();
+        system.flushAll();
+        metadata.flush();
 
-            try {
-                metadata.flush();
-            } catch (Exception e) {
-                logger.warn("Flush after insert failed", e);
-            }
+        // Verify point exists
+        EncryptedPoint before = metadata.loadEncryptedPoint(pointId);
+        assertNotNull(before, "Encrypted point must exist after finalize");
 
-            index.finalizeForSearch();
-            metadata.flush();
+        int oldVersion = keyService.getCurrentVersion().getVersion();
+        SecretKey oldKey = keyService.getCurrentVersion().getKey();
 
-            EncryptedPoint before = metadata.loadEncryptedPoint("p1");
-            assertNotNull(before);
+        // Rotate and re-encrypt
+        keyService.rotateKeyOnly();
+        keyService.initializeUsageTracking();
+        keyService.reEncryptAll();
 
+        system.flushAll();
+        metadata.flush();
 
-            int oldVersion = keyService.getCurrentVersion().getVersion();
-            SecretKey oldKey = keyService.getCurrentVersion().getKey();
+        // Load re-encrypted point
+        EncryptedPoint after = metadata.loadEncryptedPoint(pointId);
+        assertNotNull(after, "Point should exist after re-encryption");
+        assertEquals(oldVersion + 1, after.getVersion(),
+                "Re-encrypted point should have new version");
 
-            // Rotate and re-encrypt
-            keyService.rotateKeyOnly();
-            keyService.reEncryptAll();
-            metadata.flush();
+        // Verify old key cannot decrypt
+        assertThrows(
+                RuntimeException.class,
+                () -> crypto.decryptFromPoint(after, oldKey),
+                "Old key should not be able to decrypt re-encrypted point"
+        );
 
-            // ===== CRITICAL: Flush again after re-encryption =====
-            try {
-                metadata.flush();
-            } catch (Exception e) {
-                logger.warn("Flush after re-encryption failed", e);
-            }
+        // But current key should work
+        double[] vec = crypto.decryptFromPoint(after, null);
+        assertEquals(3, vec.length);
 
-            EncryptedPoint after = metadata.loadEncryptedPoint("p1");
-            assertNotNull(after, "Point should exist after re-encryption");
-            assertEquals(oldVersion + 1, after.getVersion(),
-                    "Re-encrypted point should have new version");
-
-            // Now verify old key cannot decrypt
-            assertThrows(
-                    RuntimeException.class,
-                    () -> crypto.decryptFromPoint(after, oldKey),
-                    "Old key should not be able to decrypt re-encrypted point"
-            );
-
-            // But current key should work
-            double[] vec = crypto.decryptFromPoint(after, null);
-            assertEquals(3, vec.length);
-        }
+        system.shutdown();
+        metadata.close();
+    }
 }

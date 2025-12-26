@@ -7,22 +7,22 @@ import com.fspann.crypto.AesGcmCryptoService;
 import com.fspann.key.KeyManager;
 import com.fspann.key.KeyRotationPolicy;
 import com.fspann.key.KeyRotationServiceImpl;
-import com.fspann.loader.GroundtruthManager;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import java.nio.file.*;
 import java.util.Comparator;
-import java.util.Objects;
 import java.util.Random;
 
 public abstract class BaseUnifiedIT {
 
-    protected Path root, metaDir, ptsDir, ksFile, cfgFile, seedFile;
+    @TempDir
+    protected Path root;
 
+    protected Path metaDir, ptsDir, ksFile, cfgFile, seedFile;
     protected RocksDBMetadataManager metadata;
     protected KeyRotationServiceImpl keyService;
     protected AesGcmCryptoService crypto;
@@ -30,53 +30,61 @@ public abstract class BaseUnifiedIT {
     protected SystemConfig cfg;
 
     protected final int DIM = 8;
-    private KeyManager keyManager;
-    private GroundtruthManager groundtruth;
 
     @BeforeEach
     protected void baseSetup() throws Exception {
-        Objects.requireNonNull(root);
-        Objects.requireNonNull(cfgFile);
+        metaDir = root.resolve("meta");
+        ptsDir  = root.resolve("pts");
+        ksFile  = root.resolve("keys.blob");
+        seedFile = root.resolve("seed.csv");
+        cfgFile = root.resolve("cfg.json");
 
-        this.root = root;
-        this.cfg = SystemConfig.load(cfgFile.toString(), true);
+        Files.createDirectories(metaDir);
+        Files.createDirectories(ptsDir);
 
-        // --- Metadata ---
-        Path meta = root.resolve("metadata");
-        Path pts  = root.resolve("points");
-        Files.createDirectories(meta);
-        Files.createDirectories(pts);
+        Files.writeString(seedFile, "");
+        Files.writeString(cfgFile, """
+        {
+          "paper": { "enabled": true, "m": 4, "divisions": 4, "lambda": 3, "seed": 42 },
+          "output": { "exportArtifacts": false },
+          "ratio": { "source": "none" },
+          "reencryptionEnabled": true
+        }
+        """);
 
-        this.metadata = RocksDBMetadataManager.create(
-                meta.toString(), pts.toString()
+        cfg = SystemConfig.load(cfgFile.toString(), true);
+
+        metadata = RocksDBMetadataManager.create(
+                metaDir.toString(), ptsDir.toString()
         );
 
-        // --- Keys ---
-        this.keyManager = new KeyManager(root.resolve("keys.blob").toString());
-        this.keyService = new KeyRotationServiceImpl(
-                keyManager,
+        KeyManager km = new KeyManager(ksFile.toString());
+        keyService = new KeyRotationServiceImpl(
+                km,
                 new KeyRotationPolicy(Integer.MAX_VALUE, Long.MAX_VALUE),
-                meta.toString(),
+                metaDir.toString(),
                 metadata,
                 null
         );
 
-        this.crypto = new AesGcmCryptoService(
+        crypto = new AesGcmCryptoService(
                 new SimpleMeterRegistry(),
                 keyService,
                 metadata
         );
         keyService.setCryptoService(crypto);
 
-        // --- Ratio & GT are OPTIONAL ---
-        if (cfg.getRatio() != null && cfg.getRatio().isEnabled()) {
-            if (cfg.getRatio().requiresGroundtruth()) {
-                this.groundtruth = new GroundtruthManager();
-            }
-        }
-
-        // --- NEVER auto-init GFunctions here ---
-        // GFunctionRegistry must be initialized ONLY after dimension is known
+        system = new ForwardSecureANNSystem(
+                cfgFile.toString(),
+                seedFile.toString(),
+                ksFile.toString(),
+                java.util.List.of(DIM),
+                root,
+                false,
+                metadata,
+                crypto,
+                64
+        );
     }
 
     protected void indexClusteredData(int n) throws IOException {
@@ -87,16 +95,36 @@ public abstract class BaseUnifiedIT {
                 v[d] = 5.0 + r.nextGaussian() * 0.1;
             system.insert("v" + i, v, DIM);
         }
+
         system.finalizeForSearch();
         system.flushAll();
+
+        // CRITICAL: Force RocksDB persistence
+        try {
+            metadata.flush();
+            Thread.sleep(100);  // Give RocksDB time to write
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to flush metadata", e);
+        }
     }
 
     @AfterEach
     void cleanup() throws Exception {
-        try { system.setExitOnShutdown(false); system.shutdown(); } catch (Exception ignore) {}
-        try { metadata.close(); } catch (Exception ignore) {}
-        Files.walk(root).sorted(Comparator.reverseOrder())
-                .forEach(p -> { try { Files.deleteIfExists(p); } catch (Exception ignore) {} });
+        try {
+            system.setExitOnShutdown(false);
+            system.shutdown();
+        } catch (Exception ignore) {}
+
+        try {
+            metadata.close();
+        } catch (Exception ignore) {}
+
+        Files.walk(root)
+                .sorted(Comparator.reverseOrder())
+                .forEach(p -> {
+                    try {
+                        Files.deleteIfExists(p);
+                    } catch (Exception ignore) {}
+                });
     }
 }
-
