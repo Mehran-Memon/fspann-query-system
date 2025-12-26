@@ -43,9 +43,9 @@ public final class PartitionedIndexService implements IndexService {
     private static final Logger logger =
             LoggerFactory.getLogger(PartitionedIndexService.class);
 
-    private static final int DEFAULT_BUILD_THRESHOLD =
-            Math.max(20_000, Runtime.getRuntime().availableProcessors() * 20_000);
-    private final List<PendingVector> pendingVectors = Collections.synchronizedList(new ArrayList<>());
+//    private static final int DEFAULT_BUILD_THRESHOLD =
+//            Math.max(20_000, Runtime.getRuntime().availableProcessors() * 20_000);
+private static final int DEFAULT_BUILD_THRESHOLD = 100_000;
 
     // Minimum sample size for GFunction initialization
     private static final int MIN_SAMPLE_SIZE = 1000;
@@ -122,35 +122,17 @@ public final class PartitionedIndexService implements IndexService {
 
         logger.info("PartitionedIndexService initialized | buildThreshold={} | registry=data-adaptive",
                 DEFAULT_BUILD_THRESHOLD);
+        SystemConfig.PaperConfig pc = cfg.getPaper();
+        logger.info(
+                "CONFIG ASSERT: m={} lambda={} tables={} divisions={} seed={}",
+                pc.m, pc.lambda, pc.getTables(), pc.divisions, pc.seed
+        );
+
     }
 
     // =====================================================
     // GFUNCTION REGISTRY INITIALIZATION
     // =====================================================
-
-    /**
-     * Initialize GFunctionRegistry with sample vectors.
-     * Called automatically during first batch, or can be called explicitly.
-     */
-    private void initializeRegistryIfNeeded(double[] vec) {
-        if (GFunctionRegistry.isInitialized()) {
-            return;
-        }
-
-        synchronized (initSampleBuffer) {
-            if (GFunctionRegistry.isInitialized()) {
-                return;
-            }
-
-            if (initSampleBuffer.size() < MAX_SAMPLE_SIZE) {
-                initSampleBuffer.add(vec.clone());
-            }
-
-            if (initSampleBuffer.size() >= MIN_SAMPLE_SIZE) {
-                initializeRegistry();
-            }
-        }
-    }
 
     /**
      * Force initialization with current sample buffer.
@@ -166,6 +148,14 @@ public final class PartitionedIndexService implements IndexService {
         logger.info(">>> INITIALIZING GFunctionRegistry <<<");
         logger.info("=".repeat(60));
         logger.info("Sample buffer size: {}", initSampleBuffer.size());
+
+        if (initSampleBuffer.size() < MIN_SAMPLE_SIZE) {
+            throw new IllegalStateException(
+                    "Refusing to initialize GFunctionRegistry with sampleSize=" +
+                            initSampleBuffer.size() +
+                            " (< MIN_SAMPLE_SIZE=" + MIN_SAMPLE_SIZE + ")"
+            );
+        }
 
         if (initSampleBuffer.isEmpty()) {
             throw new IllegalStateException(
@@ -208,21 +198,15 @@ public final class PartitionedIndexService implements IndexService {
      * Ensure registry is initialized before any coding operation.
      */
     private void ensureRegistryInitialized() {
-        if (!GFunctionRegistry.isInitialized()) {
-            synchronized (initSampleBuffer) {
-                if (!GFunctionRegistry.isInitialized() && !initSampleBuffer.isEmpty()) {
-                    initializeRegistry();
-                }
-            }
-        }
+        if (GFunctionRegistry.isInitialized()) return;
 
-        if (!GFunctionRegistry.isInitialized()) {
-            throw new IllegalStateException(
-                    "GFunctionRegistry not initialized. " +
-                            "Insert at least " + MIN_SAMPLE_SIZE + " vectors before coding."
-            );
-        }
+        throw new IllegalStateException(
+                "GFunctionRegistry not initialized. " +
+                        "Index must ingest at least " + MIN_SAMPLE_SIZE +
+                        " vectors before search or coding."
+        );
     }
+
 
     // =====================================================
     // INSERT
@@ -230,14 +214,6 @@ public final class PartitionedIndexService implements IndexService {
 
     @Override
     public void insert(String id, double[] vector) {
-
-        logger.info(">>> INSERT CALLED: id={}, registryInit={}, bufferSize={}, pendingSize={}",
-                id,
-                GFunctionRegistry.isInitialized(),
-                initSampleBuffer.size(),
-                pendingVectors.size()
-        );
-
         Objects.requireNonNull(id, "id cannot be null");
         Objects.requireNonNull(vector, "vector cannot be null");
 
@@ -255,34 +231,17 @@ public final class PartitionedIndexService implements IndexService {
             }
         }
 
-        // ---- INITIALIZATION CHECK ----
         if (!GFunctionRegistry.isInitialized()) {
-            initializeRegistryIfNeeded(vector);
-
-            if (!GFunctionRegistry.isInitialized()) {
-                // Still collecting samples - queue this vector for later
-                synchronized (pendingVectors) {
-                    pendingVectors.add(new PendingVector(id, vector));
-                    logger.debug("Queued vector {} for post-initialization indexing (buffer size: {})",
-                            id, pendingVectors.size());
+            synchronized (initSampleBuffer) {
+                if (initSampleBuffer.size() < MAX_SAMPLE_SIZE) {
+                    initSampleBuffer.add(vector.clone());
                 }
-                return;
-            } else {
-                // Just finished initialization - index all pending vectors FIRST
-                logger.info("GFunctionRegistry initialized! Processing {} pending vectors...",
-                        pendingVectors.size());
-
-                synchronized (pendingVectors) {
-                    for (PendingVector pv : pendingVectors) {
-                        // Recursively insert now that registry is ready
-                        insert(pv.id, pv.vector);
-                    }
-                    pendingVectors.clear();
+                if (initSampleBuffer.size() >= MIN_SAMPLE_SIZE) {
+                    initializeRegistry();
                 }
-
-                // Now fall through to index the current vector
             }
         }
+
 
         // ---- NORMAL INSERTION PATH (registry is initialized) ----
         EncryptedPoint ep;
@@ -806,9 +765,15 @@ public final class PartitionedIndexService implements IndexService {
 
         logger.info("Finalizing index for search...");
 
-        // Ensure registry is initialized before finalization
-        if (!GFunctionRegistry.isInitialized() && !initSampleBuffer.isEmpty()) {
-            initializeRegistry();
+        if (!GFunctionRegistry.isInitialized()) {
+            if (initSampleBuffer.size() >= MIN_SAMPLE_SIZE) {
+                initializeRegistry();
+            } else {
+                throw new IllegalStateException(
+                        "Cannot finalize index: only " + initSampleBuffer.size() +
+                                " samples collected (< MIN_SAMPLE_SIZE)"
+                );
+            }
         }
 
         for (DimensionState[] arr : dims.values()) {
@@ -867,4 +832,5 @@ public final class PartitionedIndexService implements IndexService {
     public void clearProbeOverride() {
         probeOverride.remove();
     }
+
 }

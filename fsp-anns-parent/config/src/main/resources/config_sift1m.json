@@ -19,10 +19,10 @@
     },
 
     "_comment_3": "===== STABILIZATION =====",
-    "_comment_4": "alpha=0.02 (2%, down from 15%) + minCandidates=100 (K-relative floor)",
+    "_comment_4": "alpha=0.4 (40%, up from 2%) + minCandidates = ceil(1.25 * K)",
     "stabilization": {
       "enabled": true,
-      "alpha": 0.02,
+      "alpha": 0.4,
       "minCandidatesRatio": 1.25
     },
 
@@ -82,13 +82,6 @@
       "name": "M28",
       "overrides": {
         "paper": { "m": 28, "lambda": 2, "divisions": 3, "seed": 13 }
-      }
-    },
-    {
-      "name": "M28_L1",
-      "overrides": {
-        "paper": { "m": 28, "lambda": 1, "divisions": 3, "seed": 13 },
-        "stabilization": { "alpha": 0.015 }
       }
     },
     {

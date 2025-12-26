@@ -178,7 +178,7 @@ public final class QueryServiceImpl implements QueryService {
                 lastCandKept = candidateIds.size();
             }
 
-            if (K > 0) {
+            if (sc != null && K > 0) {
                 double r = (double) lastCandKept / K;
                 if (r < sc.getMinCandidatesRatio() - 1e-6) {
                     logger.error(

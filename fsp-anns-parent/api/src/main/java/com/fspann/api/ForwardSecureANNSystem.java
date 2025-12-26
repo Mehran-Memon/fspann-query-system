@@ -6,6 +6,7 @@ import com.fspann.crypto.AesGcmCryptoService;
 import com.fspann.crypto.CryptoService;
 import com.fspann.crypto.ReencryptionTracker;
 import com.fspann.crypto.SelectiveReencCoordinator;
+import com.fspann.index.paper.GFunctionRegistry;
 import com.fspann.index.paper.PartitionedIndexService;
 import com.fspann.common.KeyLifeCycleService;
 import com.fspann.key.BackgroundReencryptionScheduler;
@@ -499,6 +500,19 @@ public class ForwardSecureANNSystem {
      * Keeps facade clean - no low-level crypto details in main system class.
      */
     public void batchInsert(List<double[]> vectors, int dim) {
+
+        if (!GFunctionRegistry.isInitialized()) {
+            logger.info("Forcing GFunctionRegistry initialization BEFORE ID assignment");
+
+            // Use the FIRST valid vector to initialize registry
+            for (double[] v : vectors) {
+                if (v != null && v.length == dim) {
+                    indexService.forceInitializeRegistry(v);
+                    break;
+                }
+            }
+        }
+
         Objects.requireNonNull(vectors, "Vectors cannot be null");
         if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
         if (vectors.isEmpty()) return;
@@ -530,6 +544,11 @@ public class ForwardSecureANNSystem {
                 }
 
                 String pointId = Long.toString(ord);
+                if (Long.parseLong(pointId) != ord) {
+                    throw new IllegalStateException(
+                            "ID drift detected: id=" + pointId + ", ordinal=" + ord
+                    );
+                }
                 ids.add(pointId);
                 valid.add(v);
             }
@@ -2267,7 +2286,10 @@ public class ForwardSecureANNSystem {
                     logger.error("Mismatched queries (first 10): {}", validation.mismatchedQueries);
                     throw new IllegalStateException(validation.message);
                 }
-
+                logger.info(
+                        "GT validation confirms ID == base offset invariant for dim={}",
+                        dimension
+                );
                 logger.info("GT Validation PASSED: {}", validation.message);
             }
 

@@ -63,6 +63,12 @@ public final class QueryTokenFactory {
         this.divisions = divisions;
 
         log.info("QueryTokenFactory (MSANNP v2.0): divisions={}, using GFunctionRegistry", divisions);
+        SystemConfig.PaperConfig pc = cfg.getPaper();
+        log.info(
+                "CONFIG ASSERT: m={} lambda={} tables={} divisions={} seed={}",
+                pc.m, pc.lambda, pc.getTables(), pc.divisions, pc.seed
+        );
+
     }
 
     /**
