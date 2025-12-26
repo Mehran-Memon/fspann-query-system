@@ -107,13 +107,19 @@ public final class QueryTokenFactory {
         // This ensures query codes match index codes exactly
         // ============================================================
         BitSet[][] codesByTable = GFunctionRegistry.codeAllTables(vec);
-
         // Validate codes
         if (codesByTable == null || codesByTable.length != L) {
             throw new IllegalStateException(
                     "GFunctionRegistry returned invalid codes: expected " + L +
                             " tables, got " + (codesByTable == null ? "null" : codesByTable.length)
             );
+        }
+        if (codesByTable != null && codesByTable.length > 0 && codesByTable[0].length > 0) {
+            StringBuilder sb = new StringBuilder();
+            for (int b = 0; b < Math.min(32, codesByTable[0][0].length()); b++) {
+                sb.append(codesByTable[0][0].get(b) ? '1' : '0');
+            }
+            log.info("QUERY CODE table=0 div=0 first32bits: {}", sb.toString());
         }
 
         for (int t = 0; t < L; t++) {

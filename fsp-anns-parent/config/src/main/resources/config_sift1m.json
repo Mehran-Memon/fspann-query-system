@@ -85,6 +85,13 @@
       }
     },
     {
+      "name": "M28_L1",
+      "overrides": {
+        "paper": { "m": 28, "lambda": 1, "divisions": 3, "seed": 13 },
+        "stabilization": { "alpha": 0.015 }
+      }
+    },
+    {
       "name": "M32",
       "overrides": {
         "paper": { "m": 32, "lambda": 1, "divisions": 3, "seed": 13 }

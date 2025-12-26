@@ -45,6 +45,7 @@ public final class PartitionedIndexService implements IndexService {
 
     private static final int DEFAULT_BUILD_THRESHOLD =
             Math.max(20_000, Runtime.getRuntime().availableProcessors() * 20_000);
+    private final List<PendingVector> pendingVectors = Collections.synchronizedList(new ArrayList<>());
 
     // Minimum sample size for GFunction initialization
     private static final int MIN_SAMPLE_SIZE = 1000;
@@ -79,6 +80,7 @@ public final class PartitionedIndexService implements IndexService {
         final List<EncryptedPoint> staged = new ArrayList<>();
         final List<BitSet[]> stagedCodes = new ArrayList<>();
 
+
         DimensionState(int dim, int table) {
             this.dim = dim;
             this.table = table;
@@ -88,6 +90,16 @@ public final class PartitionedIndexService implements IndexService {
     private static final class DivisionState {
         List<GreedyPartitioner.SubsetBounds> I = List.of();
         Map<String, List<String>> tagToIds = new HashMap<>();
+    }
+
+    private static class PendingVector {
+        final String id;
+        final double[] vector;
+
+        PendingVector(String id, double[] vector) {
+            this.id = id;
+            this.vector = vector.clone();
+        }
     }
 
     public PartitionedIndexService(
@@ -146,11 +158,14 @@ public final class PartitionedIndexService implements IndexService {
      */
     private synchronized void initializeRegistry() {
         if (GFunctionRegistry.isInitialized()) {
+            logger.debug("GFunctionRegistry already initialized (concurrent call)");
             return;
         }
 
-        logger.info(">>> PartitionedIndexService.initializeRegistry CALLED <<<");
-        logger.info("  buffer.size()={}", initSampleBuffer.size());
+        logger.info("=".repeat(60));
+        logger.info(">>> INITIALIZING GFunctionRegistry <<<");
+        logger.info("=".repeat(60));
+        logger.info("Sample buffer size: {}", initSampleBuffer.size());
 
         if (initSampleBuffer.isEmpty()) {
             throw new IllegalStateException(
@@ -161,22 +176,30 @@ public final class PartitionedIndexService implements IndexService {
         SystemConfig.PaperConfig pc = cfg.getPaper();
         int dimension = initSampleBuffer.get(0).length;
 
-        logger.info(
-                "Initializing GFunctionRegistry with {} samples | dim={} m={} λ={} tables={} divisions={}",
-                initSampleBuffer.size(), dimension, pc.m, pc.lambda, pc.getTables(), pc.divisions
+        logger.info("Parameters: dim={} m={} λ={} tables={} divisions={} sampleSize={}",
+                dimension, pc.m, pc.lambda, pc.getTables(), pc.divisions, initSampleBuffer.size()
         );
 
-        GFunctionRegistry.initialize(
-                initSampleBuffer,
-                dimension,
-                pc.m,
-                pc.lambda,
-                pc.seed,
-                pc.getTables(),
-                pc.divisions
-        );
+        try {
+            GFunctionRegistry.initialize(
+                    initSampleBuffer,
+                    dimension,
+                    pc.m,
+                    pc.lambda,
+                    pc.seed,
+                    pc.getTables(),
+                    pc.divisions
+            );
 
-        logger.info("GFunctionRegistry stats: {}", GFunctionRegistry.getStats());
+            logger.info("=".repeat(60));
+            logger.info(">>> GFunctionRegistry INITIALIZED SUCCESSFULLY <<<");
+            logger.info("=".repeat(60));
+            logger.info("Stats: {}", GFunctionRegistry.getStats());
+
+        } catch (Exception e) {
+            logger.error("FATAL: GFunctionRegistry initialization failed!", e);
+            throw new RuntimeException("Failed to initialize GFunctionRegistry", e);
+        }
 
         initSampleBuffer.clear();
     }
@@ -207,18 +230,61 @@ public final class PartitionedIndexService implements IndexService {
 
     @Override
     public void insert(String id, double[] vector) {
+
+        logger.info(">>> INSERT CALLED: id={}, registryInit={}, bufferSize={}, pendingSize={}",
+                id,
+                GFunctionRegistry.isInitialized(),
+                initSampleBuffer.size(),
+                pendingVectors.size()
+        );
+
         Objects.requireNonNull(id, "id cannot be null");
         Objects.requireNonNull(vector, "vector cannot be null");
 
-        // ---- STRICT REGISTRY INIT PHASE ----
-        if (!GFunctionRegistry.isInitialized()) {
-            initializeRegistryIfNeeded(vector);
-            if (!GFunctionRegistry.isInitialized()) {
-                // Collect samples only, DO NOT index yet
-                return;
+        // ========== ADD THIS DIAGNOSTIC FOR FIRST VECTOR ==========
+        if (id.equals("0") && GFunctionRegistry.isInitialized()) {
+            try {
+                BitSet[] codes = codeForTable(vector, 0);
+                StringBuilder sb = new StringBuilder();
+                for (int b = 0; b < Math.min(32, codes[0].length()); b++) {
+                    sb.append(codes[0].get(b) ? '1' : '0');
+                }
+                logger.info("INDEX CODE id=0 table=0 div=0 first32bits: {}", sb.toString());
+            } catch (Exception e) {
+                logger.error("Failed to log index code", e);
             }
         }
 
+        // ---- INITIALIZATION CHECK ----
+        if (!GFunctionRegistry.isInitialized()) {
+            initializeRegistryIfNeeded(vector);
+
+            if (!GFunctionRegistry.isInitialized()) {
+                // Still collecting samples - queue this vector for later
+                synchronized (pendingVectors) {
+                    pendingVectors.add(new PendingVector(id, vector));
+                    logger.debug("Queued vector {} for post-initialization indexing (buffer size: {})",
+                            id, pendingVectors.size());
+                }
+                return;
+            } else {
+                // Just finished initialization - index all pending vectors FIRST
+                logger.info("GFunctionRegistry initialized! Processing {} pending vectors...",
+                        pendingVectors.size());
+
+                synchronized (pendingVectors) {
+                    for (PendingVector pv : pendingVectors) {
+                        // Recursively insert now that registry is ready
+                        insert(pv.id, pv.vector);
+                    }
+                    pendingVectors.clear();
+                }
+
+                // Now fall through to index the current vector
+            }
+        }
+
+        // ---- NORMAL INSERTION PATH (registry is initialized) ----
         EncryptedPoint ep;
         try {
             ep = cryptoService.encrypt(id, vector, keyService.getCurrentVersion());
@@ -516,6 +582,30 @@ public final class PartitionedIndexService implements IndexService {
     public List<String> lookupCandidateIds(QueryToken token) {
         Objects.requireNonNull(token, "token");
         if (!frozen) throw new IllegalStateException("Index not finalized");
+
+        // ========== DIAGNOSTIC LOGGING (ADD THIS) ==========
+        logger.info("=".repeat(60));
+        logger.info(">>> LOOKUP DIAGNOSTICS <<<");
+        logger.info("Index tables: {}", numTables());
+        logger.info("Token tables: {}", token.getCodesByTable() == null ? "null" : token.getCodesByTable().length);
+        logger.info("Token dimensions: {}", token.getDimension());
+        logger.info("Token topK: {}", token.getTopK());
+        logger.info("GFunctionRegistry initialized: {}", GFunctionRegistry.isInitialized());
+
+        if (GFunctionRegistry.isInitialized()) {
+            Map<String, Object> stats = GFunctionRegistry.getStats();
+            logger.info("GFunctionRegistry stats:");
+            logger.info("  - dimension: {}", stats.get("dimension"));
+            logger.info("  - m: {}", stats.get("m"));
+            logger.info("  - lambda: {}", stats.get("lambda"));
+            logger.info("  - tables: {}", stats.get("tables"));
+            logger.info("  - divisions: {}", stats.get("divisions"));
+            logger.info("  - cached GFunctions: {}", stats.get("cachedGFunctions"));
+            logger.info("  - omega range: [{}, {}]", stats.get("omegaMin"), stats.get("omegaMax"));
+        } else {
+            logger.error("FATAL: GFunctionRegistry NOT initialized during query!");
+        }
+        logger.info("=".repeat(60));
 
         // ========== VALIDATION ==========
         BitSet[][] codesByTable = token.getCodesByTable();
