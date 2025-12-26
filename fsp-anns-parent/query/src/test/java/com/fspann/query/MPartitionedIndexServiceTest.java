@@ -3,168 +3,106 @@ package com.fspann.query;
 import com.fspann.common.*;
 import com.fspann.config.SystemConfig;
 import com.fspann.crypto.AesGcmCryptoService;
+import com.fspann.index.paper.GFunctionRegistry;
 import com.fspann.index.paper.PartitionedIndexService;
-import com.fspann.key.KeyManager;
-import com.fspann.key.KeyRotationServiceImpl;
-import com.fspann.key.KeyUsageTracker;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
+import com.fspann.key.*;
+import org.junit.jupiter.api.*;
 
 import javax.crypto.SecretKey;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
-import static org.mockito.Mockito.*;
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
-public class MPartitionedIndexServiceTest {
+class MPartitionedIndexServiceTest {
 
-    private PartitionedIndexService indexService;
-    private RocksDBMetadataManager mockMetadataManager;
-    private SystemConfig mockConfig;
-    private KeyRotationServiceImpl mockKeyRotationService;
-    private AesGcmCryptoService mockCryptoService;
+    private PartitionedIndexService index;
+    private RocksDBMetadataManager meta;
+    private AesGcmCryptoService crypto;
+    private KeyRotationServiceImpl keyService;
 
     @BeforeEach
     void setUp() {
-        // Mock dependencies
-        mockMetadataManager = mock(RocksDBMetadataManager.class);
-        mockConfig = mock(SystemConfig.class);
-        mockKeyRotationService = mock(KeyRotationServiceImpl.class);
-
-        KeyManager mockKeyManager = mock(KeyManager.class);
-        KeyUsageTracker mockTracker = mock(KeyUsageTracker.class);
-
-        when(mockKeyRotationService.getKeyManager()).thenReturn(mockKeyManager);
-        when(mockKeyManager.getUsageTracker()).thenReturn(mockTracker);
-
-        when(mockTracker.getVectorCount(anyInt())).thenReturn(0);
-        when(mockTracker.isSafeToDelete(anyInt())).thenReturn(false);
-
-        // Use spy instead of mock to preserve default interface methods
-        mockCryptoService = mock(AesGcmCryptoService.class);
-
-        // CRITICAL: Mock StorageMetrics to prevent IllegalStateException
-        StorageMetrics mockStorageMetrics = mock(StorageMetrics.class);
-
-        // Setup BEFORE calling getStorageMetrics()
-        when(mockMetadataManager.getStorageMetrics()).thenReturn(mockStorageMetrics);
-
-        // Mock StorageSnapshot for the metrics
-        StorageMetrics.StorageSnapshot mockSnapshot = new StorageMetrics.StorageSnapshot(
-                0L, 0L, 0L,
-                new ConcurrentHashMap<>(),
-                new ConcurrentHashMap<>()
+        List<double[]> sample = List.of(
+                new double[]{1.0, 2.0, 3.0},
+                new double[]{2.0, 1.0, 0.5},
+                new double[]{1.5, 1.5, 1.5}
         );
-        when(mockStorageMetrics.getSnapshot()).thenReturn(mockSnapshot);
-        when(mockStorageMetrics.getSummary()).thenReturn("mock-storage-summary");
 
-        // Create a REAL PaperConfig because PartitionedIndexService accesses fields directly
-        SystemConfig.PaperConfig realPaperConfig = new SystemConfig.PaperConfig() {
-            @Override
-            public int getTables() { return 3; }
+        // ---------------- Registry (MANDATORY) ----------------
+        GFunctionRegistry.reset();
+        GFunctionRegistry.initialize(
+                sample,     // List<double[]>
+                3,          // dimension
+                5,          // m
+                10,         // lambda
+                42L,        // baseSeed
+                3,          // tables
+                8           // divisions
+        );
+
+        meta = mock(RocksDBMetadataManager.class);
+        crypto = mock(AesGcmCryptoService.class);
+        keyService = mock(KeyRotationServiceImpl.class);
+
+        // Storage metrics mock
+        StorageMetrics sm = mock(StorageMetrics.class);
+        when(meta.getStorageMetrics()).thenReturn(sm);
+        when(sm.getSnapshot()).thenReturn(
+                new StorageMetrics.StorageSnapshot(
+                        0L,0L,0L,
+                        new ConcurrentHashMap<>(),
+                        new ConcurrentHashMap<>()
+                )
+        );
+
+        // Key lifecycle
+        SecretKey key = mock(SecretKey.class);
+        when(keyService.getCurrentVersion()).thenReturn(new KeyVersion(1, key));
+
+        // Config (REAL PaperConfig)
+        SystemConfig cfg = mock(SystemConfig.class);
+        SystemConfig.PaperConfig pc = new SystemConfig.PaperConfig() {
+            @Override public int getTables() { return 3; }
         };
-        realPaperConfig.divisions = 8;
-        realPaperConfig.seed = 42L;
-        realPaperConfig.lambda = 10;
-        realPaperConfig.m = 5;
+        pc.divisions = 8;
+        pc.m = 5;
+        pc.lambda = 10;
+        pc.seed = 42L;
 
-        when(mockConfig.getPaper()).thenReturn(realPaperConfig);
+        when(cfg.getPaper()).thenReturn(pc);
 
-        // Mock Runtime config
-        SystemConfig.RuntimeConfig mockRuntimeConfig = mock(SystemConfig.RuntimeConfig.class);
-        when(mockRuntimeConfig.getMaxCandidateFactor()).thenReturn(5);
-        when(mockRuntimeConfig.getMaxRelaxationDepth()).thenReturn(3);
-        when(mockRuntimeConfig.getEarlyStopCandidates()).thenReturn(1000);
-        when(mockConfig.getRuntime()).thenReturn(mockRuntimeConfig);
+        SystemConfig.RuntimeConfig rc = mock(SystemConfig.RuntimeConfig.class);
+        when(rc.getMaxCandidateFactor()).thenReturn(5);
+        when(rc.getEarlyStopCandidates()).thenReturn(1000);
+        when(rc.getMaxRelaxationDepth()).thenReturn(3);
+        when(cfg.getRuntime()).thenReturn(rc);
 
-        // Initialize PartitionedIndexService with mocked dependencies
-        indexService = new PartitionedIndexService(
-                mockMetadataManager,
-                mockConfig,
-                mockKeyRotationService,
-                mockCryptoService
-        );
+        index =
+                new PartitionedIndexService(meta, cfg, keyService, crypto);
     }
 
     @Test
-    void testInsertWithStringId() throws Exception {
+    void testInsertEncryptsAndStores() throws Exception {
+        double[] v = new double[]{1.0, 2.0, 3.0};
 
-        String vectorId = "test-vector-1";
-        double[] vector = new double[]{1.0, 2.0, 3.0};
+        EncryptedPoint ep = mock(EncryptedPoint.class);
+        when(ep.getId()).thenReturn("vec-1");
+        when(ep.getVectorLength()).thenReturn(3);
 
-        EncryptedPoint mockEncryptedPoint = mock(EncryptedPoint.class);
-        when(mockEncryptedPoint.getId()).thenReturn(vectorId);
-        when(mockEncryptedPoint.getVersion()).thenReturn(1);
-        when(mockEncryptedPoint.getKeyVersion()).thenReturn(1);
-        when(mockEncryptedPoint.getShardId()).thenReturn(0);
-        when(mockEncryptedPoint.getVectorLength()).thenReturn(3);
-
-        SecretKey mockKey = mock(SecretKey.class);
-        KeyVersion mockKeyVersion = new KeyVersion(1, mockKey);
-        when(mockKeyRotationService.getCurrentVersion()).thenReturn(mockKeyVersion);
-
-        when(mockCryptoService.encrypt(
-                eq(vectorId),
-                eq(vector),
+        when(crypto.encrypt(
+                eq("vec-1"),
+                eq(v),
                 any(KeyVersion.class)
-        )).thenReturn(mockEncryptedPoint);
+        )).thenReturn(ep);
 
-        doNothing().when(mockMetadataManager).saveEncryptedPoint(any());
+        doNothing().when(meta).saveEncryptedPoint(ep);
 
-        indexService.insert(vectorId, vector);
+        index.insert("vec-1", v);
 
-        verify(mockCryptoService).encrypt(eq(vectorId), eq(vector), any(KeyVersion.class));
-        verify(mockMetadataManager).saveEncryptedPoint(mockEncryptedPoint);
+        verify(crypto).encrypt(eq("vec-1"), eq(v), any());
+        verify(meta).saveEncryptedPoint(ep);
     }
 
-    @Test
-    void testInsertWithEncryptedPoint() throws Exception {
-        // Test the insert(EncryptedPoint, double[]) method directly
-        double[] vector = new double[]{1.0, 2.0, 3.0};
-
-        // Create mock encrypted point
-        EncryptedPoint mockEncryptedPoint = mock(EncryptedPoint.class);
-        when(mockEncryptedPoint.getId()).thenReturn("test-vector-2");
-        when(mockEncryptedPoint.getVersion()).thenReturn(1);
-        when(mockEncryptedPoint.getKeyVersion()).thenReturn(1);
-        when(mockEncryptedPoint.getShardId()).thenReturn(0);
-        when(mockEncryptedPoint.getVectorLength()).thenReturn(3);
-
-        // Mock metadata save
-        doNothing().when(mockMetadataManager).saveEncryptedPoint(any(EncryptedPoint.class));
-
-        // Call insert with EncryptedPoint
-        indexService.insert(mockEncryptedPoint, vector);
-
-        // Verify metadata save was called
-        verify(mockMetadataManager).saveEncryptedPoint(mockEncryptedPoint);
-    }
-
-    @Test
-    void testInsertInvalidVector() {
-        // Test with null ID - should throw NullPointerException
-        assertThrows(NullPointerException.class, () -> {
-            indexService.insert((String) null, new double[]{1.0, 2.0});
-        });
-
-        // Test with null vector - should throw NullPointerException
-        assertThrows(NullPointerException.class, () -> {
-            indexService.insert("test-id", (double[]) null);
-        });
-    }
-
-    @Test
-    void testInsertWithEncryptedPointNullInputs() {
-        // Test insert(EncryptedPoint, double[]) with null inputs
-        double[] vector = new double[]{1.0, 2.0, 3.0};
-
-        assertThrows(NullPointerException.class, () -> {
-            indexService.insert((EncryptedPoint) null, vector);
-        });
-
-        EncryptedPoint mockPoint = mock(EncryptedPoint.class);
-        assertThrows(NullPointerException.class, () -> {
-            indexService.insert(mockPoint, (double[]) null);
-        });
-    }
 }

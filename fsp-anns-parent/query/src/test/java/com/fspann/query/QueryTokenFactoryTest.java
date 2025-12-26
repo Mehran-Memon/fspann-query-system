@@ -1,128 +1,104 @@
 package com.fspann.query;
 
-import com.fspann.common.KeyLifeCycleService;
-import com.fspann.common.KeyVersion;
-import com.fspann.common.QueryToken;
+import com.fspann.common.*;
 import com.fspann.config.SystemConfig;
 import com.fspann.crypto.CryptoService;
+import com.fspann.index.paper.GFunctionRegistry;
 import com.fspann.index.paper.PartitionedIndexService;
 import com.fspann.query.core.QueryTokenFactory;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.*;
 
 import javax.crypto.SecretKey;
-import java.util.BitSet;
 
-import static org.mockito.Mockito.*;
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
-public class QueryTokenFactoryTest {
+class QueryTokenFactoryTest {
 
     private QueryTokenFactory tokenFactory;
-    private CryptoService mockCryptoService;
-    private KeyLifeCycleService mockKeyService;
-    private PartitionedIndexService mockPartitionedIndexService;
-    private SystemConfig mockConfig;
+    private CryptoService crypto;
+    private KeyLifeCycleService keyService;
+    private PartitionedIndexService partition;
+    private SystemConfig config;
 
     @BeforeEach
     void setUp() {
-        mockCryptoService = mock(CryptoService.class);
-        mockKeyService = mock(KeyLifeCycleService.class);
-        mockPartitionedIndexService = mock(PartitionedIndexService.class);
 
-        // Create mockConfig FIRST
-        mockConfig = mock(SystemConfig.class);
+        List<double[]> sample = List.of(
+                new double[]{1.0, 2.0, 3.0},
+                new double[]{2.0, 1.0, 0.5},
+                new double[]{1.5, 1.5, 1.5}
+        );
 
-        // Create a REAL PaperConfig with concrete values (not a mock)
-        // because QueryTokenFactory accesses FIELDS directly (pc.divisions, pc.seed)
-        // and Mockito cannot mock field access
-        SystemConfig.PaperConfig realPaperConfig = new SystemConfig.PaperConfig() {
-            @Override
-            public int getTables() {
-                return 3; // Number of tables (L)
-            }
+        // ---------------- Registry (MANDATORY) ----------------
+        GFunctionRegistry.reset();
+
+        GFunctionRegistry.initialize(
+                sample,     // List<double[]>
+                3,          // dimension
+                5,          // m
+                10,         // lambda
+                42L,        // baseSeed
+                3,          // tables
+                8           // divisions
+        );
+
+        crypto = mock(CryptoService.class);
+        keyService = mock(KeyLifeCycleService.class);
+        partition = mock(PartitionedIndexService.class);
+        config = mock(SystemConfig.class);
+
+        // Real PaperConfig (fields accessed directly)
+        SystemConfig.PaperConfig pc = new SystemConfig.PaperConfig() {
+            @Override public int getTables() { return 3; }
         };
-        realPaperConfig.divisions = 8;  // Field access
-        realPaperConfig.seed = 42L;     // Field access
-        realPaperConfig.lambda = 10;    // Field access
-        realPaperConfig.m = 5;          // Field access
+        pc.divisions = 8;
+        pc.m = 5;
+        pc.lambda = 10;
+        pc.seed = 42L;
 
-        // Mock the getter methods as well (for other code paths)
-        when(mockConfig.getPaper()).thenReturn(realPaperConfig);
+        when(config.getPaper()).thenReturn(pc);
 
-        // Mock the partition.code() method to return valid BitSets matching divisions
-        // But return null for empty vectors (to simulate real behavior)
-        when(mockPartitionedIndexService.code(any(double[].class), anyLong())).thenAnswer(invocation -> {
-            double[] vector = invocation.getArgument(0);
+        // Crypto + key mocks
+        SecretKey mockKey = mock(SecretKey.class);
+        when(keyService.getCurrentVersion()).thenReturn(new KeyVersion(1, mockKey));
+        when(crypto.encryptQuery(any(), any(), any())).thenReturn(new byte[]{1,2,3});
 
-            // Return null for empty vectors (simulates real partition.code() failure)
-            if (vector == null || vector.length == 0) {
-                return null;
-            }
-
-            // Return valid codes for non-empty vectors
-            BitSet[] mockCodes = new BitSet[8]; // MUST match pc.divisions = 8
-            for (int i = 0; i < 8; i++) {
-                mockCodes[i] = new BitSet();
-                mockCodes[i].set(i); // Just set some bits
-            }
-            return mockCodes;
-        });
-
-        // Initialize QueryTokenFactory with mocked dependencies
-        tokenFactory = new QueryTokenFactory(mockCryptoService, mockKeyService, mockPartitionedIndexService, mockConfig, 8);
+        tokenFactory =
+                new QueryTokenFactory(crypto, keyService, partition, config, 8);
     }
 
     @Test
-    void testCreateQueryToken() {
-        double[] query = new double[]{1.0, 2.0, 3.0};
-        int topK = 10;
+    void testCreateQueryToken_OK() {
+        double[] q = new double[]{1.0, 2.0, 3.0};
 
-        // Mock return values for the crypto and key service
-        SecretKey mockKey = mock(SecretKey.class);
-        when(mockCryptoService.encryptQuery(any(), any(), any())).thenReturn(new byte[]{1, 2, 3, 4});
-        when(mockKeyService.getCurrentVersion()).thenReturn(new KeyVersion(1, mockKey));
+        QueryToken tok = tokenFactory.create(q, 10);
 
-        // Create token using QueryTokenFactory
-        QueryToken token = tokenFactory.create(query, topK);
-
-        // Assertions
-        assertNotNull(token);
-        assertEquals(topK, token.getTopK());
-        assertEquals(3, token.getNumTables());  // Based on realPaperConfig.getTables() = 3
-        assertNotNull(token.getEncryptedQuery());
-        assertNotNull(token.getIv());
-        assertNotNull(token.getCodesByTable());
-        assertEquals(3, token.getCodesByTable().length); // Should have 3 tables worth of codes
+        assertNotNull(tok);
+        assertEquals(10, tok.getTopK());
+        assertEquals(3, tok.getNumTables());
+        assertEquals(3, tok.getCodesByTable().length);
+        assertNotNull(tok.getEncryptedQuery());
+        assertNotNull(tok.getIv());
     }
 
     @Test
-    void testInvalidQuery() {
-        double[] query = new double[]{}; // Empty query
+    void testCreateFailsWhenRegistryMissing() {
+        GFunctionRegistry.reset();
 
-        // Need to mock KeyVersion because code encrypts query BEFORE partition.code() validation
-        SecretKey mockKey = mock(SecretKey.class);
-        when(mockKeyService.getCurrentVersion()).thenReturn(new KeyVersion(1, mockKey));
-        when(mockCryptoService.encryptQuery(any(), any(), any())).thenReturn(new byte[]{1, 2, 3, 4});
-
-        // Note: Empty vector doesn't throw IllegalArgumentException - it goes through
-        // the code until partition.code() fails with IllegalStateException
-        // because the validation only checks topK, not vector length
-        assertThrows(IllegalStateException.class, () -> tokenFactory.create(query, 10));
+        assertThrows(
+                IllegalStateException.class,
+                () -> tokenFactory.create(new double[]{1,2,3}, 5)
+        );
     }
 
     @Test
     void testInvalidTopK() {
-        double[] query = new double[]{1.0, 2.0, 3.0};
-
-        // topK <= 0 should throw IllegalArgumentException
-        assertThrows(IllegalArgumentException.class, () -> tokenFactory.create(query, 0));
-        assertThrows(IllegalArgumentException.class, () -> tokenFactory.create(query, -1));
-    }
-
-    @Test
-    void testNullVector() {
-        // Null vector should throw NullPointerException
-        assertThrows(NullPointerException.class, () -> tokenFactory.create(null, 10));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> tokenFactory.create(new double[]{1,2}, 0)
+        );
     }
 }

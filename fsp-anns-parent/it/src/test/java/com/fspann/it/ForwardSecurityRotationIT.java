@@ -66,17 +66,19 @@ class ForwardSecurityRotationIT {
                 );
 
             index.insert("p1", new double[]{1, 2, 3});
-            index.finalizeForSearch();
 
-            // ===== CRITICAL: Force flush to metadata =====
             try {
                 metadata.flush();
             } catch (Exception e) {
                 logger.warn("Flush after insert failed", e);
             }
 
+            index.finalizeForSearch();
+            metadata.flush();
+
             EncryptedPoint before = metadata.loadEncryptedPoint("p1");
-            assertNotNull(before, "Point should exist before rotation");
+            assertNotNull(before);
+
 
             int oldVersion = keyService.getCurrentVersion().getVersion();
             SecretKey oldKey = keyService.getCurrentVersion().getKey();
@@ -84,6 +86,7 @@ class ForwardSecurityRotationIT {
             // Rotate and re-encrypt
             keyService.rotateKeyOnly();
             keyService.reEncryptAll();
+            metadata.flush();
 
             // ===== CRITICAL: Flush again after re-encryption =====
             try {
