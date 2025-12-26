@@ -15,7 +15,7 @@ import java.util.stream.Stream;
 public class RocksDBMetadataManager implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(RocksDBMetadataManager.class);
     private static final Object LOCK = new Object();
-    private static RocksDBMetadataManager instance = null;
+    private static final Map<String, RocksDBMetadataManager> instances = new ConcurrentHashMap<>();
     private volatile boolean syncWrites = false;
     private final StorageMetrics storageMetrics;
 
@@ -27,7 +27,7 @@ public class RocksDBMetadataManager implements AutoCloseable {
 
     private static final Object INIT_LOCK = new Object();
 
-    // Track old point files for deferred cleanup (ISSUE #3 FIX)
+    // Track old point files for deferred cleanup
     private final Queue<Path> oldPointFilesForCleanup = new ConcurrentLinkedQueue<>();
 
     static {
@@ -39,35 +39,41 @@ public class RocksDBMetadataManager implements AutoCloseable {
         }
     }
 
-    private static RocksDBMetadataManager createDefaultMetadataManager() {
-        try {
-            return RocksDBMetadataManager.create(
-                    FsPaths.metadataDb().toString(),
-                    FsPaths.pointsDir().toString()
-            );
-        } catch (IOException e) {
-            throw new RuntimeException("Failed to initialize RocksDBMetadataManager", e);
-        }
-    }
 
+    /**
+     * Path-based instance cache instead of singleton.
+     * Each unique (dbPath, pointsPath) pair gets its own instance.
+     */
     public static RocksDBMetadataManager create(String dbPath, String pointsPath) throws IOException {
-        // Check without lock first (optimization)
-        if (instance != null && !instance.closed) {
-            return instance;
-        }
+        Objects.requireNonNull(dbPath, "dbPath cannot be null");
+        Objects.requireNonNull(pointsPath, "pointsPath cannot be null");
 
-        // Initialize without holding global lock
-        RocksDBMetadataManager newInstance = new RocksDBMetadataManager(dbPath, pointsPath);
+        // Normalize paths for cache key
+        String normalizedDb = Paths.get(dbPath).toAbsolutePath().normalize().toString();
+        String normalizedPts = Paths.get(pointsPath).toAbsolutePath().normalize().toString();
+        String cacheKey = normalizedDb + "|" + normalizedPts;
 
-        // Only acquire lock for assignment
         synchronized (LOCK) {
-            if (instance != null && !instance.closed) {
-                // Someone else created it while we were initializing
-                newInstance.close();
-                return instance;
+            RocksDBMetadataManager existing = instances.get(cacheKey);
+
+            // Return existing instance if still open
+            if (existing != null && !existing.closed) {
+                logger.debug("Reusing existing RocksDBMetadataManager for {}", cacheKey);
+                return existing;
             }
-            instance = newInstance;
-            return instance;
+
+            // Remove closed instance from cache
+            if (existing != null && existing.closed) {
+                instances.remove(cacheKey);
+                logger.debug("Removed closed instance from cache: {}", cacheKey);
+            }
+
+            // Create new instance
+            logger.info("Creating new RocksDBMetadataManager: db={}, pts={}", dbPath, pointsPath);
+            RocksDBMetadataManager newInstance = new RocksDBMetadataManager(dbPath, pointsPath);
+            instances.put(cacheKey, newInstance);
+
+            return newInstance;
         }
     }
 
@@ -117,8 +123,14 @@ public class RocksDBMetadataManager implements AutoCloseable {
                     logger.info("Final storage snapshot: {}", storageMetrics.getSummary());
                 }
                 closed = true;
-                instance = null;
-                logger.debug("RocksDBMetadataManager closed for {}", dbPath);
+
+                // FIXED: Remove from cache on close
+                String normalizedDb = Paths.get(dbPath).toAbsolutePath().normalize().toString();
+                String normalizedPts = Paths.get(baseDir).toAbsolutePath().normalize().toString();
+                String cacheKey = normalizedDb + "|" + normalizedPts;
+                instances.remove(cacheKey);
+
+                logger.debug("RocksDBMetadataManager closed and removed from cache: {}", cacheKey);
             }
         }
     }
