@@ -137,7 +137,7 @@ public class RocksDBMetadataManager implements AutoCloseable {
 
     // ------------------- CRUD: metadata -------------------
 
-    public synchronized Map<String, Map<String, String>> multiGetVectorMetadata(Collection<String> vectorIds) {
+    public Map<String, Map<String, String>> multiGetVectorMetadata(Collection<String> vectorIds) {
         Objects.requireNonNull(vectorIds, "vectorIds");
         if (vectorIds.isEmpty()) return Collections.emptyMap();
 
@@ -148,7 +148,7 @@ public class RocksDBMetadataManager implements AutoCloseable {
         return out;
     }
 
-    public synchronized Map<String, String> getVectorMetadata(String vectorId) {
+    public Map<String, String> getVectorMetadata(String vectorId) {
         Objects.requireNonNull(vectorId, "vectorId");
         try {
             byte[] v = db.get(vectorId.getBytes(StandardCharsets.UTF_8));
