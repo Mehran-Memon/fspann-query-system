@@ -693,12 +693,14 @@ public class ForwardSecureANNSystem {
                 // 5. Metrics (single source of truth)
                 // --------------------------------------------------
                 QueryMetrics m = computeMetricsAtK(
-                        results,
                         k,
-                        q,
+                        results,
                         qi,
-                        gt
+                        q,          // double[] queryVector
+                        qs,         // QueryServiceImpl
+                        gt       // GroundtruthManager instance
                 );
+
 
                 // --------------------------------------------------
                 // 6. Timing
@@ -783,109 +785,90 @@ public class ForwardSecureANNSystem {
      *      - Measures search EFFICIENCY
      *      - Lower is more efficient (minimum = 1.0)
      *
-     * @param annResults Results returned by ANN search
-     * @param k          Number of neighbors requested
-     * @param queryVector The query vector
-     * @param queryIndex Index of this query (for groundtruth lookup)
-     * @param gt         Groundtruth manager
-     * @return QueryMetrics containing all three metrics
-     */
-    public QueryMetrics computeMetricsAtK(
-            List<QueryResult> annResults,
+     **/
+    QueryMetrics computeMetricsAtK(
             int k,
-            double[] queryVector,
+            List<QueryResult> annResults,
             int queryIndex,
-            GroundtruthManager gt
+            double[] queryVector,
+            QueryServiceImpl qs,
+            GroundtruthManager gtMgr
     ) {
-        if (annResults == null || annResults.isEmpty() || k <= 0) {
-            return new QueryMetrics(0.0, 0.0, 0.0);
-        }
 
-        final int upto = Math.min(k, annResults.size());
-
-        // ================== 1. Precision@K ==================
-        int[] gtIds = gt.getGroundtruthIds(queryIndex, k);
-        int hits = 0;
-
-        if (gtIds != null && gtIds.length > 0) {
-            Set<Integer> gtSet = new HashSet<>();
-            for (int id : gtIds) gtSet.add(id);
-
-            for (int i = 0; i < upto; i++) {
-                try {
-                    int annId = Integer.parseInt(annResults.get(i).getId());
-                    if (gtSet.contains(annId)) hits++;
-                } catch (NumberFormatException ignore) {}
-            }
-        }
-        double precision = hits / (double) k;
-
-        // ================== 2. Candidate Ratio (Efficiency) ==================
-        QueryServiceImpl qs = getQueryServiceImpl();
-        double candidateRatio =
-                (qs != null && k > 0 && qs.getLastCandKept() > 0)
-                        ? (double) qs.getLastCandKept() / k
-                        : 0.0;
-
-        // ================== 3. Distance Ratio (Quality) ==================
-        double distanceRatio = Double.NaN;
-
-        if (baseReader != null && gtIds != null && gtIds.length > 0) {
-            // Compute groundtruth distances for each position j
-            // GT must be sorted by distance (closest first)
-            double[] gtDistances = new double[Math.min(k, gtIds.length)];
-            for (int j = 0; j < gtDistances.length; j++) {
-                gtDistances[j] = baseReader.l2(queryVector, gtIds[j]);
-            }
-
-            // Distance ratio formula: ratio_j = dist(returned_j) / dist(GT_j)
-            double ratioSum = 0.0;
-            int validCount = 0;
-
-            for (int j = 0; j < upto; j++) {
-                // Get j-th returned result distance
-                double dAnn;
-                try {
-                    int annId = Integer.parseInt(annResults.get(j).getId());
-                    dAnn = baseReader.l2(queryVector, annId);
-                } catch (NumberFormatException e) {
-                    continue;
-                }
-
-                // Get j-th groundtruth distance (per-position denominator)
-                double dGt = (j < gtDistances.length)
-                        ? gtDistances[j]
-                        : gtDistances[gtDistances.length - 1];
-
-                // Avoid division by zero
-                if (dGt > RATIO_EPS) {
-                    ratioSum += (dAnn / dGt);
-                    validCount++;
-                }
-            }
-
-            distanceRatio = (validCount > 0) ? (ratioSum / validCount) : 0.0;
-
-            // ===== K=1 SAFETY FIX =====
-            if (k == 1 && !annResults.isEmpty() && gtIds != null && gtIds.length > 0) {
-                int returnedId = Integer.parseInt(annResults.get(0).getId());
-                int gtId = gtIds[0];
-                if (returnedId == gtId) {
-                    distanceRatio = 1.0;
-                }
-            }
-
-        }
-
-        // Log diagnostic for debugging
-        if (verbose && logger.isDebugEnabled()) {
-            logger.debug(
-                    "Q{} K={}: precision={:.4f}, distRatio={:.4f}, candRatio={:.2f}, hits={}/{}",
-                    queryIndex, k, precision, distanceRatio, candidateRatio, hits, upto
+        // ---------- 1. Ground Truth (MANDATORY) ----------
+        int[] gt = gtMgr.getGroundtruth(queryIndex, k);
+        if (gt == null || gt.length < k) {
+            throw new IllegalStateException(
+                    "GT missing or insufficient for query=" + queryIndex
             );
         }
 
-        return new QueryMetrics(distanceRatio, precision, candidateRatio);
+        // ---------- 2. Resolve ANN base indices ----------
+        int upto = Math.min(k, annResults.size());
+        int[] annIdx = new int[upto];
+
+        for (int i = 0; i < upto; i++) {
+            annIdx[i] = resolveBaseIndex(annResults.get(i));
+        }
+
+        // ---------- 3. Precision@K (PPANN) ----------
+        Set<Integer> gtSet = new HashSet<>(k);
+        for (int i = 0; i < k; i++) {
+            gtSet.add(gt[i]);
+        }
+
+        int hits = 0;
+        for (int i = 0; i < upto; i++) {
+            if (gtSet.contains(annIdx[i])) hits++;
+        }
+
+        double precisionAtK = hits / (double) k;
+
+        // ---------- 4. Distance Ratio@K (Peng et al.) ----------
+        double distanceRatioAtK = Double.NaN;
+
+        if (baseReader != null) {
+            double ratioSum = 0.0;
+            int count = Math.min(k, annIdx.length);
+
+            for (int i = 0; i < count; i++) {
+                double dGt = baseReader.l2(queryVector, gt[i]);
+                if (dGt <= 0) continue;
+                double dAnn = baseReader.l2(queryVector, annIdx[i]);
+                ratioSum += dAnn / dGt;
+            }
+            distanceRatioAtK = ratioSum / count;
+        }
+
+        // ---------- 5. Candidate Ratio ----------
+        int candidatesExamined = qs.getLastCandTotal();
+        double candidateRatioAtK = candidatesExamined / (double) k;
+
+        logger.info("GT[0..5]={}", Arrays.toString(Arrays.copyOf(gt, 5)));
+        logger.info("ANN[0..5]={}", Arrays.toString(Arrays.copyOf(annIdx, 5)));
+        logger.info("precision@{}={}", k, precisionAtK);
+        logger.info("ratio@{}={}", k, distanceRatioAtK);
+
+        return new QueryMetrics(
+                distanceRatioAtK,
+                precisionAtK,
+                candidateRatioAtK
+        );
+
+    }
+
+    private int resolveBaseIndex(QueryResult r) {
+        try {
+            int idx = Integer.parseInt(r.getId());
+            if (idx < 0) {
+                throw new IllegalStateException("Negative base index: " + r.getId());
+            }
+            return idx;
+        } catch (NumberFormatException e) {
+            throw new IllegalStateException(
+                    "Unresolvable ANN id: " + r.getId(), e
+            );
+        }
     }
 
     // --- FOR INTEGRATION TESTS

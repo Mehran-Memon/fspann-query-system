@@ -87,7 +87,7 @@ public class QueryToken implements Serializable {
 
     // mSANNP: per-table codes
     public BitSet[][] getCodesByTable() {
-        return deepCloneCodes2D(codesByTable);
+        return codesByTable;
     }
 
     // Legacy: returns table-0 codes only

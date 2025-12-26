@@ -10,7 +10,34 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
+/**
+ * PartitionedIndexService - MSANNP Implementation with Data-Adaptive GFunctions
+ * ==============================================================================
+ *
+ * KEY CHANGE (v2.0):
+ * ------------------
+ * Now uses GFunctionRegistry for data-adaptive omega computation.
+ *
+ * The registry is initialized automatically during the first batch insert
+ * using a sample of actual vectors. This ensures:
+ *   1. omega_j values are computed from actual projection ranges
+ *   2. Index and query use IDENTICAL GFunction parameters
+ *   3. Works correctly for ANY dataset (SIFT, Glove, Deep1B, etc.)
+ *
+ * INITIALIZATION FLOW:
+ * --------------------
+ * 1. First call to insert() triggers initializeRegistry() if not done
+ * 2. initializeRegistry() samples staged vectors and calls GFunctionRegistry.initialize()
+ * 3. All subsequent insert() and code() calls use cached GFunctions
+ *
+ * QUERY FLOW:
+ * -----------
+ * 1. QueryTokenFactory calls code(vec, seedOverride) or uses GFunctionRegistry directly
+ * 2. GFunctionRegistry returns the SAME GFunction used during indexing
+ * 3. Codes match -> correct candidates returned
+ */
 public final class PartitionedIndexService implements IndexService {
 
     private static final Logger logger =
@@ -18,6 +45,10 @@ public final class PartitionedIndexService implements IndexService {
 
     private static final int DEFAULT_BUILD_THRESHOLD =
             Math.max(20_000, Runtime.getRuntime().availableProcessors() * 20_000);
+
+    // Minimum sample size for GFunction initialization
+    private static final int MIN_SAMPLE_SIZE = 1000;
+    private static final int MAX_SAMPLE_SIZE = 10000;
 
     private final RocksDBMetadataManager metadata;
     private final SystemConfig cfg;
@@ -29,6 +60,9 @@ public final class PartitionedIndexService implements IndexService {
     private final Map<Integer, DimensionState[]> dims = new ConcurrentHashMap<>();
 
     private volatile boolean frozen = false;
+
+    // Buffer for collecting sample vectors before initialization
+    private final List<double[]> initSampleBuffer = Collections.synchronizedList(new ArrayList<>());
 
     private final ThreadLocal<Integer> lastTouched =
             ThreadLocal.withInitial(() -> 0);
@@ -74,7 +108,97 @@ public final class PartitionedIndexService implements IndexService {
             );
         }
 
-        logger.info("PartitionedIndexService initialized | buildThreshold={}", DEFAULT_BUILD_THRESHOLD);
+        logger.info("PartitionedIndexService initialized | buildThreshold={} | registry=data-adaptive",
+                DEFAULT_BUILD_THRESHOLD);
+    }
+
+    // =====================================================
+    // GFUNCTION REGISTRY INITIALIZATION
+    // =====================================================
+
+    /**
+     * Initialize GFunctionRegistry with sample vectors.
+     * Called automatically during first batch, or can be called explicitly.
+     */
+    private void initializeRegistryIfNeeded(double[] vec) {
+        if (GFunctionRegistry.isInitialized()) {
+            return;
+        }
+
+        synchronized (initSampleBuffer) {
+            if (GFunctionRegistry.isInitialized()) {
+                return;
+            }
+
+            if (initSampleBuffer.size() < MAX_SAMPLE_SIZE) {
+                initSampleBuffer.add(vec.clone());
+            }
+
+            if (initSampleBuffer.size() >= MIN_SAMPLE_SIZE) {
+                initializeRegistry();
+            }
+        }
+    }
+
+    /**
+     * Force initialization with current sample buffer.
+     * Called when we have enough samples or at build time.
+     */
+    private synchronized void initializeRegistry() {
+        if (GFunctionRegistry.isInitialized()) {
+            return;
+        }
+
+        logger.info(">>> PartitionedIndexService.initializeRegistry CALLED <<<");
+        logger.info("  buffer.size()={}", initSampleBuffer.size());
+
+        if (initSampleBuffer.isEmpty()) {
+            throw new IllegalStateException(
+                    "Cannot initialize GFunctionRegistry: no sample vectors available"
+            );
+        }
+
+        SystemConfig.PaperConfig pc = cfg.getPaper();
+        int dimension = initSampleBuffer.get(0).length;
+
+        logger.info(
+                "Initializing GFunctionRegistry with {} samples | dim={} m={} λ={} tables={} divisions={}",
+                initSampleBuffer.size(), dimension, pc.m, pc.lambda, pc.getTables(), pc.divisions
+        );
+
+        GFunctionRegistry.initialize(
+                initSampleBuffer,
+                dimension,
+                pc.m,
+                pc.lambda,
+                pc.seed,
+                pc.getTables(),
+                pc.divisions
+        );
+
+        logger.info("GFunctionRegistry stats: {}", GFunctionRegistry.getStats());
+
+        initSampleBuffer.clear();
+    }
+
+    /**
+     * Ensure registry is initialized before any coding operation.
+     */
+    private void ensureRegistryInitialized() {
+        if (!GFunctionRegistry.isInitialized()) {
+            synchronized (initSampleBuffer) {
+                if (!GFunctionRegistry.isInitialized() && !initSampleBuffer.isEmpty()) {
+                    initializeRegistry();
+                }
+            }
+        }
+
+        if (!GFunctionRegistry.isInitialized()) {
+            throw new IllegalStateException(
+                    "GFunctionRegistry not initialized. " +
+                            "Insert at least " + MIN_SAMPLE_SIZE + " vectors before coding."
+            );
+        }
     }
 
     // =====================================================
@@ -86,21 +210,20 @@ public final class PartitionedIndexService implements IndexService {
         Objects.requireNonNull(id, "id cannot be null");
         Objects.requireNonNull(vector, "vector cannot be null");
 
-        int dim = vector.length;
+        // ---- STRICT REGISTRY INIT PHASE ----
+        if (!GFunctionRegistry.isInitialized()) {
+            initializeRegistryIfNeeded(vector);
+            if (!GFunctionRegistry.isInitialized()) {
+                // Collect samples only, DO NOT index yet
+                return;
+            }
+        }
 
         EncryptedPoint ep;
         try {
             ep = cryptoService.encrypt(id, vector, keyService.getCurrentVersion());
             if (ep == null) throw new RuntimeException("encrypt() returned null");
-
-            // DIAGNOSTIC: Verify tracking happened
-            if (keyService instanceof com.fspann.key.KeyRotationServiceImpl kr) {
-                int tracked = kr.getKeyManager().getUsageTracker().getVectorCount(ep.getKeyVersion());
-                logger.debug("After encrypt: id={}, keyVersion={}, trackedCount={}",
-                        id, ep.getKeyVersion(), tracked);
-            }
         } catch (Exception e) {
-            logger.error("Failed to encrypt vector {}: {}", id, e.getMessage());
             throw new RuntimeException("Encryption failed for vector " + id, e);
         }
 
@@ -125,7 +248,7 @@ public final class PartitionedIndexService implements IndexService {
 
         // Stage into ALL tables (ℓ)
         for (DimensionState S : tables) {
-            BitSet[] codes = code(vec, tableSeed(S.table));
+            BitSet[] codes = codeForTable(vec, S.table);
             synchronized (S) {
                 S.staged.add(pt);
                 S.stagedCodes.add(codes);
@@ -160,10 +283,62 @@ public final class PartitionedIndexService implements IndexService {
     }
 
     // =====================================================
+    // CODING (using GFunctionRegistry)
+    // =====================================================
+
+    /**
+     * Compute codes for a vector for a specific table.
+     * Uses GFunctionRegistry for data-adaptive GFunctions.
+     */
+    private BitSet[] codeForTable(double[] vec, int table) {
+        ensureRegistryInitialized();
+        return GFunctionRegistry.codeForTable(vec, table);
+    }
+
+    /**
+     * Legacy method: code() for backward compatibility.
+     * Now delegates to GFunctionRegistry.
+     */
+    public BitSet[] code(double[] vec) {
+        ensureRegistryInitialized();
+        // Return codes for table 0 (legacy single-table behavior)
+        return GFunctionRegistry.codeForTable(vec, 0);
+    }
+
+    /**
+     * Seed override for table-independence.
+     * Used by QueryTokenFactory.
+     *
+     * NOTE: The seed is now only used to identify which table's GFunction to use.
+     * The actual GFunction parameters (alpha, r, omega) come from the registry.
+     */
+    public BitSet[] code(double[] vec, long seedOverride) {
+        ensureRegistryInitialized();
+
+        // Compute which table this seed corresponds to
+        SystemConfig.PaperConfig pc = cfg.getPaper();
+        long baseSeed = pc.seed;
+
+        // Reverse the seed computation: seed = baseSeed + (table * 1_000_003L)
+        int table = (int) ((seedOverride - baseSeed) / 1_000_003L);
+
+        if (table < 0 || table >= pc.getTables()) {
+            logger.warn("Seed {} doesn't match any table (baseSeed={}, tables={}). Using table 0.",
+                    seedOverride, baseSeed, pc.getTables());
+            table = 0;
+        }
+
+        return GFunctionRegistry.codeForTable(vec, table);
+    }
+
+    // =====================================================
     // BUILD (Algorithm-2) per table
     // =====================================================
 
     private void build(DimensionState S) {
+        // Ensure registry is initialized before building
+        ensureRegistryInitialized();
+
         SystemConfig.PaperConfig pc = cfg.getPaper();
         int divisions = pc.divisions;
 
@@ -371,7 +546,7 @@ public final class PartitionedIndexService implements IndexService {
         int paperCap = cfg.getPaper().getSafetyMaxCandidates();
         final int MAX_IDS = (paperCap > 0) ? Math.min(runtimeCap, paperCap) : runtimeCap;
 
-        logger.info("lookupCandidateIds START: K={}, maxCandFactor={}, MAX_IDS={}, lambda={}",
+        logger.debug("lookupCandidateIds START: K={}, maxCandFactor={}, MAX_IDS={}, lambda={}",
                 K, cfg.getRuntime().getMaxCandidateFactor(), MAX_IDS, pc.lambda);
 
         // ========== DIMENSION CHECK ==========
@@ -400,12 +575,12 @@ public final class PartitionedIndexService implements IndexService {
             int bits = perDivBits - relax * pc.m;
             if (bits <= 0) break;
 
-            logger.debug("Relaxation round {}: bits={}, currentCandidates={}", relax, bits, seen.size());
+            logger.trace("Relaxation round {}: bits={}, currentCandidates={}", relax, bits, seen.size());
 
             for (int t = 0; t < effectiveL && !hitLimit; t++) {
                 // Check limit BEFORE processing each table
                 if (seen.size() >= MAX_IDS) {
-                    logger.info("Candidate limit reached BEFORE table {}/{}: seen={}, MAX_IDS={}",
+                    logger.debug("Candidate limit reached BEFORE table {}/{}: seen={}, MAX_IDS={}",
                             t, effectiveL, seen.size(), MAX_IDS);
                     hitLimit = true;
                     break;
@@ -431,7 +606,7 @@ public final class PartitionedIndexService implements IndexService {
 
                         // Check limit BEFORE adding IDs from this subset
                         if (seen.size() >= MAX_IDS) {
-                            logger.info("Hit MAX_IDS mid-division: table={}, div={}, subset={}",
+                            logger.debug("Hit MAX_IDS mid-division: table={}, div={}, subset={}",
                                     t, d, sb.tag);
                             hitLimit = true;
                             break;
@@ -451,7 +626,7 @@ public final class PartitionedIndexService implements IndexService {
                                 uniqueAdded++;
 
                                 if (seen.size() >= MAX_IDS) {
-                                    logger.info(
+                                    logger.debug(
                                             "Reached MAX_IDS: seen={}, visited={}",
                                             seen.size(), visitedCount
                                     );
@@ -472,7 +647,7 @@ public final class PartitionedIndexService implements IndexService {
 
             if (hitLimit) break;
 
-            logger.debug("After relaxation {}: candidates={}/{}", relax, seen.size(), MAX_IDS);
+            logger.trace("After relaxation {}: candidates={}/{}", relax, seen.size(), MAX_IDS);
         }
 
         // ========== FINAL LOGGING ==========
@@ -506,8 +681,22 @@ public final class PartitionedIndexService implements IndexService {
     }
 
     private boolean coversRelaxed(GreedyPartitioner.SubsetBounds sb, BitSet c, int bits) {
-        var cmp = new GreedyPartitioner.CodeComparator(bits);
-        return cmp.compare(sb.lower, c) <= 0 && cmp.compare(c, sb.upper) <= 0;
+        for (int i = 0; i < bits; i++) {
+            boolean qi = c.get(i);
+            boolean lo = sb.lower.get(i);
+            boolean hi = sb.upper.get(i);
+
+            // If lower bit is 1 and query bit is 0 → below range
+            if (lo && !qi) {
+                return false;
+            }
+
+            // If upper bit is 0 and query bit is 1 → above range
+            if (!hi && qi) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private int perDivisionBits() {
@@ -526,6 +715,11 @@ public final class PartitionedIndexService implements IndexService {
         }
 
         logger.info("Finalizing index for search...");
+
+        // Ensure registry is initialized before finalization
+        if (!GFunctionRegistry.isInitialized() && !initSampleBuffer.isEmpty()) {
+            initializeRegistry();
+        }
 
         for (DimensionState[] arr : dims.values()) {
             for (DimensionState S : arr) {
@@ -547,26 +741,16 @@ public final class PartitionedIndexService implements IndexService {
             }
         }
 
+        // Log GFunctionRegistry stats
+        if (GFunctionRegistry.isInitialized()) {
+            logger.info("GFunctionRegistry stats at finalization: {}", GFunctionRegistry.getStats());
+        }
+
         logger.info("Index finalization complete");
     }
 
     public boolean isFrozen() {
         return frozen;
-    }
-
-    // =====================================================
-    // CODING (Algorithm-1)
-    // =====================================================
-
-    public BitSet[] code(double[] vec) {
-        SystemConfig.PaperConfig pc = cfg.getPaper();
-        return Coding.code(vec, pc.divisions, pc.m, pc.lambda, pc.seed);
-    }
-
-    /** Seed override for table-independence (used by QueryTokenFactory + insert staging) */
-    public BitSet[] code(double[] vec, long seedOverride) {
-        SystemConfig.PaperConfig pc = cfg.getPaper();
-        return Coding.code(vec, pc.divisions, pc.m, pc.lambda, seedOverride);
     }
 
     // =====================================================
