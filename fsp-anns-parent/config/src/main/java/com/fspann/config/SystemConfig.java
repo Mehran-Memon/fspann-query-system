@@ -36,7 +36,15 @@ public class SystemConfig {
     /** Per-path cache for loaded configs. */
     private static final ConcurrentMap<String, SystemConfig> configCache = new ConcurrentHashMap<>();
 
+    private boolean frozen = false;
+
+    public void freeze() {
+        this.frozen = true;
+    }
+
     /* ======================== Top-level fields ======================== */
+    @JsonProperty("profiles")
+    private ProfileConfig[] profiles;
 
     @JsonProperty("numShards")
     private int numShards = 32;
@@ -90,7 +98,6 @@ public class SystemConfig {
     @JsonProperty("stabilization")
     private StabilizationConfig stabilization = new StabilizationConfig();
     public StabilizationConfig getStabilization() { return stabilization; }
-
 
     /* ======================== Static loading API ======================== */
 
@@ -147,6 +154,10 @@ public class SystemConfig {
     }
 
     /* ======================== Getters used by other modules ======================== */
+
+    public ProfileConfig[] getProfiles() {
+        return profiles;
+    }
 
     public int getNumShards() {
         return clamp(numShards, 1, MAX_SHARDS);
@@ -269,7 +280,6 @@ public class SystemConfig {
         public double getTargetCandidateRatio() {
             return targetCandidateRatio > 0 ? targetCandidateRatio : 1.25;
         }
-
 
         public int getMaxCandidateFactor() {
             return Math.max(1, maxCandidateFactor);
@@ -561,18 +571,27 @@ public class SystemConfig {
         public int maxPerDiv = 0;
     }
 
-    /* ======================== Helper methods ======================== */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class ProfileConfig {
 
-    private static int clamp(int v, int min, int max) {
-        if (v < min) return min;
-        if (v > max) return max;
-        return v;
+        @JsonProperty("name")
+        public String name;
+
+        @JsonProperty("overrides")
+        public OverrideConfig overrides;
     }
 
-    private static long clamp(long v, long min, long max) {
-        if (v < min) return min;
-        if (v > max) return max;
-        return v;
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class OverrideConfig {
+
+        @JsonProperty("paper")
+        public PaperConfig paper;
+
+        @JsonProperty("runtime")
+        public RuntimeConfig runtime;
+
+        @JsonProperty("stabilization")
+        public StabilizationConfig stabilization;
     }
 
     @JsonProperty("kAdaptive")
@@ -601,6 +620,72 @@ public class SystemConfig {
         public double probeFactor = 1.5;
     }
 
+    /* ======================== Helper methods ======================== */
+
+    private static int clamp(int v, int min, int max) {
+        if (v < min) return min;
+        if (v > max) return max;
+        return v;
+    }
+
+    private static long clamp(long v, long min, long max) {
+        if (v < min) return min;
+        if (v > max) return max;
+        return v;
+    }
+
+    private void ensureMutable() {
+        if (frozen) {
+            throw new IllegalStateException("SystemConfig is frozen");
+        }
+    }
+
+    public void applyProfile(String profileName) {
+        if (profiles == null || profileName == null) return;
+
+        for (ProfileConfig p : profiles) {
+            if (!profileName.equalsIgnoreCase(p.name)) continue;
+            if (p.overrides == null) return;
+
+            if (p.overrides.paper != null) {
+                mergePaper(this.paper, p.overrides.paper);
+            }
+
+            if (p.overrides.runtime != null) {
+                mergeRuntime(this.runtime, p.overrides.runtime);
+            }
+
+            if (p.overrides.stabilization != null) {
+                mergeStabilization(this.stabilization, p.overrides.stabilization);
+            }
+
+            return;
+        }
+
+        throw new IllegalArgumentException("Unknown profile: " + profileName);
+    }
+
+    private static void mergePaper(PaperConfig base, PaperConfig o) {
+        if (o.m > 0) base.m = o.m;
+        if (o.lambda > 0) base.lambda = o.lambda;
+        if (o.divisions > 0) base.divisions = o.divisions;
+        if (o.tables > 0) base.tables = o.tables;
+        if (o.seed != 0) base.seed = o.seed;
+        if (o.safetyMaxCandidates >= 0) base.safetyMaxCandidates = o.safetyMaxCandidates;
+    }
+
+    private static void mergeRuntime(RuntimeConfig base, RuntimeConfig o) {
+        if (o.maxCandidateFactor > 0) base.maxCandidateFactor = o.maxCandidateFactor;
+        if (o.maxRefinementFactor > 0) base.maxRefinementFactor = o.maxRefinementFactor;
+        if (o.maxRelaxationDepth >= 0) base.maxRelaxationDepth = o.maxRelaxationDepth;
+        if (o.earlyStopCandidates > 0) base.earlyStopCandidates = o.earlyStopCandidates;
+    }
+
+    private static void mergeStabilization(StabilizationConfig base, StabilizationConfig o) {
+        base.enabled = o.enabled;
+        if (o.alpha > 0) base.alpha = o.alpha;
+        if (o.minCandidatesRatio >= 1.0) base.minCandidatesRatio = o.minCandidatesRatio;
+    }
 
     /* ======================== Exception type ======================== */
 

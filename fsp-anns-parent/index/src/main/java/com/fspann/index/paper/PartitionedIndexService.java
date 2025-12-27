@@ -217,33 +217,27 @@ private static final int DEFAULT_BUILD_THRESHOLD = 100_000;
         Objects.requireNonNull(id, "id cannot be null");
         Objects.requireNonNull(vector, "vector cannot be null");
 
-        // ========== ADD THIS DIAGNOSTIC FOR FIRST VECTOR ==========
-        if (id.equals("0") && GFunctionRegistry.isInitialized()) {
-            try {
-                BitSet[] codes = codeForTable(vector, 0);
-                StringBuilder sb = new StringBuilder();
-                for (int b = 0; b < Math.min(32, codes[0].length()); b++) {
-                    sb.append(codes[0].get(b) ? '1' : '0');
-                }
-                logger.info("INDEX CODE id=0 table=0 div=0 first32bits: {}", sb.toString());
-            } catch (Exception e) {
-                logger.error("Failed to log index code", e);
-            }
-        }
-
+        // -------- SAMPLING PHASE --------
         if (!GFunctionRegistry.isInitialized()) {
             synchronized (initSampleBuffer) {
-                if (initSampleBuffer.size() < MAX_SAMPLE_SIZE) {
-                    initSampleBuffer.add(vector.clone());
+                if (!GFunctionRegistry.isInitialized()) {
+                    if (initSampleBuffer.size() < MAX_SAMPLE_SIZE) {
+                        initSampleBuffer.add(vector.clone());
+                    }
+
+                    if (initSampleBuffer.size() >= MIN_SAMPLE_SIZE) {
+                        initializeRegistry();
+                    }
                 }
-                if (initSampleBuffer.size() >= MIN_SAMPLE_SIZE) {
-                    initializeRegistry();
-                }
+            }
+
+            // IMPORTANT: DO NOT encrypt or index yet
+            if (!GFunctionRegistry.isInitialized()) {
+                return;
             }
         }
 
-
-        // ---- NORMAL INSERTION PATH (registry is initialized) ----
+        // -------- INDEXING PHASE --------
         EncryptedPoint ep;
         try {
             ep = cryptoService.encrypt(id, vector, keyService.getCurrentVersion());
@@ -832,5 +826,22 @@ private static final int DEFAULT_BUILD_THRESHOLD = 100_000;
     public void clearProbeOverride() {
         probeOverride.remove();
     }
+
+    private void maybeCollectSample(double[] vec) {
+        if (GFunctionRegistry.isInitialized()) return;
+
+        synchronized (initSampleBuffer) {
+            if (GFunctionRegistry.isInitialized()) return;
+
+            if (initSampleBuffer.size() < MAX_SAMPLE_SIZE) {
+                initSampleBuffer.add(vec.clone());
+            }
+
+            if (initSampleBuffer.size() >= MIN_SAMPLE_SIZE) {
+                initializeRegistry();
+            }
+        }
+    }
+
 
 }

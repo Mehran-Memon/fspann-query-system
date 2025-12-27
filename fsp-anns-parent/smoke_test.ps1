@@ -10,7 +10,7 @@
 
 param(
     [string]$Dataset = "SIFT1M",
-    [string]$Profile = "M24",
+    [string]$Profile = "M20",
     [int]$QueryLimit = 50
 )
 

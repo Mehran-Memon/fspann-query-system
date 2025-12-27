@@ -158,13 +158,16 @@ public class ForwardSecureANNSystem {
 
         // ---- load config ----
         SystemConfig cfg;
-        try {
-            cfg = new com.fspann.api.ApiSystemConfig(this.configPath).getConfig();
-        } catch (IOException e) {
-            logger.error("Failed to initialize configuration: {}", configPath, e);
-            throw e;
+        cfg = new com.fspann.api.ApiSystemConfig(this.configPath).getConfig();
+        String profile = System.getProperty("cli.profile");
+        if (profile != null && !profile.isBlank()) {
+            cfg.applyProfile(profile);
+            logger.info("Applied profile override: {}", profile);
         }
+        cfg.freeze();
+
         this.config = cfg;
+
 
         // ==== feature configuration ====
 
@@ -500,20 +503,7 @@ public class ForwardSecureANNSystem {
      * Keeps facade clean - no low-level crypto details in main system class.
      */
     public void batchInsert(List<double[]> vectors, int dim) {
-
-        if (!GFunctionRegistry.isInitialized()) {
-            logger.info("Forcing GFunctionRegistry initialization BEFORE ID assignment");
-
-            // Use the FIRST valid vector to initialize registry
-            for (double[] v : vectors) {
-                if (v != null && v.length == dim) {
-                    indexService.forceInitializeRegistry(v);
-                    break;
-                }
-            }
-        }
-
-        Objects.requireNonNull(vectors, "Vectors cannot be null");
+       Objects.requireNonNull(vectors, "Vectors cannot be null");
         if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
         if (vectors.isEmpty()) return;
 
