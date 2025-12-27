@@ -23,9 +23,9 @@
 
     "runtime": {
       "maxCandidateFactor": 3,
-      "maxRefinementFactor": 3,
+      "maxRefinementFactor": 4,
       "maxRelaxationDepth": 1,
-      "earlyStopCandidates": 1000
+      "earlyStopCandidates": 1200
     },
 
     "eval": {

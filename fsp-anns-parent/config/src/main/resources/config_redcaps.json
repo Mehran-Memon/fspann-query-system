@@ -22,10 +22,10 @@
     },
 
     "runtime": {
-      "maxCandidateFactor": 3,
+      "maxCandidateFactor": 4,
       "maxRefinementFactor": 3,
       "maxRelaxationDepth": 1,
-      "earlyStopCandidates": 1000
+      "earlyStopCandidates": 1500
     },
 
     "eval": {

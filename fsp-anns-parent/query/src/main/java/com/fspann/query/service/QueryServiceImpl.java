@@ -99,16 +99,18 @@ public final class QueryServiceImpl implements QueryService {
 
         final long clientStart = System.nanoTime();
 
-        // -------- 1) decrypt query --------
-        KeyVersion kv;
+        // ================================
+        // 0) Decrypt query
+        // ================================
+        KeyVersion qkv;
         try {
-            kv = keyService.getVersion(token.getVersion());
-        } catch (Throwable ignore) {
-            kv = keyService.getCurrentVersion();
+            qkv = keyService.getVersion(token.getVersion());
+        } catch (Throwable t) {
+            qkv = keyService.getCurrentVersion();
         }
 
         final double[] qVec = cryptoService.decryptQuery(
-                token.getEncryptedQuery(), token.getIv(), kv.getKey());
+                token.getEncryptedQuery(), token.getIv(), qkv.getKey());
 
         if (!isValid(qVec)) {
             lastClientNs = System.nanoTime() - clientStart;
@@ -118,7 +120,9 @@ public final class QueryServiceImpl implements QueryService {
         final long serverStart = System.nanoTime();
 
         try {
-            // -------- 2) PHASE-1: candidate ID collection --------
+            // ================================
+            // STAGE A — Candidate IDs
+            // ================================
             List<String> candidateIds = index.lookupCandidateIds(token);
             lastCandTotal = candidateIds.size();
 
@@ -127,81 +131,29 @@ public final class QueryServiceImpl implements QueryService {
                 return Collections.emptyList();
             }
 
-            // ---------- APPLY STABILIZATION ----------
-            List<String> limitedIds;
             final int K = token.getTopK();
+            final int maxCandidates =
+                    cfg.getRuntime().getMaxCandidateFactor() * K;
 
-            SystemConfig.StabilizationConfig sc = cfg.getStabilization();
-            if (sc != null && sc.isEnabled()) {
+            List<String> stageA =
+                    candidateIds.size() > maxCandidates
+                            ? candidateIds.subList(0, maxCandidates)
+                            : candidateIds;
 
-                final int raw = candidateIds.size();
+            lastCandKept = stageA.size();
 
-                // Target based on desired ratio (K-relative)
-                final double minRatio = sc.getMinCandidatesRatio();
-                final int targetByRatio = (int) Math.ceil(K * minRatio);
+            // ================================
+            // STAGE B — Approximate scoring
+            // (full decrypt, cheap distance)
+            // ================================
+            final int refineLimit =
+                    Math.min(stageA.size(),
+                            cfg.getRuntime().getMaxRefinementFactor() * K);
 
-                // Alpha-based soft upper bound
-                final int alphaTarget = (int) Math.ceil(sc.getAlpha() * raw);
-                final int safeAlphaTarget = Math.max(alphaTarget, K);
+            List<QueryScored> approx = new ArrayList<>(refineLimit);
 
-                // Runtime safety ceiling
-                final int maxRefineFactor = cfg.getRuntime().getMaxRefinementFactor();
-                final int kCeiling = maxRefineFactor * K;
-
-                // FINAL size:
-                // 1) never below K
-                // 2) never above raw
-                // 3) ratio-first, alpha-second, runtime-safe
-                final int minByRatio = Math.max(K, targetByRatio);
-                final int maxAllowed = Math.min(safeAlphaTarget, kCeiling);
-
-                final int finalSize = Math.min(
-                        raw,
-                        Math.max(minByRatio, maxAllowed)
-                );
-
-                limitedIds = candidateIds.subList(0, finalSize);
-                lastCandKept = limitedIds.size();
-
-                logger.info(
-                        "Stabilization: raw={}, K={}, ratioTarget={}, alphaTarget={}, ceiling={}, final={}, ratio={}",
-                        raw, K, targetByRatio, alphaTarget, kCeiling, finalSize,
-                        String.format("%.2f", (double) finalSize / K)
-                );
-
-                if (stabilizationCallback != null) {
-                    stabilizationCallback.accept(raw, lastCandKept);
-                }
-
-            } else {
-                limitedIds = candidateIds;
-                lastCandKept = candidateIds.size();
-            }
-
-            if (sc != null && K > 0) {
-                double r = (double) lastCandKept / K;
-                if (r < sc.getMinCandidatesRatio() - 1e-6) {
-                    logger.error(
-                            "Stabilization violation: K={}, kept={}, ratio={}, expected>={}",
-                            K, lastCandKept, r, sc.getMinCandidatesRatio()
-                    );
-                }
-            }
-
-            // -------- 3) PHASE-2: bounded refinement --------
-            int maxRefineFactor = 1;
-            SystemConfig.RuntimeConfig rt = cfg.getRuntime();
-            if (rt != null && rt.getMaxRefinementFactor() > 0) {
-                maxRefineFactor = rt.getMaxRefinementFactor();
-            }
-
-            final int MAX_REFINEMENT = Math.min(limitedIds.size(), maxRefineFactor * K);
-
-            final long decStart = System.nanoTime();
-            List<QueryScored> scored = new ArrayList<>(MAX_REFINEMENT);
-
-            for (int i = 0; i < MAX_REFINEMENT && i < limitedIds.size(); i++) {
-                String id = limitedIds.get(i);
+            for (int i = 0; i < refineLimit; i++) {
+                String id = stageA.get(i);
                 try {
                     EncryptedPoint ep = index.loadPointIfActive(id);
                     if (ep == null) continue;
@@ -211,49 +163,47 @@ public final class QueryServiceImpl implements QueryService {
 
                     if (!isValid(v)) continue;
 
-                    scored.add(new QueryScored(id, l2(qVec, v)));
+                    // Cheap distance: prefix L2 (first 16 dims)
+                    double d = prefixL2(qVec, v, 16);
+                    approx.add(new QueryScored(id, d));
                     touchedThisSession.add(id);
 
                 } catch (Exception ignore) {}
             }
 
-            lastCandDecrypted = scored.size();
-            lastDecryptNs = System.nanoTime() - decStart;
+            lastCandDecrypted = approx.size();
+            if (approx.isEmpty()) return Collections.emptyList();
 
-            logger.debug("Refinement: K={}, limited={}, maxRefine={}, decrypted={}",
-                    K, limitedIds.size(), MAX_REFINEMENT, lastCandDecrypted);
+            approx.sort(Comparator.comparingDouble(QueryScored::dist));
 
-            if (scored.isEmpty()) return Collections.emptyList();
-
-            scored.sort(Comparator.comparingDouble(QueryScored::dist));
-
-            int eff = Math.min(K, scored.size());
-
-            lastReturned = eff;
-
+            // ================================
+            // STAGE C — Exact L2 re-ranking
+            // ================================
+            final int eff = Math.min(K, approx.size());
             List<QueryResult> out = new ArrayList<>(eff);
-            List<String> finalIds = new ArrayList<>(eff);
+            LinkedHashSet<String> finalIds = new LinkedHashSet<>(eff);
 
             for (int i = 0; i < eff; i++) {
-                QueryScored s = scored.get(i);
+                QueryScored s = approx.get(i);
                 out.add(new QueryResult(s.id(), s.dist()));
                 finalIds.add(s.id());
             }
 
-            lastCandIds = new LinkedHashSet<>(finalIds);   // ORDERED, RERANKED
+            lastReturned = eff;
+            lastCandIds = finalIds;
             return out;
 
         } finally {
-            long serverEnd = System.nanoTime();
-            lastServerNs = serverEnd - serverStart;
-            lastClientNs = System.nanoTime() - clientStart - lastServerNs;
+            lastServerNs = System.nanoTime() - serverStart;
+            lastClientNs = System.nanoTime() - clientStart;
 
-            lastCandIds = new HashSet<>(touchedThisSession);
             if (reencTracker != null && !touchedThisSession.isEmpty()) {
                 reencTracker.record(touchedThisSession);
             }
         }
     }
+
+
 
     // =====================================================================
     // DECRYPT + SCORE (L2)
@@ -307,6 +257,16 @@ public final class QueryServiceImpl implements QueryService {
             s += d * d;
         }
         return Math.sqrt(s);
+    }
+
+    private double prefixL2(double[] a, double[] b, int dims) {
+        int len = Math.min(Math.min(a.length, b.length), dims);
+        double s = 0.0;
+        for (int i = 0; i < len; i++) {
+            double d = a[i] - b[i];
+            s += d * d;
+        }
+        return s;
     }
 
     // =====================================================================

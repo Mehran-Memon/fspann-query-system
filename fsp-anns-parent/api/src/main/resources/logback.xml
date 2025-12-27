@@ -12,7 +12,7 @@
 
     <!-- Enable INFO only for system progress and shutdown -->
     <logger name="com.fspann.api.ForwardSecureANNSystem" level="INFO" />
-    <logger name="com.fspann.index.paper.PartitionedIndexService" level="INFO" />
-    <logger name="com.fspann.index.paper.GFunctionRegistry" level="INFO" />
-    <logger name="com.fspann.query.core.QueryTokenFactory" level="INFO" />
+<!--    <logger name="com.fspann.index.paper.PartitionedIndexService" level="INFO" />-->
+<!--    <logger name="com.fspann.index.paper.GFunctionRegistry" level="INFO" />-->
+<!--    <logger name="com.fspann.query.core.QueryTokenFactory" level="INFO" />-->
 </configuration>
