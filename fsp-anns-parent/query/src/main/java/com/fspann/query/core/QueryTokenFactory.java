@@ -78,6 +78,10 @@ public final class QueryTokenFactory {
      * perfect consistency with index codes.
      */
     public QueryToken create(double[] vec, int topK) {
+        if (!GFunctionRegistry.getStats().get("dimension").equals(vec.length)) {
+            throw new IllegalStateException("Registry dimension mismatch");
+        }
+
         Objects.requireNonNull(vec, "Query vector cannot be null");
         if (topK <= 0) throw new IllegalArgumentException("topK must be > 0");
 

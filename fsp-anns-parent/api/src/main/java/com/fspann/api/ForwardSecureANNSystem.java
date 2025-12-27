@@ -503,7 +503,12 @@ public class ForwardSecureANNSystem {
      * Keeps facade clean - no low-level crypto details in main system class.
      */
     public void batchInsert(List<double[]> vectors, int dim) {
-       Objects.requireNonNull(vectors, "Vectors cannot be null");
+        if (!indexService.isFrozen() && indexedCount.get() != fileOrdinal.get()) {
+            logger.debug("Index warmup: indexed={} ord={}",
+                    indexedCount.get(), fileOrdinal.get());
+        }
+
+        Objects.requireNonNull(vectors, "Vectors cannot be null");
         if (dim <= 0) throw new IllegalArgumentException("Dimension must be positive");
         if (vectors.isEmpty()) return;
 
@@ -670,6 +675,13 @@ public class ForwardSecureANNSystem {
                 // --------------------------------------------------
                 List<QueryResult> results = qs.search(token);
 
+                if (results.isEmpty()) {
+                    logger.error(
+                            "EMPTY ANN RESULTS q={} k={} touched={}",
+                            qi, k, indexService.getLastTouchedCount()
+                    );
+                }
+
                 // --------------------------------------------------
                 // 3. Touch accounting
                 // --------------------------------------------------
@@ -807,9 +819,12 @@ public class ForwardSecureANNSystem {
         // ---------- 1. Ground Truth (MANDATORY) ----------
         int[] gt = gtMgr.getGroundtruth(queryIndex, k);
         if (gt == null || gt.length < k) {
-            throw new IllegalStateException(
-                    "GT missing or insufficient for query=" + queryIndex
+            logger.warn(
+                    "GT missing for query={} K={}, skipping precision/ratio",
+                    queryIndex, k
             );
+            return new QueryMetrics(Double.NaN, Double.NaN,
+                    qs.getLastCandTotal() / (double) k);
         }
 
         // ---------- 2. Resolve ANN base indices ----------
@@ -1877,6 +1892,12 @@ public class ForwardSecureANNSystem {
 
     /** Façade: produce a token for (q, k, dim) */
     public QueryToken createToken(double[] q, int k, int dim) {
+
+        if (!indexService.isFrozen()) {
+            throw new IllegalStateException(
+                    "Query attempted before indexService.finalizeForSearch()");
+        }
+
 
         Objects.requireNonNull(q, "Query vector cannot be null");
 

@@ -72,6 +72,9 @@ private static final int DEFAULT_BUILD_THRESHOLD = 100_000;
     private final ThreadLocal<Integer> probeOverride =
             ThreadLocal.withInitial(() -> -1);
 
+    private final List<PendingVector> pendingVectors =
+            Collections.synchronizedList(new ArrayList<>());
+
     private static final class DimensionState {
         final int dim;
         final int table; // 0..L-1
@@ -217,25 +220,37 @@ private static final int DEFAULT_BUILD_THRESHOLD = 100_000;
         Objects.requireNonNull(id, "id cannot be null");
         Objects.requireNonNull(vector, "vector cannot be null");
 
-        // -------- SAMPLING PHASE --------
-        if (!GFunctionRegistry.isInitialized()) {
-            synchronized (initSampleBuffer) {
-                if (!GFunctionRegistry.isInitialized()) {
-                    if (initSampleBuffer.size() < MAX_SAMPLE_SIZE) {
-                        initSampleBuffer.add(vector.clone());
-                    }
-
-                    if (initSampleBuffer.size() >= MIN_SAMPLE_SIZE) {
-                        initializeRegistry();
-                    }
-                }
-            }
-
-            // IMPORTANT: DO NOT encrypt or index yet
-            if (!GFunctionRegistry.isInitialized()) {
-                return;
+        if (GFunctionRegistry.isInitialized()) {
+            int regDim = (int) GFunctionRegistry.getStats().get("dimension");
+            if (vector.length != regDim) {
+                throw new IllegalArgumentException(
+                        "Mixed dimensions not supported in single index: got "
+                                + vector.length + ", expected " + regDim
+                );
             }
         }
+
+        if (!GFunctionRegistry.isInitialized()) {
+            synchronized (initSampleBuffer) {
+                if (!GFunctionRegistry.isInitialized()
+                        && initSampleBuffer.size() < MAX_SAMPLE_SIZE) {
+                    initSampleBuffer.add(vector.clone());
+                }
+                if (initSampleBuffer.size() >= MIN_SAMPLE_SIZE) {
+                    initializeRegistry();
+                }
+            }
+        }
+
+        if (!GFunctionRegistry.isInitialized()) {
+            // Stage plaintext for later indexing
+            PendingVector pv = new PendingVector(id, vector);
+            synchronized (pendingVectors) {
+                pendingVectors.add(pv);
+            }
+            return;
+        }
+
 
         // -------- INDEXING PHASE --------
         EncryptedPoint ep;
@@ -642,7 +657,11 @@ private static final int DEFAULT_BUILD_THRESHOLD = 100_000;
                     BitSet qc = qcodes[d];
 
                     for (GreedyPartitioner.SubsetBounds sb : div.I) {
-                        if (!covers(sb, qc, bits)) continue;
+                        boolean match = (relax == 0)
+                                ? covers(sb, qc, bits)
+                                : coversRelaxed(sb, qc, bits);
+
+                        if (!match) continue;
 
                         List<String> ids = div.tagToIds.get(sb.tag);
                         if (ids == null) continue;
@@ -751,6 +770,24 @@ private static final int DEFAULT_BUILD_THRESHOLD = 100_000;
     // FINALIZATION
     // =====================================================
 
+    private void directInsert(EncryptedPoint pt, double[] vec) {
+        int dim = vec.length;
+
+        try {
+            metadata.saveEncryptedPoint(pt);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+
+        DimensionState[] tables = dims.computeIfAbsent(dim, d -> newTableStates(d));
+
+        for (DimensionState S : tables) {
+            BitSet[] codes = codeForTable(vec, S.table);
+            S.staged.add(pt);
+            S.stagedCodes.add(codes);
+        }
+    }
+
     public void finalizeForSearch() {
         if (frozen) {
             logger.info("Index already finalized");
@@ -770,6 +807,32 @@ private static final int DEFAULT_BUILD_THRESHOLD = 100_000;
             }
         }
 
+        // HARD registry consistency check
+        Map<String, Object> stats = GFunctionRegistry.getStats();
+        SystemConfig.PaperConfig pc = cfg.getPaper();
+        if ((int) stats.get("m") != pc.m
+                || (int) stats.get("lambda") != pc.lambda
+                || (int) stats.get("tables") != pc.getTables()
+                || (int) stats.get("divisions") != pc.divisions) {
+            throw new IllegalStateException(
+                    "GFunctionRegistry mismatch at finalize: " + stats
+            );
+        }
+
+        // Flush pending plaintext vectors (NO recursive insert)
+        if (!pendingVectors.isEmpty()) {
+            logger.info("Flushing {} pending vectors after registry init",
+                    pendingVectors.size());
+
+            for (PendingVector pv : pendingVectors) {
+                EncryptedPoint ep =
+                        cryptoService.encrypt(pv.id, pv.vector, keyService.getCurrentVersion());
+                directInsert(ep, pv.vector);
+            }
+            pendingVectors.clear();
+        }
+
+        // Build all tables
         for (DimensionState[] arr : dims.values()) {
             for (DimensionState S : arr) {
                 synchronized (S) {
@@ -779,21 +842,6 @@ private static final int DEFAULT_BUILD_THRESHOLD = 100_000;
         }
 
         frozen = true;
-
-        for (Integer dim : dims.keySet()) {
-            try {
-                storageMetrics.updateDimensionStorage(dim);
-                StorageMetrics.StorageSnapshot snap = storageMetrics.getSnapshot();
-                logger.info("Finalized dim {}: {}", dim, snap.summary());
-            } catch (Exception e) {
-                logger.warn("Failed to update storage metrics for dimension {}", dim, e);
-            }
-        }
-
-        // Log GFunctionRegistry stats
-        if (GFunctionRegistry.isInitialized()) {
-            logger.info("GFunctionRegistry stats at finalization: {}", GFunctionRegistry.getStats());
-        }
 
         logger.info("Index finalization complete");
     }
