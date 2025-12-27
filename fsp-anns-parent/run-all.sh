@@ -57,7 +57,7 @@ declare -A DATASET_QUERY=(
   ["glove-100"]="/mnt/data/mehran/Datasets/glove-100/glove-100_query.fvecs"
   ["RedCaps"]="/mnt/data/mehran/Datasets/redcaps/redcaps_query.fvecs"
 )
-)
+
 
 declare -A DATASET_GT=(
   ["SIFT1M"]="/mnt/data/mehran/Datasets/SIFT1M/sift_query_groundtruth.ivecs"
@@ -66,7 +66,7 @@ declare -A DATASET_GT=(
 )
 
 # ================= DEBUG SWITCHES =================
-ONLY_DATASET=""
+ONLY_DATASET="SIFT1M"
 ONLY_PROFILE=""
 
 # ================= METRICS (JAVA ONLY) =================

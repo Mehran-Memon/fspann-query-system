@@ -17,15 +17,15 @@
 
     "stabilization": {
       "enabled": true,
-      "alpha": 0.02,
-      "minCandidatesRatio": 1.25
+      "alpha": 0.06,
+      "minCandidatesRatio": 1.5
     },
 
     "runtime": {
-      "maxCandidateFactor": 3,
-      "maxRefinementFactor": 4,
-      "maxRelaxationDepth": 1,
-      "earlyStopCandidates": 1200
+      "maxCandidateFactor": 6,
+      "maxRefinementFactor": 12,
+      "maxRelaxationDepth": 2,
+      "earlyStopCandidates": 3000
     },
 
     "eval": {
