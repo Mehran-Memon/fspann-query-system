@@ -3,14 +3,13 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 
 # ============================================================
-# FSP-ANN MULTI-DATASET SWEEP RUNNER (PAPER-GRADE)
+# FSP-ANN MULTI-DATASET SWEEP RUNNER (JAVA-ONLY, PAPER-GRADE)
 # ============================================================
 
 # -------------------- PATHS --------------------
 JarPath="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/api/target/api-0.0.1-SNAPSHOT-shaded.jar"
 OutRoot="/mnt/data/mehran"
 Batch=100000
-QUERY_LIMIT=200
 
 # -------------------- JVM ----------------------
 JvmArgs=(
@@ -29,7 +28,7 @@ ensure_cmd() { command -v "$1" >/dev/null || die "$1 not found"; }
 
 ensure_cmd java
 ensure_cmd jq
-ensure_cmd python3
+ensure_cmd jshell
 ensure_file "$JarPath"
 mkdir -p "$OutRoot"
 
@@ -58,6 +57,7 @@ declare -A DATASET_QUERY=(
   ["glove-100"]="/mnt/data/mehran/Datasets/glove-100/glove-100_query.fvecs"
   ["RedCaps"]="/mnt/data/mehran/Datasets/redcaps/redcaps_query.fvecs"
 )
+)
 
 declare -A DATASET_GT=(
   ["SIFT1M"]="/mnt/data/mehran/Datasets/SIFT1M/sift_query_groundtruth.ivecs"
@@ -69,18 +69,42 @@ declare -A DATASET_GT=(
 ONLY_DATASET=""
 ONLY_PROFILE=""
 
-# ================= METRICS ========================
+# ================= METRICS (JAVA ONLY) =================
 
 extract_metrics() {
   local csv="$1/profiler_metrics.csv"
   [[ -f "$csv" ]] || { echo "NA,NA"; return; }
 
-  python3 <<EOF
-import pandas as pd
-df = pd.read_csv("$csv")
-art = df["clientMs"].mean()
-ratio = df["ratio"].mean()
-print(f"{art:.2f},{ratio:.4f}")
+  jshell <<EOF 2>/dev/null | tail -n 1
+import java.nio.file.*;
+import java.util.*;
+import java.util.stream.*;
+
+var lines = Files.readAllLines(Path.of("$csv"));
+var header = lines.get(0).split(",");
+int clientIdx = -1, ratioIdx = -1;
+
+for (int i = 0; i < header.length; i++) {
+  if (header[i].equals("clientMs")) clientIdx = i;
+  if (header[i].equals("ratio")) ratioIdx = i;
+}
+
+double artSum = 0.0, ratioSum = 0.0;
+int n = 0;
+
+for (int i = 1; i < lines.size(); i++) {
+  var p = lines.get(i).split(",");
+  if (p.length <= Math.max(clientIdx, ratioIdx)) continue;
+  artSum += Double.parseDouble(p[clientIdx]);
+  ratioSum += Double.parseDouble(p[ratioIdx]);
+  n++;
+}
+
+if (n == 0) {
+  System.out.println("NA,NA");
+} else {
+  System.out.printf("%.2f,%.4f%n", artSum / n, ratioSum / n);
+}
 EOF
 }
 
@@ -101,7 +125,10 @@ for ds in "${DATASETS[@]}"; do
   query="${DATASET_QUERY[$ds]}"
   gt="${DATASET_GT[$ds]}"
 
-  ensure_file "$cfg" "$base" "$query" "$gt"
+  ensure_file "$cfg"
+  ensure_file "$base"
+  ensure_file "$query"
+  ensure_file "$gt"
 
   CFG_JSON="$(cat "$cfg")"
   BASE_JSON="$(jq -c 'del(.profiles)' <<<"$CFG_JSON")"
@@ -118,16 +145,15 @@ for ds in "${DATASETS[@]}"; do
     name="$(jq -r '.name' <<<"$profile")"
 
     [[ -n "$ONLY_PROFILE" && "$name" != "$ONLY_PROFILE" ]] && continue
-
     ran_any=true
-    overrides="$(jq -c '.overrides // {}' <<<"$profile")"
 
+    overrides="$(jq -c '.overrides // {}' <<<"$profile")"
     run_dir="$ds_root/$name"
+
     mkdir -p "$run_dir/results"
     rm -f "$run_dir/keys.blob"
     rm -rf "$run_dir/metadata"
 
-    # -------- FIXED jq MERGE (portable) --------
     final_cfg="$(jq -n '
       def deepmerge(a; b):
         reduce (b | keys_unsorted[]) as $k
@@ -138,7 +164,6 @@ for ds in "${DATASETS[@]}"; do
              else b[$k]
              end
           );
-
       deepmerge($base; $ovr)
       | .output.resultsDir = $resdir
       | .ratio.source = "gt"
@@ -152,13 +177,11 @@ for ds in "${DATASETS[@]}"; do
     )"
 
     echo "$final_cfg" > "$run_dir/config.json"
-
     log="$run_dir/run.log"
 
     java "${JvmArgs[@]}" \
       -Dcli.dataset="$ds" \
       -Dcli.profile="$name" \
-      -Dquery.limit="$QUERY_LIMIT" \
       -jar "$JarPath" \
       "$run_dir/config.json" \
       "$base" "$query" "$run_dir/keys.blob" \
