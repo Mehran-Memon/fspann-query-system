@@ -228,14 +228,19 @@ public final class QueryServiceImpl implements QueryService {
             scored.sort(Comparator.comparingDouble(QueryScored::dist));
 
             int eff = Math.min(K, scored.size());
+
             lastReturned = eff;
 
             List<QueryResult> out = new ArrayList<>(eff);
+            List<String> finalIds = new ArrayList<>(eff);
+
             for (int i = 0; i < eff; i++) {
                 QueryScored s = scored.get(i);
                 out.add(new QueryResult(s.id(), s.dist()));
+                finalIds.add(s.id());
             }
 
+            lastCandIds = new LinkedHashSet<>(finalIds);   // ORDERED, RERANKED
             return out;
 
         } finally {
@@ -344,6 +349,11 @@ public final class QueryServiceImpl implements QueryService {
 
     // Exposed to ForwardSecureANNSystem / Engine / Profiler
 
+    public List<String> getLastFinalResultIds() {
+        return lastCandIds == null
+                ? Collections.emptyList()
+                : new ArrayList<>(lastCandIds);
+    }
     public long getLastQueryDurationNs() { return lastServerNs; }
     public long getLastClientDurationNs() { return lastClientNs; }
     public long getLastDecryptNs() { return lastDecryptNs; }
