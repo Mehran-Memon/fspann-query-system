@@ -9,7 +9,6 @@ import com.fspann.index.paper.PartitionedIndexService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.crypto.SecretKey;
 import java.util.*;
 
 /**
@@ -45,7 +44,6 @@ public final class QueryTokenFactory {
 
     private final CryptoService crypto;
     private final KeyLifeCycleService keyService;
-    private final PartitionedIndexService partition;  // kept for backward compatibility
     private final SystemConfig cfg;
     private final int divisions;
     private final int tables;
@@ -61,7 +59,6 @@ public final class QueryTokenFactory {
     ) {
         this.crypto = Objects.requireNonNull(crypto);
         this.keyService = Objects.requireNonNull(keyService);
-        this.partition = Objects.requireNonNull(partition);
         this.cfg = Objects.requireNonNull(cfg);
         this.divisions = divisions;
         this.tables = tables;
@@ -74,7 +71,7 @@ public final class QueryTokenFactory {
         SystemConfig.PaperConfig pc = cfg.getPaper();
         log.info(
                 "CONFIG ASSERT: m={} lambda={} tables={} divisions={} seed={}",
-                pc.m, pc.lambda, pc.getTables(), pc.divisions, pc.seed
+                pc.getM(), pc.getLambda(), pc.getTables(), pc.getDivisions(), pc.getSeed()
         );
 
         if (tables != pc.getTables()) {
@@ -93,82 +90,58 @@ public final class QueryTokenFactory {
      * perfect consistency with index codes.
      */
     public QueryToken create(double[] vec, int topK) {
-        if (!GFunctionRegistry.getStats().get("dimension").equals(vec.length)) {
-            throw new IllegalStateException("Registry dimension mismatch");
-        }
-
         Objects.requireNonNull(vec, "Query vector cannot be null");
         if (topK <= 0) throw new IllegalArgumentException("topK must be > 0");
 
-        int dim = vec.length;
-
-        SystemConfig.PaperConfig pc = cfg.getPaper();
-        int L = pc.getTables();              // number of tables
-        int j = pc.divisions;                // divisions per table
-
-        // Validate GFunctionRegistry is initialized
         if (!GFunctionRegistry.isInitialized()) {
             throw new IllegalStateException(
-                    "GFunctionRegistry not initialized! " +
-                            "Index must be built (vectors inserted) before querying."
+                    "GFunctionRegistry not initialized. Build index first."
             );
         }
 
+        SystemConfig.PaperConfig pc = cfg.getPaper();
+        int L = pc.getTables();
+        int j = pc.getDivisions();
+        int dim = vec.length;
+
+        // Registry sanity
         Map<String, Object> stats = GFunctionRegistry.getStats();
-        if (!stats.get("tables").equals(pc.getTables())
-                || !stats.get("divisions").equals(pc.divisions)
-                || !stats.get("m").equals(pc.m)
-                || !stats.get("lambda").equals(pc.lambda)) {
+        if ((int) stats.get("dimension") != dim
+                || (int) stats.get("tables") != L
+                || (int) stats.get("divisions") != j
+                || (int) stats.get("m") != pc.getM()
+                || (int) stats.get("lambda") != pc.getLambda()) {
             throw new IllegalStateException(
-                    "GFunctionRegistry configuration mismatch: " + stats
+                    "GFunctionRegistry mismatch: " + stats
             );
         }
 
-        // Validate vector
-        GFunctionRegistry.validateVector(vec);
-
-        // ============================================================
-        // KEY FIX: Use GFunctionRegistry directly for code generation
-        // This ensures query codes match index codes exactly
-        // ============================================================
+        // === MSANNP v2: integer hashes only ===
         int[][] hashesByTable = GFunctionRegistry.hashAllTables(vec);
-        // Validate codes
-        if (codesByTable == null || codesByTable.length != L) {
+
+        if (hashesByTable == null || hashesByTable.length != L) {
             throw new IllegalStateException(
-                    "GFunctionRegistry returned invalid codes: expected " + L +
-                            " tables, got " + (codesByTable == null ? "null" : codesByTable.length)
+                    "Invalid hash tables returned: expected " + L
             );
-        }
-        if (codesByTable != null && codesByTable.length > 0 && codesByTable[0].length > 0) {
-            StringBuilder sb = new StringBuilder();
-            for (int b = 0; b < Math.min(32, codesByTable[0][0].length()); b++) {
-                sb.append(codesByTable[0][0].get(b) ? '1' : '0');
-            }
-            log.info("QUERY CODE table=0 div=0 first32bits: {}", sb.toString());
         }
 
         for (int t = 0; t < L; t++) {
-            if (codesByTable[t] == null || codesByTable[t].length != j) {
+            if (hashesByTable[t] == null || hashesByTable[t].length != j) {
                 throw new IllegalStateException(
-                        "Invalid codes for table " + t + ": expected " + j +
-                                " divisions, got " + (codesByTable[t] == null ? "null" : codesByTable[t].length)
+                        "Invalid hash row at table " + t +
+                                " expected " + j + " divisions"
                 );
             }
         }
 
-        // Encrypt query
+        // Encrypt query ONCE
         KeyVersion kv = keyService.getCurrentVersion();
         byte[] iv = EncryptionUtils.generateIV();
         byte[] ct = crypto.encryptQuery(vec, kv.getKey(), iv);
 
-        int lambda = pc.lambda;
-
-        log.debug("QueryToken created: dim={} K={} λ={} tables={} divisions={}",
-                dim, topK, lambda, L, j);
-
         return new QueryToken(
-                Collections.emptyList(),  // legacy tableBuckets (unused in MSANNP)
-                codesByTable,
+                Collections.emptyList(),   // legacy tableBuckets (unused)
+                hashesByTable,
                 iv,
                 ct,
                 topK,
@@ -176,7 +149,7 @@ public final class QueryTokenFactory {
                 "dim_" + dim + "_v" + kv.getVersion(),
                 dim,
                 kv.getVersion(),
-                lambda
+                pc.getLambda()
         );
     }
 
@@ -190,7 +163,7 @@ public final class QueryTokenFactory {
 
         return new QueryToken(
                 tok.getTableBuckets(),
-                tok.getCodesByTable(),
+                tok.getHashesByTable(),
                 tok.getIv(),
                 tok.getEncryptedQuery(),
                 newTopK,
@@ -209,9 +182,9 @@ public final class QueryTokenFactory {
         Map<String, Object> diag = new LinkedHashMap<>();
         diag.put("divisions", divisions);
         diag.put("tables", cfg.getPaper().getTables());
-        diag.put("m", cfg.getPaper().m);
-        diag.put("lambda", cfg.getPaper().lambda);
-        diag.put("baseSeed", cfg.getPaper().seed);
+        diag.put("m", cfg.getPaper().getM());
+        diag.put("lambda", cfg.getPaper().getLambda());
+        diag.put("baseSeed", cfg.getPaper().getSeed());
         diag.put("registryInitialized", GFunctionRegistry.isInitialized());
         if (GFunctionRegistry.isInitialized()) {
             diag.put("registryStats", GFunctionRegistry.getStats());

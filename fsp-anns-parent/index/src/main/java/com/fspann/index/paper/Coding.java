@@ -211,7 +211,9 @@ public final class Coding {
     // Algorithm-1: H(v) and C(v)
     // ============================================================
 
-    /** Compute H(v) = { h_j(v) }. */
+    /**
+     * Compute H(v) = { h_j(v) }.
+     */
     public static int[] H(double[] v, GFunction G) {
         requireVector(v, G.d);
         int[] out = new int[G.m];
@@ -220,6 +222,19 @@ public final class Coding {
             out[j] = (int) Math.floor(y / G.omega[j]);
         }
         return out;
+    }
+
+    /**
+     * Collapse multi-projection H(v) into a single integer hash
+     * Deterministic, order-sensitive, fast.
+     */
+    public static int H1(double[] v, GFunction G) {
+        int[] H = H(v, G);
+        int h = 0;
+        for (int x : H) {
+            h = 31 * h + x;   // standard hash mixing
+        }
+        return h;
     }
 
     /**

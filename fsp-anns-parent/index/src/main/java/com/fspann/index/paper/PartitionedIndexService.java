@@ -127,7 +127,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         SystemConfig.PaperConfig pc = cfg.getPaper();
         logger.info(
                 "CONFIG ASSERT: m={} lambda={} tables={} divisions={} seed={}",
-                pc.m, pc.lambda, pc.getTables(), pc.divisions, pc.seed
+                pc.getM(), pc.getLambda(), pc.getTables(), pc.getDivisions(), pc.getSeed()
         );
 
     }
@@ -169,18 +169,18 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         int dimension = initSampleBuffer.get(0).length;
 
         logger.info("Parameters: dim={} m={} λ={} tables={} divisions={} sampleSize={}",
-                dimension, pc.m, pc.lambda, pc.getTables(), pc.divisions, initSampleBuffer.size()
+                dimension, pc.getM(), pc.getLambda(), pc.getTables(), pc.getDivisions(), initSampleBuffer.size()
         );
 
         try {
             GFunctionRegistry.initialize(
                     initSampleBuffer,
                     dimension,
-                    pc.m,
-                    pc.lambda,
-                    pc.seed,
+                    pc.getM(),
+                    pc.getLambda(),
+                    pc.getSeed(),
                     pc.getTables(),
-                    pc.divisions
+                    pc.getDivisions()
             );
 
             logger.info("=".repeat(60));
@@ -306,7 +306,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
 
     private long tableSeed(int table) {
         SystemConfig.PaperConfig pc = cfg.getPaper();
-        return pc.seed + (table * 1_000_003L);
+        return pc.getSeed() + (table * 1_000_003L);
     }
 
     /**
@@ -324,7 +324,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         ensureRegistryInitialized();
 
         SystemConfig.PaperConfig pc = cfg.getPaper();
-        int divisions = pc.divisions;
+        int divisions = pc.getDivisions();
 
         S.divisions.clear();
 
@@ -376,14 +376,15 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         if (!frozen) throw new IllegalStateException("Index not finalized");
 
         // Decrypt query ONCE (safe, already required for scoring later)
-        double[] qvec = cryptoService.decryptQuery(
-                token.getEncryptedQuery(),
-                token.getIv(),
-                keyService.getCurrentVersion().getKey()
-        );
-
-
-        int[][] qHashes = GFunctionRegistry.hashAllTables(qvec);
+        int[][] qHashes = token.getHashesByTable();
+        if (qHashes == null) {
+            double[] qvec = cryptoService.decryptQuery(
+                    token.getEncryptedQuery(),
+                    token.getIv(),
+                    keyService.getCurrentVersion().getKey()
+            );
+            qHashes = GFunctionRegistry.hashAllTables(qvec);
+        }
 
         int dim = token.getDimension();
         DimensionState[] tables = dims.get(dim);
@@ -392,15 +393,12 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         SystemConfig.PaperConfig pc = cfg.getPaper();
         int K = token.getTopK();
 
-        boolean precisionMode = cfg.getRuntime().isPrecisionMode();
+        final int MAX_IDS =
+                cfg.getRuntime().getMaxCandidateFactor() * K;
 
-        final int MIN_IDS = precisionMode
-                ? cfg.getRuntime().getMinPrecisionCandidates()
-                : cfg.getRuntime().getMaxCandidateFactor() * K;
+        final int MIN_IDS =
+                Math.min(MAX_IDS, K);
 
-        final int MAX_IDS = precisionMode
-                ? cfg.getRuntime().getMaxPrecisionCandidates()
-                : cfg.getRuntime().getMaxCandidateFactor() * K;
 
         final int maxRelax = cfg.getRuntime().getMaxRelaxationDepth();
         final int L = Math.min(tables.length, qHashes.length);
@@ -451,7 +449,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
                 if (score.size() >= MAX_IDS) break;
             }
 
-            if (precisionMode && relax > 0 && score.size() >= MIN_IDS) break;
+            if (score.size() >= MAX_IDS) break;
         }
 
         List<Map.Entry<String, Integer>> ordered =
@@ -528,10 +526,10 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         // HARD registry consistency check
         Map<String, Object> stats = GFunctionRegistry.getStats();
         SystemConfig.PaperConfig pc = cfg.getPaper();
-        if ((int) stats.get("m") != pc.m
-                || (int) stats.get("lambda") != pc.lambda
+        if ((int) stats.get("m") != pc.getM()
+                || (int) stats.get("lambda") != pc.getLambda()
                 || (int) stats.get("tables") != pc.getTables()
-                || (int) stats.get("divisions") != pc.divisions) {
+                || (int) stats.get("divisions") != pc.getDivisions()) {
             throw new IllegalStateException(
                     "GFunctionRegistry mismatch at finalize: " + stats
             );

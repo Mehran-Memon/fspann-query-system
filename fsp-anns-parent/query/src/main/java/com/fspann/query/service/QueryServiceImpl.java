@@ -147,6 +147,8 @@ public final class QueryServiceImpl implements QueryService {
 
             List<QueryScored> scored = new ArrayList<>(refineLimit);
 
+            long decryptStart = System.nanoTime();
+
             for (int i = 0; i < refineLimit; i++) {
                 String id = candidateIds.get(i);
                 try {
@@ -164,6 +166,7 @@ public final class QueryServiceImpl implements QueryService {
                 } catch (Exception ignore) {}
             }
 
+            lastDecryptNs = System.nanoTime() - decryptStart;
             lastCandDecrypted = scored.size();
             if (scored.isEmpty()) return Collections.emptyList();
 

@@ -15,12 +15,11 @@ import java.util.Objects;
  *  - It does NOT carry the plaintext query vector.
  */
 public class QueryToken implements Serializable {
-    private static final long serialVersionUID = 1L;
 
-    private final List<List<Integer>> tableBuckets;  // legacy
+    private final List<List<Integer>> tableBuckets;
     private final int numTables;
 
-    // mSANNP: [table][division]
+    // MSANNP integer hashes
     private final int[][] hashesByTable;
 
     private final byte[] iv;
@@ -42,63 +41,31 @@ public class QueryToken implements Serializable {
             int dimension,
             int version,
             int lambda
-    )
- {
-        this.tableBuckets = List.copyOf(Objects.requireNonNull(tableBuckets, "tableBuckets"));
+    ) {
+        this.tableBuckets = List.copyOf(Objects.requireNonNull(tableBuckets));
         this.numTables = Math.max(1, numTables);
-        this.hashesByTable = deepCloneCodes2D(hashesByTable);
+        this.hashesByTable = deepCloneHashes2D(hashesByTable);
 
-        this.iv = Objects.requireNonNull(iv, "iv").clone();
-        this.encryptedQuery = Objects.requireNonNull(encryptedQuery, "encryptedQuery").clone();
+        this.iv = iv.clone();
+        this.encryptedQuery = encryptedQuery.clone();
         this.topK = Math.max(1, topK);
-
-        this.encryptionContext = Objects.requireNonNullElseGet(
-                encryptionContext,
-                () -> "epoch_" + version + "_dim_" + dimension
-        );
-        this.dimension = Math.max(1, dimension);
+        this.encryptionContext = encryptionContext;
+        this.dimension = dimension;
         this.version = version;
-        this.lambda = Math.max(1, lambda);
-
-        if (this.iv.length != 12) {
-            throw new IllegalArgumentException("iv must be 12 bytes for AES-GCM");
-        }
+        this.lambda = lambda;
     }
 
-    private static BitSet[][] deepCloneCodes2D(BitSet[][] src) {
+    private static int[][] deepCloneHashes2D(int[][] src) {
         if (src == null) return null;
-        BitSet[][] out = new BitSet[src.length][];
+        int[][] out = new int[src.length][];
         for (int t = 0; t < src.length; t++) {
-            BitSet[] row = src[t];
-            if (row == null) {
-                out[t] = null;
-                continue;
-            }
-            out[t] = new BitSet[row.length];
-            for (int d = 0; d < row.length; d++) {
-                out[t][d] = (row[d] == null) ? null : (BitSet) row[d].clone();
-            }
+            out[t] = (src[t] == null) ? null : src[t].clone();
         }
         return out;
     }
 
     public List<List<Integer>> getTableBuckets() {
         return tableBuckets;
-    }
-
-    // mSANNP: per-table codes
-    public BitSet[][] getCodesByTable() {
-        return codesByTable;
-    }
-
-    // Legacy: returns table-0 codes only
-    public BitSet[] getCodes() {
-        if (codesByTable == null || codesByTable.length == 0) return null;
-        BitSet[] row = codesByTable[0];
-        if (row == null) return null;
-        BitSet[] out = new BitSet[row.length];
-        for (int i = 0; i < row.length; i++) out[i] = (row[i] == null) ? null : (BitSet) row[i].clone();
-        return out;
     }
 
     public byte[] getIv() {

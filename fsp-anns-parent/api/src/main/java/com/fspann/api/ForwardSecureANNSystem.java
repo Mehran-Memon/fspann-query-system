@@ -6,6 +6,7 @@ import com.fspann.crypto.AesGcmCryptoService;
 import com.fspann.crypto.CryptoService;
 import com.fspann.crypto.ReencryptionTracker;
 import com.fspann.crypto.SelectiveReencCoordinator;
+import com.fspann.index.paper.GFunctionRegistry;
 import com.fspann.index.paper.PartitionedIndexService;
 import com.fspann.common.KeyLifeCycleService;
 import com.fspann.key.BackgroundReencryptionScheduler;
@@ -65,13 +66,8 @@ public class ForwardSecureANNSystem {
     private final boolean computePrecision;
     private final boolean writeGlobalPrecisionCsv;
     private final int[] K_VARIANTS;
-    private final boolean auditEnable;
-    private final int auditK;
-    private final int auditSampleEvery;
-    private final int auditWorstKeep;
     private final Path resultsDir;
     private final double configuredNoiseScale;
-    private final RetrievedAudit retrievedAudit;
     private Path reencCsv;
     private final SystemConfig.KAdaptiveConfig kAdaptive;
     // key = dim|topK|vectorHash  (simple but enough for tests)
@@ -159,19 +155,13 @@ public class ForwardSecureANNSystem {
         // ---- load config ----
         SystemConfig cfg;
         cfg = new com.fspann.api.ApiSystemConfig(this.configPath).getConfig();
-        String profile = System.getProperty("cli.profile");
-        if (profile != null && !profile.isBlank()) {
-            cfg.applyProfile(profile);
-            logger.info("Applied profile override: {}", profile);
-        }
-        cfg.freeze();
         this.config = cfg;
 
         this.paper = cfg.getPaper();
 
         logger.info(
                 "FINAL PAPER CONFIG: m={} lambda={} divisions={} tables={} seed={}",
-                paper.m, paper.lambda, paper.divisions, paper.getTables(), paper.seed
+                paper.getM(), paper.getLambda(), paper.getDivisions(), paper.getTables(), paper.getSeed()
         );
 
         // ==== feature configuration ====
@@ -214,28 +204,6 @@ public class ForwardSecureANNSystem {
                 "reenc.enabled", "reencryption.enabled", "reencrypt.enabled"
         );
 
-        // ==== audit subsystem ====
-
-        boolean enableAudit = false;
-        int aK = 100, aEvery = 100, aWorst = 25;
-
-        try {
-            var ac = config.getAudit();
-            if (ac != null) {
-                enableAudit = ac.enable;
-                if (ac.k > 0) aK = ac.k;
-                if (ac.sampleEvery > 0) aEvery = ac.sampleEvery;
-                if (ac.worstKeep > 0) aWorst = ac.worstKeep;
-            }
-        } catch (Throwable ignore) {}
-
-        enableAudit = enableAudit || propOr(true, "output.audit", "audit");
-
-        this.auditEnable = enableAudit;
-        this.auditK = aK;
-        this.auditSampleEvery = aEvery;
-        this.auditWorstKeep = aWorst;
-
         // ==== output directory + profilers ====
 
         String outDir = (config.getOutput() != null && config.getOutput().resultsDir != null
@@ -271,17 +239,6 @@ public class ForwardSecureANNSystem {
             case "base" -> RatioSource.BASE;
             default -> RatioSource.AUTO;
         };
-
-        // ==== audit files ====
-        RetrievedAudit ra = null;
-        if (auditEnable) {
-            try {
-                ra = new RetrievedAudit(this.resultsDir);
-            } catch (IOException ioe) {
-                logger.warn("Audit writer init failed; audit disabled", ioe);
-            }
-        }
-        this.retrievedAudit = ra;
 
         // ==== FsPaths binding ====
 
@@ -406,7 +363,7 @@ public class ForwardSecureANNSystem {
                             keyService,
                             indexService,
                             config,
-                            paper.divisions,
+                            paper.getDivisions(),
                             paper.getTables()
                     );
 
@@ -414,7 +371,7 @@ public class ForwardSecureANNSystem {
 
             logger.info(
                     "TokenFactory created: dim={} m={} lambda={} divisions={} tables={}",
-                    dim, paper.m, paper.lambda, paper.divisions, paper.getTables()
+                    dim, paper.getM(), paper.getLambda(), paper.getDivisions(), paper.getTables()
             );
         }
 
@@ -670,13 +627,12 @@ public class ForwardSecureANNSystem {
     ) {
         Objects.requireNonNull(queries, "queries");
         Objects.requireNonNull(gt, "groundtruth");
-        int maxQueries = Integer.getInteger("query.limit", queries.size());
 
         QueryServiceImpl qs = getQueryServiceImpl();
 
         logger.info("Running explicit query loop: queries={}, dim={}", queries.size(), dim);
 
-        for (int qi = 0; qi < Math.min(queries.size(), maxQueries); qi++) {
+        for (int qi = 0; qi < queries.size(); qi++) {
             double[] q = queries.get(qi);
 
             for (int k : K_VARIANTS) {
@@ -711,14 +667,15 @@ public class ForwardSecureANNSystem {
                 // --------------------------------------------------
                 // 4. Zero-touch fallback (per-K)
                 // --------------------------------------------------
-                if (config.getSearchMode() == com.fspann.config.SearchMode.OPTIMIZED &&
-                        indexService.getLastTouchedIds().isEmpty()) {
+                if (indexService.getLastTouchedIds().isEmpty()) {
                     int baseProbes = config.getRuntime().getMaxCandidateFactor();
                     int fallbackProbes = Math.max(baseProbes * 2, 4);
+
                     logger.warn(
                             "Zero-touch ANN query detected (q={}, k={}). Forcing probe widening {} → {}",
                             qi, k, baseProbes, fallbackProbes
                     );
+
                     indexService.setProbeOverride(fallbackProbes);
                     results = qs.search(token);
                     indexService.clearProbeOverride();
@@ -1339,9 +1296,9 @@ public class ForwardSecureANNSystem {
             EvaluationSummaryPrinter.printAndWriteCsv(
                     dataset,
                     profile,
-                    paper.m,
-                    paper.lambda,
-                    paper.divisions,
+                    paper.getM(),
+                    paper.getLambda(),
+                    paper.getDivisions(),
                     totalIndexMs,
                     agg,
                     outDir.resolve("summary.csv")
@@ -1375,27 +1332,30 @@ public class ForwardSecureANNSystem {
     private String cacheKeyOf(QueryToken token) {
         if (token == null) return "null";
 
-        StringBuilder sb = new StringBuilder(128);
+        StringBuilder sb = new StringBuilder(256);
 
         // Version + dimension + topK
         sb.append("v").append(token.getVersion())
                 .append(":d").append(token.getDimension())
                 .append(":k").append(token.getTopK());
 
-        // Partitioned-mode codes (BitSet array)
-        BitSet[] codes = token.getCodes();
-        if (codes != null && codes.length > 0) {
-            sb.append(":codes");
-            for (BitSet bs : codes) {
-                if (bs == null) {
-                    sb.append("|-1");
-                } else {
-                    sb.append('|').append(bs.hashCode());
+        // MSANNP integer hashes: [table][division]
+        int[][] hashes = token.getHashesByTable();
+        if (hashes != null && hashes.length > 0) {
+            sb.append(":h");
+            for (int t = 0; t < hashes.length; t++) {
+                int[] row = hashes[t];
+                sb.append("|t").append(t);
+                if (row == null) {
+                    sb.append(":-");
+                    continue;
+                }
+                for (int h : row) {
+                    sb.append(',').append(h);
                 }
             }
         } else {
-            // No codes available
-            sb.append(":nocodes");
+            sb.append(":nohash");
         }
 
         return sb.toString();
@@ -1464,7 +1424,7 @@ public class ForwardSecureANNSystem {
         boolean enabled = reencEnabled;
         try {
             var rc = config.getReencryption();
-            if (rc != null) enabled = enabled && rc.enabled;
+            if (rc != null) enabled = enabled && rc.isEnabled();
         } catch (Throwable ignore) { /* ok */ }
 
         final List<String> allTouchedUnique = new ArrayList<>(touchedGlobal);
@@ -1642,11 +1602,6 @@ public class ForwardSecureANNSystem {
         } catch (Throwable ignore) {
         }
         return 0L;
-    }
-
-    private static boolean containsInt(int[] a, int v) {
-        for (int x : a) if (x == v) return true;
-        return false;
     }
 
     private String ratioDenomLabel(boolean gtTrusted) {
@@ -1959,11 +1914,6 @@ public class ForwardSecureANNSystem {
         return server / 1_000_000.0;
     }
 
-    /** Façade: cache-key for QueryToken */
-    public String getCacheKeyOf(QueryToken tok) {
-        return cacheKeyOf(tok);
-    }
-
     /** Façade: expose the logical-result cache */
     public Map<String, List<QueryResult>> getQueryCache() {
         return this.queryCache;
@@ -2003,26 +1953,12 @@ public class ForwardSecureANNSystem {
     }
 
     /** Façade: max-K across auditK and K-variants */
-    public int baseKForToken() {
-        return Math.max(
-                Math.max(auditK, 100),
-                Arrays.stream(K_VARIANTS).max().orElse(100)
-        );
-    }
-
     public void resetProbeShards() {
         System.clearProperty("probe.shards");
     }
-
     public boolean kAdaptiveProbeEnabled() {
         return kAdaptive != null && kAdaptive.enabled;
     }
-
-
-    public int[] getKVariants() {
-        return K_VARIANTS.clone();
-    }
-
     public void setStabilizationStats(int raw, int fin) {
         this.lastStabilizedRaw = raw;
         this.lastStabilizedFinal = fin;
@@ -2031,6 +1967,20 @@ public class ForwardSecureANNSystem {
     public int getLastStabilizedFinal() { return lastStabilizedFinal; }
     public String ratioDenomLabelPublic(boolean trusted) {
         return ratioDenomLabel(trusted);
+    }
+    static List<double[]> sampleBaseVectors(Path basePath, int dim, int max) throws IOException {
+        List<double[]> out = new ArrayList<>(max);
+        DefaultDataLoader loader = new DefaultDataLoader();
+        FormatLoader fl = loader.lookup(basePath);
+
+        Iterator<double[]> it = fl.openVectorIterator(basePath);
+        while (out.size() < max && it.hasNext()) {
+            double[] v = it.next();
+            if (v != null && v.length == dim) {
+                out.add(v);
+            }
+        }
+        return out;
     }
 
     public void flushAll() throws IOException {
@@ -2310,6 +2260,20 @@ public class ForwardSecureANNSystem {
             }
 
             sys.finalizeForSearch();
+
+        // ===================== GFUNCTION REGISTRY INIT =====================
+            List<double[]> sampleForG =
+                    sampleBaseVectors(baseVecs, dimension, 50_000);
+
+            GFunctionRegistry.initialize(
+                    sampleForG,
+                    dimension,
+                    cfg.getPaper().getM(),
+                    cfg.getPaper().getLambda(),
+                    cfg.getPaper().getSeed(),
+                    cfg.getPaper().getTables(),
+                    cfg.getPaper().getDivisions()
+            );
 
             GroundtruthManager gt = new GroundtruthManager();
             gt.load(groundtruth);

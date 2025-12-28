@@ -150,7 +150,7 @@ public final class GFunctionRegistry {
         int[] h = new int[DIVISIONS];
         for (int d = 0; d < DIVISIONS; d++) {
             Coding.GFunction G = get(vec.length, table, d);
-            h[d] = Coding.H(vec, G);
+            h[d] = Coding.H1(vec, G);
         }
         return h;
     }
