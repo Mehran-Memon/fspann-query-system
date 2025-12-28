@@ -60,11 +60,11 @@ class MultiTableSystemIntegrationTest {
                         new double[]{2,3,4,5,6,7}
                 ),
                 6,                              // dimension
-                cfg.getPaper().m,
-                cfg.getPaper().lambda,
-                cfg.getPaper().seed,
+                cfg.getPaper().getM(),
+                cfg.getPaper().getLambda(),
+                cfg.getPaper().getSeed(),
                 cfg.getPaper().getTables(),
-                cfg.getPaper().divisions
+                cfg.getPaper().getDivisions()
         );
 
         // 3. Key + crypto

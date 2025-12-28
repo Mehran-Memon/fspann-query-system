@@ -9,7 +9,8 @@ import com.fspann.query.core.QueryTokenFactory;
 import org.junit.jupiter.api.*;
 
 import javax.crypto.SecretKey;
-
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -20,54 +21,66 @@ class QueryTokenFactoryTest {
     private QueryTokenFactory tokenFactory;
     private CryptoService crypto;
     private KeyLifeCycleService keyService;
-    private PartitionedIndexService partition;
+    private PartitionedIndexService index;
     private SystemConfig config;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
 
-        List<double[]> sample = List.of(
-                new double[]{1.0, 2.0, 3.0},
-                new double[]{2.0, 1.0, 0.5},
-                new double[]{1.5, 1.5, 1.5}
-        );
-
-        // ---------------- Registry (MANDATORY) ----------------
+        // ---------------- Registry ----------------
         GFunctionRegistry.reset();
-
         GFunctionRegistry.initialize(
-                sample,     // List<double[]>
-                3,          // dimension
-                5,          // m
-                10,         // lambda
-                42L,        // baseSeed
-                3,          // tables
-                8           // divisions
+                List.of(
+                        new double[]{1, 2, 3},
+                        new double[]{2, 1, 0.5},
+                        new double[]{1.5, 1.5, 1.5}
+                ),
+                3,      // dim
+                5,      // m
+                10,     // lambda
+                42L,
+                3,      // tables
+                8       // divisions
         );
 
+        // ---------------- Config ----------------
+        Path cfg = Files.createTempFile("cfg", ".json");
+        Files.writeString(cfg, """
+        {
+          "paper": {
+            "enabled": true,
+            "m": 5,
+            "lambda": 10,
+            "divisions": 8,
+            "tables": 3,
+            "seed": 42
+          }
+        }
+        """);
+
+        config = SystemConfig.load(cfg.toString(), true);
+
+        // ---------------- Crypto ----------------
         crypto = mock(CryptoService.class);
         keyService = mock(KeyLifeCycleService.class);
-        partition = mock(PartitionedIndexService.class);
-        config = mock(SystemConfig.class);
+        index = mock(PartitionedIndexService.class);
 
-        // Real PaperConfig (fields accessed directly)
-        SystemConfig.PaperConfig pc = new SystemConfig.PaperConfig() {
-            @Override public int getTables() { return 3; }
-        };
-        pc.divisions = 8;
-        pc.m = 5;
-        pc.lambda = 10;
-        pc.seed = 42L;
+        SecretKey key = mock(SecretKey.class);
+        when(keyService.getCurrentVersion())
+                .thenReturn(new KeyVersion(1, key));
 
-        when(config.getPaper()).thenReturn(pc);
-
-        // Crypto + key mocks
-        SecretKey mockKey = mock(SecretKey.class);
-        when(keyService.getCurrentVersion()).thenReturn(new KeyVersion(1, mockKey));
-        when(crypto.encryptQuery(any(), any(), any())).thenReturn(new byte[]{1,2,3});
+        when(crypto.encryptQuery(any(), any(), any()))
+                .thenReturn(new byte[]{1, 2, 3});
 
         tokenFactory =
-                new QueryTokenFactory(crypto, keyService, partition, config, 8, 4);
+                new QueryTokenFactory(
+                        crypto,
+                        keyService,
+                        index,
+                        config,
+                        config.getPaper().getDivisions(),
+                        config.getPaper().getTables()
+                );
     }
 
     @Test
@@ -78,19 +91,36 @@ class QueryTokenFactoryTest {
 
         assertNotNull(tok);
         assertEquals(10, tok.getTopK());
+
+        // Tables
         assertEquals(3, tok.getNumTables());
-        assertEquals(3, tok.getCodesByTable().length);
+
+        // MSANNP hashes
+        int[][] hashes = tok.getHashesByTable();
+        assertNotNull(hashes);
+        assertEquals(3, hashes.length); // one per table
+
+        for (int[] h : hashes) {
+            assertNotNull(h);
+            assertTrue(h.length > 0);
+        }
+
+        // Legacy multiprobe buckets
+        List<List<Integer>> buckets = tok.getTableBuckets();
+        assertNotNull(buckets);
+        assertEquals(3, buckets.size());
+
+        // Encryption material
         assertNotNull(tok.getEncryptedQuery());
         assertNotNull(tok.getIv());
     }
 
     @Test
-    void testCreateFailsWhenRegistryMissing() {
+    void testFailsWhenRegistryMissing() {
         GFunctionRegistry.reset();
-
         assertThrows(
                 IllegalStateException.class,
-                () -> tokenFactory.create(new double[]{1,2,3}, 5)
+                () -> tokenFactory.create(new double[]{1, 2, 3}, 5)
         );
     }
 
@@ -98,7 +128,7 @@ class QueryTokenFactoryTest {
     void testInvalidTopK() {
         assertThrows(
                 IllegalArgumentException.class,
-                () -> tokenFactory.create(new double[]{1,2}, 0)
+                () -> tokenFactory.create(new double[]{1, 2, 3}, 0)
         );
     }
 }

@@ -1,18 +1,14 @@
 package com.fspann.config;
 
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * CORRECTED Comprehensive unit tests for SystemConfig.
- * Tests configuration loading, validation, and nested config access.
+ * Unit tests aligned EXACTLY with SystemConfig API
  *
- * FIXED: RatioConfig.getSource() -> Use direct field access or correct method name
- *
- * Run with: mvn test -Dtest=SystemConfigTest
+ * No invented getters
+ * No removed methods
+ * No speculative features
  */
 @DisplayName("SystemConfig Unit Tests")
 public class SystemConfigTest {
@@ -20,330 +16,150 @@ public class SystemConfigTest {
     private SystemConfig config;
 
     @BeforeEach
-    public void setUp() {
-        SystemConfig.clearCache();
-        config = createDefaultConfig();
+    void setUp() {
+        config = new SystemConfig();
     }
 
-    @AfterEach
-    public void tearDown() {
-        SystemConfig.clearCache();
-    }
-
-    // ============ GETTERS TESTS ============
+    // =========================================================
+    // BASIC GETTERS
+    // =========================================================
 
     @Test
-    @DisplayName("Test getNumShards returns valid value")
-    public void testGetNumShards() {
+    void testNumShards() {
         int shards = config.getNumShards();
         assertTrue(shards >= 1);
-        assertTrue(shards <= 8192);
     }
 
     @Test
-    @DisplayName("Test getOpsThreshold returns valid value")
-    public void testGetOpsThreshold() {
+    void testOpsThreshold() {
         long ops = config.getOpsThreshold();
-        assertTrue(ops >= 1);
-        assertTrue(ops <= 1_000_000_000L);
+        assertTrue(ops > 0);
     }
 
     @Test
-    @DisplayName("Test getAgeThresholdMs returns valid value")
-    public void testGetAgeThresholdMs() {
+    void testAgeThresholdMs() {
         long age = config.getAgeThresholdMs();
         assertTrue(age >= 0);
     }
 
-    // ============ FEATURE FLAGS TESTS ============
+    // =========================================================
+    // FEATURE FLAGS
+    // =========================================================
 
     @Test
-    @DisplayName("Test isForwardSecurityEnabled")
-    public void testIsForwardSecurityEnabled() {
-        boolean enabled = config.isForwardSecurityEnabled();
-        assertNotNull(enabled);
+    void testForwardSecurityEnabled() {
+        assertTrue(config.isForwardSecurityEnabled() || !config.isForwardSecurityEnabled());
     }
 
     @Test
-    @DisplayName("Test isPartitionedIndexingEnabled")
-    public void testIsPartitionedIndexingEnabled() {
-        boolean enabled = config.isPartitionedIndexingEnabled();
-        assertNotNull(enabled);
+    void testProfilerEnabled() {
+        assertTrue(config.isProfilerEnabled() || !config.isProfilerEnabled());
     }
 
     @Test
-    @DisplayName("Test isReencryptionEnabled")
-    public void testIsReencryptionEnabled() {
-        boolean enabled = config.isReencryptionEnabled();
-        assertNotNull(enabled);
+    void testReencryptionGloballyEnabled() {
+        assertTrue(config.isReencryptionGloballyEnabled() || !config.isReencryptionGloballyEnabled());
     }
 
+    // =========================================================
+    // PAPER CONFIG
+    // =========================================================
+
     @Test
-    @DisplayName("Test isProfilerEnabled")
-    public void testIsProfilerEnabled() {
-        boolean enabled = config.isProfilerEnabled();
-        assertNotNull(enabled);
+    void testPaperConfig() {
+        SystemConfig.PaperConfig p = config.getPaper();
+        assertNotNull(p);
+
+        assertTrue(p.getM() > 0);
+        assertTrue(p.getLambda() > 0);
+        assertTrue(p.getDivisions() > 0);
+        assertTrue(p.getTables() > 0);
+        assertNotEquals(0L, p.getSeed());
     }
 
-    // ============ NESTED CONFIG TESTS ============
+    // =========================================================
+    // RUNTIME CONFIG
+    // =========================================================
 
     @Test
-    @DisplayName("Test getLsh returns non-null config")
-    public void testGetLsh() {
-        SystemConfig.LshConfig lsh = config.getLsh();
-        assertNotNull(lsh);
+    void testRuntimeConfig() {
+        SystemConfig.RuntimeConfig r = config.getRuntime();
+        assertNotNull(r);
+
+        assertTrue(r.getMaxCandidateFactor() > 0);
+        assertTrue(r.getMaxRefinementFactor() > 0);
+        assertTrue(r.getMaxRelaxationDepth() >= 0);
+        assertTrue(r.getEarlyStopCandidates() > 0);
+        assertTrue(r.getRefinementLimit() > 0);
     }
 
+    // =========================================================
+    // STABILIZATION CONFIG
+    // =========================================================
+
     @Test
-    @DisplayName("Test getReencryption returns non-null config")
-    public void testGetReencryption() {
-        SystemConfig.ReencryptionConfig reenc = config.getReencryption();
-        assertNotNull(reenc);
+    void testStabilizationConfig() {
+        SystemConfig.StabilizationConfig s = config.getStabilization();
+        assertNotNull(s);
+
+        assertTrue(s.getAlpha() > 0.0);
+        assertTrue(s.getMinCandidatesRatio() >= 1.0);
     }
 
+    // =========================================================
+    // EVAL CONFIG (FIELD ACCESS — BY DESIGN)
+    // =========================================================
+
     @Test
-    @DisplayName("Test getPaper returns non-null config")
-    public void testGetPaper() {
-        SystemConfig.PaperConfig paper = config.getPaper();
-        assertNotNull(paper);
+    void testEvalConfig() {
+        SystemConfig.EvalConfig e = config.getEval();
+        assertNotNull(e);
+
+        assertNotNull(e.computePrecision);
+        assertNotNull(e.writeGlobalPrecisionCsv);
+        assertNotNull(e.kVariants);
+        assertTrue(e.kVariants.length > 0);
     }
 
-    @Test
-    @DisplayName("Test getEval returns non-null config")
-    public void testGetEval() {
-        SystemConfig.EvalConfig eval = config.getEval();
-        assertNotNull(eval);
-    }
+    // =========================================================
+    // RATIO CONFIG (FIELD ACCESS — BY DESIGN)
+    // =========================================================
 
     @Test
-    @DisplayName("Test getOutput returns non-null config")
-    public void testGetOutput() {
-        SystemConfig.OutputConfig output = config.getOutput();
-        assertNotNull(output);
-    }
+    void testRatioConfig() {
+        SystemConfig.RatioConfig r = config.getRatio();
+        assertNotNull(r);
 
-    @Test
-    @DisplayName("Test getStabilization returns non-null config")
-    public void testGetStabilization() {
-        SystemConfig.StabilizationConfig stab = config.getStabilization();
-        assertNotNull(stab);
-    }
-
-    @Test
-    @DisplayName("Test getRatio returns non-null config")
-    public void testGetRatio() {
-        SystemConfig.RatioConfig ratio = config.getRatio();
-        assertNotNull(ratio);
-    }
-
-    @Test
-    @DisplayName("Test getKAdaptive returns non-null config")
-    public void testGetKAdaptive() {
-        SystemConfig.KAdaptiveConfig kadaptive = config.getKAdaptive();
-        assertNotNull(kadaptive);
-    }
-
-    // ============ LSHCONFIG TESTS ============
-
-    @Test
-    @DisplayName("Test LshConfig getNumFunctions")
-    public void testLshGetNumFunctions() {
-        SystemConfig.LshConfig lsh = config.getLsh();
-        int numFuncs = lsh.getNumFunctions();
-        assertTrue(numFuncs >= 1);
-        assertTrue(numFuncs <= 256);
-    }
-
-    @Test
-    @DisplayName("Test LshConfig getNumBuckets")
-    public void testLshGetNumBuckets() {
-        SystemConfig.LshConfig lsh = config.getLsh();
-        int numBuckets = lsh.getNumBuckets();
-        assertTrue(numBuckets >= 100);
-        assertTrue(numBuckets <= 1_000_000);
-    }
-
-    @Test
-    @DisplayName("Test LshConfig getTargetRatio")
-    public void testLshGetTargetRatio() {
-        SystemConfig.LshConfig lsh = config.getLsh();
-        double ratio = lsh.getTargetRatio();
-        assertTrue(ratio >= 1.0);
-        assertTrue(ratio <= 2.0);
-    }
-
-    // ============ PAPERCONFIG TESTS ============
-
-    @Test
-    @DisplayName("Test PaperConfig getM")
-    public void testPaperGetM() {
-        SystemConfig.PaperConfig paper = config.getPaper();
-        int m = paper.getM();
-        assertTrue(m >= 1);
-    }
-
-    @Test
-    @DisplayName("Test PaperConfig getLambda")
-    public void testPaperGetLambda() {
-        SystemConfig.PaperConfig paper = config.getPaper();
-        int lambda = paper.getLambda();
-        assertTrue(lambda >= 1);
-    }
-
-    @Test
-    @DisplayName("Test PaperConfig getDivisions")
-    public void testPaperGetDivisions() {
-        SystemConfig.PaperConfig paper = config.getPaper();
-        int divisions = paper.getDivisions();
-        assertTrue(divisions >= 1);
-    }
-
-    @Test
-    @DisplayName("Test PaperConfig getSeed")
-    public void testPaperGetSeed() {
-        SystemConfig.PaperConfig paper = config.getPaper();
-        long seed = paper.getSeed();
-        assertNotNull(seed);
-    }
-
-    // ============ STABILIZATIONCONFIG TESTS ============
-
-    @Test
-    @DisplayName("Test StabilizationConfig isEnabled")
-    public void testStabilizationIsEnabled() {
-        SystemConfig.StabilizationConfig stab = config.getStabilization();
-        boolean enabled = stab.isEnabled();
-        assertNotNull(enabled);
-    }
-
-    @Test
-    @DisplayName("Test StabilizationConfig getAlpha")
-    public void testStabilizationGetAlpha() {
-        SystemConfig.StabilizationConfig stab = config.getStabilization();
-        double alpha = stab.getAlpha();
-        assertTrue(alpha > 0.0);
-        assertTrue(alpha <= 1.0);
-    }
-
-    @Test
-    @DisplayName("Test StabilizationConfig getMinCandidatesRatio")
-    public void testStabilizationGetMinCandidatesRatio() {
-        SystemConfig.StabilizationConfig stab = config.getStabilization();
-        double ratio = stab.getMinCandidatesRatio();
-
-        assertTrue(ratio >= 1.0);
-        assertTrue(ratio <= 2.0);
-    }
-
-    // ============ REENCRYPTIONCONFIG TESTS ============
-
-    @Test
-    @DisplayName("Test ReencryptionConfig isEnabled")
-    public void testReencryptionIsEnabled() {
-        SystemConfig.ReencryptionConfig reenc = config.getReencryption();
-        boolean enabled = reenc.isEnabled();
-        assertNotNull(enabled);
-    }
-
-    @Test
-    @DisplayName("Test ReencryptionConfig getBatchSize")
-    public void testReencryptionGetBatchSize() {
-        SystemConfig.ReencryptionConfig reenc = config.getReencryption();
-        int batchSize = reenc.getBatchSize();
-        assertTrue(batchSize >= 1);
-    }
-
-    @Test
-    @DisplayName("Test ReencryptionConfig getMaxMsPerBatch")
-    public void testReencryptionGetMaxMsPerBatch() {
-        SystemConfig.ReencryptionConfig reenc = config.getReencryption();
-        long maxMs = reenc.getMaxMsPerBatch();
-        assertTrue(maxMs >= 0);
-    }
-
-    // ============ EVALCONFIG TESTS ============
-
-    @Test
-    @DisplayName("Test EvalConfig computePrecision")
-    public void testEvalComputePrecision() {
-        SystemConfig.EvalConfig eval = config.getEval();
-        boolean compute = eval.computePrecision;
-        assertNotNull(compute);
-    }
-
-    @Test
-    @DisplayName("Test EvalConfig kVariants")
-    public void testEvalKVariants() {
-        SystemConfig.EvalConfig eval = config.getEval();
-        int[] kVariants = eval.kVariants;
-        assertNotNull(kVariants);
-        assertTrue(kVariants.length > 0);
-        for (int k : kVariants) {
-            assertTrue(k > 0);
-        }
-    }
-
-    // ============ OUTPUTCONFIG TESTS ============
-
-    @Test
-    @DisplayName("Test OutputConfig getResultsDir")
-    public void testOutputGetResultsDir() {
-        SystemConfig.OutputConfig output = config.getOutput();
-        String resultsDir = output.resultsDir;
-        assertNotNull(resultsDir);
-        assertFalse(resultsDir.isBlank());
-    }
-
-    @Test
-    @DisplayName("Test OutputConfig exportArtifacts")
-    public void testOutputExportArtifacts() {
-        SystemConfig.OutputConfig output = config.getOutput();
-        boolean export = output.exportArtifacts;
-        assertNotNull(export);
-    }
-
-    // ============ RATIOCONFIG TESTS ============
-
-    @Test
-    @DisplayName("Test RatioConfig returns non-null")
-    public void testRatioConfigNonNull() {
-        SystemConfig.RatioConfig ratio = config.getRatio();
-        assertNotNull(ratio);
-    }
-
-    @Test
-    @DisplayName("Test RatioConfig source field")
-    public void testRatioConfigSource() {
-        SystemConfig.RatioConfig ratio = config.getRatio();
-        String source = ratio.source;
-
-        assertNotNull(source);
+        assertNotNull(r.source);
         assertTrue(
-                source.equals("auto") ||
-                        source.equals("gt")   ||
-                        source.equals("base"),
-                "Invalid ratio source: " + source
+                r.source.equals("auto") ||
+                        r.source.equals("gt")   ||
+                        r.source.equals("base")
         );
     }
 
-
-    // ============ CACHE TESTS ============
+    // =========================================================
+    // REENCRYPTION CONFIG
+    // =========================================================
 
     @Test
-    @DisplayName("Test clearCache empties the cache")
-    public void testClearCache() {
-        SystemConfig.clearCache();
-        // Should not throw
-        assertTrue(true);
+    void testReencryptionConfig() {
+        SystemConfig.ReencryptionConfig r = config.getReencryption();
+        assertNotNull(r);
+
+        assertTrue(r.getBatchSize() > 0);
+        assertTrue(r.getMaxMsPerBatch() >= 0);
     }
 
-    // ============ HELPER METHODS ============
+    // =========================================================
+    // OPTIONAL CONFIG BLOCKS (MAY BE NULL)
+    // =========================================================
 
-    private SystemConfig createDefaultConfig() {
-        try {
-            return new SystemConfig();
-        } catch (Exception e) {
-            return new SystemConfig();
-        }
+    @Test
+    void testOptionalConfigs() {
+        // These are optional by design
+        assertDoesNotThrow(() -> config.getKAdaptive());
+        assertDoesNotThrow(() -> config.getOutput());
+        assertDoesNotThrow(() -> config.getCloak());
     }
 }

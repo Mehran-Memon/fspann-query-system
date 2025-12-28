@@ -3,124 +3,131 @@ package com.fspann.index;
 import com.fspann.index.paper.Coding;
 import com.fspann.index.paper.GreedyPartitioner;
 
-import java.util.BitSet;
+import java.util.*;
 
 /**
- * Verification test for the Coding bit ordering fix.
+ * Verification test for MSANNP integer hash stability and prefix behavior.
  *
- * Run this BEFORE full evaluation to confirm the fix is correct.
+ * This test is aligned with:
+ *  - Coding.H(...) → int[]
+ *  - GreedyPartitioner → integer interval based
+ *
+ * Run BEFORE large-scale evaluation.
  */
-public class CodingVerificationTest {
+public final class CodingVerificationTest {
 
     public static void main(String[] args) {
-        System.out.println("=== CODING BIT ORDERING VERIFICATION ===\n");
+
+        System.out.println("=== MSANNP CODING VERIFICATION (INTEGER HASH) ===\n");
 
         int m = 24;
         int lambda = 2;
         int dim = 128;
         long seed = 42L;
 
-        // Create two similar vectors
+        // ------------------------------------------------------------
+        // 1. Create vectors
+        // ------------------------------------------------------------
         double[] v1 = new double[dim];
         double[] v2 = new double[dim];
-        double[] v3 = new double[dim];  // very different
+        double[] v3 = new double[dim];
 
-        java.util.Random rnd = new java.util.Random(123);
+        Random rnd = new Random(123);
         for (int i = 0; i < dim; i++) {
             v1[i] = rnd.nextGaussian();
-            v2[i] = v1[i] + rnd.nextGaussian() * 0.1;  // Small perturbation
-            v3[i] = rnd.nextGaussian() * 10;           // Completely different
+            v2[i] = v1[i] + rnd.nextGaussian() * 0.1;   // similar
+            v3[i] = rnd.nextGaussian() * 10.0;          // very different
         }
 
-        // Generate codes
-        Coding.GFunction G = Coding.buildRandomG(dim, m, lambda, 1.0, seed);
+        // ------------------------------------------------------------
+        // 2. Build GFunction
+        // ------------------------------------------------------------
+        Coding.GFunction G =
+                Coding.buildRandomG(dim, m, lambda, 1.0, seed);
 
-        BitSet c1 = Coding.C(v1, G);
-        BitSet c2 = Coding.C(v2, G);
-        BitSet c3 = Coding.C(v3, G);
+        int[] h1 = Coding.H(v1, G);
+        int[] h2 = Coding.H(v2, G);
+        int[] h3 = Coding.H(v3, G);
 
-        int codeBits = m * lambda;  // 48
-
-        System.out.println("Code bits: " + codeBits);
+        System.out.println("Hash length (m): " + h1.length);
         System.out.println();
 
-        // Test 1: Similar vectors should have similar MSBs
-        int msbMatch = countMatchingBits(c1, c2, 0, m);  // First m bits (MSBs)
-        int lsbMatch = countMatchingBits(c1, c2, m, codeBits);  // Last m bits (LSBs)
+        // ------------------------------------------------------------
+        // 3. Similar vectors → similar hashes
+        // ------------------------------------------------------------
+        int match12 = countEqual(h1, h2);
+        int match13 = countEqual(h1, h3);
 
-        System.out.println("Test 1: Similar vectors (v1 vs v2)");
-        System.out.println("  MSB match (bits 0-" + (m-1) + "): " + msbMatch + "/" + m);
-        System.out.println("  LSB match (bits " + m + "-" + (codeBits-1) + "): " + lsbMatch + "/" + m);
+        System.out.println("Test 1: Hash similarity");
+        System.out.println("  v1 vs v2 equal hashes: " + match12 + "/" + m);
+        System.out.println("  v1 vs v3 equal hashes: " + match13 + "/" + m);
 
-        // For similar vectors, MSB match should be HIGH
-        if (msbMatch < m/2) {
-            System.out.println("  WARNING: Low MSB match for similar vectors!");
+        if (match12 <= match13) {
+            System.err.println("FAIL: Similar vectors not more similar than random!");
+            System.exit(1);
         } else {
-            System.out.println("  OK: Good MSB match for similar vectors");
+            System.out.println("  OK: Similarity preserved");
         }
+
         System.out.println();
 
-        // Test 2: Different vectors should have low MSB match
-        int msbMatchDiff = countMatchingBits(c1, c3, 0, m);
-        int lsbMatchDiff = countMatchingBits(c1, c3, m, codeBits);
+        // ------------------------------------------------------------
+        // 4. Prefix stability test (first k projections)
+        // ------------------------------------------------------------
+        int k = m / 2;
+        int prefixMatch = countEqual(h1, h2, 0, k);
 
-        System.out.println("Test 2: Different vectors (v1 vs v3)");
-        System.out.println("  MSB match (bits 0-" + (m-1) + "): " + msbMatchDiff + "/" + m);
-        System.out.println("  LSB match (bits " + m + "-" + (codeBits-1) + "): " + lsbMatchDiff + "/" + m);
-        System.out.println();
+        System.out.println("Test 2: Prefix stability (first " + k + ")");
+        System.out.println("  Prefix matches: " + prefixMatch + "/" + k);
 
-        // Test 3: Prefix matching simulation
-        System.out.println("Test 3: Prefix matching simulation");
-
-        GreedyPartitioner.CodeComparator fullCmp = new GreedyPartitioner.CodeComparator(codeBits);
-        GreedyPartitioner.CodeComparator halfCmp = new GreedyPartitioner.CodeComparator(m);  // Half bits
-
-        int fullCmpResult = fullCmp.compare(c1, c2);
-        int halfCmpResult = halfCmp.compare(c1, c2);
-
-        System.out.println("  Full 48-bit compare (c1 vs c2): " + fullCmpResult);
-        System.out.println("  Half 24-bit compare (c1 vs c2): " + halfCmpResult);
-
-        // With MSB-first ordering, half-bit compare should still capture similarity
-        System.out.println();
-
-        // Test 4: Verify bit layout
-        System.out.println("Test 4: Bit layout verification");
-        int[] H = Coding.H(v1, G);
-
-        System.out.println("  First 3 h_j values: h_0=" + H[0] + ", h_1=" + H[1] + ", h_2=" + H[2]);
-        System.out.println("  Expected MSBs at positions 0-" + (m-1));
-
-        // Check if MSB of h_0 is at position 0
-        boolean h0_msb = ((H[0] >>> (lambda - 1)) & 1) == 1;
-        boolean bit0 = c1.get(0);
-
-        System.out.println("  h_0 MSB = " + (h0_msb ? 1 : 0));
-        System.out.println("  Code bit 0 = " + (bit0 ? 1 : 0));
-
-        if (h0_msb == bit0) {
-            System.out.println("  OK: MSB correctly placed at position 0");
+        if (prefixMatch < k / 2) {
+            System.err.println("FAIL: Prefix similarity too weak");
+            System.exit(1);
         } else {
-            System.out.println("  ERROR: MSB not at expected position!");
+            System.out.println("  OK: Prefix similarity strong");
         }
 
         System.out.println();
-        System.out.println("=== VERIFICATION COMPLETE ===");
 
-        // Summary
-        boolean success = (msbMatch >= m/2) && (h0_msb == bit0);
-        System.out.println("\nResult: " + (success ? "PASS" : "FAIL"));
+        // ------------------------------------------------------------
+        // 5. GreedyPartitioner sanity test
+        // ------------------------------------------------------------
+        System.out.println("Test 3: GreedyPartitioner correctness");
 
-        if (!success) {
+        List<GreedyPartitioner.Item> items = new ArrayList<>();
+        for (int i = 0; i < m; i++) {
+            items.add(new GreedyPartitioner.Item("v1_" + i, h1[i]));
+            items.add(new GreedyPartitioner.Item("v2_" + i, h2[i]));
+        }
+
+        GreedyPartitioner.BuildResult br =
+                GreedyPartitioner.build(items, seed);
+
+        System.out.println("  Intervals: " + br.indexI.size());
+        System.out.println("  Max bucket size (w): " + br.w);
+
+        if (br.indexI.isEmpty()) {
+            System.err.println("FAIL: No partitions created");
             System.exit(1);
         }
+
+        System.out.println("  OK: Partitioning produced valid intervals");
+
+        System.out.println("\n=== VERIFICATION PASSED ===");
     }
 
-    private static int countMatchingBits(BitSet a, BitSet b, int start, int end) {
-        int count = 0;
+    // ------------------------------------------------------------
+    // Helpers
+    // ------------------------------------------------------------
+    private static int countEqual(int[] a, int[] b) {
+        return countEqual(a, b, 0, a.length);
+    }
+
+    private static int countEqual(int[] a, int[] b, int start, int end) {
+        int c = 0;
         for (int i = start; i < end; i++) {
-            if (a.get(i) == b.get(i)) count++;
+            if (a[i] == b[i]) c++;
         }
-        return count;
+        return c;
     }
 }

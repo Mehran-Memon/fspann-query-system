@@ -8,19 +8,12 @@ import com.fspann.key.KeyManager;
 import com.fspann.key.KeyRotationPolicy;
 import com.fspann.key.KeyRotationServiceImpl;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.file.*;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
-import java.util.Random;
-
+import java.util.*;
 
 public abstract class BaseUnifiedIT {
 
@@ -34,11 +27,11 @@ public abstract class BaseUnifiedIT {
     protected ForwardSecureANNSystem system;
     protected SystemConfig cfg;
 
-    protected final int DIM = 8;
-    private static final Logger logger = LoggerFactory.getLogger(BaseUnifiedIT.class);
+    protected static final int DIM = 8;
 
     @BeforeEach
     protected void baseSetup() throws Exception {
+
         metaDir = root.resolve("meta");
         ptsDir  = root.resolve("pts");
         ksFile  = root.resolve("keys.blob");
@@ -49,12 +42,18 @@ public abstract class BaseUnifiedIT {
         Files.createDirectories(ptsDir);
 
         Files.writeString(seedFile, "");
+
         Files.writeString(cfgFile, """
         {
-          "paper": { "enabled": true, "m": 4, "divisions": 4, "lambda": 3, "seed": 42 },
-          "output": { "exportArtifacts": false },
-          "ratio": { "source": "none" },
-          "reencryptionEnabled": true
+          "paper": {
+            "enabled": true,
+            "m": 4,
+            "divisions": 4,
+            "lambda": 3,
+            "tables": 2,
+            "seed": 42
+          },
+          "reencryption": { "enabled": true }
         }
         """);
 
@@ -84,7 +83,7 @@ public abstract class BaseUnifiedIT {
                 cfgFile.toString(),
                 seedFile.toString(),
                 ksFile.toString(),
-                java.util.List.of(DIM),
+                List.of(DIM),
                 root,
                 false,
                 metadata,
@@ -94,14 +93,12 @@ public abstract class BaseUnifiedIT {
     }
 
     protected void indexClusteredData(int n) throws IOException {
-        Random r = new Random(42);
 
-        // WORKAROUND: Insert at least 1001 vectors to trigger GFunctionRegistry init
-        // Small test datasets (<1000 vectors) won't persist otherwise
-        int actualCount = Math.max(n, 1001);
+        Random r = new Random(42);
+        int count = Math.max(n, 1024); // ensure registry stability
 
         List<double[]> vectors = new ArrayList<>();
-        for (int i = 0; i < actualCount; i++) {
+        for (int i = 0; i < count; i++) {
             double[] v = new double[DIM];
             for (int d = 0; d < DIM; d++) {
                 v[d] = 5.0 + r.nextGaussian() * 0.1;
@@ -109,37 +106,14 @@ public abstract class BaseUnifiedIT {
             vectors.add(v);
         }
 
-        logger.info("Indexing {} vectors (requested {}, adjusted for registry init)",
-                actualCount, n);
-
         system.batchInsert(vectors, DIM);
         system.finalizeForSearch();
-        system.flushAll();
-
-        try {
-            metadata.flush();
-            Thread.sleep(100);
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to flush metadata", e);
-        }
+        metadata.flush();
     }
+
     @AfterEach
-    void cleanup() throws Exception {
-        try {
-            system.setExitOnShutdown(false);
-            system.shutdown();
-        } catch (Exception ignore) {}
-
-        try {
-            metadata.close();
-        } catch (Exception ignore) {}
-
-        Files.walk(root)
-                .sorted(Comparator.reverseOrder())
-                .forEach(p -> {
-                    try {
-                        Files.deleteIfExists(p);
-                    } catch (Exception ignore) {}
-                });
+    void cleanup() {
+        try { system.setExitOnShutdown(false); system.shutdown(); } catch (Exception ignore) {}
+        try { metadata.close(); } catch (Exception ignore) {}
     }
 }

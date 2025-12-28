@@ -83,11 +83,11 @@ public class ForwardSecurityGameTest {
                         new double[]{2,3,4,5,6,7}
                 ),
                 6,
-                sc.getPaper().m,
-                sc.getPaper().lambda,
-                sc.getPaper().seed,
+                sc.getPaper().getM(),
+                sc.getPaper().getLambda(),
+                sc.getPaper().getSeed(),
                 sc.getPaper().getTables(),
-                sc.getPaper().divisions
+                sc.getPaper().getDivisions()
         );
 
         // -------------------------------

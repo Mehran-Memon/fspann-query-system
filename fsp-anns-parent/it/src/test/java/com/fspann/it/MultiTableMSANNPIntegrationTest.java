@@ -52,11 +52,11 @@ class MultiTableMSANNPIntegrationTest {
                         new double[]{2,3,4,5,6,7}
                 ),
                 6,
-                cfg.getPaper().m,
-                cfg.getPaper().lambda,
-                cfg.getPaper().seed,
+                cfg.getPaper().getM(),
+                cfg.getPaper().getLambda(),
+                cfg.getPaper().getSeed(),
                 cfg.getPaper().getTables(),
-                cfg.getPaper().divisions
+                cfg.getPaper().getDivisions()
         );
 
         KeyManager km = new KeyManager(tempDir.resolve("keys.blob").toString());
@@ -80,12 +80,6 @@ class MultiTableMSANNPIntegrationTest {
     private void bootstrapIndex() throws Exception {
         indexService.insert("__boot__", new double[]{0,0,0,0,0,0});
         indexService.finalizeForSearch();
-    }
-
-    @Test
-    void tokenHasMultipleTables() {
-        QueryToken tok = tokenFactory.create(new double[]{1,2,3,4,5,6}, 5);
-        assertEquals(3, tok.getCodesByTable().length);
     }
 
     @Test

@@ -9,6 +9,8 @@ import com.fspann.key.*;
 import org.junit.jupiter.api.*;
 
 import javax.crypto.SecretKey;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -23,69 +25,74 @@ class MPartitionedIndexServiceTest {
     private KeyRotationServiceImpl keyService;
 
     @BeforeEach
-    void setUp() {
-        List<double[]> sample = List.of(
-                new double[]{1.0, 2.0, 3.0},
-                new double[]{2.0, 1.0, 0.5},
-                new double[]{1.5, 1.5, 1.5}
-        );
+    void setUp() throws Exception {
 
-        // ---------------- Registry (MANDATORY) ----------------
+        // ---------------- Registry ----------------
         GFunctionRegistry.reset();
         GFunctionRegistry.initialize(
-                sample,     // List<double[]>
-                3,          // dimension
-                5,          // m
-                10,         // lambda
-                42L,        // baseSeed
-                3,          // tables
-                8           // divisions
+                List.of(
+                        new double[]{1, 2, 3},
+                        new double[]{2, 1, 0.5},
+                        new double[]{1.5, 1.5, 1.5}
+                ),
+                3, 5, 10, 42L, 3, 8
         );
 
-        meta = mock(RocksDBMetadataManager.class);
-        crypto = mock(AesGcmCryptoService.class);
-        keyService = mock(KeyRotationServiceImpl.class);
+        // ---------------- Config ----------------
+        Path cfg = Files.createTempFile("cfg", ".json");
+        Files.writeString(cfg, """
+        {
+          "paper": {
+            "enabled": true,
+            "m": 5,
+            "lambda": 10,
+            "divisions": 8,
+            "tables": 3,
+            "seed": 42
+          },
+          "runtime": {
+            "maxCandidateFactor": 5,
+            "earlyStopCandidates": 1000,
+            "maxRelaxationDepth": 3
+          }
+        }
+        """);
 
-        // Storage metrics mock
+        SystemConfig config = SystemConfig.load(cfg.toString(), true);
+
+        // ---------------- Metadata ----------------
+        meta = mock(RocksDBMetadataManager.class);
         StorageMetrics sm = mock(StorageMetrics.class);
         when(meta.getStorageMetrics()).thenReturn(sm);
         when(sm.getSnapshot()).thenReturn(
                 new StorageMetrics.StorageSnapshot(
-                        0L,0L,0L,
+                        0, 0, 0,
                         new ConcurrentHashMap<>(),
                         new ConcurrentHashMap<>()
                 )
         );
 
-        // Key lifecycle
+        // ---------------- Crypto ----------------
+        crypto = mock(AesGcmCryptoService.class);
+        keyService = mock(KeyRotationServiceImpl.class);
+
         SecretKey key = mock(SecretKey.class);
-        when(keyService.getCurrentVersion()).thenReturn(new KeyVersion(1, key));
-
-        // Config (REAL PaperConfig)
-        SystemConfig cfg = mock(SystemConfig.class);
-        SystemConfig.PaperConfig pc = new SystemConfig.PaperConfig() {
-            @Override public int getTables() { return 3; }
-        };
-        pc.divisions = 8;
-        pc.m = 5;
-        pc.lambda = 10;
-        pc.seed = 42L;
-
-        when(cfg.getPaper()).thenReturn(pc);
-
-        SystemConfig.RuntimeConfig rc = mock(SystemConfig.RuntimeConfig.class);
-        when(rc.getMaxCandidateFactor()).thenReturn(5);
-        when(rc.getEarlyStopCandidates()).thenReturn(1000);
-        when(rc.getMaxRelaxationDepth()).thenReturn(3);
-        when(cfg.getRuntime()).thenReturn(rc);
+        when(keyService.getCurrentVersion())
+                .thenReturn(new KeyVersion(1, key));
 
         index =
-                new PartitionedIndexService(meta, cfg, keyService, crypto);
+                new PartitionedIndexService(
+                        meta,
+                        config,
+                        keyService,
+                        crypto
+                );
     }
 
     @Test
     void testInsertEncryptsAndStores() throws Exception {
-        double[] v = new double[]{1.0, 2.0, 3.0};
+
+        double[] v = new double[]{1, 2, 3};
 
         EncryptedPoint ep = mock(EncryptedPoint.class);
         when(ep.getId()).thenReturn("vec-1");
@@ -104,5 +111,4 @@ class MPartitionedIndexServiceTest {
         verify(crypto).encrypt(eq("vec-1"), eq(v), any());
         verify(meta).saveEncryptedPoint(ep);
     }
-
 }
