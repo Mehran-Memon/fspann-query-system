@@ -67,7 +67,7 @@ class QueryTokenFactoryTest {
         when(crypto.encryptQuery(any(), any(), any())).thenReturn(new byte[]{1,2,3});
 
         tokenFactory =
-                new QueryTokenFactory(crypto, keyService, partition, config, 8);
+                new QueryTokenFactory(crypto, keyService, partition, config, 8, 4);
     }
 
     @Test

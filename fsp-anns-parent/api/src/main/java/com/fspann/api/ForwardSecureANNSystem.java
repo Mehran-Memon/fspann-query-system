@@ -6,7 +6,6 @@ import com.fspann.crypto.AesGcmCryptoService;
 import com.fspann.crypto.CryptoService;
 import com.fspann.crypto.ReencryptionTracker;
 import com.fspann.crypto.SelectiveReencCoordinator;
-import com.fspann.index.paper.GFunctionRegistry;
 import com.fspann.index.paper.PartitionedIndexService;
 import com.fspann.common.KeyLifeCycleService;
 import com.fspann.key.BackgroundReencryptionScheduler;
@@ -39,7 +38,6 @@ import java.nio.file.*;
 import java.security.MessageDigest;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.stream.Collectors;
 
 
 public class ForwardSecureANNSystem {
@@ -80,6 +78,7 @@ public class ForwardSecureANNSystem {
     private final Map<String, List<QueryResult>> queryCache = new ConcurrentHashMap<>();
     enum RatioSource {AUTO, GT, BASE}
     private final BackgroundReencryptionScheduler backgroundReencryptor;
+    private final SystemConfig.PaperConfig paper;
 
     // Optional: use sharded metadata for large-scale deployments
     private final boolean useShardedMetadata = Boolean.parseBoolean(
@@ -153,7 +152,8 @@ public class ForwardSecureANNSystem {
 
         this.verbose = verbose;
         this.BATCH_SIZE = batchSize;
-        this.executor = Executors.newFixedThreadPool(Math.max(1, Runtime.getRuntime().availableProcessors() / 2));
+        int cores = Runtime.getRuntime().availableProcessors();
+        this.executor = Executors.newFixedThreadPool(Math.max(2, cores - 2));
         this.configPath = normalizePath(configPath);
 
         // ---- load config ----
@@ -165,9 +165,14 @@ public class ForwardSecureANNSystem {
             logger.info("Applied profile override: {}", profile);
         }
         cfg.freeze();
-
         this.config = cfg;
 
+        this.paper = cfg.getPaper();
+
+        logger.info(
+                "FINAL PAPER CONFIG: m={} lambda={} divisions={} tables={} seed={}",
+                paper.m, paper.lambda, paper.divisions, paper.getTables(), paper.seed
+        );
 
         // ==== feature configuration ====
 
@@ -395,30 +400,43 @@ public class ForwardSecureANNSystem {
 
         for (int dim : dimensions) {
 
-            int divisions = config.getPaper().divisions;
-
             QueryTokenFactory factory =
                     new QueryTokenFactory(
                             cryptoService,
                             keyService,
                             indexService,
                             config,
-                            divisions
+                            paper.divisions,
+                            paper.getTables()
                     );
 
             tokenFactories.put(dim, factory);
 
             logger.info(
-                    "TokenFactory created: dim={} m={} lambda={} divisions={}",
-                    dim,
-                    config.getPaper().m,
-                    config.getPaper().lambda,
-                    divisions
+                    "TokenFactory created: dim={} m={} lambda={} divisions={} tables={}",
+                    dim, paper.m, paper.lambda, paper.divisions, paper.getTables()
+            );
+        }
+
+        int indexTables = paper.getTables();
+        int tokenTables = indexService.numTables();
+
+        if (indexTables != tokenTables) {
+            throw new IllegalStateException(
+                    "TABLE MISMATCH: index tables=" + indexTables +
+                            ", token tables=" + tokenTables
             );
         }
 
         int primaryDim = dimensions.get(0);
         QueryTokenFactory qtf = tokenFactories.get(primaryDim);
+
+        if (tokenFactories.size() != 1) {
+            throw new IllegalStateException(
+                    "Multiple dimensions configured but QueryService bound to single TokenFactory. " +
+                            "This will corrupt precision."
+            );
+        }
 
         // ==== QueryService ====
         this.queryService = new QueryServiceImpl(indexService, cryptoService, keyService, qtf, cfg);
@@ -695,7 +713,7 @@ public class ForwardSecureANNSystem {
                 // --------------------------------------------------
                 if (config.getSearchMode() == com.fspann.config.SearchMode.OPTIMIZED &&
                         indexService.getLastTouchedIds().isEmpty()) {
-                    int baseProbes = config.getPaper().probeLimit;
+                    int baseProbes = config.getRuntime().getMaxCandidateFactor();
                     int fallbackProbes = Math.max(baseProbes * 2, 4);
                     logger.warn(
                             "Zero-touch ANN query detected (q={}, k={}). Forcing probe widening {} → {}",
@@ -1321,9 +1339,9 @@ public class ForwardSecureANNSystem {
             EvaluationSummaryPrinter.printAndWriteCsv(
                     dataset,
                     profile,
-                    config.getPaper().m,
-                    config.getPaper().lambda,
-                    config.getPaper().divisions,
+                    paper.m,
+                    paper.lambda,
+                    paper.divisions,
                     totalIndexMs,
                     agg,
                     outDir.resolve("summary.csv")
@@ -2124,6 +2142,17 @@ public class ForwardSecureANNSystem {
                 ? Integer.parseInt(args[7])
                 : 100_000;
 
+        // ===================== QUERY LIMIT =====================
+        final int queryLimit =
+                Integer.getInteger(
+                        "queryLimit",
+                        Integer.getInteger("cli.queryLimit", -1)
+                );
+
+        if (queryLimit > 0) {
+            logger.warn("Query limit ENABLED: {}", queryLimit);
+        }
+
         logger.info("FSP-ANN start | dim={} | batchSize={}", dimension, batchSize);
 
         // ===================== FILESYSTEM =====================
@@ -2146,10 +2175,24 @@ public class ForwardSecureANNSystem {
         Path baseVecs  = Paths.get(dataPath);
         Path queryVecs = Paths.get(queryPath);
 
-        List<double[]> queries = loadQueriesWithValidation(Paths.get(queryPath), dimension);
+        List<double[]> allQueries =
+                loadQueriesWithValidation(Paths.get(queryPath), dimension);
 
-        if (queries.isEmpty()) {
+        if (allQueries.isEmpty()) {
             throw new IllegalStateException("No queries loaded from " + queryPath);
+        }
+
+        final List<double[]> queries;
+        if (queryLimit > 0 && queryLimit < allQueries.size()) {
+            queries = allQueries.subList(0, queryLimit);
+            logger.warn(
+                    "Using {} / {} queries (queryLimit active)",
+                    queries.size(),
+                    allQueries.size()
+            );
+        } else {
+            queries = allQueries;
+            logger.info("Using all {} queries", queries.size());
         }
 
         if (Files.exists(baseVecs)) {

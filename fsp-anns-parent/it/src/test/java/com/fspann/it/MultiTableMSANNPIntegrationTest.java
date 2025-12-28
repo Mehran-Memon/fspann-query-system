@@ -71,7 +71,7 @@ class MultiTableMSANNPIntegrationTest {
         ks.setCryptoService(crypto);
 
         indexService = new PartitionedIndexService(metadata, cfg, ks, crypto);
-        tokenFactory = new QueryTokenFactory(crypto, ks, indexService, cfg, 4);
+        tokenFactory = new QueryTokenFactory(crypto, ks, indexService, cfg, 4, 4);
         queryService = new QueryServiceImpl(indexService, crypto, ks, tokenFactory, cfg);
 
         bootstrapIndex();

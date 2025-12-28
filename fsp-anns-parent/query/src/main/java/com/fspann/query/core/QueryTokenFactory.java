@@ -48,28 +48,43 @@ public final class QueryTokenFactory {
     private final PartitionedIndexService partition;  // kept for backward compatibility
     private final SystemConfig cfg;
     private final int divisions;
+    private final int tables;
+
 
     public QueryTokenFactory(
             CryptoService crypto,
             KeyLifeCycleService keyService,
             PartitionedIndexService partition,
             SystemConfig cfg,
-            int divisions
+            int divisions,
+            int tables
     ) {
         this.crypto = Objects.requireNonNull(crypto);
         this.keyService = Objects.requireNonNull(keyService);
         this.partition = Objects.requireNonNull(partition);
         this.cfg = Objects.requireNonNull(cfg);
         this.divisions = divisions;
+        this.tables = tables;
 
-        log.info("QueryTokenFactory (MSANNP v2.0): divisions={}, using GFunctionRegistry", divisions);
+        log.info(
+                "QueryTokenFactory (MSANNP v2.1): divisions={} tables={}",
+                divisions, tables
+        );
+
         SystemConfig.PaperConfig pc = cfg.getPaper();
         log.info(
                 "CONFIG ASSERT: m={} lambda={} tables={} divisions={} seed={}",
                 pc.m, pc.lambda, pc.getTables(), pc.divisions, pc.seed
         );
 
+        if (tables != pc.getTables()) {
+            throw new IllegalStateException(
+                    "TokenFactory tables mismatch: ctor=" + tables +
+                            " config=" + pc.getTables()
+            );
+        }
     }
+
 
     /**
      * Build MSANNP QueryToken.

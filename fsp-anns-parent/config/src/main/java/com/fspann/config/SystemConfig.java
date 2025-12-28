@@ -240,6 +240,7 @@ public class SystemConfig {
         return getSearchMode() == SearchMode.PAPER_BASELINE;
     }
 
+
     public static final class RuntimeConfig {
 
         /**
@@ -296,6 +297,16 @@ public class SystemConfig {
         public int getEarlyStopCandidates() {
             return Math.max(1, earlyStopCandidates);
         }
+
+        private boolean precisionMode = false;
+        private int minPrecisionCandidates = 10000;
+        private int maxPrecisionCandidates = 50000;
+        private int refinementLimit = 10000;
+        public boolean isPrecisionMode() { return precisionMode; }
+        public int getMinPrecisionCandidates() { return minPrecisionCandidates; }
+        public int getMaxPrecisionCandidates() { return maxPrecisionCandidates; }
+        public int getRefinementLimit() { return refinementLimit; }
+
     }
 
     private RuntimeConfig runtime = new RuntimeConfig();

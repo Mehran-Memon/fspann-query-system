@@ -45,7 +45,7 @@ public final class PartitionedIndexService implements IndexService {
 
 //    private static final int DEFAULT_BUILD_THRESHOLD =
 //            Math.max(20_000, Runtime.getRuntime().availableProcessors() * 20_000);
-private static final int DEFAULT_BUILD_THRESHOLD = 100_000;
+private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
 
     // Minimum sample size for GFunction initialization
     private static final int MIN_SAMPLE_SIZE = 1000;
@@ -410,7 +410,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 100_000;
     @Override
     public List<EncryptedPoint> lookup(QueryToken token) {
         Objects.requireNonNull(token, "token cannot be null");
-        Set<String> deletedCache = new HashSet<>();
+        Set<String> deletedCache = new HashSet<>(1024);
 
         if (!frozen) throw new IllegalStateException("Index not finalized before lookup");
 
@@ -479,7 +479,8 @@ private static final int DEFAULT_BUILD_THRESHOLD = 100_000;
 
                 int safeDivs = Math.min(S.divisions.size(), qcodes.length);
 
-                for (int d = 0; d < safeDivs && !hitLimit; d++) {
+                for (int offset = 0; offset < safeDivs; offset++) {
+                    int d = (offset + relax) % safeDivs;
                     DivisionState div = S.divisions.get(d);
                     BitSet qc = qcodes[d];
 
@@ -562,22 +563,31 @@ private static final int DEFAULT_BUILD_THRESHOLD = 100_000;
         SystemConfig.PaperConfig pc = cfg.getPaper();
         int K = token.getTopK();
 
-        final int MAX_IDS =
-                Math.min(
-                        cfg.getRuntime().getMaxCandidateFactor() * K,
-                        pc.getSafetyMaxCandidates() > 0
-                                ? pc.getSafetyMaxCandidates()
-                                : Integer.MAX_VALUE
-                );
+        boolean precisionMode = cfg.getRuntime().isPrecisionMode();
+
+        final int MIN_IDS = precisionMode
+                ? cfg.getRuntime().getMinPrecisionCandidates()
+                : cfg.getRuntime().getMaxCandidateFactor() * K;
+
+        final int MAX_IDS = precisionMode
+                ? cfg.getRuntime().getMaxPrecisionCandidates()
+                : cfg.getRuntime().getMaxCandidateFactor() * K;
 
         final int perDivBits = perDivisionBits();
-        final int maxRelax = Math.min(pc.lambda, cfg.getRuntime().getMaxRelaxationDepth());
+        final int maxRelax = precisionMode
+                ? Math.min(
+                cfg.getRuntime().getMaxRelaxationDepth(),
+                perDivBits / pc.m
+        )
+                : Math.min(
+                cfg.getRuntime().getMaxRelaxationDepth(),
+                pc.lambda
+        );
+
         final int L = Math.min(tables.length, codesByTable.length);
 
-        // ========= ORDERED scoring =========
-        // lower score = better
         Map<String, Integer> score = new HashMap<>(MAX_IDS);
-        Set<String> deletedCache = new HashSet<>();
+        Set<String> deletedCache = new HashSet<>(1024);
 
         for (int relax = 0; relax <= maxRelax; relax++) {
             int bits = perDivBits - relax * pc.m;
@@ -600,6 +610,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 100_000;
                         boolean match = (relax == 0)
                                 ? covers(sb, qc, bits)
                                 : coversRelaxed(sb, qc, bits);
+
                         if (!match) continue;
 
                         List<String> ids = div.tagToIds.get(sb.tag);
@@ -608,12 +619,16 @@ private static final int DEFAULT_BUILD_THRESHOLD = 100_000;
                         for (String id : ids) {
                             if (deletedCache.contains(id)) continue;
                             if (metadata.isDeleted(id)) {
-                                deletedCache.add(id);
+                                if (deletedCache.size() < 100_000) {
+                                    deletedCache.add(id);
+                                }
                                 continue;
                             }
 
-                            // SCORE = (relax * 1000) + table + division
-                            int s = relax * 1000 + t * 10 + d;
+                            int s =
+                                    (relax << 24)
+                                            | (t << 16)
+                                            | (d << 8);
                             score.merge(id, s, Math::min);
 
                             if (score.size() >= MAX_IDS) break;
@@ -622,12 +637,18 @@ private static final int DEFAULT_BUILD_THRESHOLD = 100_000;
                     }
                     if (score.size() >= MAX_IDS) break;
                 }
-                if (score.size() >= MAX_IDS) break;
             }
-            if (score.size() >= MAX_IDS) break;
+            if (precisionMode && relax > 0 && score.size() >= MIN_IDS) {
+                break;
+            }
+
+
+            if (precisionMode && relax > 0 && score.size() >= MIN_IDS) {
+                break;
+            }
+
         }
 
-        // ========= ORDER candidates =========
         List<Map.Entry<String, Integer>> ordered =
                 new ArrayList<>(score.entrySet());
 
@@ -639,7 +660,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 100_000;
             if (out.size() >= MAX_IDS) break;
         }
 
-        lastTouched.set(score.size());
+        lastTouched.set(out.size());
         lastTouchedIds.get().clear();
         lastTouchedIds.get().addAll(out);
 
@@ -660,20 +681,22 @@ private static final int DEFAULT_BUILD_THRESHOLD = 100_000;
         return cmp.compare(sb.lower, c) <= 0 && cmp.compare(c, sb.upper) <= 0;
     }
 
-    private boolean coversRelaxed(GreedyPartitioner.SubsetBounds sb, BitSet c, int bits) {
+    private boolean coversRelaxed(
+            GreedyPartitioner.SubsetBounds sb,
+            BitSet q,
+            int bits
+    ) {
+        int violations = 0;
+
         for (int i = 0; i < bits; i++) {
-            boolean qi = c.get(i);
+            boolean qi = q.get(i);
             boolean lo = sb.lower.get(i);
             boolean hi = sb.upper.get(i);
 
-            // If lower bit is 1 and query bit is 0 → below range
-            if (lo && !qi) {
-                return false;
-            }
-
-            // If upper bit is 0 and query bit is 1 → above range
-            if (!hi && qi) {
-                return false;
+            if ((lo && !qi) || (!hi && qi)) {
+                violations++;
+                // Allow limited violations
+                if (violations > 1) return false;
             }
         }
         return true;

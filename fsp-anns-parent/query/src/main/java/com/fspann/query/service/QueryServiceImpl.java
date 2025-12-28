@@ -110,7 +110,10 @@ public final class QueryServiceImpl implements QueryService {
         }
 
         final double[] qVec = cryptoService.decryptQuery(
-                token.getEncryptedQuery(), token.getIv(), qkv.getKey());
+                token.getEncryptedQuery(),
+                token.getIv(),
+                qkv.getKey()
+        );
 
         if (!isValid(qVec)) {
             lastClientNs = System.nanoTime() - clientStart;
@@ -121,7 +124,7 @@ public final class QueryServiceImpl implements QueryService {
 
         try {
             // ================================
-            // STAGE A — Candidate IDs
+            // STAGE A — Candidate IDs (ORDERED)
             // ================================
             List<String> candidateIds = index.lookupCandidateIds(token);
             lastCandTotal = candidateIds.size();
@@ -132,50 +135,49 @@ public final class QueryServiceImpl implements QueryService {
             }
 
             final int K = token.getTopK();
-            List<String> stageA = candidateIds;
-            lastCandKept = stageA.size();
+            lastCandKept = candidateIds.size();
 
             // ================================
-            // STAGE B — Approximate scoring
-            // (full decrypt, cheap distance)
+            // STAGE B — Controlled refinement
             // ================================
+            final int refineLimit = Math.min(
+                    candidateIds.size(),
+                    cfg.getRuntime().getRefinementLimit()
+            );
 
-            final int refineLimit = Math.min(stageA.size(), K * 3);
-            List<QueryScored> approx = new ArrayList<>(refineLimit);
+            List<QueryScored> scored = new ArrayList<>(refineLimit);
 
             for (int i = 0; i < refineLimit; i++) {
-                String id = stageA.get(i);
+                String id = candidateIds.get(i);
                 try {
                     EncryptedPoint ep = index.loadPointIfActive(id);
                     if (ep == null) continue;
 
                     KeyVersion kvp = keyService.getVersion(ep.getKeyVersion());
                     double[] v = cryptoService.decryptFromPoint(ep, kvp.getKey());
-
                     if (!isValid(v)) continue;
 
-                    // Cheap distance: prefix L2 (first 16 dims)
                     double d = l2(qVec, v);
-                    approx.add(new QueryScored(id, d));
+                    scored.add(new QueryScored(id, d));
                     touchedThisSession.add(id);
 
                 } catch (Exception ignore) {}
             }
 
-            lastCandDecrypted = approx.size();
-            if (approx.isEmpty()) return Collections.emptyList();
-
-            approx.sort(Comparator.comparingDouble(QueryScored::dist));
+            lastCandDecrypted = scored.size();
+            if (scored.isEmpty()) return Collections.emptyList();
 
             // ================================
-            // STAGE C — Exact L2 re-ranking
+            // STAGE C — SINGLE GLOBAL SORT
             // ================================
-            final int eff = Math.min(K, approx.size());
+            scored.sort(Comparator.comparingDouble(QueryScored::dist));
+
+            int eff = Math.min(K, scored.size());
             List<QueryResult> out = new ArrayList<>(eff);
             LinkedHashSet<String> finalIds = new LinkedHashSet<>(eff);
 
             for (int i = 0; i < eff; i++) {
-                QueryScored s = approx.get(i);
+                QueryScored s = scored.get(i);
                 out.add(new QueryResult(s.id(), s.dist()));
                 finalIds.add(s.id());
             }
@@ -193,8 +195,6 @@ public final class QueryServiceImpl implements QueryService {
             }
         }
     }
-
-
 
     // =====================================================================
     // DECRYPT + SCORE (L2)
