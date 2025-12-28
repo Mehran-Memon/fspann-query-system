@@ -868,10 +868,10 @@ public class ForwardSecureANNSystem {
         int candidatesExamined = qs.getLastCandTotal();
         double candidateRatioAtK = candidatesExamined / (double) k;
 
-        logger.info("GT[0..5]={}", Arrays.toString(Arrays.copyOf(gt, 5)));
-        logger.info("ANN[0..5]={}", Arrays.toString(Arrays.copyOf(annIdx, 5)));
-        logger.info("precision@{}={}", k, precisionAtK);
-        logger.info("ratio@{}={}", k, distanceRatioAtK);
+//        logger.debug("GT[0..5]={}", Arrays.toString(Arrays.copyOf(gt, 5)));
+//        logger.debug("ANN[0..5]={}", Arrays.toString(Arrays.copyOf(annIdx, 5)));
+//        logger.debug("precision@{}={}", k, precisionAtK);
+//        logger.debug("ratio@{}={}", k, distanceRatioAtK);
 
         return new QueryMetrics(
                 distanceRatioAtK,
@@ -2154,7 +2154,7 @@ public class ForwardSecureANNSystem {
 
         if (Files.exists(baseVecs)) {
             System.setProperty("base.path", baseVecs.toString());
-            logger.info("Set base.path={} for ratio computation (mode={})",
+            logger.debug("Set base.path={} for ratio computation (mode={})",
                     baseVecs, queryOnlyMode ? "query-only" : "full");
         }
 

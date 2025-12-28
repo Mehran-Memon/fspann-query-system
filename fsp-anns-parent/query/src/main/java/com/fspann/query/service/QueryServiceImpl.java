@@ -132,24 +132,15 @@ public final class QueryServiceImpl implements QueryService {
             }
 
             final int K = token.getTopK();
-            final int maxCandidates =
-                    cfg.getRuntime().getMaxCandidateFactor() * K;
-
-            List<String> stageA =
-                    candidateIds.size() > maxCandidates
-                            ? candidateIds.subList(0, maxCandidates)
-                            : candidateIds;
-
+            List<String> stageA = candidateIds;
             lastCandKept = stageA.size();
 
             // ================================
             // STAGE B — Approximate scoring
             // (full decrypt, cheap distance)
             // ================================
-            final int refineLimit =
-                    Math.min(stageA.size(),
-                            cfg.getRuntime().getMaxRefinementFactor() * K);
 
+            final int refineLimit = Math.min(stageA.size(), K * 3);
             List<QueryScored> approx = new ArrayList<>(refineLimit);
 
             for (int i = 0; i < refineLimit; i++) {
@@ -164,7 +155,7 @@ public final class QueryServiceImpl implements QueryService {
                     if (!isValid(v)) continue;
 
                     // Cheap distance: prefix L2 (first 16 dims)
-                    double d = prefixL2(qVec, v, 16);
+                    double d = l2(qVec, v);
                     approx.add(new QueryScored(id, d));
                     touchedThisSession.add(id);
 
@@ -257,16 +248,6 @@ public final class QueryServiceImpl implements QueryService {
             s += d * d;
         }
         return Math.sqrt(s);
-    }
-
-    private double prefixL2(double[] a, double[] b, int dims) {
-        int len = Math.min(Math.min(a.length, b.length), dims);
-        double s = 0.0;
-        for (int i = 0; i < len; i++) {
-            double d = a[i] - b[i];
-            s += d * d;
-        }
-        return s;
     }
 
     // =====================================================================

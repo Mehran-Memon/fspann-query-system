@@ -551,108 +551,48 @@ private static final int DEFAULT_BUILD_THRESHOLD = 100_000;
         Objects.requireNonNull(token, "token");
         if (!frozen) throw new IllegalStateException("Index not finalized");
 
-        // ========== DIAGNOSTIC LOGGING (ADD THIS) ==========
-        logger.info("=".repeat(60));
-        logger.info(">>> LOOKUP DIAGNOSTICS <<<");
-        logger.info("Index tables: {}", numTables());
-        logger.info("Token tables: {}", token.getCodesByTable() == null ? "null" : token.getCodesByTable().length);
-        logger.info("Token dimensions: {}", token.getDimension());
-        logger.info("Token topK: {}", token.getTopK());
-        logger.info("GFunctionRegistry initialized: {}", GFunctionRegistry.isInitialized());
-
-        if (GFunctionRegistry.isInitialized()) {
-            Map<String, Object> stats = GFunctionRegistry.getStats();
-            logger.info("GFunctionRegistry stats:");
-            logger.info("  - dimension: {}", stats.get("dimension"));
-            logger.info("  - m: {}", stats.get("m"));
-            logger.info("  - lambda: {}", stats.get("lambda"));
-            logger.info("  - tables: {}", stats.get("tables"));
-            logger.info("  - divisions: {}", stats.get("divisions"));
-            logger.info("  - cached GFunctions: {}", stats.get("cachedGFunctions"));
-            logger.info("  - omega range: [{}, {}]", stats.get("omegaMin"), stats.get("omegaMax"));
-        } else {
-            logger.error("FATAL: GFunctionRegistry NOT initialized during query!");
-        }
-        logger.info("=".repeat(60));
-
-        // ========== VALIDATION ==========
         BitSet[][] codesByTable = token.getCodesByTable();
-        if (codesByTable == null || codesByTable.length == 0) {
-            logger.error(
-                    "FATAL: QueryToken has no codesByTable! Token: dim={}, topK={}, version={}",
-                    token.getDimension(), token.getTopK(), token.getVersion()
-            );
-            throw new IllegalStateException(
-                    "QueryToken.getCodesByTable() returned null or empty. " +
-                            "QueryTokenFactory must generate codes for ALL tables."
-            );
-        }
+        if (codesByTable == null || codesByTable.length == 0)
+            throw new IllegalStateException("Token has no codes");
 
-        int L = numTables();
-        if (codesByTable.length < L) {
-            logger.error(
-                    "Token has {} table codes but index expects {} tables",
-                    codesByTable.length, L
-            );
-        }
+        int dim = token.getDimension();
+        DimensionState[] tables = dims.get(dim);
+        if (tables == null) return List.of();
 
-        // ========== CONFIGURATION ==========
         SystemConfig.PaperConfig pc = cfg.getPaper();
         int K = token.getTopK();
 
-        int runtimeCap = cfg.getRuntime().getMaxCandidateFactor() * K;
-        int paperCap = cfg.getPaper().getSafetyMaxCandidates();
-        final int MAX_IDS = (paperCap > 0) ? Math.min(runtimeCap, paperCap) : runtimeCap;
-
-        logger.debug("lookupCandidateIds START: K={}, maxCandFactor={}, MAX_IDS={}, lambda={}",
-                K, cfg.getRuntime().getMaxCandidateFactor(), MAX_IDS, pc.lambda);
-
-        // ========== DIMENSION CHECK ==========
-        int dim = token.getDimension();
-        DimensionState[] tables = dims.get(dim);
-        if (tables == null) {
-            lastTouched.set(0);
-            lastTouchedIds.get().clear();
-            logger.info("lookupCandidateIds: No tables for dim={}, returning empty", dim);
-            return List.of();
-        }
-
-        // ========== MAIN LOOKUP LOOP ==========
-        Set<String> seen = new LinkedHashSet<>(MAX_IDS);
-        Set<String> deletedCache = new HashSet<>();
-        int visitedCount = 0;
-        int uniqueAdded = 0;
+        final int MAX_IDS =
+                Math.min(
+                        cfg.getRuntime().getMaxCandidateFactor() * K,
+                        pc.getSafetyMaxCandidates() > 0
+                                ? pc.getSafetyMaxCandidates()
+                                : Integer.MAX_VALUE
+                );
 
         final int perDivBits = perDivisionBits();
-        int maxRelax = cfg.getRuntime().getMaxRelaxationDepth();
-        int effectiveL = Math.min(tables.length, codesByTable.length);
+        final int maxRelax = Math.min(pc.lambda, cfg.getRuntime().getMaxRelaxationDepth());
+        final int L = Math.min(tables.length, codesByTable.length);
 
-        boolean hitLimit = false;
+        // ========= ORDERED scoring =========
+        // lower score = better
+        Map<String, Integer> score = new HashMap<>(MAX_IDS);
+        Set<String> deletedCache = new HashSet<>();
 
-        for (int relax = 0; relax <= Math.min(pc.lambda, maxRelax) && !hitLimit; relax++) {
+        for (int relax = 0; relax <= maxRelax; relax++) {
             int bits = perDivBits - relax * pc.m;
             if (bits <= 0) break;
 
-            logger.trace("Relaxation round {}: bits={}, currentCandidates={}", relax, bits, seen.size());
-
-            for (int t = 0; t < effectiveL && !hitLimit; t++) {
-                // Check limit BEFORE processing each table
-                if (seen.size() >= MAX_IDS) {
-                    logger.debug("Candidate limit reached BEFORE table {}/{}: seen={}, MAX_IDS={}",
-                            t, effectiveL, seen.size(), MAX_IDS);
-                    hitLimit = true;
-                    break;
-                }
-
+            for (int t = 0; t < L; t++) {
                 DimensionState S = tables[t];
                 if (S == null || S.divisions.isEmpty()) continue;
 
                 BitSet[] qcodes = codesByTable[t];
-                if (qcodes == null || qcodes.length == 0) continue;
+                if (qcodes == null) continue;
 
                 int safeDivs = Math.min(S.divisions.size(), qcodes.length);
 
-                for (int d = 0; d < safeDivs && !hitLimit; d++) {
+                for (int d = 0; d < safeDivs; d++) {
                     DivisionState div = S.divisions.get(d);
                     BitSet qc = qcodes[d];
 
@@ -660,72 +600,50 @@ private static final int DEFAULT_BUILD_THRESHOLD = 100_000;
                         boolean match = (relax == 0)
                                 ? covers(sb, qc, bits)
                                 : coversRelaxed(sb, qc, bits);
-
                         if (!match) continue;
 
                         List<String> ids = div.tagToIds.get(sb.tag);
                         if (ids == null) continue;
 
-                        // Check limit BEFORE adding IDs from this subset
-                        if (seen.size() >= MAX_IDS) {
-                            logger.debug("Hit MAX_IDS mid-division: table={}, div={}, subset={}",
-                                    t, d, sb.tag);
-                            hitLimit = true;
-                            break;
-                        }
-
                         for (String id : ids) {
-                            // Skip deleted
                             if (deletedCache.contains(id)) continue;
                             if (metadata.isDeleted(id)) {
                                 deletedCache.add(id);
                                 continue;
                             }
 
-                            visitedCount++;
+                            // SCORE = (relax * 1000) + table + division
+                            int s = relax * 1000 + t * 10 + d;
+                            score.merge(id, s, Math::min);
 
-                            if (seen.add(id)) {
-                                uniqueAdded++;
-
-                                if (seen.size() >= MAX_IDS) {
-                                    logger.debug(
-                                            "Reached MAX_IDS: seen={}, visited={}",
-                                            seen.size(), visitedCount
-                                    );
-                                    hitLimit = true;
-                                    break;
-                                }
-                            }
+                            if (score.size() >= MAX_IDS) break;
                         }
-
-                        if (hitLimit) break;
+                        if (score.size() >= MAX_IDS) break;
                     }
-
-                    if (hitLimit) break;
+                    if (score.size() >= MAX_IDS) break;
                 }
-
-                if (hitLimit) break;
+                if (score.size() >= MAX_IDS) break;
             }
-
-            if (hitLimit) break;
-
-            logger.trace("After relaxation {}: candidates={}/{}", relax, seen.size(), MAX_IDS);
+            if (score.size() >= MAX_IDS) break;
         }
 
-        // ========== FINAL LOGGING ==========
-        double ratio = (K > 0) ? ((double) seen.size() / K) : 0.0;
+        // ========= ORDER candidates =========
+        List<Map.Entry<String, Integer>> ordered =
+                new ArrayList<>(score.entrySet());
 
-        logger.info(
-                "lookupCandidateIds END: K={}, candidates={}, visited={}, unique={}, ratio={}",
-                K, seen.size(), visitedCount, uniqueAdded,
-                String.format("%.3f", ratio)
-        );
+        ordered.sort(Comparator.comparingInt(Map.Entry::getValue));
 
-        lastTouched.set(visitedCount);
+        List<String> out = new ArrayList<>(Math.min(MAX_IDS, ordered.size()));
+        for (Map.Entry<String, Integer> e : ordered) {
+            out.add(e.getKey());
+            if (out.size() >= MAX_IDS) break;
+        }
+
+        lastTouched.set(score.size());
         lastTouchedIds.get().clear();
-        lastTouchedIds.get().addAll(seen);
+        lastTouchedIds.get().addAll(out);
 
-        return new ArrayList<>(seen);
+        return out;
     }
 
     public EncryptedPoint loadPointIfActive(String id) {
