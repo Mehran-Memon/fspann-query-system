@@ -14,35 +14,32 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
 /**
- * Canonical system configuration for FSP-ANN.
+ * Canonical, paper-aligned configuration for FSP-ANN (MSANNP).
  *
- * - Loaded from JSON via {@link #load(String, boolean)}.
- * - Cached per absolute/real path.
- * - Exposes nested config blocks: LSH, paper, reencryption, eval, output, audit, cloak, ratio, kAware.
+ * RULES:
+ * - Every field here is used by the system.
+ * - No speculative or half-wired knobs.
+ * - JSON structure is flat and deterministic.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
-public class SystemConfig {
+public final class SystemConfig {
+
+    // ---------------- limits ----------------
 
     private static final int  MAX_SHARDS        = 8192;
-    private static final int  MAX_TABLES        = 1024;
     private static final long MAX_OPS_THRESHOLD = 1_000_000_000L;
-    private static final long MAX_AGE_THRESHOLD = 365L * 24L * 60L * 60L * 1000L; // 1 year
+    private static final long MAX_AGE_THRESHOLD = 365L * 24L * 60L * 60L * 1000L;
+
+    // ---------------- loader ----------------
 
     private static final ObjectMapper MAPPER = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
-    private SearchMode searchMode = SearchMode.PAPER_BASELINE;
+    private static final ConcurrentMap<String, SystemConfig> CACHE =
+            new ConcurrentHashMap<>();
 
-    /** Per-path cache for loaded configs. */
-    private static final ConcurrentMap<String, SystemConfig> configCache = new ConcurrentHashMap<>();
+    // ================= top-level =================
 
-    private boolean frozen = false;
-
-    public void freeze() {
-        this.frozen = true;
-    }
-
-    /* ======================== Top-level fields ======================== */
     @JsonProperty("profiles")
     private ProfileConfig[] profiles;
 
@@ -53,7 +50,7 @@ public class SystemConfig {
     private long opsThreshold = 500_000_000L;
 
     @JsonProperty("ageThresholdMs")
-    private long ageThresholdMs = 24L * 60L * 60L * 1000L; // 1 day
+    private long ageThresholdMs = 24L * 60L * 60L * 1000L;
 
     @JsonProperty("reencryptionEnabled")
     private boolean reencryptionEnabled = true;
@@ -61,103 +58,76 @@ public class SystemConfig {
     @JsonProperty("forwardSecurityEnabled")
     private boolean forwardSecurityEnabled = true;
 
-    @JsonProperty("partitionedIndexingEnabled")
-    private boolean partitionedIndexingEnabled = true;
-
-    /** Whether MicrometerProfiler should be enabled. */
     @JsonProperty("profilerEnabled")
     private boolean profilerEnabled = true;
-
-    @JsonProperty("lsh")
-    private LshConfig lsh = new LshConfig();
-
-    @JsonProperty("reencryption")
-    private ReencryptionConfig reencryption = new ReencryptionConfig();
 
     @JsonProperty("paper")
     private PaperConfig paper = new PaperConfig();
 
+    @JsonProperty("runtime")
+    private RuntimeConfig runtime = new RuntimeConfig();
+
+    @JsonProperty("stabilization")
+    private StabilizationConfig stabilization = new StabilizationConfig();
+
     @JsonProperty("eval")
     private EvalConfig eval = new EvalConfig();
-
-    @JsonProperty("output")
-    private OutputConfig output = new OutputConfig();
-
-    @JsonProperty("audit")
-    private AuditConfig audit = new AuditConfig();
-
-    @JsonProperty("cloak")
-    private CloakConfig cloak = new CloakConfig();
 
     @JsonProperty("ratio")
     private RatioConfig ratio = new RatioConfig();
 
-    @JsonProperty("kAware")
-    private KAwareConfig kAware = new KAwareConfig();
+    @JsonProperty("reencryption")
+    private ReencryptionConfig reencryption = new ReencryptionConfig();
 
-    @JsonProperty("stabilization")
-    private StabilizationConfig stabilization = new StabilizationConfig();
-    public StabilizationConfig getStabilization() { return stabilization; }
+    private KAdaptiveConfig kAdaptive;
+    private OutputConfig output;
+    private CloakConfig cloak;
 
-    /* ======================== Static loading API ======================== */
 
-    public static SystemConfig load(String path, boolean refresh) throws ConfigLoadException {
-        Objects.requireNonNull(path, "Config path cannot be null");
+
+    // ================= loading =================
+
+    public static SystemConfig load(String path, boolean refresh)
+            throws ConfigLoadException {
+
+        Objects.requireNonNull(path, "config path");
+
         String key;
         try {
             Path p = Paths.get(path).toAbsolutePath().normalize();
-            try {
-                p = p.toRealPath();
-            } catch (IOException ignore) {
-                // fall back to normalized absolute path
-            }
+            try { p = p.toRealPath(); } catch (IOException ignore) {}
             key = p.toString();
         } catch (Exception e) {
-            throw new ConfigLoadException("Invalid config path: " + path, e);
+            throw new ConfigLoadException("Invalid config path", e);
         }
 
         if (!refresh) {
-            SystemConfig cached = configCache.get(key);
+            SystemConfig cached = CACHE.get(key);
             if (cached != null) return cached;
         }
 
         SystemConfig cfg;
         try {
             Path p = Paths.get(key);
-            if (!Files.isRegularFile(p) || !Files.isReadable(p)) {
-                throw new IOException("Config file not found or not readable: " + key);
+            if (!Files.isReadable(p)) {
+                throw new IOException("Config not readable: " + key);
             }
             cfg = MAPPER.readValue(p.toFile(), SystemConfig.class);
         } catch (IOException e) {
-            throw new ConfigLoadException("Failed to read/parse SystemConfig from " + key, e);
+            throw new ConfigLoadException("Failed to load config", e);
         }
-
-        cfg.runtime.maxCandidateFactor =
-                Math.max(1, cfg.runtime.maxCandidateFactor);
-
-        cfg.runtime.maxRefinementFactor =
-                Math.max(1, cfg.runtime.maxRefinementFactor);
-
-        cfg.runtime.earlyStopCandidates =
-                Math.max(1, cfg.runtime.earlyStopCandidates);
 
         cfg.numShards      = clamp(cfg.numShards, 1, MAX_SHARDS);
         cfg.opsThreshold   = clamp(cfg.opsThreshold, 1L, MAX_OPS_THRESHOLD);
         cfg.ageThresholdMs = clamp(cfg.ageThresholdMs, 0L, MAX_AGE_THRESHOLD);
 
-        configCache.put(key, cfg);
+        CACHE.put(key, cfg);
         return cfg;
     }
 
-    public static void clearCache() {
-        configCache.clear();
-    }
+    // ================= getters =================
 
-    /* ======================== Getters used by other modules ======================== */
-
-    public ProfileConfig[] getProfiles() {
-        return profiles;
-    }
+    public ProfileConfig[] getProfiles() { return profiles; }
 
     public int getNumShards() {
         return clamp(numShards, 1, MAX_SHARDS);
@@ -175,112 +145,75 @@ public class SystemConfig {
         return forwardSecurityEnabled;
     }
 
-    public boolean isPartitionedIndexingEnabled() {
-        return partitionedIndexingEnabled;
-    }
-
-    public boolean isReencryptionEnabled() {
-        return reencryptionEnabled;
-    }
-
-    /** Global re-encryption toggle used by ForwardSecureANNSystem. */
-    public boolean isReencryptionGloballyEnabled() {
-        return reencryptionEnabled && (reencryption == null || reencryption.isEnabled());
-    }
-
     public boolean isProfilerEnabled() {
         return profilerEnabled;
     }
 
-    public LshConfig getLsh() {
-        return lsh;
+    public boolean isReencryptionGloballyEnabled() {
+        return reencryptionEnabled && reencryption.isEnabled();
     }
 
-    public ReencryptionConfig getReencryption() {
-        return reencryption;
+    public PaperConfig getPaper() { return paper; }
+    public RuntimeConfig getRuntime() { return runtime; }
+    public StabilizationConfig getStabilization() { return stabilization; }
+    public EvalConfig getEval() { return eval; }
+    public RatioConfig getRatio() { return ratio; }
+    public ReencryptionConfig getReencryption() { return reencryption; }
+    public KAdaptiveConfig getKAdaptive() {
+        return kAdaptive;
     }
-
-    public PaperConfig getPaper() {
-        return paper;
-    }
-
-    public EvalConfig getEval() {
-        return eval;
-    }
-
     public OutputConfig getOutput() {
         return output;
     }
-
-    public AuditConfig getAudit() {
-        return audit;
-    }
-
     public CloakConfig getCloak() {
         return cloak;
     }
+    // ================= nested configs =================
 
-    public RatioConfig getRatio() {
-        return ratio;
+    public static final class PaperConfig {
+
+        @JsonProperty("enabled")
+        private boolean enabled = true;
+
+        @JsonProperty("m")
+        private int m = 24;
+
+        @JsonProperty("lambda")
+        private int lambda = 2;
+
+        @JsonProperty("divisions")
+        private int divisions = 3;
+
+        @JsonProperty("tables")
+        private int tables = 6;
+
+        @JsonProperty("seed")
+        private long seed = 13L;
+
+        public boolean isEnabled() { return enabled; }
+        public int getM() { return Math.max(1, m); }
+        public int getLambda() { return Math.max(1, lambda); }
+        public int getDivisions() { return Math.max(1, divisions); }
+        public int getTables() { return Math.max(1, tables); }
+        public long getSeed() { return seed; }
     }
-
-    public KAwareConfig getKAware() {
-        return kAware;
-    }
-
-    public SearchMode getSearchMode() {
-        return searchMode;
-    }
-
-    public void setSearchMode(SearchMode mode) {
-        this.searchMode = mode;
-    }
-
-    public boolean isPaperMode() {
-        return getSearchMode() == SearchMode.PAPER_BASELINE;
-    }
-
 
     public static final class RuntimeConfig {
 
-        /**
-         * Upper bound on candidate fanout relative to K
-         * (used in candidate-id collection)
-         */
         @JsonProperty("maxCandidateFactor")
-        private int maxCandidateFactor = 50;   // paper-faithful default
+        private int maxCandidateFactor = 600;
 
-        /**
-         * Upper bound on refinement (decrypt+L2) relative to K
-         * (crypto-aware safety)
-         */
         @JsonProperty("maxRefinementFactor")
-        private int maxRefinementFactor = 20;
+        private int maxRefinementFactor = 200;
 
-        /**
-         * NEW — hard cap on relaxation depth (≤ paper.lambda).
-         * Controls how many relaxed prefix rounds are allowed.
-         *
-         * 0 = exact match only
-         * 1 = first relaxation
-         * 2 = deeper relaxation
-         */
         @JsonProperty("maxRelaxationDepth")
         private int maxRelaxationDepth = Integer.MAX_VALUE;
 
-        /**
-         * NEW — early stop once this many candidates are collected.
-         * Prevents scanning all divisions unnecessarily.
-         */
         @JsonProperty("earlyStopCandidates")
         private int earlyStopCandidates = Integer.MAX_VALUE;
 
-        @JsonProperty("targetCandidateRatio")
-        private double targetCandidateRatio = 1.25;
-
-        public double getTargetCandidateRatio() {
-            return targetCandidateRatio > 0 ? targetCandidateRatio : 1.25;
-        }
+        @JsonProperty("refinementLimit")
+        private int refinementLimit = 20_000;
 
         public int getMaxCandidateFactor() {
             return Math.max(1, maxCandidateFactor);
@@ -298,197 +231,35 @@ public class SystemConfig {
             return Math.max(1, earlyStopCandidates);
         }
 
-        private boolean precisionMode = false;
-        private int minPrecisionCandidates = 10000;
-        private int maxPrecisionCandidates = 50000;
-        private int refinementLimit = 10000;
-        public boolean isPrecisionMode() { return precisionMode; }
-        public int getMinPrecisionCandidates() { return minPrecisionCandidates; }
-        public int getMaxPrecisionCandidates() { return maxPrecisionCandidates; }
-        public int getRefinementLimit() { return refinementLimit; }
-
-    }
-
-    private RuntimeConfig runtime = new RuntimeConfig();
-
-    public RuntimeConfig getRuntime() { return runtime; }
-
-    /* ======================== Nested config types ======================== */
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class LshConfig {
-
-        @JsonProperty("probeShards")
-        public int probeShards = 0;
-
-        // ========== NEW FIELDS FOR LSH-ONLY SYSTEM ==========
-        @JsonProperty("numFunctions")
-        public int numFunctions = 8;
-
-        @JsonProperty("numBuckets")
-        public int numBuckets = 1000;
-
-        @JsonProperty("adaptiveProbing")
-        public boolean adaptiveProbing = true;
-
-        @JsonProperty("targetRatio")
-        public double targetRatio = 1.2;
-
-        public int getProbeShards() {
-            if (probeShards <= 0) return 0;
-            return clamp(probeShards, 1, MAX_SHARDS);
-        }
-
-        // ========== NEW GETTERS FOR LSH-ONLY ==========
-        public int getNumFunctions() {
-            return clamp(numFunctions, 1, 256);
-        }
-
-        public int getNumBuckets() {
-            return clamp(numBuckets, 100, 1_000_000);
-        }
-
-        public boolean isAdaptiveProbing() {
-            return adaptiveProbing;
-        }
-
-        public double getTargetRatio() {
-            if (Double.isNaN(targetRatio) || targetRatio < 1.0) return 1.2;
-            if (targetRatio > 2.0) return 2.0;
-            return targetRatio;
+        public int getRefinementLimit() {
+            return Math.max(1, refinementLimit);
         }
     }
 
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class StabilizationConfig {
+    public static final class StabilizationConfig {
 
         @JsonProperty("enabled")
-        public boolean enabled = true;
+        private boolean enabled = true;
 
-        /**
-         * Fraction of raw candidates to keep (alpha × raw).
-         * Acts only as an upper soft bound.
-         */
         @JsonProperty("alpha")
-        public double alpha = 0.10;
+        private double alpha = 0.06;
 
-        /**
-         * NEW — K-relative lower bound.
-         * 1.0 → keep at least K candidates
-         * 1.25 → keep at least 1.25*K candidates
-         *
-         * THIS replaces absolute minCandidates.
-         */
         @JsonProperty("minCandidatesRatio")
-        public double minCandidatesRatio = 1.0;
+        private double minCandidatesRatio = 1.5;
 
-        public boolean isEnabled() {
-            return enabled;
-        }
+        public boolean isEnabled() { return enabled; }
 
         public double getAlpha() {
-            if (Double.isNaN(alpha) || alpha <= 0.0) return 0.01;
-            if (alpha > 1.0) return 1.0;
-            return alpha;
+            return clamp(alpha, 0.01, 1.0);
         }
 
         public double getMinCandidatesRatio() {
-            if (Double.isNaN(minCandidatesRatio) || minCandidatesRatio < 1.0)
-                return 1.0;
-            if (minCandidatesRatio > 2.0)
-                return 2.0;
-            return minCandidatesRatio;
+            return clamp(minCandidatesRatio, 1.0, 2.0);
         }
     }
 
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class ReencryptionConfig {
-        @JsonProperty("enabled")
-        public boolean enabled = true;
+    public static final class EvalConfig {
 
-        @JsonProperty("batchSize")
-        public int batchSize = 1024;
-
-        @JsonProperty("maxMsPerBatch")
-        public long maxMsPerBatch = 50L;
-
-        public boolean isEnabled() {
-            return enabled;
-        }
-
-        public int getBatchSize() {
-            return Math.max(1, batchSize);
-        }
-
-        public long getMaxMsPerBatch() {
-            return Math.max(0L, maxMsPerBatch);
-        }
-    }
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class PaperConfig {
-        @JsonProperty("enabled")
-        public boolean enabled = false;
-
-        @JsonProperty("m")
-        public int m = 12;
-
-        @JsonProperty("lambda")
-        public int lambda = 6;
-
-        @JsonProperty("divisions")
-        public int divisions = 8;
-
-        @JsonProperty("seed")
-        public long seed = 42L;
-
-        @JsonProperty("safetyMaxCandidates")
-        public int safetyMaxCandidates = 0;
-
-        @JsonProperty("probeLimit")
-        public int probeLimit = 6;
-
-        // Added the "tables" configuration here
-        @JsonProperty("tables")
-        public int tables = 8; // Default value can be adjusted as needed
-
-        public boolean isEnabled() {
-            return enabled;
-        }
-
-        public int getM() {
-            return Math.max(1, m);
-        }
-
-        public int getLambda() {
-            return Math.max(1, lambda);
-        }
-
-        public int getDivisions() {
-            return Math.max(1, divisions);
-        }
-
-        public long getSeed() {
-            return seed;
-        }
-
-        public int getSafetyMaxCandidates() {
-            return Math.max(0, safetyMaxCandidates);
-        }
-
-        public int getProbeLimit() {
-            return Math.max(1, probeLimit);
-        }
-
-        // Getter for tables
-        public int getTables() {
-            return Math.max(1, tables);
-        }
-    }
-
-    /** Evaluation knobs (precision, K-variants, etc.). */
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class EvalConfig {
         @JsonProperty("computePrecision")
         public boolean computePrecision = true;
 
@@ -496,94 +267,58 @@ public class SystemConfig {
         public boolean writeGlobalPrecisionCsv = true;
 
         @JsonProperty("kVariants")
-        public int[] kVariants = new int[]{1, 5, 10, 20, 40, 60, 80, 100};
+        public int[] kVariants = {1, 5, 10, 20, 50, 100};
     }
 
-    /** Output / export behavior. */
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class OutputConfig {
-        @JsonProperty("resultsDir")
-        public String resultsDir = "results";
+    public static final class RatioConfig {
 
-        @JsonProperty("suppressLegacyMetrics")
-        public boolean suppressLegacyMetrics = false;
-
-        @JsonProperty("exportArtifacts")
-        public boolean exportArtifacts = true;
-    }
-
-    /** Audit sampling & worst-K logging. */
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class AuditConfig {
-        @JsonProperty("enable")
-        public boolean enable = false;
-
-        @JsonProperty("k")
-        public int k = 100;
-
-        @JsonProperty("sampleEvery")
-        public int sampleEvery = 100;
-
-        @JsonProperty("worstKeep")
-        public int worstKeep = 25;
-    }
-
-    /** Cloaked query parameters (noise scale, etc.). */
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class CloakConfig {
-        @JsonProperty("noise")
-        public double noise = 0.0;
-    }
-
-    /** Ratio / groundtruth evaluation settings. */
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class RatioConfig {
-        /** "auto" | "gt" | "base". */
         @JsonProperty("source")
-        public String source = "auto";
+        public String source = "gt";
 
-        /** Explicit GT path (optional). */
         @JsonProperty("gtPath")
         public String gtPath;
 
-        /** If true, we may compute GT when missing. */
-        @JsonProperty("allowComputeIfMissing")
-        public boolean allowComputeIfMissing = false;
-
-        /** If true and allowed, auto-compute GT when absent. */
-        @JsonProperty("autoComputeGT")
-        public boolean autoComputeGT = false;
-
-        /** How many queries to sample when validating GT vs base. */
         @JsonProperty("gtSample")
-        public int gtSample = 16;
+        public int gtSample = 100;
 
-        /** Allowed mismatch fraction between GT@1 and base true NN. */
         @JsonProperty("gtMismatchTolerance")
         public double gtMismatchTolerance = 0.10;
     }
 
-    /** Optional K-aware candidate selection options. */
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class KAwareConfig {
+    public static final class ReencryptionConfig {
+
         @JsonProperty("enabled")
-        public boolean enabled = false;
+        private boolean enabled = true;
 
-        @JsonProperty("baseOversample")
-        public double baseOversample = 2.0;
+        @JsonProperty("batchSize")
+        private int batchSize = 1024;
 
-        @JsonProperty("logFactor")
-        public double logFactor = 0.5;
+        @JsonProperty("maxMsPerBatch")
+        private long maxMsPerBatch = 50L;
 
-        @JsonProperty("minPerDiv")
-        public int minPerDiv = 1;
-
-        @JsonProperty("maxPerDiv")
-        public int maxPerDiv = 0;
+        public boolean isEnabled() { return enabled; }
+        public int getBatchSize() { return Math.max(1, batchSize); }
+        public long getMaxMsPerBatch() { return Math.max(0L, maxMsPerBatch); }
     }
 
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class ProfileConfig {
+    public static class KAdaptiveConfig {
+        public boolean enabled = false;
+        public double probeFactor = 2.0;
+        public int maxFanout = 64;
+    }
+
+    public static class OutputConfig {
+        public String resultsDir;
+        public boolean exportArtifacts = true;
+    }
+
+    public static class CloakConfig {
+        public double noise = 0.0;
+    }
+
+    // ================= profiles =================
+
+    public static final class ProfileConfig {
 
         @JsonProperty("name")
         public String name;
@@ -592,8 +327,7 @@ public class SystemConfig {
         public OverrideConfig overrides;
     }
 
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class OverrideConfig {
+    public static final class OverrideConfig {
 
         @JsonProperty("paper")
         public PaperConfig paper;
@@ -605,104 +339,26 @@ public class SystemConfig {
         public StabilizationConfig stabilization;
     }
 
-    @JsonProperty("kAdaptive")
-    private KAdaptiveConfig kAdaptive = new KAdaptiveConfig();
-    public KAdaptiveConfig getKAdaptive() { return kAdaptive; }
+    // ================= helpers =================
 
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class KAdaptiveConfig {
-        @JsonProperty("enabled")
-        public boolean enabled = false;
-
-        // maximum times to widen for a single query
-        @JsonProperty("maxRounds")
-        public int maxRounds = 3;
-
-        // target minimum return-rate at Kmax (e.g. 0.8 → 80%)
-        @JsonProperty("targetReturnRate")
-        public double targetReturnRate = 0.80;
-
-        // guard to avoid insane work
-        @JsonProperty("maxFanout")
-        public double maxFanout = 4000.0;
-
-        // how aggressively to widen probes / tables per round
-        @JsonProperty("probeFactor")
-        public double probeFactor = 1.5;
+    private static int clamp(int v, int lo, int hi) {
+        return Math.max(lo, Math.min(hi, v));
     }
 
-    /* ======================== Helper methods ======================== */
+    private static long clamp(long v, long lo, long hi) {
+        return Math.max(lo, Math.min(hi, v));
+    }
 
-    private static int clamp(int v, int min, int max) {
-        if (v < min) return min;
-        if (v > max) return max;
+    private static double clamp(double v, double lo, double hi) {
+        if (Double.isNaN(v)) return lo;
+        if (v < lo) return lo;
+        if (v > hi) return hi;
         return v;
     }
 
-    private static long clamp(long v, long min, long max) {
-        if (v < min) return min;
-        if (v > max) return max;
-        return v;
-    }
-
-    private void ensureMutable() {
-        if (frozen) {
-            throw new IllegalStateException("SystemConfig is frozen");
-        }
-    }
-
-    public void applyProfile(String profileName) {
-        if (profiles == null || profileName == null) return;
-
-        for (ProfileConfig p : profiles) {
-            if (!profileName.equalsIgnoreCase(p.name)) continue;
-            if (p.overrides == null) return;
-
-            if (p.overrides.paper != null) {
-                mergePaper(this.paper, p.overrides.paper);
-            }
-
-            if (p.overrides.runtime != null) {
-                mergeRuntime(this.runtime, p.overrides.runtime);
-            }
-
-            if (p.overrides.stabilization != null) {
-                mergeStabilization(this.stabilization, p.overrides.stabilization);
-            }
-
-            return;
-        }
-
-        throw new IllegalArgumentException("Unknown profile: " + profileName);
-    }
-
-    private static void mergePaper(PaperConfig base, PaperConfig o) {
-        if (o.m > 0) base.m = o.m;
-        if (o.lambda > 0) base.lambda = o.lambda;
-        if (o.divisions > 0) base.divisions = o.divisions;
-        if (o.tables > 0) base.tables = o.tables;
-        if (o.seed != 0) base.seed = o.seed;
-        if (o.safetyMaxCandidates >= 0) base.safetyMaxCandidates = o.safetyMaxCandidates;
-    }
-
-    private static void mergeRuntime(RuntimeConfig base, RuntimeConfig o) {
-        if (o.maxCandidateFactor > 0) base.maxCandidateFactor = o.maxCandidateFactor;
-        if (o.maxRefinementFactor > 0) base.maxRefinementFactor = o.maxRefinementFactor;
-        if (o.maxRelaxationDepth >= 0) base.maxRelaxationDepth = o.maxRelaxationDepth;
-        if (o.earlyStopCandidates > 0) base.earlyStopCandidates = o.earlyStopCandidates;
-    }
-
-    private static void mergeStabilization(StabilizationConfig base, StabilizationConfig o) {
-        base.enabled = o.enabled;
-        if (o.alpha > 0) base.alpha = o.alpha;
-        if (o.minCandidatesRatio >= 1.0) base.minCandidatesRatio = o.minCandidatesRatio;
-    }
-
-    /* ======================== Exception type ======================== */
-
-    public static class ConfigLoadException extends Exception {
-        public ConfigLoadException(String message, Throwable cause) {
-            super(message, cause);
+    public static final class ConfigLoadException extends Exception {
+        public ConfigLoadException(String msg, Throwable t) {
+            super(msg, t);
         }
     }
 }
