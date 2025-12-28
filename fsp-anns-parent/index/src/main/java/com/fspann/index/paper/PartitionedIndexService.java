@@ -575,14 +575,8 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
 
         final int perDivBits = perDivisionBits();
         final int maxRelax = precisionMode
-                ? Math.min(
-                cfg.getRuntime().getMaxRelaxationDepth(),
-                perDivBits / pc.m
-        )
-                : Math.min(
-                cfg.getRuntime().getMaxRelaxationDepth(),
-                pc.lambda
-        );
+                ? cfg.getRuntime().getMaxRelaxationDepth()
+                : Math.min(cfg.getRuntime().getMaxRelaxationDepth(), pc.lambda);
 
         final int L = Math.min(tables.length, codesByTable.length);
 
@@ -593,7 +587,8 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
             int bits = perDivBits - relax * pc.m;
             if (bits <= 0) break;
 
-            for (int t = 0; t < L; t++) {
+            for (int offsetT = 0; offsetT < L; offsetT++) {
+                int t = (offsetT + relax) % L;
                 DimensionState S = tables[t];
                 if (S == null || S.divisions.isEmpty()) continue;
 
@@ -602,7 +597,8 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
 
                 int safeDivs = Math.min(S.divisions.size(), qcodes.length);
 
-                for (int d = 0; d < safeDivs; d++) {
+                for (int offsetD = 0; offsetD < safeDivs; offsetD++) {
+                    int d = (offsetD + relax) % safeDivs;
                     DivisionState div = S.divisions.get(d);
                     BitSet qc = qcodes[d];
 
@@ -625,10 +621,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
                                 continue;
                             }
 
-                            int s =
-                                    (relax << 24)
-                                            | (t << 16)
-                                            | (d << 8);
+                            int s = (relax << 24) | (t << 16) | (d << 8);
                             score.merge(id, s, Math::min);
 
                             if (score.size() >= MAX_IDS) break;
@@ -637,11 +630,8 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
                     }
                     if (score.size() >= MAX_IDS) break;
                 }
+                if (score.size() >= MAX_IDS) break;
             }
-            if (precisionMode && relax > 0 && score.size() >= MIN_IDS) {
-                break;
-            }
-
 
             if (precisionMode && relax > 0 && score.size() >= MIN_IDS) {
                 break;

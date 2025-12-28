@@ -67,7 +67,7 @@ declare -A DATASET_GT=(
 
 # ================= DEBUG SWITCHES =================
 ONLY_DATASET="SIFT1M"
-ONLY_PROFILE=""
+ONLY_PROFILE="M24"
 
 # ================= METRICS (JAVA ONLY) =================
 
