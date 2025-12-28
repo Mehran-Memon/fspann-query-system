@@ -10,7 +10,6 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * PartitionedIndexService - MSANNP Implementation with Data-Adaptive GFunctions
@@ -81,7 +80,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
 
         final List<DivisionState> divisions = new ArrayList<>();
         final List<EncryptedPoint> staged = new ArrayList<>();
-        final List<BitSet[]> stagedCodes = new ArrayList<>();
+        final List<int[]> stagedHashes = new ArrayList<>();
 
 
         DimensionState(int dim, int table) {
@@ -270,7 +269,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
 
         int dim = vec.length;
 
-        // Persist once (global metadata), not per-table
+        // Persist once (global metadata)
         try {
             metadata.saveEncryptedPoint(pt);
         } catch (IOException e) {
@@ -282,10 +281,11 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
 
         // Stage into ALL tables (ℓ)
         for (DimensionState S : tables) {
-            BitSet[] codes = codeForTable(vec, S.table);
+            int[] hashes = GFunctionRegistry.hashForTable(vec, S.table);
+
             synchronized (S) {
                 S.staged.add(pt);
-                S.stagedCodes.add(codes);
+                S.stagedHashes.add(hashes);
 
                 if (S.staged.size() >= DEFAULT_BUILD_THRESHOLD) {
                     build(S);
@@ -317,60 +317,10 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
     }
 
     // =====================================================
-    // CODING (using GFunctionRegistry)
-    // =====================================================
-
-    /**
-     * Compute codes for a vector for a specific table.
-     * Uses GFunctionRegistry for data-adaptive GFunctions.
-     */
-    private BitSet[] codeForTable(double[] vec, int table) {
-        ensureRegistryInitialized();
-        return GFunctionRegistry.codeForTable(vec, table);
-    }
-
-    /**
-     * Legacy method: code() for backward compatibility.
-     * Now delegates to GFunctionRegistry.
-     */
-    public BitSet[] code(double[] vec) {
-        ensureRegistryInitialized();
-        // Return codes for table 0 (legacy single-table behavior)
-        return GFunctionRegistry.codeForTable(vec, 0);
-    }
-
-    /**
-     * Seed override for table-independence.
-     * Used by QueryTokenFactory.
-     *
-     * NOTE: The seed is now only used to identify which table's GFunction to use.
-     * The actual GFunction parameters (alpha, r, omega) come from the registry.
-     */
-    public BitSet[] code(double[] vec, long seedOverride) {
-        ensureRegistryInitialized();
-
-        // Compute which table this seed corresponds to
-        SystemConfig.PaperConfig pc = cfg.getPaper();
-        long baseSeed = pc.seed;
-
-        // Reverse the seed computation: seed = baseSeed + (table * 1_000_003L)
-        int table = (int) ((seedOverride - baseSeed) / 1_000_003L);
-
-        if (table < 0 || table >= pc.getTables()) {
-            logger.warn("Seed {} doesn't match any table (baseSeed={}, tables={}). Using table 0.",
-                    seedOverride, baseSeed, pc.getTables());
-            table = 0;
-        }
-
-        return GFunctionRegistry.codeForTable(vec, table);
-    }
-
-    // =====================================================
     // BUILD (Algorithm-2) per table
     // =====================================================
 
     private void build(DimensionState S) {
-        // Ensure registry is initialized before building
         ensureRegistryInitialized();
 
         SystemConfig.PaperConfig pc = cfg.getPaper();
@@ -379,18 +329,19 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         S.divisions.clear();
 
         for (int d = 0; d < divisions; d++) {
-            List<GreedyPartitioner.Item> items = new ArrayList<>(S.staged.size());
+            List<GreedyPartitioner.Item> items =
+                    new ArrayList<>(S.staged.size());
+
             for (int i = 0; i < S.staged.size(); i++) {
                 items.add(new GreedyPartitioner.Item(
                         S.staged.get(i).getId(),
-                        S.stagedCodes.get(i)[d]
+                        S.stagedHashes.get(i)[d]
                 ));
             }
 
-            int codeBits = pc.m * pc.lambda;
-
             long seedTD = tableSeed(S.table) + d;
-            var br = GreedyPartitioner.build(items, codeBits, seedTD);
+            GreedyPartitioner.BuildResult br =
+                    GreedyPartitioner.build(items, seedTD);
 
             DivisionState div = new DivisionState();
             div.I = br.indexI;
@@ -399,140 +350,12 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         }
 
         S.staged.clear();
-        S.stagedCodes.clear();
-        logger.debug("Built partitions: dim={} table={} divisions={}", S.dim, S.table, S.divisions.size());
-    }
+        S.stagedHashes.clear();
 
-    // =====================================================
-    // LOOKUP (paper baseline) - unions across tables
-    // =====================================================
-
-    @Override
-    public List<EncryptedPoint> lookup(QueryToken token) {
-        Objects.requireNonNull(token, "token cannot be null");
-        Set<String> deletedCache = new HashSet<>(1024);
-
-        if (!frozen) throw new IllegalStateException("Index not finalized before lookup");
-
-        if (!cfg.isPaperMode()) {
-            throw new IllegalStateException(
-                    "lookup() is PAPER BASELINE ONLY. Use lookupCandidateIds() for production runs."
-            );
-        }
-
-        if (cfg.getSearchMode() != com.fspann.config.SearchMode.PAPER_BASELINE) {
-            throw new IllegalStateException("lookup() is restricted to PAPER_BASELINE. Use lookupCandidateIds() for real runs.");
-        }
-
-        SystemConfig.PaperConfig pc = cfg.getPaper();
-        int K = token.getTopK();
-
-        int runtimeCap = cfg.getRuntime().getMaxCandidateFactor() * K;
-        int paperCap = cfg.getPaper().getSafetyMaxCandidates();
-        final int HARD_CAP = (paperCap > 0) ? Math.min(runtimeCap, paperCap) : runtimeCap;
-
-        logger.info("lookup BASELINE START: K={}, HARD_CAP={}", K, HARD_CAP);
-
-        Set<String> touchedIds = lastTouchedIds.get();
-        touchedIds.clear();
-
-        int dim = token.getDimension();
-        DimensionState[] tables = dims.get(dim);
-        if (tables == null) {
-            lastTouched.set(0);
-            return List.of();
-        }
-
-        BitSet[][] codesByTable = token.getCodesByTable();
-        if (codesByTable == null || codesByTable.length == 0) {
-            lastTouched.set(0);
-            return List.of();
-        }
-
-        LinkedHashMap<String, EncryptedPoint> out = new LinkedHashMap<>(HARD_CAP);
-        final int perDivBits = perDivisionBits();
-
-        int maxRelax = cfg.getRuntime().getMaxRelaxationDepth();
-        int L = Math.min(tables.length, codesByTable.length);
-
-        boolean hitLimit = false;
-
-        for (int relax = 0; relax <= Math.min(pc.lambda, maxRelax) && !hitLimit; relax++) {
-            int earlyStop = cfg.getRuntime().getEarlyStopCandidates();
-            if (earlyStop > 0 && out.size() >= earlyStop) break;
-
-            int relaxedBits = perDivBits - (relax * pc.m);
-            if (relaxedBits <= 0) continue;
-
-            for (int t = 0; t < L && !hitLimit; t++) {
-                if (out.size() >= HARD_CAP) {
-                    logger.info("HARD_CAP reached before table {}: size={}", t, out.size());
-                    hitLimit = true;
-                    break;
-                }
-
-                DimensionState S = tables[t];
-                if (S == null || S.divisions.isEmpty()) continue;
-
-                BitSet[] qcodes = codesByTable[t];
-                if (qcodes == null || qcodes.length == 0) continue;
-
-                int safeDivs = Math.min(S.divisions.size(), qcodes.length);
-
-                for (int offset = 0; offset < safeDivs; offset++) {
-                    int d = (offset + relax) % safeDivs;
-                    DivisionState div = S.divisions.get(d);
-                    BitSet qc = qcodes[d];
-
-                    for (GreedyPartitioner.SubsetBounds sb : div.I) {
-                        boolean match = (relax == 0)
-                                ? covers(sb, qc, relaxedBits)
-                                : coversRelaxed(sb, qc, relaxedBits);
-
-                        if (!match) continue;
-
-                        List<String> ids = div.tagToIds.get(sb.tag);
-                        if (ids == null) continue;
-
-                        for (String id : ids) {
-                            touchedIds.add(id);
-
-                            if (out.containsKey(id)) continue;
-                            if (deletedCache.contains(id)) continue;
-                            if (metadata.isDeleted(id)) {
-                                deletedCache.add(id);
-                                continue;
-                            }
-
-                            try {
-                                EncryptedPoint ep = metadata.loadEncryptedPoint(id);
-                                if (ep != null) out.put(id, ep);
-                            } catch (Exception ignore) {}
-
-                            if (out.size() >= HARD_CAP) {
-                                logger.info("HARD_CAP reached: size={}, touched={}",
-                                        out.size(), touchedIds.size());
-                                hitLimit = true;
-                                break;
-                            }
-                        }
-
-                        if (hitLimit) break;
-                    }
-
-                    if (hitLimit) break;
-                }
-
-                if (hitLimit) break;
-            }
-
-            if (hitLimit) break;
-        }
-
-        logger.info("lookup BASELINE END: returned={}, touched={}", out.size(), touchedIds.size());
-
-        lastTouched.set(touchedIds.size());
-        return new ArrayList<>(out.values());
+        logger.debug(
+                "Built MSANNP partitions: dim={} table={} divisions={}",
+                S.dim, S.table, S.divisions.size()
+        );
     }
 
     // =====================================================
@@ -552,9 +375,15 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         Objects.requireNonNull(token, "token");
         if (!frozen) throw new IllegalStateException("Index not finalized");
 
-        BitSet[][] codesByTable = token.getCodesByTable();
-        if (codesByTable == null || codesByTable.length == 0)
-            throw new IllegalStateException("Token has no codes");
+        // Decrypt query ONCE (safe, already required for scoring later)
+        double[] qvec = cryptoService.decryptQuery(
+                token.getEncryptedQuery(),
+                token.getIv(),
+                keyService.getCurrentVersion().getKey()
+        );
+
+
+        int[][] qHashes = GFunctionRegistry.hashAllTables(qvec);
 
         int dim = token.getDimension();
         DimensionState[] tables = dims.get(dim);
@@ -573,41 +402,32 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
                 ? cfg.getRuntime().getMaxPrecisionCandidates()
                 : cfg.getRuntime().getMaxCandidateFactor() * K;
 
-        final int perDivBits = perDivisionBits();
-        final int maxRelax = precisionMode
-                ? cfg.getRuntime().getMaxRelaxationDepth()
-                : Math.min(cfg.getRuntime().getMaxRelaxationDepth(), pc.lambda);
-
-        final int L = Math.min(tables.length, codesByTable.length);
+        final int maxRelax = cfg.getRuntime().getMaxRelaxationDepth();
+        final int L = Math.min(tables.length, qHashes.length);
 
         Map<String, Integer> score = new HashMap<>(MAX_IDS);
-        Set<String> deletedCache = new HashSet<>(1024);
+        Set<String> deletedCache = new HashSet<>(2048);
 
         for (int relax = 0; relax <= maxRelax; relax++) {
-            int bits = perDivBits - relax * pc.m;
-            if (bits <= 0) break;
 
-            for (int offsetT = 0; offsetT < L; offsetT++) {
-                int t = (offsetT + relax) % L;
+            for (int t = 0; t < L; t++) {
                 DimensionState S = tables[t];
                 if (S == null || S.divisions.isEmpty()) continue;
 
-                BitSet[] qcodes = codesByTable[t];
-                if (qcodes == null) continue;
+                int[] qhTable = qHashes[t];
+                int safeDivs = Math.min(S.divisions.size(), qhTable.length);
 
-                int safeDivs = Math.min(S.divisions.size(), qcodes.length);
-
-                for (int offsetD = 0; offsetD < safeDivs; offsetD++) {
-                    int d = (offsetD + relax) % safeDivs;
+                for (int d = 0; d < safeDivs; d++) {
                     DivisionState div = S.divisions.get(d);
-                    BitSet qc = qcodes[d];
+                    int qh = qhTable[d];
 
                     for (GreedyPartitioner.SubsetBounds sb : div.I) {
-                        boolean match = (relax == 0)
-                                ? covers(sb, qc, bits)
-                                : coversRelaxed(sb, qc, bits);
 
-                        if (!match) continue;
+                        int dist = 0;
+                        if (qh < sb.lower) dist = sb.lower - qh;
+                        else if (qh > sb.upper) dist = qh - sb.upper;
+
+                        if (dist > relax) continue;
 
                         List<String> ids = div.tagToIds.get(sb.tag);
                         if (ids == null) continue;
@@ -615,13 +435,11 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
                         for (String id : ids) {
                             if (deletedCache.contains(id)) continue;
                             if (metadata.isDeleted(id)) {
-                                if (deletedCache.size() < 100_000) {
-                                    deletedCache.add(id);
-                                }
+                                deletedCache.add(id);
                                 continue;
                             }
 
-                            int s = (relax << 24) | (t << 16) | (d << 8);
+                            int s = (dist << 16) | (t << 8) | d;
                             score.merge(id, s, Math::min);
 
                             if (score.size() >= MAX_IDS) break;
@@ -633,15 +451,11 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
                 if (score.size() >= MAX_IDS) break;
             }
 
-            if (precisionMode && relax > 0 && score.size() >= MIN_IDS) {
-                break;
-            }
-
+            if (precisionMode && relax > 0 && score.size() >= MIN_IDS) break;
         }
 
         List<Map.Entry<String, Integer>> ordered =
                 new ArrayList<>(score.entrySet());
-
         ordered.sort(Comparator.comparingInt(Map.Entry::getValue));
 
         List<String> out = new ArrayList<>(Math.min(MAX_IDS, ordered.size()));
@@ -666,36 +480,6 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         }
     }
 
-    private boolean covers(GreedyPartitioner.SubsetBounds sb, BitSet c, int bits) {
-        var cmp = new GreedyPartitioner.CodeComparator(bits);
-        return cmp.compare(sb.lower, c) <= 0 && cmp.compare(c, sb.upper) <= 0;
-    }
-
-    private boolean coversRelaxed(
-            GreedyPartitioner.SubsetBounds sb,
-            BitSet q,
-            int bits
-    ) {
-        int violations = 0;
-
-        for (int i = 0; i < bits; i++) {
-            boolean qi = q.get(i);
-            boolean lo = sb.lower.get(i);
-            boolean hi = sb.upper.get(i);
-
-            if ((lo && !qi) || (!hi && qi)) {
-                violations++;
-                // Allow limited violations
-                if (violations > 1) return false;
-            }
-        }
-        return true;
-    }
-
-    private int perDivisionBits() {
-        SystemConfig.PaperConfig pc = cfg.getPaper();
-        return pc.m * pc.lambda;
-    }
 
     // =====================================================
     // FINALIZATION
@@ -713,9 +497,12 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         DimensionState[] tables = dims.computeIfAbsent(dim, d -> newTableStates(d));
 
         for (DimensionState S : tables) {
-            BitSet[] codes = codeForTable(vec, S.table);
-            S.staged.add(pt);
-            S.stagedCodes.add(codes);
+            int[] hashes = GFunctionRegistry.hashForTable(vec, S.table);
+
+            synchronized (S) {
+                S.staged.add(pt);
+                S.stagedHashes.add(hashes);
+            }
         }
     }
 
@@ -805,22 +592,5 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
     public void clearProbeOverride() {
         probeOverride.remove();
     }
-
-    private void maybeCollectSample(double[] vec) {
-        if (GFunctionRegistry.isInitialized()) return;
-
-        synchronized (initSampleBuffer) {
-            if (GFunctionRegistry.isInitialized()) return;
-
-            if (initSampleBuffer.size() < MAX_SAMPLE_SIZE) {
-                initSampleBuffer.add(vec.clone());
-            }
-
-            if (initSampleBuffer.size() >= MIN_SAMPLE_SIZE) {
-                initializeRegistry();
-            }
-        }
-    }
-
 
 }

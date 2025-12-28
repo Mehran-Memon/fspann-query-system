@@ -131,7 +131,7 @@ public final class QueryTokenFactory {
         // KEY FIX: Use GFunctionRegistry directly for code generation
         // This ensures query codes match index codes exactly
         // ============================================================
-        BitSet[][] codesByTable = GFunctionRegistry.codeAllTables(vec);
+        int[][] hashesByTable = GFunctionRegistry.hashAllTables(vec);
         // Validate codes
         if (codesByTable == null || codesByTable.length != L) {
             throw new IllegalStateException(

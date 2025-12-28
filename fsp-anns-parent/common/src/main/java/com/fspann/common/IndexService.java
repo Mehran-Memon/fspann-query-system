@@ -18,15 +18,6 @@ public interface IndexService {
      */
     void insert(String id, double[] vector);
 
-    /**
-     * Lookup candidates for a query token.
-     *
-     * Returns encrypted points that match the query.
-     *
-     * @param token    encrypted query token
-     * @return         list of candidate encrypted points
-     */
-    List<EncryptedPoint> lookup(QueryToken token);
 
     /**
      * Finalize index for search operations.

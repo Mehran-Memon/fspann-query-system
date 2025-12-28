@@ -21,7 +21,7 @@ public class QueryToken implements Serializable {
     private final int numTables;
 
     // mSANNP: [table][division]
-    private final BitSet[][] codesByTable;
+    private final int[][] hashesByTable;
 
     private final byte[] iv;
     private final byte[] encryptedQuery;
@@ -33,7 +33,7 @@ public class QueryToken implements Serializable {
 
     public QueryToken(
             List<List<Integer>> tableBuckets,
-            BitSet[][] codesByTable,
+            int[][] hashesByTable,
             byte[] iv,
             byte[] encryptedQuery,
             int topK,
@@ -42,10 +42,11 @@ public class QueryToken implements Serializable {
             int dimension,
             int version,
             int lambda
-    ) {
+    )
+ {
         this.tableBuckets = List.copyOf(Objects.requireNonNull(tableBuckets, "tableBuckets"));
         this.numTables = Math.max(1, numTables);
-        this.codesByTable = deepCloneCodes2D(codesByTable);
+        this.hashesByTable = deepCloneCodes2D(hashesByTable);
 
         this.iv = Objects.requireNonNull(iv, "iv").clone();
         this.encryptedQuery = Objects.requireNonNull(encryptedQuery, "encryptedQuery").clone();
@@ -132,14 +133,7 @@ public class QueryToken implements Serializable {
         return lambda;
     }
 
-    public int estimateSerializedSizeBytes() {
-        int sum = 0;
-        if (codesByTable != null) {
-            for (BitSet[] row : codesByTable) {
-                if (row == null) continue;
-                for (BitSet bs : row) sum += (bs == null ? 1 : (bs.toByteArray().length + 1));
-            }
-        }
-        return sum;
+    public int[][] getHashesByTable() {
+        return hashesByTable;
     }
 }
