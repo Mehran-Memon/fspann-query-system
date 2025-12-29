@@ -288,6 +288,9 @@ public final class QueryServiceImpl implements QueryService {
         lastCandDecrypted = 0;
         lastReturned = 0;
         lastCandIds = Collections.emptySet();
+        lastTrueNNRank = -1;
+        lastTrueNNSeen = false;
+
     }
 
     private int prefixTokenBytes(QueryToken t) {

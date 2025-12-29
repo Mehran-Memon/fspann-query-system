@@ -375,6 +375,10 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         Objects.requireNonNull(token, "token");
         if (!frozen) throw new IllegalStateException("Index not finalized");
 
+        int override = probeOverride.get();
+        int effectiveRelax =
+                (override > 0 ? override : cfg.getRuntime().getMaxRelaxationDepth());
+
         // Decrypt query ONCE (safe, already required for scoring later)
         int[][] qHashes = token.getHashesByTable();
         if (qHashes == null) {
@@ -399,16 +403,12 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         final int GLOBAL_CAP =
                 cfg.getRuntime().getMaxGlobalCandidates(); // or hardcode 2000
 
-
-
-        final int maxRelax = cfg.getRuntime().getMaxRelaxationDepth();
         final int L = Math.min(tables.length, qHashes.length);
 
         Map<String, Integer> score = new HashMap<>(MAX_IDS);
         Set<String> deletedCache = new HashSet<>(2048);
 
-        for (int relax = 0; relax <= maxRelax; relax++) {
-
+        for (int relax = 0; relax <= effectiveRelax; relax++) {
             for (int t = 0; t < L; t++) {
                 DimensionState S = tables[t];
                 if (S == null || S.divisions.isEmpty()) continue;
@@ -441,16 +441,16 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
                             int s = (dist << 16) | (t << 8) | d;
                             score.merge(id, s, Math::min);
 
-                            if (score.size() >= MAX_IDS) break;
+                            if (score.size() >= Math.min(MAX_IDS, GLOBAL_CAP)) break;
                         }
-                        if (score.size() >= MAX_IDS) break;
+                        if (score.size() >= Math.min(MAX_IDS, GLOBAL_CAP)) break;
                     }
-                    if (score.size() >= MAX_IDS) break;
+                    if (score.size() >= Math.min(MAX_IDS, GLOBAL_CAP)) break;
                 }
-                if (score.size() >= MAX_IDS) break;
+                if (score.size() >= Math.min(MAX_IDS, GLOBAL_CAP)) break;
             }
 
-            if (score.size() >= MAX_IDS) break;
+            if (score.size() >= Math.min(MAX_IDS, GLOBAL_CAP)) break;
         }
 
         List<Map.Entry<String, Integer>> ordered =
