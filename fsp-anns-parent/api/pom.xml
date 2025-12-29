@@ -32,10 +32,6 @@
             <groupId>com.fspann</groupId>
             <artifactId>config</artifactId>
         </dependency>
-        <dependency>
-            <groupId>com.fspann</groupId>
-            <artifactId>loader</artifactId>
-        </dependency>
         <!-- SLF4J & Logback for logging -->
         <dependency>
             <groupId>org.slf4j</groupId>

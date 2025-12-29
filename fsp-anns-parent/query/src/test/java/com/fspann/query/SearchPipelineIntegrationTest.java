@@ -244,11 +244,14 @@ class SearchPipelineIntegrationTest {
                         128, 128, k, k, 0,
                         100, 10,
                         0, 0, 0L, 0L, 0L,
-                        "gt", "partitioned", 1000, 200
+                        "gt", "partitioned", 1000, 200, -1, false
                 );
             }
 
             Aggregates agg = Aggregates.fromProfiler(p);
+            Profiler.QueryRow row = p.getQueryRows().get(0);
+            assertEquals(-1, row.nnRank);
+            assertFalse(row.nnSeen);
 
             // Verify all K values have precision recorded
             for (int k : K_VARIANTS) {
@@ -370,7 +373,7 @@ class SearchPipelineIntegrationTest {
                             0, 0,
                             result.touchedCount, 0, 0L, 0L, 0L,
                             "gt", "partitioned",
-                            result.rawCandidates, result.keptCandidates
+                            result.rawCandidates, result.keptCandidates, 1, true
                     );
                 }
             }
@@ -403,7 +406,7 @@ class SearchPipelineIntegrationTest {
                     512, 128, 100, 100, 0,
                     10000, 1000,
                     5000, 500, 1000L, 50000L, 1000000L,  // Re-encryption triggered
-                    "gt", "partitioned", 5000, 300
+                    "gt", "partitioned", 5000, 300, 1, true
             );
 
             // Query 2: no re-encryption
@@ -414,7 +417,7 @@ class SearchPipelineIntegrationTest {
                     512, 128, 100, 100, 1,
                     10500, 1000,
                     4000, 0, 0L, 0L, 1000000L,
-                    "gt", "partitioned", 4000, 250
+                    "gt", "partitioned", 4000, 250, 1, true
             );
 
             Aggregates agg = Aggregates.fromProfiler(profiler);
@@ -489,7 +492,7 @@ class SearchPipelineIntegrationTest {
                     100, 10,
                     0, 0, 0L, 0L, 0L,
                     "gt", "partitioned",  // mode is partitioned
-                    100, 50
+                    100, 50, 1, true
             );
 
             Aggregates agg = Aggregates.fromProfiler(p);
@@ -635,7 +638,7 @@ class SearchPipelineIntegrationTest {
                     17, 18,
                     19, 20, 21L, 22L, 23L,
                     "source", "mode",
-                    24, 25
+                    24, 25, -1, false
             );
 
             List<Profiler.QueryRow> rows = p.getQueryRows();
@@ -671,6 +674,9 @@ class SearchPipelineIntegrationTest {
             assertEquals("mode", row.mode);
             assertEquals(24, row.stableRaw);
             assertEquals(25, row.stableFinal);
+            assertEquals(-1, row.nnRank);
+            assertFalse(row.nnSeen);
+
         }
     }
 }

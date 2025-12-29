@@ -117,7 +117,6 @@ public final class Profiler {
             int stableFinal,
             int nnRank,
             boolean nnSeen
-
     ) {
         queryRows.add(new QueryRow(
                 label,
@@ -147,7 +146,9 @@ public final class Profiler {
                 ratioDenomSource,
                 mode,
                 stableRaw,
-                stableFinal
+                stableFinal,
+                nnRank,
+                nnSeen
         ));
     }
 
@@ -234,6 +235,9 @@ public final class Profiler {
         public final int stableRaw;
         public final int stableFinal;
 
+        public final int nnRank;
+        public final boolean nnSeen;
+
         private QueryRow(
                 String label,
                 double serverMs,
@@ -262,7 +266,9 @@ public final class Profiler {
                 String denom,
                 String mode,
                 int stableRaw,
-                int stableFinal
+                int stableFinal,
+                int nnRank,
+                Boolean nnSeen
         ) {
             this.label = label;
 
@@ -300,6 +306,9 @@ public final class Profiler {
 
             this.stableRaw = stableRaw;
             this.stableFinal = stableFinal;
+
+            this.nnRank = nnRank;
+            this.nnSeen = nnSeen;
         }
     }
 }

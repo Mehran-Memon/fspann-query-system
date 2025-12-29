@@ -450,7 +450,10 @@ class MetricsAndSearchTest {
                     "gt",               // ratioDenomSource
                     "partitioned",      // mode
                     500,                // stableRaw
-                    150                 // stableFinal
+                    150,                 // stableFinal
+                    -1,
+                    false
+
             );
 
             Aggregates agg = Aggregates.fromProfiler(p);
@@ -517,7 +520,7 @@ class MetricsAndSearchTest {
                     128, 128, 10, 10, 0,
                     100, 10,
                     50, 10, 100L, 500L, 10000L,  // reenc: count=10, time=100ms, delta=500, after=10000
-                    "gt", "partitioned", 100, 50
+                    "gt", "partitioned", 100, 50, -1, false
             );
 
             p.recordQueryRow(
@@ -527,7 +530,7 @@ class MetricsAndSearchTest {
                     128, 128, 10, 10, 1,
                     100, 10,
                     50, 5, 50L, 200L, 10200L,  // reenc: count=5, time=50ms, delta=200
-                    "gt", "partitioned", 100, 50
+                    "gt", "partitioned", 100, 50, -1, false
             );
 
             Aggregates agg = Aggregates.fromProfiler(p);
@@ -545,7 +548,7 @@ class MetricsAndSearchTest {
                     128, 128, k, k, 0,
                     100, 10,
                     0, 0, 0L, 0L, 0L,
-                    "gt", "partitioned", 100, 50
+                    "gt", "partitioned", 100, 50, -1, false
             );
         }
     }
