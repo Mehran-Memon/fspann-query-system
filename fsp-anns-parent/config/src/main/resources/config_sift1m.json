@@ -24,7 +24,7 @@
     "precisionMode": false,
     "refinementLimit": 3000,
     "maxCandidateFactor": 3,
-    "maxRelaxationDepth": 6
+    "maxRelaxationDepth": 3
   },
 
   "eval": {
