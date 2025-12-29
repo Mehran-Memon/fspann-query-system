@@ -95,6 +95,7 @@ public final class Profiler {
             double insertMs,
             double ratio,
             double precision,
+            double recall,
             int candTotal,
             int candKept,
             int candDecrypted,
@@ -127,6 +128,7 @@ public final class Profiler {
                 insertMs,
                 ratio,
                 precision,
+                recall,
                 candTotal,
                 candKept,
                 candDecrypted,
@@ -208,6 +210,7 @@ public final class Profiler {
 
         public final double ratio;
         public final double precision;
+        public final double recall;
 
         public final int candTotal;
         public final int candKept;
@@ -247,6 +250,8 @@ public final class Profiler {
                 double insertMs,
                 double ratio,
                 double precision,
+                double recall,
+
                 int candTotal,
                 int candKept,
                 int candDecrypted,
@@ -280,6 +285,7 @@ public final class Profiler {
 
             this.ratio = ratio;
             this.precision = precision;
+            this.recall = recall;
 
             this.candTotal = candTotal;
             this.candKept = candKept;

@@ -17,6 +17,7 @@ import java.util.*;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class MultiTableMSANNPIntegrationTest {
 
     Path tempDir;
@@ -33,15 +34,14 @@ class MultiTableMSANNPIntegrationTest {
         Files.createDirectories(meta);
         Files.createDirectories(pts);
 
-
         metadata = RocksDBMetadataManager.create(meta.toString(), pts.toString());
 
         Path cfgFile = tempDir.resolve("cfg.json");
         Files.writeString(cfgFile, """
-        {
-          "paper": { "enabled": true, "tables": 3, "divisions": 4, "m": 6, "seed": 123 }
-        }
-        """);
+    {
+      "paper": { "enabled": true, "tables": 3, "divisions": 4, "m": 6, "seed": 123 }
+    }
+    """);
 
         SystemConfig cfg = SystemConfig.load(cfgFile.toString(), true);
 
@@ -65,21 +65,30 @@ class MultiTableMSANNPIntegrationTest {
                 meta.toString(), metadata, null
         );
 
-        AesGcmCryptoService crypto = new AesGcmCryptoService(
-                new SimpleMeterRegistry(), ks, metadata
-        );
+        AesGcmCryptoService crypto =
+                new AesGcmCryptoService(new SimpleMeterRegistry(), ks, metadata);
         ks.setCryptoService(crypto);
 
         indexService = new PartitionedIndexService(metadata, cfg, ks, crypto);
-        tokenFactory = new QueryTokenFactory(crypto, ks, indexService, cfg, 4, 4);
+
+        tokenFactory = new QueryTokenFactory(
+                crypto,
+                ks,
+                indexService,
+                cfg,
+                cfg.getPaper().getDivisions(),
+                cfg.getPaper().getTables()
+        );
+
         queryService = new QueryServiceImpl(indexService, crypto, ks, tokenFactory, cfg);
 
         bootstrapIndex();
+        indexService.finalizeForSearch();
     }
+
 
     private void bootstrapIndex() throws Exception {
         indexService.insert("__boot__", new double[]{0,0,0,0,0,0});
-        indexService.finalizeForSearch();
     }
 
     @Test
@@ -89,11 +98,13 @@ class MultiTableMSANNPIntegrationTest {
         assertNotNull(res);
     }
 
-    @AfterEach
-    void cleanup() throws Exception {
+    @AfterAll
+    void cleanupOnce() throws Exception {
         metadata.close();
-        Files.walk(tempDir).sorted(Comparator.reverseOrder()).forEach(p -> {
-            try { Files.delete(p); } catch (Exception ignored) {}
-        });
+        Files.walk(tempDir)
+                .sorted(Comparator.reverseOrder())
+                .forEach(p -> {
+                    try { Files.deleteIfExists(p); } catch (Exception ignored) {}
+                });
     }
 }

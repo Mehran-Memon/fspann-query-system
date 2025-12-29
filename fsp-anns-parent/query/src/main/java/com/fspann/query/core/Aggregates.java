@@ -10,6 +10,7 @@ public final class Aggregates {
 
     public double avgRatio;
     public double avgPrecision;         // NEW: direct average precision
+    public double avgRecall;                     // NEW
     public double avgServerMs;
     public double avgClientMs;
     public double avgRunMs;             // TRUE ART
@@ -32,6 +33,7 @@ public final class Aggregates {
 
     /** Precision broken down by K value */
     public Map<Integer, Double> precisionAtK = new HashMap<>();
+    public Map<Integer, Double> recallAtK = new HashMap<>();
 
     public Aggregates() {}
 
@@ -51,6 +53,7 @@ public final class Aggregates {
 
         double sumRatio = 0;
         double sumPrecision = 0;
+        double sumRecall = 0;
         double sumServer = 0;
         double sumClient = 0;
         double sumRun = 0;
@@ -67,6 +70,9 @@ public final class Aggregates {
         int precisionCount = 0;
         Map<Integer, List<Double>> pAtK = new HashMap<>();
 
+        int recallCount = 0;
+        Map<Integer, List<Double>> rAtK = new HashMap<>();
+
         for (Profiler.QueryRow r : rows) {
 
             // ---------------- Core metrics ----------------
@@ -79,6 +85,7 @@ public final class Aggregates {
                 sumRun += r.runMs;
                 runCount++;
             }
+
             sumTokenBytes += nz(r.tokenBytes);
             sumWorkUnits  += r.vectorDim;   // Option-C definition
 
@@ -88,15 +95,25 @@ public final class Aggregates {
             if (r.candDecrypted >= 0)  sumCandD += r.candDecrypted;
             if (r.candReturned >= 0)   sumRet   += r.candReturned;
 
-            // ---------------- Precision@K (FIXED: always aggregate) ----------------
+            // ---------------- Precision@K ----------------
             double prec = nz(r.precision);
             if (prec >= 0 && prec <= 1.0) {
                 sumPrecision += prec;
                 precisionCount++;
 
-                // Also store by K for detailed breakdown
                 if (r.tokenK > 0) {
                     pAtK.computeIfAbsent(r.tokenK, z -> new ArrayList<>()).add(prec);
+                }
+            }
+
+            // ---------------- Recall@K ----------------
+            double rec = nz(r.recall);
+            if (rec >= 0 && rec <= 1.0) {
+                sumRecall += rec;
+                recallCount++;
+
+                if (r.tokenK > 0) {
+                    rAtK.computeIfAbsent(r.tokenK, z -> new ArrayList<>()).add(rec);
                 }
             }
 
@@ -110,10 +127,11 @@ public final class Aggregates {
 
         // ---------------- Averages ----------------
         a.avgRatio       = sumRatio / count;
-        a.avgPrecision   = precisionCount > 0 ? sumPrecision / precisionCount : 0.0;
+        a.avgPrecision   = precisionCount > 0 ? (sumPrecision / precisionCount) : 0.0;
+        a.avgRecall      = recallCount > 0 ? (sumRecall / recallCount) : 0.0;
         a.avgServerMs    = sumServer / count;
         a.avgClientMs    = sumClient / count;
-        a.avgRunMs       = runCount > 0 ? sumRun / runCount : 0.0;
+        a.avgRunMs       = runCount > 0 ? (sumRun / runCount) : 0.0;
         a.avgDecryptMs   = sumDecrypt / count;
 
         a.avgTokenBytes  = sumTokenBytes / count;
@@ -127,6 +145,14 @@ public final class Aggregates {
         // ---------------- Avg Precision@K by K value ----------------
         for (var e : pAtK.entrySet()) {
             a.precisionAtK.put(
+                    e.getKey(),
+                    e.getValue().stream().mapToDouble(Double::doubleValue).average().orElse(0.0)
+            );
+        }
+
+        // ---------------- Avg Recall@K by K value ----------------
+        for (var e : rAtK.entrySet()) {
+            a.recallAtK.put(
                     e.getKey(),
                     e.getValue().stream().mapToDouble(Double::doubleValue).average().orElse(0.0)
             );

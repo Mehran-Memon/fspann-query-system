@@ -112,7 +112,12 @@ public class ForwardSecurityAdversarialIT {
     @Test
     void compromisedKeyCannotDecryptAfterRotation() {
         keySvc.initializeUsageTracking();
-        keySvc.reEncryptAll();
+        keySvc.initializeUsageTracking();
+        keySvc.reencryptTouched(
+                meta.getAllVectorIds(),
+                keySvc.getCurrentVersion().getVersion(),
+                () -> 0L
+        );
 
         int ok = 0;
         for (EncryptedPoint p : meta.getAllEncryptedPoints()) {
@@ -129,7 +134,12 @@ public class ForwardSecurityAdversarialIT {
     void reencryptAllChangesCiphertext() {
         var before = snapshot();
         keySvc.initializeUsageTracking();
-        keySvc.reEncryptAll();
+        keySvc.initializeUsageTracking();
+        keySvc.reencryptTouched(
+                meta.getAllVectorIds(),
+                keySvc.getCurrentVersion().getVersion(),
+                () -> 0L
+        );
         var after = snapshot();
         assertNotEquals(before, after);
     }
@@ -187,7 +197,12 @@ public class ForwardSecurityAdversarialIT {
         assertNotNull(km.getSessionKey(previous),
                 "Previous key must not be deleted while vectors exist");
 
-        keySvc.reEncryptAll();
+        keySvc.initializeUsageTracking();
+        keySvc.reencryptTouched(
+                meta.getAllVectorIds(),
+                keySvc.getCurrentVersion().getVersion(),
+                () -> 0L
+        );
 
         assertEquals(0, tracker.getVectorCount(previous),
                 "Previous key must have zero vectors after re-encryption");
@@ -240,6 +255,12 @@ public class ForwardSecurityAdversarialIT {
     @AfterEach
     void cleanup() {
         try { sys.setExitOnShutdown(false); sys.shutdown(); } catch (Exception ignore) {}
+        try { meta.close(); } catch (Exception ignore) {}
+    }
+
+    @AfterAll
+    void shutdownOnce() {
+        try { sys.shutdown(); } catch (Exception ignore) {}
         try { meta.close(); } catch (Exception ignore) {}
     }
 
