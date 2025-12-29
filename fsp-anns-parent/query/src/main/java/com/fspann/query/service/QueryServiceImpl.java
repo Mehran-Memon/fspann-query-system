@@ -132,35 +132,44 @@ public final class QueryServiceImpl implements QueryService {
             // STAGE A — Candidate IDs (ORDERED)
             // ================================
             List<String> candidateIds = index.lookupCandidateIds(token);
-            lastCandTotal = candidateIds.size();
 
-            // ---- NN rank logging (ordered candidate list) ----
+            // TRUE raw candidate count (law-correct)
+            lastCandTotal = index.getLastRawCandidateCount();
+            lastCandKept  = candidateIds.size();
+
             if (trueNearestId != null) {
                 int rank = -1;
                 for (int i = 0; i < candidateIds.size(); i++) {
                     if (trueNearestId.equals(candidateIds.get(i))) {
-                        rank = i + 1; // 1-based rank
+                        rank = i + 1;
                         break;
                     }
                 }
                 lastTrueNNRank = rank;
                 lastTrueNNSeen = (rank > 0);
+                logger.info("TRUE-NN-RANK-IN-CANDIDATES={}", rank);
             }
 
             if (candidateIds.isEmpty()) {
-                lastCandKept = 0;
                 return Collections.emptyList();
             }
 
             final int K = token.getTopK();
-            lastCandKept = candidateIds.size();
+            final int requiredK = Math.max(K, cfg.getEval().getMaxK());
+
+            if (candidateIds.size() < requiredK) {
+                logger.warn(
+                        "CANDIDATE FLOOR VIOLATED: candidates={} required={}",
+                        candidateIds.size(), requiredK
+                );
+            }
 
             // ================================
             // STAGE B — Controlled refinement
             // ================================
             final int refineLimit = Math.min(
                     candidateIds.size(),
-                    cfg.getRuntime().getRefinementLimit()
+                    Math.max(requiredK * 4, cfg.getRuntime().getRefinementLimit())
             );
 
             List<QueryScored> scored = new ArrayList<>(refineLimit);
@@ -177,8 +186,7 @@ public final class QueryServiceImpl implements QueryService {
                     double[] v = cryptoService.decryptFromPoint(ep, kvp.getKey());
                     if (!isValid(v)) continue;
 
-                    double d = l2(qVec, v);
-                    scored.add(new QueryScored(id, d));
+                    scored.add(new QueryScored(id, l2(qVec, v)));
                     touchedThisSession.add(id);
 
                 } catch (Exception ignore) {}
@@ -186,10 +194,18 @@ public final class QueryServiceImpl implements QueryService {
 
             lastDecryptNs = System.nanoTime() - decryptStart;
             lastCandDecrypted = scored.size();
+
+            if (scored.size() < requiredK) {
+                logger.warn(
+                        "REFINEMENT FLOOR VIOLATED: refined={} required={}",
+                        scored.size(), requiredK
+                );
+            }
+
             if (scored.isEmpty()) return Collections.emptyList();
 
             // ================================
-            // STAGE C — SINGLE GLOBAL SORT
+            // STAGE C — Global sort
             // ================================
             scored.sort(Comparator.comparingDouble(QueryScored::dist));
 

@@ -46,7 +46,8 @@ ensure_file() { [[ -f "$1" ]] || die "File not found: $1"; }
 
 command -v java >/dev/null || die "java not found"
 command -v jq   >/dev/null || die "jq not found"
-command -v awk  >/dev/null || die "awk not found"
+command -v gawk >/dev/null || die "gawk not found (required for asort)"
+AWK=gawk
 command -v bc   >/dev/null || die "bc not found"
 ensure_file "$JarPath"
 
@@ -287,7 +288,7 @@ if [ $precision_col -ne -1 ]; then
 fi
 
 # Calculate statistics using awk with dynamic column handling
-stats=$(awk -F',' -v rc="$ratio_col" -v pc="$precision_col" -v sc="$serverMs_col" -v cc="$clientMs_col" -v has_prec="$has_precision" '
+stats=$(gawk -F',' -v rc="$ratio_col" -v pc="$precision_col" -v sc="$serverMs_col" -v cc="$clientMs_col" -v has_prec="$has_precision" '
 BEGIN {
     count = 0
     ratio_sum = 0; ratio_min = 999999; ratio_max = 0

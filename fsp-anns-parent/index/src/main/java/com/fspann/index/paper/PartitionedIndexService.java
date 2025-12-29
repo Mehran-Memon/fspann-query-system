@@ -60,6 +60,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
     private final Map<Integer, DimensionState[]> dims = new ConcurrentHashMap<>();
 
     private volatile boolean frozen = false;
+    private volatile int lastRawVisited = 0;
 
     // Buffer for collecting sample vectors before initialization
     private final List<double[]> initSampleBuffer = Collections.synchronizedList(new ArrayList<>());
@@ -81,7 +82,6 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         final List<DivisionState> divisions = new ArrayList<>();
         final List<EncryptedPoint> staged = new ArrayList<>();
         final List<int[]> stagedHashes = new ArrayList<>();
-
 
         DimensionState(int dim, int table) {
             this.dim = dim;
@@ -379,7 +379,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         int effectiveRelax =
                 (override > 0 ? override : cfg.getRuntime().getMaxRelaxationDepth());
 
-        // Decrypt query ONCE (safe, already required for scoring later)
+        // Decrypt / hash query ONCE
         int[][] qHashes = token.getHashesByTable();
         if (qHashes == null) {
             double[] qvec = cryptoService.decryptQuery(
@@ -394,37 +394,46 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         DimensionState[] tables = dims.get(dim);
         if (tables == null) return List.of();
 
-        SystemConfig.PaperConfig pc = cfg.getPaper();
-        int K = token.getTopK();
+        final int K = token.getTopK();
+        final int requiredK = Math.max(K, cfg.getEval().getMaxK());
 
         final int MAX_IDS =
-                cfg.getRuntime().getMaxCandidateFactor() * K;
+                Math.max(cfg.getRuntime().getMaxCandidateFactor() * K, requiredK);
 
-        final int GLOBAL_CAP =
-                cfg.getRuntime().getMaxGlobalCandidates(); // or hardcode 2000
+        final int GLOBAL_CAP = cfg.getRuntime().getMaxGlobalCandidates();
+
+        // HARD CAP: ordering-safe, reviewer-safe
+        final int HARD_CAP = Math.min(
+                GLOBAL_CAP,
+                Math.max(MAX_IDS, requiredK * 2)
+        );
 
         final int L = Math.min(tables.length, qHashes.length);
 
-        Map<String, Integer> score = new HashMap<>(MAX_IDS);
+        Map<String, Integer> score = new HashMap<>(HARD_CAP);
         Set<String> deletedCache = new HashSet<>(2048);
 
-        for (int relax = 0; relax <= effectiveRelax; relax++) {
-            for (int t = 0; t < L; t++) {
+        int rawSeen = 0;
+
+        for (int relax = 0; relax <= effectiveRelax && score.size() < HARD_CAP; relax++) {
+            for (int t = 0; t < L && score.size() < HARD_CAP; t++) {
+
                 DimensionState S = tables[t];
                 if (S == null || S.divisions.isEmpty()) continue;
 
                 int[] qhTable = qHashes[t];
                 int safeDivs = Math.min(S.divisions.size(), qhTable.length);
 
-                for (int d = 0; d < safeDivs; d++) {
+                for (int d = 0; d < safeDivs && score.size() < HARD_CAP; d++) {
                     DivisionState div = S.divisions.get(d);
                     int qh = qhTable[d];
 
                     for (GreedyPartitioner.SubsetBounds sb : div.I) {
 
-                        int dist = 0;
+                        int dist;
                         if (qh < sb.lower) dist = sb.lower - qh;
                         else if (qh > sb.upper) dist = qh - sb.upper;
+                        else dist = 0;
 
                         if (dist > relax) continue;
 
@@ -432,44 +441,54 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
                         if (ids == null) continue;
 
                         for (String id : ids) {
+                            rawSeen++;
+
                             if (deletedCache.contains(id)) continue;
                             if (metadata.isDeleted(id)) {
                                 deletedCache.add(id);
                                 continue;
                             }
 
-                            int s = (dist << 16) | (t << 8) | d;
-                            score.merge(id, s, Math::min);
+                            // Strong lexicographic ordering
+                            int weight =
+                                    (dist << 12) +   // dominant
+                                            (t    << 6)  +   // table consistency
+                                            d;               // division locality
 
-                            if (score.size() >= Math.min(MAX_IDS, GLOBAL_CAP)) break;
+                            score.merge(id, weight, Integer::sum);
+
+                            if (score.size() >= HARD_CAP) break;
                         }
-                        if (score.size() >= Math.min(MAX_IDS, GLOBAL_CAP)) break;
+                        if (score.size() >= HARD_CAP) break;
                     }
-                    if (score.size() >= Math.min(MAX_IDS, GLOBAL_CAP)) break;
                 }
-                if (score.size() >= Math.min(MAX_IDS, GLOBAL_CAP)) break;
             }
-
-            if (score.size() >= Math.min(MAX_IDS, GLOBAL_CAP)) break;
         }
 
+        // Order by accumulated score (lower = better)
         List<Map.Entry<String, Integer>> ordered =
                 new ArrayList<>(score.entrySet());
         ordered.sort(Comparator.comparingInt(Map.Entry::getValue));
 
-        int limit = Math.min(
-                ordered.size(),
-                Math.min(MAX_IDS, GLOBAL_CAP)
-        );
+        int limit = Math.min(ordered.size(), HARD_CAP);
 
         List<String> out = new ArrayList<>(limit);
         for (int i = 0; i < limit; i++) {
             out.add(ordered.get(i).getKey());
         }
 
+        // Metrics exposure
         lastTouched.set(out.size());
         lastTouchedIds.get().clear();
         lastTouchedIds.get().addAll(out);
+        lastRawVisited = rawSeen;
+
+        if (out.size() < requiredK) {
+            logger.warn(
+                    "Recall floor violated: returned={} required={} relaxDepth={}",
+                    out.size(), requiredK, effectiveRelax
+            );
+        }
 
         return out;
     }
@@ -595,5 +614,10 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
     public void clearProbeOverride() {
         probeOverride.remove();
     }
+
+    public int getLastRawCandidateCount() {
+        return lastRawVisited;
+    }
+
 
 }

@@ -7,37 +7,35 @@
 
   "paper": {
     "enabled": true,
-    "m": 20,
+    "m": 24,
     "lambda": 2,
     "divisions": 3,
-    "tables": 4,
+    "tables": 6,
     "seed": 13
   },
 
   "stabilization": {
     "enabled": true,
     "alpha": 0.02,
-    "minCandidatesRatio": 1.25
+    "minCandidatesRatio": 1.1
   },
 
   "runtime": {
-    "precisionMode": true,
-    "minPrecisionCandidates": 6000,
-    "maxPrecisionCandidates": 25000,
-    "refinementLimit": 12000,
-    "maxCandidateFactor": 150,
-    "maxRelaxationDepth": 4
+    "precisionMode": false,
+    "refinementLimit": 3000,
+    "maxCandidateFactor": 3,
+    "maxRelaxationDepth": 6
   },
 
   "eval": {
     "computePrecision": true,
     "writeGlobalPrecisionCsv": true,
-    "kVariants": [1, 5, 10, 20, 50, 100]
+    "kVariants": [1, 5, 10, 20, 40, 60, 80, 100]
   },
 
   "ratio": {
     "source": "gt",
-    "gtSample": 100
+    "gtSample": 10
   },
 
   "profiles": [

@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Arrays;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -115,6 +116,14 @@ public final class SystemConfig {
             cfg = MAPPER.readValue(p.toFile(), SystemConfig.class);
         } catch (IOException e) {
             throw new ConfigLoadException("Failed to load config", e);
+        }
+
+        int maxK = Arrays.stream(cfg.getEval().kVariants).max().orElse(1);
+        if (cfg.getRuntime().getMaxGlobalCandidates() < maxK) {
+            throw new IllegalStateException(
+                    "Invalid config: maxGlobalCandidates < maxK (" +
+                            cfg.getRuntime().getMaxGlobalCandidates() + " < " + maxK + ")"
+            );
         }
 
         cfg.numShards      = clamp(cfg.numShards, 1, MAX_SHARDS);
@@ -275,6 +284,16 @@ public final class SystemConfig {
 
         @JsonProperty("kVariants")
         public int[] kVariants = {1, 5, 10, 20, 50, 100};
+
+        public int getMaxK() {
+            int max = 1;
+            if (kVariants != null) {
+                for (int k : kVariants) {
+                    if (k > max) max = k;
+                }
+            }
+            return max;
+        }
     }
 
     public static final class RatioConfig {
