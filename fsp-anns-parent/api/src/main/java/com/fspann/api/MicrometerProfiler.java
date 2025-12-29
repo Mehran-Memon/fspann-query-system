@@ -1,22 +1,28 @@
 package com.fspann.api;
 
 import com.fspann.common.Profiler;
-import io.micrometer.core.instrument.*;
-import io.micrometer.core.instrument.Timer;
+import io.micrometer.core.instrument.DistributionSummary;
+import io.micrometer.core.instrument.Meter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;   // ✅ Micrometer Timer
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import java.util.*;
+import java.util.HashMap;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
 public final class MicrometerProfiler {
 
-    private static final Logger log = LoggerFactory.getLogger(MicrometerProfiler.class);
+    private static final Logger log =
+            LoggerFactory.getLogger(MicrometerProfiler.class);
 
-    private final Profiler base;            // the real profiler
+    private final Profiler base;
     private final MeterRegistry registry;
 
     private final Map<String, Timer> timers = new HashMap<>();
@@ -27,12 +33,18 @@ public final class MicrometerProfiler {
     private final DistributionSummary ratioSummary;
 
     public MicrometerProfiler(MeterRegistry reg, Profiler baseProfiler) {
-        this.registry = Objects.requireNonNull(reg);
-        this.base = Objects.requireNonNull(baseProfiler);
+        this.registry = Objects.requireNonNull(reg, "registry");
+        this.base = Objects.requireNonNull(baseProfiler, "baseProfiler");
 
-        this.clientSummary = DistributionSummary.builder("fspann.query.client_ms").register(registry);
-        this.serverSummary = DistributionSummary.builder("fspann.query.server_ms").register(registry);
-        this.ratioSummary  = DistributionSummary.builder("fspann.query.ratio").register(registry);
+        this.clientSummary =
+                DistributionSummary.builder("fspann.query.client_ms")
+                        .register(registry);
+        this.serverSummary =
+                DistributionSummary.builder("fspann.query.server_ms")
+                        .register(registry);
+        this.ratioSummary =
+                DistributionSummary.builder("fspann.query.ratio")
+                        .register(registry);
     }
 
     /* --------------------------------------------------------
@@ -40,16 +52,21 @@ public final class MicrometerProfiler {
      * -------------------------------------------------------- */
 
     public synchronized void start(String op) {
-        base.start(op);   // delegate
-        timers.computeIfAbsent(op,
+        base.start(op);
+
+        timers.computeIfAbsent(
+                op,
                 k -> Timer.builder("fspann.operation.duration")
                         .tag("op", k)
-                        .register(registry));
+                        .register(registry)
+        );
+
         startTimes.put(op, System.nanoTime());
     }
 
     public synchronized void stop(String op) {
-        base.stop(op);    // delegate
+        base.stop(op);
+
         Long st = startTimes.remove(op);
         Timer t = timers.get(op);
         if (t != null && st != null) {
@@ -58,7 +75,7 @@ public final class MicrometerProfiler {
     }
 
     /* --------------------------------------------------------
-     * QUERY ROW WRAPPER
+     * QUERY ROW WRAPPER (NN-rank aware)
      * -------------------------------------------------------- */
 
     public synchronized void recordQueryRow(
@@ -89,18 +106,43 @@ public final class MicrometerProfiler {
             String ratioDenomSource,
             String mode,
             int stableRaw,
-            int stableFinal
+            int stableFinal,
+            int nnRank,
+            boolean nnSeen
     ) {
-        // send to real Profiler
         base.recordQueryRow(
-                label, serverMs, clientMs, runMs, decryptMs, insertMs, ratio, precision,
-                candTotal, candKept, candDec, returned, tokenBytes, vectorDim,
-                tokenK, tokenKBase, qIndex, totalFlushed, flushThreshold,
-                touchedCount, reencCount, reencMs, reencDelta, reencAfter,
-                ratioDenomSource, mode, stableRaw, stableFinal
+                label,
+                serverMs,
+                clientMs,
+                runMs,
+                decryptMs,
+                insertMs,
+                ratio,
+                precision,
+                candTotal,
+                candKept,
+                candDec,
+                returned,
+                tokenBytes,
+                vectorDim,
+                tokenK,
+                tokenKBase,
+                qIndex,
+                totalFlushed,
+                flushThreshold,
+                touchedCount,
+                reencCount,
+                reencMs,
+                reencDelta,
+                reencAfter,
+                ratioDenomSource,
+                mode,
+                stableRaw,
+                stableFinal,
+                nnRank,
+                nnSeen
         );
 
-        // micrometer metrics
         clientSummary.record(clientMs);
         serverSummary.record(serverMs);
         ratioSummary.record(ratio);
@@ -111,29 +153,34 @@ public final class MicrometerProfiler {
      * -------------------------------------------------------- */
 
     public void exportMetersCSV(String path) {
-        StringBuilder sb = new StringBuilder("name,tags,count,totalMs,meanMs,maxMs\n");
+        StringBuilder sb =
+                new StringBuilder("name,tags,count,totalMs,meanMs,maxMs\n");
 
         for (Meter m : registry.getMeters()) {
             if (m instanceof Timer t) {
                 long count = t.count();
                 double total = t.totalTime(TimeUnit.MILLISECONDS);
-                double mean  = (count == 0 ? 0 : total / count);
-                double max   = t.max(TimeUnit.MILLISECONDS);
+                double mean = (count == 0 ? 0.0 : total / count);
+                double max = t.max(TimeUnit.MILLISECONDS);
 
                 sb.append(t.getId().getName()).append(',')
                         .append(t.getId().getTags()).append(',')
                         .append(count).append(',')
-                        .append(String.format("%.3f", total)).append(',')
-                        .append(String.format("%.3f", mean)).append(',')
-                        .append(String.format("%.3f", max)).append('\n');
+                        .append(String.format(Locale.ROOT, "%.3f", total)).append(',')
+                        .append(String.format(Locale.ROOT, "%.3f", mean)).append(',')
+                        .append(String.format(Locale.ROOT, "%.3f", max)).append('\n');
             }
         }
 
         try {
             Files.createDirectories(Paths.get(path).getParent());
             Files.writeString(Paths.get(path), sb.toString());
-        } catch (IOException ignored) {}
+        } catch (IOException e) {
+            log.warn("Failed to export Micrometer CSV to {}", path);
+        }
     }
 
-    public Profiler getBase() { return base; }
+    public Profiler getBase() {
+        return base;
+    }
 }

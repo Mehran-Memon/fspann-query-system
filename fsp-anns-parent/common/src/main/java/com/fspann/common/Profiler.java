@@ -114,7 +114,10 @@ public final class Profiler {
             String ratioDenomSource,
             String mode,
             int stableRaw,
-            int stableFinal
+            int stableFinal,
+            int nnRank,
+            boolean nnSeen
+
     ) {
         queryRows.add(new QueryRow(
                 label,

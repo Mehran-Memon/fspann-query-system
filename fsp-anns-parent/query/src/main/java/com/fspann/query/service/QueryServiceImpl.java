@@ -57,6 +57,11 @@ public final class QueryServiceImpl implements QueryService {
     // one-run touched set (for forward security)
     private final Set<String> touchedThisSession = ConcurrentHashMap.newKeySet();
 
+    // --- NN rank diagnostics ---
+    private volatile int lastTrueNNRank = -1;
+    private volatile boolean lastTrueNNSeen = false;
+    private volatile String trueNearestId;
+
     public QueryServiceImpl(
             PartitionedIndexService index,
             CryptoService cryptoService,
@@ -128,6 +133,19 @@ public final class QueryServiceImpl implements QueryService {
             // ================================
             List<String> candidateIds = index.lookupCandidateIds(token);
             lastCandTotal = candidateIds.size();
+
+            // ---- NN rank logging (ordered candidate list) ----
+            if (trueNearestId != null) {
+                int rank = -1;
+                for (int i = 0; i < candidateIds.size(); i++) {
+                    if (trueNearestId.equals(candidateIds.get(i))) {
+                        rank = i + 1; // 1-based rank
+                        break;
+                    }
+                }
+                lastTrueNNRank = rank;
+                lastTrueNNSeen = (rank > 0);
+            }
 
             if (candidateIds.isEmpty()) {
                 lastCandKept = 0;
@@ -298,6 +316,10 @@ public final class QueryServiceImpl implements QueryService {
                 ? Collections.emptyList()
                 : new ArrayList<>(lastCandIds);
     }
+    public void setTrueNearestId(String id) {
+        this.trueNearestId = id;
+    }
+
     public long getLastQueryDurationNs() { return lastServerNs; }
     public long getLastClientDurationNs() { return lastClientNs; }
     public long getLastDecryptNs() { return lastDecryptNs; }
@@ -311,4 +333,11 @@ public final class QueryServiceImpl implements QueryService {
     }
     public int  getLastCandDecrypted() { return lastCandDecrypted; }
     public int  getLastReturned() { return lastReturned; }
+    public int getLastTrueNNRank() {
+        return lastTrueNNRank;
+    }
+    public boolean wasLastTrueNNSeen() {
+        return lastTrueNNSeen;
+    }
+
 }

@@ -396,8 +396,9 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         final int MAX_IDS =
                 cfg.getRuntime().getMaxCandidateFactor() * K;
 
-        final int MIN_IDS =
-                Math.min(MAX_IDS, K);
+        final int GLOBAL_CAP =
+                cfg.getRuntime().getMaxGlobalCandidates(); // or hardcode 2000
+
 
 
         final int maxRelax = cfg.getRuntime().getMaxRelaxationDepth();
@@ -456,10 +457,14 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
                 new ArrayList<>(score.entrySet());
         ordered.sort(Comparator.comparingInt(Map.Entry::getValue));
 
-        List<String> out = new ArrayList<>(Math.min(MAX_IDS, ordered.size()));
-        for (Map.Entry<String, Integer> e : ordered) {
-            out.add(e.getKey());
-            if (out.size() >= MAX_IDS) break;
+        int limit = Math.min(
+                ordered.size(),
+                Math.min(MAX_IDS, GLOBAL_CAP)
+        );
+
+        List<String> out = new ArrayList<>(limit);
+        for (int i = 0; i < limit; i++) {
+            out.add(ordered.get(i).getKey());
         }
 
         lastTouched.set(out.size());

@@ -215,6 +215,9 @@ public final class SystemConfig {
         @JsonProperty("refinementLimit")
         private int refinementLimit = 20_000;
 
+        @JsonProperty("maxGlobalCandidates")
+        private int maxGlobalCandidates = 2000;
+
         public int getMaxCandidateFactor() {
             return Math.max(1, maxCandidateFactor);
         }
@@ -233,6 +236,10 @@ public final class SystemConfig {
 
         public int getRefinementLimit() {
             return Math.max(1, refinementLimit);
+        }
+
+        public int getMaxGlobalCandidates() {
+            return Math.max(1, maxGlobalCandidates);
         }
     }
 

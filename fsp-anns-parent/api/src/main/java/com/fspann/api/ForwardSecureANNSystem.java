@@ -632,12 +632,24 @@ public class ForwardSecureANNSystem {
 
         logger.info("Running explicit query loop: queries={}, dim={}", queries.size(), dim);
 
+
         for (int qi = 0; qi < queries.size(); qi++) {
             double[] q = queries.get(qi);
 
             for (int k : K_VARIANTS) {
 
                 long t0 = System.nanoTime();
+
+                // 0. Groundtruth NN (for NN-rank logging)
+                String trueNNId = null;
+                if (trustedGT) {
+                    int[] gtIds = gt.getGroundtruthIds(qi, 1);
+                    if (gtIds != null && gtIds.length > 0) {
+                        trueNNId = String.valueOf(gtIds[0]);
+                    }
+                }
+                qs.setTrueNearestId(trueNNId);
+
 
                 // --------------------------------------------------
                 // 1. Token creation (per-K, paper-consistent)
@@ -748,7 +760,10 @@ public class ForwardSecureANNSystem {
                         "partitioned",
 
                         getLastStabilizedRaw(),
-                        getLastStabilizedFinal()
+                        getLastStabilizedFinal(),
+
+                        qs.getLastTrueNNRank(),
+                        qs.wasLastTrueNNSeen()
                 );
 
                 // --------------------------------------------------
