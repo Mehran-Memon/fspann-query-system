@@ -81,9 +81,13 @@ echo ""
 
 echo "[STEP 1/5] Verifying configuration..."
 
-maxCand=$(jq '.base.runtime.maxCandidateFactor' "$cfg")
-gtSample=$(jq '.base.ratio.gtSample' "$cfg")
-alpha=$(jq '.base.stabilization.alpha' "$cfg")
+maxCand=$(jq -r '.runtime.maxCandidateFactor // empty' "$cfg")
+gtSample=$(jq -r '.ratio.gtSample // empty' "$cfg")
+alpha=$(jq -r '.stabilization.alpha // empty' "$cfg")
+
+: "${maxCand:=3}"
+: "${gtSample:=10}"
+: "${alpha:=0.02}"
 
 echo "  maxCandidateFactor = $maxCand"
 echo "  gtSample           = $gtSample"
@@ -92,19 +96,16 @@ echo "  alpha              = $alpha"
 if (( $(echo "$maxCand > 3" | bc -l) )); then
   echo "WARNING: maxCandidateFactor > 3 → ratio inflation risk"
   echo "         Recommended: 3"
-  read -p "Press ENTER to continue anyway, Ctrl+C to abort..."
 fi
 
 if (( gtSample > 20 )); then
   echo "WARNING: gtSample too high → long hangs"
   echo "         Recommended: 10"
-  read -p "Press ENTER to continue anyway, Ctrl+C to abort..."
 fi
 
 if (( $(echo "$alpha > 0.05" | bc -l) )); then
   echo "WARNING: alpha too aggressive → recall risk"
   echo "         Recommended: 0.02"
-  read -p "Press ENTER to continue anyway, Ctrl+C to abort..."
 fi
 
 echo "  Config sanity OK"
@@ -115,7 +116,7 @@ echo ""
 echo "[STEP 2/5] Building final config..."
 
 # Read base config
-base_config=$(jq '.base' "$cfg")
+base_config=$(jq 'del(.profiles)' "$cfg")
 
 # Apply profile if not BASE
 if [ "$TEST_PROFILE" != "BASE" ]; then
@@ -131,9 +132,10 @@ if [ "$TEST_PROFILE" != "BASE" ]; then
 
   # FIXED: Deep merge profile overrides into base config
   merged_config=$(echo "$base_config" | jq --argjson overrides "$profile_json" '
-    .paper = (.paper + ($overrides.paper // {})) |
-    .stabilization = (.stabilization + ($overrides.stabilization // {})) |
-    .runtime = (.runtime + ($overrides.runtime // {}))
+  .paper         = (.paper         + ($overrides.paper         // {})) |
+  .stabilization = (.stabilization + ($overrides.stabilization // {})) |
+  .runtime       = (.runtime       + ($overrides.runtime       // {})) |
+  .ratio         = (.ratio         + ($overrides.ratio         // {}))
   ')
 else
   echo "  Using BASE profile (no overrides)"
@@ -149,12 +151,14 @@ mkdir -p "$run_dir/results"
 final_config=$(echo "$merged_config" | jq \
   --arg resultsDir "$run_dir/results" \
   --arg gtPath "$gt" \
-  --arg gtSample "10" \
   '
   .output.resultsDir = $resultsDir |
   .ratio.source = "gt" |
   .ratio.gtPath = $gtPath |
-  .ratio.gtSample = ($gtSample | tonumber)
+  .ratio.gtSample = 10 |
+  .runtime.precisionMode = false |
+  .runtime.refinementLimit = 3000 |
+  .runtime.maxCandidateFactor = 3
   ')
 
 # Write final config
@@ -180,7 +184,7 @@ start=$(date +%s)
 java "${JvmArgs[@]}" \
   -Dcli.dataset="$TEST_DATASET" \
   -Dcli.profile="$TEST_PROFILE" \
-  -Dquery.limit="$QUERY_LIMIT" \
+  -DqueryLimit="$QUERY_LIMIT" \
   -jar "$JarPath" \
   "$run_dir/config.json" \
   "$base" \
