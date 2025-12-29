@@ -142,8 +142,9 @@ public final class EvaluationSummaryPrinter {
             if (!exists) {
                 StringBuilder h = new StringBuilder();
                 h.append("dataset,profile,m,lambda,divisions,index_time_ms,");
-                h.append("avg_ratio,avg_precision,avg_server_ms,avg_client_ms,avg_art_ms,avg_decrypt_ms,");
+                h.append("avg_ratio,avg_precision,avg_recall,avg_server_ms,avg_client_ms,avg_art_ms,avg_decrypt_ms,");
                 for (int k : STANDARD_KS) h.append("p_at_").append(k).append(",");
+                for (int k : STANDARD_KS) h.append("r_at_").append(k).append(",");
                 String header = h.substring(0, h.length() - 1);
                 Files.write(out, (header + "\n").getBytes(StandardCharsets.UTF_8),
                         StandardOpenOption.CREATE, StandardOpenOption.APPEND);
@@ -156,6 +157,7 @@ public final class EvaluationSummaryPrinter {
             sb.append(indexMs).append(",");
             sb.append(fmt(nz(a.avgRatio))).append(",");
             sb.append(fmt(nz(a.avgPrecision))).append(",");
+            sb.append(fmt(nz(a.avgRecall))).append(",");
             sb.append(fmt(nz(a.avgServerMs))).append(",");
             sb.append(fmt(nz(a.avgClientMs))).append(",");
             sb.append(fmt(nz(a.getAvgArtMs()))).append(",");
@@ -165,7 +167,10 @@ public final class EvaluationSummaryPrinter {
                 double v = a.precisionAtK.getOrDefault(k, Double.NaN);
                 sb.append(fmt(v)).append(",");
             }
-
+            for (int k : STANDARD_KS) {
+                double v = a.recallAtK.getOrDefault(k, Double.NaN);
+                sb.append(fmt(v)).append(",");
+            }
             String row = sb.substring(0, sb.length() - 1);
             Files.write(out, (row + "\n").getBytes(StandardCharsets.UTF_8),
                     StandardOpenOption.CREATE, StandardOpenOption.APPEND);

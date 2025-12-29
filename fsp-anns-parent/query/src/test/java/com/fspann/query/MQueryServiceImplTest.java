@@ -13,125 +13,115 @@ import javax.crypto.SecretKey;
 import java.util.Collections;
 import java.util.List;
 
-import static org.mockito.Mockito.*;
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
-public class MQueryServiceImplTest {
+class MQueryServiceImplTest {
 
     private QueryServiceImpl queryService;
-    private PartitionedIndexService mockIndexService;
-    private CryptoService mockCryptoService;
-    private KeyLifeCycleService mockKeyService;
-    private QueryTokenFactory mockTokenFactory;
-    private SystemConfig mockConfig;
+    private PartitionedIndexService index;
+    private CryptoService crypto;
+    private KeyLifeCycleService keyService;
+    private QueryTokenFactory tokenFactory;
+    private SystemConfig cfg;
 
     @BeforeEach
     void setUp() {
-        // Mock all dependencies - don't create real instances
-        mockIndexService = mock(PartitionedIndexService.class);
-        mockCryptoService = mock(CryptoService.class);
-        mockKeyService = mock(KeyLifeCycleService.class);
-        mockTokenFactory = mock(QueryTokenFactory.class);
-        mockConfig = mock(SystemConfig.class);
 
-        // Mock SystemConfig stabilization and runtime configs
-        SystemConfig.StabilizationConfig mockStabilizationConfig = mock(SystemConfig.StabilizationConfig.class);
-        when(mockStabilizationConfig.isEnabled()).thenReturn(false); // Disable stabilization for simpler tests
-        when(mockConfig.getStabilization()).thenReturn(mockStabilizationConfig);
+        index = mock(PartitionedIndexService.class);
+        crypto = mock(CryptoService.class);
+        keyService = mock(KeyLifeCycleService.class);
+        tokenFactory = mock(QueryTokenFactory.class);
+        cfg = mock(SystemConfig.class);
 
-        SystemConfig.RuntimeConfig mockRuntimeConfig = mock(SystemConfig.RuntimeConfig.class);
-        when(mockRuntimeConfig.getMaxRefinementFactor()).thenReturn(5);
-        when(mockConfig.getRuntime()).thenReturn(mockRuntimeConfig);
+        // ---- Runtime config (CRITICAL) ----
+        SystemConfig.RuntimeConfig runtime = mock(SystemConfig.RuntimeConfig.class);
+        when(runtime.getRefinementLimit()).thenReturn(10);
+        when(runtime.getMaxRefinementFactor()).thenReturn(5);
+        when(cfg.getRuntime()).thenReturn(runtime);
 
-        // Initialize QueryServiceImpl with mocked dependencies
+        // ---- Stabilization config ----
+        SystemConfig.StabilizationConfig stab = mock(SystemConfig.StabilizationConfig.class);
+        when(stab.isEnabled()).thenReturn(false);
+        when(cfg.getStabilization()).thenReturn(stab);
+
         queryService = new QueryServiceImpl(
-                mockIndexService,
-                mockCryptoService,
-                mockKeyService,
-                mockTokenFactory,
-                mockConfig
+                index,
+                crypto,
+                keyService,
+                tokenFactory,
+                cfg
         );
     }
 
     @Test
     void testSearchWithValidQuery() {
-        // Setup mock QueryToken
-        QueryToken mockToken = mock(QueryToken.class);
-        when(mockToken.getVersion()).thenReturn(1);
-        when(mockToken.getTopK()).thenReturn(10);
-        when(mockToken.getEncryptedQuery()).thenReturn(new byte[]{1, 2, 3});
-        when(mockToken.getIv()).thenReturn(new byte[]{4, 5, 6});
 
-        // Mock KeyVersion and SecretKey - MUST BE SET UP BEFORE search() is called
-        SecretKey mockKey = mock(SecretKey.class);
-        KeyVersion mockKeyVersion = new KeyVersion(1, mockKey);
-        when(mockKeyService.getVersion(1)).thenReturn(mockKeyVersion);
-        when(mockKeyService.getCurrentVersion()).thenReturn(mockKeyVersion);
+        QueryToken token = mock(QueryToken.class);
+        when(token.getVersion()).thenReturn(1);
+        when(token.getTopK()).thenReturn(10);
+        when(token.getEncryptedQuery()).thenReturn(new byte[]{1, 2, 3});
+        when(token.getIv()).thenReturn(new byte[]{4, 5, 6});
 
-        // Mock decrypted query vector
-        double[] queryVector = new double[]{1.0, 2.0, 3.0};
-        when(mockCryptoService.decryptQuery(any(byte[].class), any(byte[].class), any(SecretKey.class)))
-                .thenReturn(queryVector);
+        SecretKey key = mock(SecretKey.class);
+        when(keyService.getVersion(1))
+                .thenReturn(new KeyVersion(1, key));
+        when(keyService.getCurrentVersion())
+                .thenReturn(new KeyVersion(1, key));
 
-        // Mock candidate IDs from index
-        List<String> candidateIds = List.of("id1", "id2");
-        when(mockIndexService.lookupCandidateIds(mockToken)).thenReturn(candidateIds);
+        when(crypto.decryptQuery(any(), any(), any()))
+                .thenReturn(new double[]{1.0, 2.0, 3.0});
 
-        // Mock encrypted points
-        EncryptedPoint mockPoint1 = mock(EncryptedPoint.class);
-        when(mockPoint1.getId()).thenReturn("id1");
-        when(mockPoint1.getKeyVersion()).thenReturn(1);
+        // ---- Candidate IDs ----
+        when(index.lookupCandidateIds(token))
+                .thenReturn(List.of("id1", "id2"));
 
-        EncryptedPoint mockPoint2 = mock(EncryptedPoint.class);
-        when(mockPoint2.getId()).thenReturn("id2");
-        when(mockPoint2.getKeyVersion()).thenReturn(1);
+        EncryptedPoint p1 = mock(EncryptedPoint.class);
+        when(p1.getId()).thenReturn("id1");
+        when(p1.getKeyVersion()).thenReturn(1);
 
-        when(mockIndexService.loadPointIfActive("id1")).thenReturn(mockPoint1);
-        when(mockIndexService.loadPointIfActive("id2")).thenReturn(mockPoint2);
+        EncryptedPoint p2 = mock(EncryptedPoint.class);
+        when(p2.getId()).thenReturn("id2");
+        when(p2.getKeyVersion()).thenReturn(1);
 
-        // Mock decryption of candidate vectors
-        double[] vector1 = new double[]{1.1, 2.1, 3.1};
-        double[] vector2 = new double[]{1.2, 2.2, 3.2};
-        when(mockCryptoService.decryptFromPoint(mockPoint1, mockKey)).thenReturn(vector1);
-        when(mockCryptoService.decryptFromPoint(mockPoint2, mockKey)).thenReturn(vector2);
+        when(index.loadPointIfActive("id1")).thenReturn(p1);
+        when(index.loadPointIfActive("id2")).thenReturn(p2);
 
-        // Perform the search
-        List<QueryResult> results = queryService.search(mockToken);
+        when(crypto.decryptFromPoint(eq(p1), any()))
+                .thenReturn(new double[]{1.1, 2.1, 3.1});
+        when(crypto.decryptFromPoint(eq(p2), any()))
+                .thenReturn(new double[]{1.2, 2.2, 3.2});
 
-        // Assertions
+        List<QueryResult> results = queryService.search(token);
+
         assertNotNull(results);
         assertEquals(2, results.size());
+
         assertTrue(results.stream().anyMatch(r -> r.getId().equals("id1")));
         assertTrue(results.stream().anyMatch(r -> r.getId().equals("id2")));
     }
 
     @Test
-    void testSearchWithEmptyResults() {
-        // Setup mock QueryToken
-        QueryToken mockToken = mock(QueryToken.class);
-        when(mockToken.getVersion()).thenReturn(1);
-        when(mockToken.getTopK()).thenReturn(10);
-        when(mockToken.getEncryptedQuery()).thenReturn(new byte[]{1, 2, 3});
-        when(mockToken.getIv()).thenReturn(new byte[]{4, 5, 6});
+    void testSearchWithEmptyCandidates() {
 
-        // Mock KeyVersion
-        SecretKey mockKey = mock(SecretKey.class);
-        KeyVersion mockKeyVersion = new KeyVersion(1, mockKey);
-        when(mockKeyService.getVersion(1)).thenReturn(mockKeyVersion);
-        when(mockKeyService.getCurrentVersion()).thenReturn(mockKeyVersion);
+        QueryToken token = mock(QueryToken.class);
+        when(token.getVersion()).thenReturn(1);
+        when(token.getTopK()).thenReturn(10);
+        when(token.getEncryptedQuery()).thenReturn(new byte[]{1, 2, 3});
+        when(token.getIv()).thenReturn(new byte[]{4, 5, 6});
 
-        // Mock decrypted query vector
-        double[] queryVector = new double[]{1.0, 2.0, 3.0};
-        when(mockCryptoService.decryptQuery(any(byte[].class), any(byte[].class), any(SecretKey.class)))
-                .thenReturn(queryVector);
+        SecretKey key = mock(SecretKey.class);
+        when(keyService.getVersion(1))
+                .thenReturn(new KeyVersion(1, key));
 
-        // Mock empty candidate list
-        when(mockIndexService.lookupCandidateIds(mockToken)).thenReturn(Collections.emptyList());
+        when(crypto.decryptQuery(any(), any(), any()))
+                .thenReturn(new double[]{1.0, 2.0, 3.0});
 
-        // Perform the search
-        List<QueryResult> results = queryService.search(mockToken);
+        when(index.lookupCandidateIds(token))
+                .thenReturn(Collections.emptyList());
 
-        // Assertions
+        List<QueryResult> results = queryService.search(token);
+
         assertNotNull(results);
         assertTrue(results.isEmpty());
     }

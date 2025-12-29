@@ -60,7 +60,7 @@ class QueryTokenFactoryTest {
 
         config = SystemConfig.load(cfg.toString(), true);
 
-        // ---------------- Crypto ----------------
+        // ---------------- Crypto + Keys ----------------
         crypto = mock(CryptoService.class);
         keyService = mock(KeyLifeCycleService.class);
         index = mock(PartitionedIndexService.class);
@@ -95,20 +95,20 @@ class QueryTokenFactoryTest {
         // Tables
         assertEquals(3, tok.getNumTables());
 
-        // MSANNP hashes
+        // Hashes (MSANNP v2)
         int[][] hashes = tok.getHashesByTable();
         assertNotNull(hashes);
-        assertEquals(3, hashes.length); // one per table
+        assertEquals(3, hashes.length);
 
         for (int[] h : hashes) {
             assertNotNull(h);
-            assertTrue(h.length > 0);
+            assertEquals(8, h.length); // divisions
         }
 
-        // Legacy multiprobe buckets
-        List<List<Integer>> buckets = tok.getTableBuckets();
-        assertNotNull(buckets);
-        assertEquals(3, buckets.size());
+        // Legacy buckets are intentionally EMPTY
+        assertNotNull(tok.getTableBuckets());
+        assertTrue(tok.getTableBuckets().isEmpty(),
+                "Legacy multiprobe buckets must be empty in MSANNP v2");
 
         // Encryption material
         assertNotNull(tok.getEncryptedQuery());

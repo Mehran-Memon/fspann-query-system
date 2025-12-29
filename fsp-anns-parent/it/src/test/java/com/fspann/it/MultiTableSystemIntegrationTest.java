@@ -89,7 +89,7 @@ class MultiTableSystemIntegrationTest {
                 cfgPath.toString(),
                 temp.resolve("data.fvecs").toString(),
                 temp.resolve("keys.blob").toString(),
-                dimensions,              // ✅ FIXED
+                dimensions,
                 temp,
                 false,
                 metadata,
@@ -107,6 +107,7 @@ class MultiTableSystemIntegrationTest {
         }
 
         // 6. Finalize
+        system.flushAll();
         system.finalizeForSearch();
     }
 
@@ -125,8 +126,8 @@ class MultiTableSystemIntegrationTest {
                 >= system.getQueryServiceImpl().getLastReturned());
     }
 
-    @AfterEach
-    void cleanup() throws Exception {
+    @AfterAll
+    void shutdownOnce() throws Exception {
         system.shutdown();
         metadata.close();
     }

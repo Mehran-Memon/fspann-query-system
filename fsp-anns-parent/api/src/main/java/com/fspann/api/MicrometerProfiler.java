@@ -87,6 +87,7 @@ public final class MicrometerProfiler {
             double insertMs,
             double ratio,
             double precision,
+            double recall,                 // ✅ ADD THIS
             int candTotal,
             int candKept,
             int candDec,
@@ -119,6 +120,7 @@ public final class MicrometerProfiler {
                 insertMs,
                 ratio,
                 precision,
+                recall,               // ✅ FORWARD IT
                 candTotal,
                 candKept,
                 candDec,

@@ -734,6 +734,7 @@ public class ForwardSecureANNSystem {
 
                         m.ratioAtK(),
                         m.precisionAtK(),
+                        m.recallAtK(),
 
                         qs.getLastCandTotal(),
                         qs.getLastCandKept(),
@@ -838,6 +839,9 @@ public class ForwardSecureANNSystem {
 
         double precisionAtK = hits / (double) k;
 
+        // ---------- 3b. Recall@K (PPANN, explicit) ----------
+        double recallAtK = hits / (double) k;   // SAME formula, explicit semantic
+
         // ---------- 4. Distance Ratio@K (Peng et al.) ----------
         double distanceRatioAtK = Double.NaN;
 
@@ -858,14 +862,10 @@ public class ForwardSecureANNSystem {
         int candidatesExamined = qs.getLastCandTotal();
         double candidateRatioAtK = candidatesExamined / (double) k;
 
-//        logger.debug("GT[0..5]={}", Arrays.toString(Arrays.copyOf(gt, 5)));
-//        logger.debug("ANN[0..5]={}", Arrays.toString(Arrays.copyOf(annIdx, 5)));
-//        logger.debug("precision@{}={}", k, precisionAtK);
-//        logger.debug("ratio@{}={}", k, distanceRatioAtK);
-
         return new QueryMetrics(
                 distanceRatioAtK,
                 precisionAtK,
+                recallAtK,
                 candidateRatioAtK
         );
 
@@ -2071,6 +2071,38 @@ public class ForwardSecureANNSystem {
                 System.clearProperty(FsPaths.KEYSTORE_PROP);
             else
                 System.setProperty(FsPaths.KEYSTORE_PROP, prevKeyStoreProp);
+        }
+    }
+
+    public void shutdownForTests() {
+        try {
+            // Never allow System.exit in tests
+            setExitOnShutdown(false);
+
+            // 1. Kill background re-encryption FIRST
+            if (backgroundReencryptor != null) {
+                try {
+                    backgroundReencryptor.shutdown();
+                } catch (Exception ignored) {}
+            }
+
+            // 2. Kill main executor HARD
+            if (executor != null) {
+                executor.shutdownNow();
+            }
+
+            // 3. Close RocksDB LAST
+            if (metadataManager != null) {
+                metadataManager.close();
+            }
+
+            // 4. Close base reader if present
+            try {
+                if (baseReader != null) baseReader.close();
+            } catch (Exception ignored) {}
+
+        } catch (Exception ignored) {
+            // absolutely no rethrow in tests
         }
     }
 
