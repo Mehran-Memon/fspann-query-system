@@ -16,7 +16,7 @@ JVM_ARGS=(
   "-XX:+UseG1GC"
   "-XX:MaxGCPauseMillis=200"
   "-XX:+AlwaysPreTouch"
-  "-Xmx16g"
+  "-Xmx24g"
   "-Dfile.encoding=UTF-8"
   "-Dreenc.mode=end"
 )
@@ -66,8 +66,11 @@ declare -A GT=(
 )
 
 # ================= FILTERS =====================
-ONLY_DATASET="SIFT1M"
-ONLY_PROFILE="M24"
+ONLY_DATASET=""
+ONLY_PROFILE=""
+
+# ================= K VARIANTS ==================
+KLIST="1,5,10,20,40,60,80,100"
 
 # ================= METRIC EXTRACTION =================
 
@@ -80,47 +83,69 @@ import java.nio.file.*;
 import java.util.*;
 
 var lines = Files.readAllLines(Path.of("$csv"));
-if (lines.size() <= 1) {
-  System.out.println("NA,NA");
-  System.exit(0);
-}
+if (lines.size() <= 1) { System.out.println("NA,NA"); System.exit(0); }
 
 var header = lines.get(0).split(",");
-int clientIdx = -1, ratioIdx = -1;
-
-for (int i = 0; i < header.length; i++) {
-  if (header[i].equals("clientMs")) clientIdx = i;
-  if (header[i].equals("ratio")) ratioIdx = i;
+int clientIdx=-1, ratioIdx=-1;
+for (int i=0;i<header.length;i++){
+  if(header[i].equals("clientMs")) clientIdx=i;
+  if(header[i].equals("ratio")) ratioIdx=i;
 }
 
-if (clientIdx < 0 || ratioIdx < 0) {
-  System.out.println("NA,NA");
-  System.exit(0);
-}
-
-double artSum = 0.0, ratioSum = 0.0;
-int n = 0;
-
-for (int i = 1; i < lines.size(); i++) {
-  var p = lines.get(i).split(",");
-  if (p.length <= Math.max(clientIdx, ratioIdx)) continue;
-  artSum += Double.parseDouble(p[clientIdx]);
-  ratioSum += Double.parseDouble(p[ratioIdx]);
+double art=0, r=0; int n=0;
+for(int i=1;i<lines.size();i++){
+  var p=lines.get(i).split(",");
+  art+=Double.parseDouble(p[clientIdx]);
+  r+=Double.parseDouble(p[ratioIdx]);
   n++;
 }
-
-if (n == 0) {
-  System.out.println("NA,NA");
-} else {
-  System.out.printf("%.2f,%.4f%n", artSum / n, ratioSum / n);
+System.out.printf("%.2f,%.4f%n", art/n, r/n);
+EOF
 }
+
+extract_ratio_per_k() {
+  local csv="$1/profiler_metrics.csv"
+  local klist="$2"
+  [[ -f "$csv" ]] || { echo ""; return; }
+
+  jshell --execution local <<EOF 2>/dev/null | grep -E '^[0-9]'
+import java.nio.file.*;
+import java.util.*;
+
+var ks=new TreeSet<Integer>();
+for(var s:"$klist".split(",")) ks.add(Integer.parseInt(s));
+
+var lines=Files.readAllLines(Path.of("$csv"));
+var h=lines.get(0).split(",");
+int kI=-1,rI=-1;
+for(int i=0;i<h.length;i++){ if(h[i].equals("k"))kI=i; if(h[i].equals("ratio"))rI=i;}
+
+var sum=new HashMap<Integer,Double>();
+var cnt=new HashMap<Integer,Integer>();
+for(int k:ks){sum.put(k,0.0);cnt.put(k,0);}
+
+for(int i=1;i<lines.size();i++){
+ var p=lines.get(i).split(",");
+ int k=Integer.parseInt(p[kI]);
+ if(!ks.contains(k))continue;
+ sum.put(k,sum.get(k)+Double.parseDouble(p[rI]));
+ cnt.put(k,cnt.get(k)+1);
+}
+
+for(int k:ks){
+ if(cnt.get(k)==0) System.out.print("NA");
+ else System.out.printf("%.4f",sum.get(k)/cnt.get(k));
+ System.out.print(",");
+}
+System.out.println();
 EOF
 }
 
 # ================= GLOBAL SUMMARY =================
 
 GLOBAL_SUMMARY="$OUT_ROOT/global_summary.csv"
-echo "dataset,profile,ART_ms,AvgRatio" > "$GLOBAL_SUMMARY"
+echo "dataset,profile,ART_ms,AvgRatio,ratio@1,ratio@5,ratio@10,ratio@20,ratio@40,ratio@60,ratio@80,ratio@100" \
+  > "$GLOBAL_SUMMARY"
 
 # ================= MAIN LOOP ======================
 
@@ -134,79 +159,53 @@ for ds in "${DATASETS[@]}"; do
   query="${QUERY[$ds]}"
   gt="${GT[$ds]}"
 
-  need_file "$cfg"
-  need_file "$base"
-  need_file "$query"
-  need_file "$gt"
-
   BASE_JSON="$(jq -c 'del(.profiles)' "$cfg")"
 
   ds_root="$OUT_ROOT/$ds"
   mkdir -p "$ds_root"
-  echo "profile,ART_ms,AvgRatio" > "$ds_root/dataset_summary.csv"
+  echo "profile,ART_ms,AvgRatio,ratio@1,ratio@5,ratio@10,ratio@20,ratio@40,ratio@60,ratio@80,ratio@100" \
+    > "$ds_root/dataset_summary.csv"
 
   PROFILE_COUNT="$(jq '.profiles | length' "$cfg")"
   ran_any=false
 
-  for ((i=0; i<PROFILE_COUNT; i++)); do
+  for ((i=0;i<PROFILE_COUNT;i++)); do
     prof="$(jq -c ".profiles[$i]" "$cfg")"
     name="$(jq -r '.name' <<<"$prof")"
-
     [[ -n "$ONLY_PROFILE" && "$name" != "$ONLY_PROFILE" ]] && continue
     ran_any=true
 
     overrides="$(jq -c '.overrides // {}' <<<"$prof")"
     run_dir="$ds_root/$name"
-
-    rm -rf "$run_dir"
-    mkdir -p "$run_dir/results"
+    rm -rf "$run_dir"; mkdir -p "$run_dir/results"
 
     final_cfg="$(jq -n '
-      def deepmerge(a; b):
-        reduce (b | keys_unsorted[]) as $k
-          (a;
-           .[$k] =
-             if (a[$k] | type) == "object" and (b[$k] | type) == "object"
-             then deepmerge(a[$k]; b[$k])
-             else b[$k]
-             end);
-      deepmerge($base; $ovr)
-      | .output.resultsDir = $resdir
-      | .ratio.source = "gt"
-      | .ratio.gtPath = $gtpath
-      | .ratio.allowComputeIfMissing = false
-    ' \
-      --argjson base "$BASE_JSON" \
-      --argjson ovr "$overrides" \
-      --arg resdir "$run_dir/results" \
-      --arg gtpath "$gt"
-    )"
+      def deepmerge(a;b):
+        reduce (b|keys_unsorted[]) as $k (a;
+          .[$k]=(if (a[$k]|type)=="object" and (b[$k]|type)=="object"
+                 then deepmerge(a[$k];b[$k]) else b[$k] end));
+      deepmerge($base;$ovr)
+      | .output.resultsDir=$res
+      | .ratio.source="gt"
+      | .ratio.gtPath=$gt
+      | .ratio.allowComputeIfMissing=false
+    ' --argjson base "$BASE_JSON" --argjson ovr "$overrides" \
+       --arg res "$run_dir/results" --arg gt "$gt")"
 
     echo "$final_cfg" > "$run_dir/config.json"
-    log="$run_dir/run.log"
 
-    java "${JVM_ARGS[@]}" \
-      -Dcli.dataset="$ds" \
-      -Dcli.profile="$name" \
-      -jar "$JAR" \
-      "$run_dir/config.json" \
-      "$base" "$query" "$run_dir/keys.blob" \
+    java "${JVM_ARGS[@]}" -jar "$JAR" \
+      "$run_dir/config.json" "$base" "$query" "$run_dir/keys.blob" \
       "$dim" "$run_dir" "$gt" "$BATCH_SIZE" \
-      >"$log" 2>&1 || {
-        echo "FAILED: $ds / $name"
-        tail -80 "$log"
-        exit 1
-      }
+      >"$run_dir/run.log" 2>&1 || exit 1
 
     metrics="$(extract_metrics "$run_dir/results")"
     IFS=',' read -r art ratio <<<"$metrics"
+    rk="$(extract_ratio_per_k "$run_dir/results" "$KLIST")"
 
-    echo "$name,$art,$ratio" >> "$ds_root/dataset_summary.csv"
-    echo "$ds,$name,$art,$ratio" >> "$GLOBAL_SUMMARY"
-
-    printf "%-10s | %-12s | ART=%7s ms | Ratio=%s\n" \
-      "$ds" "$name" "${art:-NA}" "${ratio:-NA}"
+    echo "$name,$art,$ratio,$rk" >> "$ds_root/dataset_summary.csv"
+    echo "$ds,$name,$art,$ratio,$rk" >> "$GLOBAL_SUMMARY"
   done
 
-  [[ "$ran_any" == true ]] || die "No profile executed for dataset $ds"
+  [[ "$ran_any" == true ]] || die "No profile executed for $ds"
 done
