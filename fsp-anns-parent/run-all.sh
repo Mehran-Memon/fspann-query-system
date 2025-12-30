@@ -127,6 +127,7 @@ for ds in "${DATASETS[@]}"; do
        --arg res "$run_dir/results" --arg gt "$gt")"
 
     echo "$final_cfg" > "$run_dir/config.json"
+    sha256sum "$run_dir/config.json" > "$run_dir/config.sha256"
 
     echo "RUNNING PROFILE: $ds | $name"
     echo "Config  : $run_dir/config.json"
@@ -136,10 +137,13 @@ for ds in "${DATASETS[@]}"; do
 
     start_ts=$(date +%s)
 
-    java "${JVM_ARGS[@]}" -jar "$JAR" \
+    if ! java "${JVM_ARGS[@]}" -jar "$JAR" \
       "$run_dir/config.json" "$base" "$query" "$run_dir/keys.blob" \
       "$dim" "$run_dir" "$gt" "$BATCH_SIZE" \
-      >"$run_dir/run.log" 2>&1 || exit 1
+      >"$run_dir/run.log" 2>&1; then
+        echo "FAILED: $ds | $name (see run.log)" >&2
+        continue
+    fi
 
     end_ts=$(date +%s)
     echo "COMPLETED: $ds | $name | runtime=$((end_ts - start_ts))s"
@@ -150,13 +154,14 @@ for ds in "${DATASETS[@]}"; do
     row="$(tail -n 1 "$acc")"
     IFS=',' read -r \
       dataset profile m lambda divisions index_ms \
-      avg_ratio avg_server avg_client avg_art avg_decrypt \
+      avg_ratio avg_precision avg_recall \
+      avg_server avg_client avg_art avg_decrypt \
       p20 p40 p60 p80 p100 \
       r20 r40 r60 r80 r100 \
     <<<"$row"
 
-
-    echo "$name,$avg_art,$avg_ratio,$p20,$p40,$p60,$p80,$p100" >> "$ds_root/dataset_summary.csv"
+    echo "$name,$avg_art,$avg_ratio,$p20,$p40,$p60,$p80,$p100,$((end_ts - start_ts))" \
+    >> "$ds_root/dataset_summary.csv"
     echo "$ds,$name,$avg_art,$avg_ratio,$p20,$p40,$p60,$p80,$p100" >> "$GLOBAL_SUMMARY"
   done
 
