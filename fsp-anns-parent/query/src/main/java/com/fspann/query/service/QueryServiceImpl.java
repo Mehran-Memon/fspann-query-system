@@ -104,9 +104,6 @@ public final class QueryServiceImpl implements QueryService {
 
         final long clientStart = System.nanoTime();
 
-        // =====================================================
-        // 0) Decrypt query ONCE (lawful)
-        // =====================================================
         KeyVersion qkv;
         try {
             qkv = keyService.getVersion(token.getVersion());
@@ -128,53 +125,29 @@ public final class QueryServiceImpl implements QueryService {
         final long serverStart = System.nanoTime();
 
         try {
-            // =====================================================
-            // STAGE A — Candidate retrieval (ORDERED, MSANNP)
-            // =====================================================
+            // -------------------------------
+            // STAGE A — candidate IDs
+            // -------------------------------
             List<String> candidateIds = index.lookupCandidateIds(token);
 
             lastCandTotal = index.getLastRawCandidateCount();
             lastCandKept  = candidateIds.size();
 
-            if (trueNearestId != null) {
-                int rank = -1;
-                for (int i = 0; i < candidateIds.size(); i++) {
-                    if (trueNearestId.equals(candidateIds.get(i))) {
-                        rank = i + 1;
-                        break;
-                    }
-                }
-                lastTrueNNRank = rank;
-                lastTrueNNSeen = (rank > 0);
-            }
+            if (candidateIds.isEmpty()) return Collections.emptyList();
 
-            if (candidateIds.isEmpty()) {
-                return Collections.emptyList();
-            }
+            final int K = token.getTopK();        // STRICT per-K
+            final int requiredK = K;
 
-            // =====================================================
-            // CRITICAL INVARIANT
-            // =====================================================
-            final int MAX_K = token.getTopK();  // MUST be max(K_VARIANTS)
-            final int requiredK = MAX_K;
-
-            if (candidateIds.size() < requiredK) {
-                logger.warn(
-                        "CANDIDATE FLOOR VIOLATED: candidates={} required={}",
-                        candidateIds.size(), requiredK
-                );
-            }
-
-            // =====================================================
-            // STAGE B — Controlled refinement (paper-bounded)
-            // =====================================================
+            // -------------------------------
+            // STAGE B — bounded refinement
+            // -------------------------------
+            final double ratioCeil = 1.3; // paper target
             final int refineLimit = Math.min(
                     candidateIds.size(),
-                    (int) Math.ceil(MAX_K * 1.25)
+                    (int) Math.ceil(requiredK * ratioCeil)
             );
 
             List<QueryScored> scored = new ArrayList<>(refineLimit);
-
             long decryptStart = System.nanoTime();
 
             for (int i = 0; i < refineLimit; i++) {
@@ -196,29 +169,14 @@ public final class QueryServiceImpl implements QueryService {
             lastDecryptNs = System.nanoTime() - decryptStart;
             lastCandDecrypted = scored.size();
 
-            if (scored.size() < requiredK) {
-                logger.warn(
-                        "REFINEMENT FLOOR VIOLATED: refined={} required={}",
-                        scored.size(), requiredK
-                );
-            }
-
             if (scored.isEmpty()) return Collections.emptyList();
 
-            // =====================================================
-            // STAGE C — Global ranking
-            // =====================================================
+            // -------------------------------
+            // STAGE C — rank & return
+            // -------------------------------
             scored.sort(Comparator.comparingDouble(QueryScored::dist));
 
-            int eff = Math.min(MAX_K, scored.size());
-
-            // HARD SAFETY — NEVER return fewer than MAX_K silently
-            if (eff < MAX_K) {
-                throw new IllegalStateException(
-                        "ANN returned fewer than MAX_K results: returned="
-                                + eff + " expected=" + MAX_K
-                );
-            }
+            int eff = Math.min(K, scored.size());
 
             List<QueryResult> out = new ArrayList<>(eff);
             LinkedHashSet<String> finalIds = new LinkedHashSet<>(eff);
@@ -229,7 +187,7 @@ public final class QueryServiceImpl implements QueryService {
                 finalIds.add(s.id());
             }
 
-            lastReturned = eff;          // == MAX_K
+            lastReturned = eff;
             lastCandIds  = finalIds;
             return out;
 
@@ -334,5 +292,13 @@ public final class QueryServiceImpl implements QueryService {
     public boolean wasLastTrueNNSeen() {
         return lastTrueNNSeen;
     }
+
+    public QueryToken deriveToken(QueryToken base, int k) {
+        if (tokenFactory == null) {
+            throw new IllegalStateException("QueryTokenFactory not available");
+        }
+        return tokenFactory.derive(base, k);
+    }
+
 
 }

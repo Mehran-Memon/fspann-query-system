@@ -388,7 +388,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         BitSet[][] qCodes = token.getBitCodes();
         if (qCodes == null) {
             throw new IllegalStateException(
-                    "QueryToken missing bitCodes (MSANNP forbids recomputation)"
+                    "MSANNP violation: QueryToken missing BitSet codes"
             );
         }
 

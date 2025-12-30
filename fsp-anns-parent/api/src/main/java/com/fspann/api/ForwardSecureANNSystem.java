@@ -629,18 +629,13 @@ public class ForwardSecureANNSystem {
 
         logger.info("Running explicit query loop: queries={}, dim={}", queries.size(), dim);
 
-        // --------------------------------------------------
-        // MSANNP RULE: ONE ANN RUN PER QUERY (MAX_K)
-        // --------------------------------------------------
         final int MAX_K = Arrays.stream(K_VARIANTS).max().orElseThrow();
 
         for (int qi = 0; qi < queries.size(); qi++) {
             double[] q = queries.get(qi);
 
-            long t0 = System.nanoTime();
-
             // --------------------------------------------------
-            // 0. Groundtruth NN (for NN-rank logging)
+            // Groundtruth NN (diagnostics only)
             // --------------------------------------------------
             String trueNNId = null;
             if (trustedGT) {
@@ -652,53 +647,36 @@ public class ForwardSecureANNSystem {
             qs.setTrueNearestId(trueNNId);
 
             // --------------------------------------------------
-            // 1. Token creation (ONCE, MAX_K)
+            // Token creation ONCE (codes computed once)
             // --------------------------------------------------
-            QueryToken token = createToken(q, MAX_K, dim);
+            QueryToken baseToken = createToken(q, MAX_K, dim);
 
-            // --------------------------------------------------
-            // 2. ANN search (ONCE)
-            // --------------------------------------------------
-            List<QueryResult> results = qs.search(token);
-
-            // Zero-touch fallback (ONCE)
-            if (results.isEmpty()) {
-                int baseProbes = config.getRuntime().getMaxCandidateFactor();
-                int fallbackProbes = Math.max(baseProbes * 2, 4);
-
-                logger.warn(
-                        "Zero-touch ANN query detected (q={}). Forcing probe widening {} → {}",
-                        qi, baseProbes, fallbackProbes
-                );
-
-                indexService.setProbeOverride(fallbackProbes);
-                results = qs.search(token);
-                indexService.clearProbeOverride();
-            }
-
-            long t1 = System.nanoTime();
-            addQueryTime(t1 - t0);
-
-            // --------------------------------------------------
-            // 3. Touch accounting (ONCE)
-            // --------------------------------------------------
-            Set<String> annTouched = indexService.getLastTouchedIds();
-            if (annTouched != null && !annTouched.isEmpty()) {
-                touchedGlobal.addAll(annTouched);
-            }
-
-            // --------------------------------------------------
-            // 4. Per-K evaluation (PREFIXES ONLY)
-            // --------------------------------------------------
             for (int k : K_VARIANTS) {
 
-                int effK = Math.min(k, results.size());
-                List<QueryResult> prefix =
-                        results.subList(0, effK);
+                QueryToken tokK = qs.deriveToken(baseToken, k);
 
+                long t0 = System.nanoTime();
+                List<QueryResult> results = qs.search(tokK);
+
+                // Zero-touch fallback (per-K, lawful)
+                if (results.isEmpty()) {
+                    int baseProbes = config.getRuntime().getMaxCandidateFactor();
+                    int fallbackProbes = Math.max(baseProbes * 2, 4);
+
+                    indexService.setProbeOverride(fallbackProbes);
+                    results = qs.search(tokK);
+                    indexService.clearProbeOverride();
+                }
+
+                long t1 = System.nanoTime();
+                addQueryTime(t1 - t0);
+
+                // --------------------------------------------------
+                // Metrics (TRUE per-K)
+                // --------------------------------------------------
                 QueryMetrics m = computeMetricsAtK(
                         k,
-                        prefix,
+                        results,
                         qi,
                         q,
                         qs,
@@ -710,8 +688,8 @@ public class ForwardSecureANNSystem {
                 long decryptMs = qs.getLastDecryptNs() / 1_000_000L;
 
                 int tokenBytes =
-                        token.getEncryptedQuery().length +
-                                token.getIv().length;
+                        tokK.getEncryptedQuery().length +
+                                tokK.getIv().length;
 
                 profiler.recordQueryRow(
                         "Q" + qi + "_K" + k,
@@ -728,12 +706,12 @@ public class ForwardSecureANNSystem {
                         qs.getLastCandTotal(),
                         qs.getLastCandKept(),
                         qs.getLastCandDecrypted(),
-                        qs.getLastReturned(),   // NOW ≈ MAX_K
+                        qs.getLastReturned(),
 
                         tokenBytes,
                         dim,
                         k,
-                        MAX_K,
+                        k,          // tokenKBase == k (correct)
                         qi,
 
                         totalFlushed(),
@@ -758,12 +736,9 @@ public class ForwardSecureANNSystem {
 
                 doReencrypt("Q" + qi + "_K" + k, qs);
             }
-
-            if (kAdaptiveProbeEnabled()) {
-                runKAdaptiveProbeOnly(qi, q, dim, qs);
-            }
         }
     }
+
 
     /**
      * Compute evaluation metrics for a single query at a given K.
