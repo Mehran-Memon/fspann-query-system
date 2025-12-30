@@ -170,10 +170,7 @@ public final class QueryServiceImpl implements QueryService {
             // =====================================================
             final int refineLimit = Math.min(
                     candidateIds.size(),
-                    Math.max(
-                            requiredK,
-                            (int) Math.ceil(requiredK * 1.3)   // HARD ratio ceiling
-                    )
+                    (int) Math.ceil(MAX_K * 1.25)
             );
 
             List<QueryScored> scored = new ArrayList<>(refineLimit);
