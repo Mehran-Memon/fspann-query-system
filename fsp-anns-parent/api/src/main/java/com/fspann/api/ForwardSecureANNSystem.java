@@ -805,8 +805,9 @@ public class ForwardSecureANNSystem {
         // ---------- 4. Distance Ratio@K (Peng et al.) ----------
         double distanceRatioAtK = Double.NaN;
 
-        if (baseReader != null) {
+        if (baseReader != null && k >= 20) {
             double ratioSum = 0.0;
+            int used = 0;
             int count = Math.min(k, annIdx.length);
 
             for (int i = 0; i < count; i++) {
@@ -814,9 +815,14 @@ public class ForwardSecureANNSystem {
                 if (dGt <= 0) continue;
                 double dAnn = baseReader.l2(queryVector, annIdx[i]);
                 ratioSum += dAnn / dGt;
+                used++;
             }
-            distanceRatioAtK = ratioSum / count;
+
+            if (used > 0) {
+                distanceRatioAtK = ratioSum / used;
+            }
         }
+
 
         // ---------- 5. Candidate Ratio ----------
         int candidatesExamined = qs.getLastCandTotal();

@@ -51,32 +51,40 @@ public final class Aggregates {
         int count = rows.size();
         int runCount = 0;
 
-        double sumRatio = 0;
-        double sumPrecision = 0;
-        double sumRecall = 0;
-        double sumServer = 0;
-        double sumClient = 0;
-        double sumRun = 0;
-        double sumDecrypt = 0;
+        double sumRatio = 0.0;
+        int ratioCount = 0;
 
-        double sumTokenBytes = 0;
-        double sumWorkUnits = 0;
-
-        double sumCandT = 0;
-        double sumCandK = 0;
-        double sumCandD = 0;
-        double sumRet   = 0;
-
+        double sumPrecision = 0.0;
         int precisionCount = 0;
-        Map<Integer, List<Double>> pAtK = new HashMap<>();
 
+        double sumRecall = 0.0;
         int recallCount = 0;
+
+        double sumServer = 0.0;
+        double sumClient = 0.0;
+        double sumRun = 0.0;
+        double sumDecrypt = 0.0;
+
+        double sumTokenBytes = 0.0;
+        double sumWorkUnits = 0.0;
+
+        double sumCandT = 0.0;
+        double sumCandK = 0.0;
+        double sumCandD = 0.0;
+        double sumRet   = 0.0;
+
+        Map<Integer, List<Double>> pAtK = new HashMap<>();
         Map<Integer, List<Double>> rAtK = new HashMap<>();
 
         for (Profiler.QueryRow r : rows) {
 
-            // ---------------- Core metrics ----------------
-            sumRatio   += nz(r.ratio);
+            // ---------- Ratio (K >= 20 only, NaN already enforced upstream) ----------
+            if (Double.isFinite(r.ratio)) {
+                sumRatio += r.ratio;
+                ratioCount++;
+            }
+
+            // ---------- Timing ----------
             sumServer  += nz(r.serverMs);
             sumClient  += nz(r.clientMs);
             sumDecrypt += nz(r.decryptMs);
@@ -86,38 +94,35 @@ public final class Aggregates {
                 runCount++;
             }
 
+            // ---------- Token / Work ----------
             sumTokenBytes += nz(r.tokenBytes);
-            sumWorkUnits  += r.vectorDim;   // Option-C definition
+            sumWorkUnits  += r.vectorDim;
 
-            // ---------------- Candidate pipeline ----------------
-            if (r.candTotal >= 0)      sumCandT += r.candTotal;
-            if (r.candKept >= 0)       sumCandK += r.candKept;
-            if (r.candDecrypted >= 0)  sumCandD += r.candDecrypted;
-            if (r.candReturned >= 0)   sumRet   += r.candReturned;
+            // ---------- Candidate pipeline ----------
+            if (r.candTotal >= 0)     sumCandT += r.candTotal;
+            if (r.candKept >= 0)      sumCandK += r.candKept;
+            if (r.candDecrypted >= 0) sumCandD += r.candDecrypted;
+            if (r.candReturned >= 0)  sumRet   += r.candReturned;
 
-            // ---------------- Precision@K ----------------
-            double prec = nz(r.precision);
-            if (prec >= 0 && prec <= 1.0) {
-                sumPrecision += prec;
+            // ---------- Precision@K ----------
+            if (r.precision >= 0.0 && r.precision <= 1.0) {
+                sumPrecision += r.precision;
                 precisionCount++;
-
-                if (r.tokenK > 0) {
-                    pAtK.computeIfAbsent(r.tokenK, z -> new ArrayList<>()).add(prec);
+                if (r.tokenK >= 20) {
+                    pAtK.computeIfAbsent(r.tokenK, k -> new ArrayList<>()).add(r.precision);
                 }
             }
 
-            // ---------------- Recall@K ----------------
-            double rec = nz(r.recall);
-            if (rec >= 0 && rec <= 1.0) {
-                sumRecall += rec;
+            // ---------- Recall@K ----------
+            if (r.recall >= 0.0 && r.recall <= 1.0) {
+                sumRecall += r.recall;
                 recallCount++;
-
-                if (r.tokenK > 0) {
-                    rAtK.computeIfAbsent(r.tokenK, z -> new ArrayList<>()).add(rec);
+                if (r.tokenK >= 20) {
+                    rAtK.computeIfAbsent(r.tokenK, k -> new ArrayList<>()).add(r.recall);
                 }
             }
 
-            // ---------------- Re-encryption (clamped) ----------------
+            // ---------- Re-encryption ----------
             if (r.reencCount > 0) {
                 a.reencryptCount += r.reencCount;
                 a.reencryptBytes += Math.max(0, r.reencBytesDelta);
@@ -125,24 +130,25 @@ public final class Aggregates {
             }
         }
 
-        // ---------------- Averages ----------------
-        a.avgRatio       = sumRatio / count;
-        a.avgPrecision   = precisionCount > 0 ? (sumPrecision / precisionCount) : 0.0;
-        a.avgRecall      = recallCount > 0 ? (sumRecall / recallCount) : 0.0;
-        a.avgServerMs    = sumServer / count;
-        a.avgClientMs    = sumClient / count;
-        a.avgRunMs       = runCount > 0 ? (sumRun / runCount) : 0.0;
-        a.avgDecryptMs   = sumDecrypt / count;
+        // ---------- Final averages ----------
+        a.avgRatio      = ratioCount > 0 ? (sumRatio / ratioCount) : 0.0;   // avg_ratio_20_100
+        a.avgPrecision  = precisionCount > 0 ? (sumPrecision / precisionCount) : 0.0;
+        a.avgRecall     = recallCount > 0 ? (sumRecall / recallCount) : 0.0;
 
-        a.avgTokenBytes  = sumTokenBytes / count;
-        a.avgWorkUnits   = sumWorkUnits / count;
+        a.avgServerMs   = sumServer / count;
+        a.avgClientMs   = sumClient / count;
+        a.avgRunMs      = runCount > 0 ? (sumRun / runCount) : 0.0;
+        a.avgDecryptMs  = sumDecrypt / count;
 
-        a.avgCandTotal      = sumCandT / count;
-        a.avgCandKept       = sumCandK / count;
-        a.avgCandDecrypted  = sumCandD / count;
-        a.avgReturned       = sumRet   / count;
+        a.avgTokenBytes = sumTokenBytes / count;
+        a.avgWorkUnits  = sumWorkUnits / count;
 
-        // ---------------- Avg Precision@K by K value ----------------
+        a.avgCandTotal     = sumCandT / count;
+        a.avgCandKept      = sumCandK / count;
+        a.avgCandDecrypted = sumCandD / count;
+        a.avgReturned      = sumRet   / count;
+
+        // ---------- Precision@K ----------
         for (var e : pAtK.entrySet()) {
             a.precisionAtK.put(
                     e.getKey(),
@@ -150,7 +156,7 @@ public final class Aggregates {
             );
         }
 
-        // ---------------- Avg Recall@K by K value ----------------
+        // ---------- Recall@K ----------
         for (var e : rAtK.entrySet()) {
             a.recallAtK.put(
                     e.getKey(),

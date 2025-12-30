@@ -19,7 +19,7 @@ public final class EvaluationSummaryPrinter {
     private static final Logger log = LoggerFactory.getLogger(EvaluationSummaryPrinter.class);
 
     public static final List<Integer> STANDARD_KS =
-            List.of(1, 5, 10, 20, 40, 60, 80, 100);
+            List.of(20, 40, 60, 80, 100);
 
     // ---------------------------------------------------------------------
     // MAIN ENTRY: produces three CSVs
@@ -142,7 +142,7 @@ public final class EvaluationSummaryPrinter {
             if (!exists) {
                 StringBuilder h = new StringBuilder();
                 h.append("dataset,profile,m,lambda,divisions,index_time_ms,");
-                h.append("avg_ratio,avg_precision,avg_recall,avg_server_ms,avg_client_ms,avg_art_ms,avg_decrypt_ms,");
+                h.append("avg_ratio,avg_precision,avg_recall,avg_precision,avg_recall,avg_server_ms,avg_client_ms,avg_art_ms,avg_decrypt_ms,");
                 for (int k : STANDARD_KS) h.append("p_at_").append(k).append(",");
                 for (int k : STANDARD_KS) h.append("r_at_").append(k).append(",");
                 String header = h.substring(0, h.length() - 1);

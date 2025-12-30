@@ -70,76 +70,7 @@ ONLY_DATASET=""
 ONLY_PROFILE=""
 
 # ================= K VARIANTS ==================
-KLIST="1,10,20,40,60,80,100"
-
-# ================= METRIC EXTRACTION =================
-
-extract_metrics() {
-  local csv="$1/profiler_metrics.csv"
-  [[ -f "$csv" ]] || { echo "NA,NA"; return; }
-
-  jshell --execution local <<EOF 2>/dev/null | grep -E '^[0-9]'
-import java.nio.file.*;
-import java.util.*;
-
-var lines = Files.readAllLines(Path.of("$csv"));
-if (lines.size() <= 1) { System.out.println("NA,NA"); System.exit(0); }
-
-var header = lines.get(0).split(",");
-int clientIdx=-1, ratioIdx=-1;
-for (int i=0;i<header.length;i++){
-  if(header[i].equals("clientMs")) clientIdx=i;
-  if(header[i].equals("ratio")) ratioIdx=i;
-}
-
-double art=0, r=0; int n=0;
-for(int i=1;i<lines.size();i++){
-  var p=lines.get(i).split(",");
-  art+=Double.parseDouble(p[clientIdx]);
-  r+=Double.parseDouble(p[ratioIdx]);
-  n++;
-}
-System.out.printf("%.2f,%.4f%n", art/n, r/n);
-EOF
-}
-
-extract_ratio_per_k() {
-  local csv="$1/profiler_metrics.csv"
-  local klist="$2"
-  [[ -f "$csv" ]] || { echo ""; return; }
-
-  jshell --execution local <<EOF 2>/dev/null | grep -E '^[0-9]'
-import java.nio.file.*;
-import java.util.*;
-
-var ks=new TreeSet<Integer>();
-for(var s:"$klist".split(",")) ks.add(Integer.parseInt(s));
-
-var lines=Files.readAllLines(Path.of("$csv"));
-var h=lines.get(0).split(",");
-int kI=-1,rI=-1;
-for(int i=0;i<h.length;i++){ if(h[i].equals("k"))kI=i; if(h[i].equals("ratio"))rI=i;}
-
-var sum=new HashMap<Integer,Double>();
-var cnt=new HashMap<Integer,Integer>();
-for(int k:ks){sum.put(k,0.0);cnt.put(k,0);}
-
-for(int i=1;i<lines.size();i++){
- var p=lines.get(i).split(",");
- int k=Integer.parseInt(p[kI]);
- if(!ks.contains(k))continue;
- sum.put(k,sum.get(k)+Double.parseDouble(p[rI]));
- cnt.put(k,cnt.get(k)+1);
-}
-
-for(int k:ks){
- if(cnt.get(k)==0) System.out.print("NA");
- else System.out.printf("%.4f",sum.get(k)/cnt.get(k));
- System.out.print(",");
-}
-System.out.println();
-EOF
-}
+KLIST="20,40,60,80,100"
 
 # ================= GLOBAL SUMMARY =================
 
@@ -199,12 +130,20 @@ for ds in "${DATASETS[@]}"; do
       "$dim" "$run_dir" "$gt" "$BATCH_SIZE" \
       >"$run_dir/run.log" 2>&1 || exit 1
 
-    metrics="$(extract_metrics "$run_dir/results")"
-    IFS=',' read -r art ratio <<<"$metrics"
-    rk="$(extract_ratio_per_k "$run_dir/results" "$KLIST")"
+    acc="$run_dir/results/accuracy.csv"
+    [[ -f "$acc" ]] || die "Missing accuracy.csv"
 
-    echo "$name,$art,$ratio,$rk" >> "$ds_root/dataset_summary.csv"
-    echo "$ds,$name,$art,$ratio,$rk" >> "$GLOBAL_SUMMARY"
+    row="$(tail -n 1 "$acc")"
+    IFS=',' read -r \
+      dataset profile m lambda divisions index_ms \
+      avg_ratio avg_precision avg_recall \
+      avg_server avg_client avg_art avg_decrypt \
+      p20 p40 p60 p80 p100 \
+      r20 r40 r60 r80 r100 \
+      <<<"$row"
+
+    echo "$name,$avg_art,$avg_ratio,$p20,$p40,$p60,$p80,$p100" >> "$ds_root/dataset_summary.csv"
+    echo "$ds,$name,$avg_art,$avg_ratio,$p20,$p40,$p60,$p80,$p100" >> "$GLOBAL_SUMMARY"
   done
 
   [[ "$ran_any" == true ]] || die "No profile executed for $ds"
