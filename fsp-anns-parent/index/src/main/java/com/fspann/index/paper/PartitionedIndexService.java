@@ -146,9 +146,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
             return;
         }
 
-        logger.info("=".repeat(60));
-        logger.info(">>> INITIALIZING GFunctionRegistry <<<");
-        logger.info("=".repeat(60));
+        logger.info("Initializing GFunctionRegistry");
         logger.info("Sample buffer size: {}", initSampleBuffer.size());
 
         if (initSampleBuffer.size() < MIN_SAMPLE_SIZE) {
@@ -183,9 +181,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
                     pc.getDivisions()
             );
 
-            logger.info("=".repeat(60));
-            logger.info(">>> GFunctionRegistry INITIALIZED SUCCESSFULLY <<<");
-            logger.info("=".repeat(60));
+            logger.info("GFunctionRegistry initialized successfully");
             logger.info("Stats: {}", GFunctionRegistry.getStats());
 
         } catch (Exception e) {
