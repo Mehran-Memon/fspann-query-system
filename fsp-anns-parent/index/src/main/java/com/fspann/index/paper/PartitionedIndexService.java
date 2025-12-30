@@ -387,12 +387,9 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
 
         BitSet[][] qCodes = token.getBitCodes();
         if (qCodes == null) {
-            double[] qvec = cryptoService.decryptQuery(
-                    token.getEncryptedQuery(),
-                    token.getIv(),
-                    keyService.getCurrentVersion().getKey()
+            throw new IllegalStateException(
+                    "QueryToken missing bitCodes (MSANNP forbids recomputation)"
             );
-            qCodes = GFunctionRegistry.codeAllTables(qvec);
         }
 
         int K = token.getTopK();
@@ -406,30 +403,30 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         Set<String> deleted = new HashSet<>(2048);
 
         int rawSeen = 0;
+        int fullBits = cfg.getPaper().getM() * cfg.getPaper().getLambda();
+        int maxRelax = fullBits - 1;
 
-        for (int t = 0; t < tables.length && score.size() < HARD_CAP; t++) {
-            DimensionState S = tables[t];
+        for (int relax = 0; relax <= maxRelax && score.size() < HARD_CAP; relax++) {
+            int prefixLen = fullBits - relax;
 
-            for (int d = 0; d < S.divisions.size() && score.size() < HARD_CAP; d++) {
-                DivisionState div = S.divisions.get(d);
-                BitSet q = qCodes[t][d];
+            for (int t = 0; t < tables.length && score.size() < HARD_CAP; t++) {
+                DimensionState S = tables[t];
 
-                int fullBits = div.prefixPartitions.get(0).prefixLen;
+                for (int d = 0; d < S.divisions.size() && score.size() < HARD_CAP; d++) {
+                    DivisionState div = S.divisions.get(d);
+                    BitSet q = qCodes[t][d];
 
-                for (PrefixPartitioner.Partition p : div.prefixPartitions) {
-
-                    int relax = fullBits - p.prefixLen;
-                    if (relax > cfg.getRuntime().getMaxRelaxationDepth()) break;
+                    // Find the ONE partition matching this prefixLen
+                    PrefixPartitioner.Partition part = div.prefixPartitions
+                            .get(fullBits - prefixLen); // index aligned with build()
 
                     PrefixPartitioner.PrefixKey key =
-                            new PrefixPartitioner.PrefixKey(q, p.prefixLen);
+                            new PrefixPartitioner.PrefixKey(q, prefixLen);
 
-                    List<String> ids = p.buckets.get(key);
+                    List<String> ids = part.buckets.get(key);
                     if (ids == null) continue;
 
                     for (String id : ids) {
-                        rawSeen++;
-
                         if (deleted.contains(id)) continue;
                         if (metadata.isDeleted(id)) {
                             deleted.add(id);
@@ -442,6 +439,8 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
                                         d;
 
                         score.merge(id, weight, Integer::sum);
+                        rawSeen++;
+
                         if (score.size() >= HARD_CAP) break;
                     }
                 }
