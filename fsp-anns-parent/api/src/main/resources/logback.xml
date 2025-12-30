@@ -15,4 +15,8 @@
     <logger name="com.fspann.index.paper.PartitionedIndexService" level="INFO" />
     <logger name="com.fspann.index.paper.GFunctionRegistry" level="INFO" />
     <logger name="com.fspann.query.core.QueryTokenFactory" level="INFO" />
+    <logger name="com.fspann.query.service.QueryServiceImpl" level="INFO" />
+    <logger name="com.fspann.crypto.AesGcmCryptoService" level="INFO" />
+    <logger name="com.fspann.key.KeyRotationServiceImpl" level="INFO" />
+    <logger name="com.fspann.key.KeyManager" level="INFO" />
 </configuration>
