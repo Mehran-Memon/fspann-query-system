@@ -144,7 +144,7 @@ public final class QueryServiceImpl implements QueryService {
                 // -------------------------------
                 // STAGE B — bounded refinement
                 // -------------------------------
-                final int minDecryptFloor = Math.max(2000, 20 * K);
+                final int minDecryptFloor = Math.max(3500, 35 * K);
 
                 final int refineLimit = Math.min(
                         candidateIds.size(),
