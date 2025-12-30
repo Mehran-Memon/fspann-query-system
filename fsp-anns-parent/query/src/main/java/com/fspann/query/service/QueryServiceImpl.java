@@ -124,75 +124,112 @@ public final class QueryServiceImpl implements QueryService {
 
         final long serverStart = System.nanoTime();
 
+        boolean retried = false;
+
         try {
-            // -------------------------------
-            // STAGE A — candidate IDs
-            // -------------------------------
-            List<String> candidateIds = index.lookupCandidateIds(token);
-
-            lastCandTotal = index.getLastRawCandidateCount();
-            lastCandKept  = candidateIds.size();
-
-            if (candidateIds.isEmpty()) return Collections.emptyList();
-
             final int K = token.getTopK();
 
-            // -------------------------------
-            // STAGE B — bounded refinement
-            // -------------------------------
-            final int refineLimit = Math.min(
-                    candidateIds.size(),
-                    Math.max(
-                            K,
-                            (int) Math.ceil(K * cfg.getStabilization().getMinCandidatesRatio())
-                    )
-            );
+            while (true) {
 
-            List<QueryScored> scored = new ArrayList<>(refineLimit);
-            long decryptStart = System.nanoTime();
+                // -------------------------------
+                // STAGE A — candidate IDs
+                // -------------------------------
+                List<String> candidateIds = index.lookupCandidateIds(token);
 
-            for (int i = 0; i < refineLimit; i++) {
-                String id = candidateIds.get(i);
-                try {
-                    EncryptedPoint ep = index.loadPointIfActive(id);
-                    if (ep == null) continue;
+                lastCandTotal = index.getLastRawCandidateCount();
+                lastCandKept  = candidateIds.size();
 
-                    KeyVersion kvp = keyService.getVersion(ep.getKeyVersion());
-                    double[] v = cryptoService.decryptFromPoint(ep, kvp.getKey());
-                    if (!isValid(v)) continue;
+                if (candidateIds.isEmpty()) return Collections.emptyList();
 
-                    scored.add(new QueryScored(id, l2(qVec, v)));
-                    touchedThisSession.add(id);
+                // -------------------------------
+                // STAGE B — bounded refinement
+                // -------------------------------
+                final int minDecryptFloor = Math.max(2000, 20 * K);
 
-                } catch (Exception ignore) {}
+                final int refineLimit = Math.min(
+                        candidateIds.size(),
+                        Math.max(
+                                minDecryptFloor,
+                                Math.max(
+                                        K,
+                                        (int) Math.ceil(
+                                                K * cfg.getStabilization().getMinCandidatesRatio()
+                                        )
+                                )
+                        )
+                );
+
+                List<QueryScored> scored = new ArrayList<>(refineLimit);
+                long decryptStart = System.nanoTime();
+
+                for (int i = 0; i < refineLimit; i++) {
+                    String id = candidateIds.get(i);
+                    try {
+                        EncryptedPoint ep = index.loadPointIfActive(id);
+                        if (ep == null) continue;
+
+                        KeyVersion kvp = keyService.getVersion(ep.getKeyVersion());
+                        double[] v = cryptoService.decryptFromPoint(ep, kvp.getKey());
+                        if (!isValid(v)) continue;
+
+                        scored.add(new QueryScored(id, l2(qVec, v)));
+                        touchedThisSession.add(id);
+
+                    } catch (Exception ignore) {}
+                }
+
+                lastDecryptNs = System.nanoTime() - decryptStart;
+                lastCandDecrypted = scored.size();
+
+                if (scored.isEmpty()) return Collections.emptyList();
+
+                // -------------------------------
+                // STAGE C — rank & return
+                // -------------------------------
+                scored.sort(Comparator.comparingDouble(QueryScored::dist));
+
+                int eff = K;
+                if (scored.size() < K) {
+                    logger.warn(
+                            "Returned <K results: returned={} requested={}",
+                            scored.size(), K
+                    );
+                    eff = scored.size();
+                }
+
+                List<QueryResult> out = new ArrayList<>(eff);
+                LinkedHashSet<String> finalIds = new LinkedHashSet<>(eff);
+
+                for (int i = 0; i < eff; i++) {
+                    QueryScored s = scored.get(i);
+                    out.add(new QueryResult(s.id(), s.dist()));
+                    finalIds.add(s.id());
+                }
+
+                lastReturned = eff;
+                lastCandIds  = finalIds;
+
+                // -------------------------------
+                // PATCH 3 — adaptive retry (ONCE)
+                // -------------------------------
+                if (!retried && needRetry(K)) {
+                    retried = true;
+
+                    logger.debug(
+                            "Adaptive retry triggered: returned={}, decrypted={}, K={}",
+                            lastReturned, lastCandDecrypted, K
+                    );
+
+                    index.setProbeOverride(2);   // widen search
+                    continue;                    // retry whole A–C once
+                }
+
+                return out;
             }
-
-            lastDecryptNs = System.nanoTime() - decryptStart;
-            lastCandDecrypted = scored.size();
-
-            if (scored.isEmpty()) return Collections.emptyList();
-
-            // -------------------------------
-            // STAGE C — rank & return
-            // -------------------------------
-            scored.sort(Comparator.comparingDouble(QueryScored::dist));
-
-            int eff = Math.min(K, scored.size());
-
-            List<QueryResult> out = new ArrayList<>(eff);
-            LinkedHashSet<String> finalIds = new LinkedHashSet<>(eff);
-
-            for (int i = 0; i < eff; i++) {
-                QueryScored s = scored.get(i);
-                out.add(new QueryResult(s.id(), s.dist()));
-                finalIds.add(s.id());
-            }
-
-            lastReturned = eff;
-            lastCandIds  = finalIds;
-            return out;
 
         } finally {
+            index.clearProbeOverride();  // CRITICAL: always reset
+
             lastServerNs = System.nanoTime() - serverStart;
             lastClientNs = System.nanoTime() - clientStart;
 
@@ -273,7 +310,6 @@ public final class QueryServiceImpl implements QueryService {
     public void setTrueNearestId(String id) {
         this.trueNearestId = id;
     }
-
     public long getLastQueryDurationNs() { return lastServerNs; }
     public long getLastClientDurationNs() { return lastClientNs; }
     public long getLastDecryptNs() { return lastDecryptNs; }
@@ -293,7 +329,12 @@ public final class QueryServiceImpl implements QueryService {
     public boolean wasLastTrueNNSeen() {
         return lastTrueNNSeen;
     }
-
+    private boolean needRetry(int K) {
+        // retry if we failed to return K
+        // OR refinement was too shallow to be reliable
+        return lastReturned < K
+                || lastCandDecrypted < (10 * K);
+    }
     public QueryToken deriveToken(QueryToken base, int k) {
         if (tokenFactory == null) {
             throw new IllegalStateException("QueryTokenFactory not available");

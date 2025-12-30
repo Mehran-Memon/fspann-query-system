@@ -390,7 +390,11 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
 
         int K = token.getTopK();
         int requiredK = Math.max(K, cfg.getEval().getMaxK());
-        int HARD_CAP = cfg.getRuntime().getMaxGlobalCandidates();
+        int HARD_CAP =
+                Math.max(
+                        cfg.getRuntime().getMaxGlobalCandidates(),
+                        50 * K
+                );
 
 
         Map<String, Integer> score = new HashMap<>(HARD_CAP);
