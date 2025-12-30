@@ -17,12 +17,12 @@
   "stabilization": {
     "enabled": true,
     "alpha": 0.02,
-    "minCandidatesRatio": 1.35
+    "minCandidatesRatio": 1.20
   },
 
   "runtime": {
     "precisionMode": false,
-    "refinementLimit": 4000,
+    "refinementLimit": 2500,
     "maxCandidateFactor": 3,
     "maxRelaxationDepth": 4
   },
