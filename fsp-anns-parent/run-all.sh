@@ -75,7 +75,7 @@ KLIST="20,40,60,80,100"
 # ================= GLOBAL SUMMARY =================
 
 GLOBAL_SUMMARY="$OUT_ROOT/global_summary.csv"
-echo "dataset,profile,ART_ms,AvgRatio,ratio@1,ratio@5,ratio@10,ratio@20,ratio@40,ratio@60,ratio@80,ratio@100" \
+echo "dataset,profile,ART_ms,AvgRatio,ratio@20,ratio@40,ratio@60,ratio@80,ratio@100" \
   > "$GLOBAL_SUMMARY"
 
 # ================= MAIN LOOP ======================
@@ -84,6 +84,7 @@ DATASETS=(SIFT1M glove-100 RedCaps)
 [[ -n "$ONLY_DATASET" ]] && DATASETS=("$ONLY_DATASET")
 
 for ds in "${DATASETS[@]}"; do
+  echo "DATASET START: $ds"
   cfg="${CFG[$ds]}"
   dim="${DIM[$ds]}"
   base="${BASE[$ds]}"
@@ -94,7 +95,7 @@ for ds in "${DATASETS[@]}"; do
 
   ds_root="$OUT_ROOT/$ds"
   mkdir -p "$ds_root"
-  echo "profile,ART_ms,AvgRatio,ratio@1,ratio@5,ratio@10,ratio@20,ratio@40,ratio@60,ratio@80,ratio@100" \
+  echo "profile,ART_ms,AvgRatio,ratio@20,ratio@40,ratio@60,ratio@80,ratio@100" \
     > "$ds_root/dataset_summary.csv"
 
   PROFILE_COUNT="$(jq '.profiles | length' "$cfg")"
@@ -125,10 +126,21 @@ for ds in "${DATASETS[@]}"; do
 
     echo "$final_cfg" > "$run_dir/config.json"
 
+    echo "RUNNING PROFILE: $ds | $name"
+    echo "Config  : $run_dir/config.json"
+    echo "Base    : $base"
+    echo "Query   : $query"
+    echo "GT      : $gt"
+
+    start_ts=$(date +%s)
+
     java "${JVM_ARGS[@]}" -jar "$JAR" \
       "$run_dir/config.json" "$base" "$query" "$run_dir/keys.blob" \
       "$dim" "$run_dir" "$gt" "$BATCH_SIZE" \
       >"$run_dir/run.log" 2>&1 || exit 1
+
+    end_ts=$(date +%s)
+    echo "COMPLETED: $ds | $name | runtime=$((end_ts - start_ts))s"
 
     acc="$run_dir/results/accuracy.csv"
     [[ -f "$acc" ]] || die "Missing accuracy.csv"
