@@ -78,4 +78,16 @@ public interface KeyLifeCycleService {
     default void trackReencryption(String vectorId, int oldVersion, int newVersion) {
         // Default: no-op (for implementations that don't support tracking)
     }
-}
+
+    /**
+     * Forces an immediate key version bump WITHOUT re-encryption.
+     * Used for controlled experiments (e.g., post-query selective migration).
+     *
+     * @return true if rotation occurred
+     */
+    default boolean forceRotateNow() {
+        rotateIfNeeded();
+        return false;
+    }
+
+    }

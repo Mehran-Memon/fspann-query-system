@@ -19,6 +19,8 @@ JVM_ARGS=(
   "-Xmx24g"
   "-Dfile.encoding=UTF-8"
   "-Dreenc.mode=end"
+  #"-Dreenc.fullMigration=true"
+
 )
 
 # -------------------- SAFETY -------------------
@@ -142,17 +144,17 @@ for ds in "${DATASETS[@]}"; do
     end_ts=$(date +%s)
     echo "COMPLETED: $ds | $name | runtime=$((end_ts - start_ts))s"
 
-    acc="$run_dir/results/accuracy.csv"
-    [[ -f "$acc" ]] || die "Missing accuracy.csv"
+    acc="$run_dir/results/summary.csv"
+    [[ -f "$acc" ]] || die "Missing summary.csv"
 
     row="$(tail -n 1 "$acc")"
     IFS=',' read -r \
       dataset profile m lambda divisions index_ms \
-      avg_ratio avg_precision avg_recall \
-      avg_server avg_client avg_art avg_decrypt \
+      avg_ratio avg_server avg_client avg_art avg_decrypt \
       p20 p40 p60 p80 p100 \
       r20 r40 r60 r80 r100 \
-      <<<"$row"
+    <<<"$row"
+
 
     echo "$name,$avg_art,$avg_ratio,$p20,$p40,$p60,$p80,$p100" >> "$ds_root/dataset_summary.csv"
     echo "$ds,$name,$avg_art,$avg_ratio,$p20,$p40,$p60,$p80,$p100" >> "$GLOBAL_SUMMARY"

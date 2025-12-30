@@ -298,6 +298,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
     }
 
     /** Force a single bump now (no re-encryption). Returns true if rotated. */
+    @Override
     public synchronized boolean forceRotateNow() {
         rotateKeyOnly();
         return true;
@@ -421,6 +422,29 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
             tracker.trackReencryption(vectorId, oldVersion, newVersion);
         }
     }
+
+    /**
+     * Diagnostic-only: how many vectors still use a given key version.
+     * Used to prove migration safety (no data loss).
+     *
+     * @param version key version to check
+     * @return number of vectors still encrypted under this version
+     */
+    public int migrationRemaining(int version) {
+        try {
+            if (metadataManager == null) {
+                logger.warn("migrationRemaining skipped: metadataManager is null");
+                return -1;
+            }
+
+            return metadataManager.countWithVersion(version);
+
+        } catch (Exception e) {
+            logger.error("migrationRemaining({}) failed", version, e);
+            return -1;
+        }
+    }
+
 
     public KeyManager getKeyManager() {
         return this.keyManager;

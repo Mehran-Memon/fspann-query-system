@@ -13,9 +13,6 @@ public class SelectiveReencCoordinator {
     private final KeyLifeCycleService keys;
     private final ReencryptionTracker tracker;
     private final MeterRegistry meters;
-    private final int batchSize = Integer.getInteger("reenc.batchSize", 2000);
-    private final int minTouched = Integer.getInteger("reenc.minTouched", 1 );
-
     private final Path resultsDir;
     private final StorageSizer sizer;
     private final AtomicLong cumulativeUnique = new AtomicLong();
@@ -31,44 +28,63 @@ public class SelectiveReencCoordinator {
      * Execute selective re-encryption for a known target version.
      * Called by ForwardSecureANNSystem after forced rotation and before finalizeRotation().
      */
-    public void runOnceWithVersion(int targetVer) {
-        Set<String> ids = tracker.drainAll();
-        inc("reenc.touched.unique", ids.size());
+    private ReencryptReport runSelective(
+            int targetVer,
+            Set<String> ids
+    ) {
+        long beforeBytes = bytesOnDisk();
 
-        long before = bytesOnDisk();
-        if (ids.isEmpty()) {
-            writeSummary(0, 0, 0, 0L, before, targetVer);
-            return;
+        if (ids == null || ids.isEmpty()) {
+            writeSummary(0, 0, 0, 0L, beforeBytes, targetVer);
+            return new ReencryptReport(0, 0, 0L, 0L, beforeBytes);
         }
 
         int reenc = 0;
-        int sameVer = 0;
+        int alreadyCurrent = 0;
+        long timeMs = 0L;
+        long afterBytes = beforeBytes;
 
         if (keys instanceof SelectiveReencryptor capable) {
-            ReencryptReport rep = capable.reencryptTouched(ids, targetVer, sizer);
+            long t0 = System.currentTimeMillis();
+            ReencryptReport rep =
+                    capable.reencryptTouched(ids, targetVer, sizer);
+            long t1 = System.currentTimeMillis();
 
-            reenc   = rep.reencryptedCount();
-            sameVer = Math.max(0, ids.size() - reenc);
+            reenc = rep.reencryptedCount();
+            alreadyCurrent = Math.max(0, ids.size() - reenc);
+            timeMs = (t1 - t0);
+            afterBytes = rep.bytesAfter();
 
-            inc("reenc.done.reencrypted",        reenc);
-            inc("reenc.done.skipped.sameVersion", sameVer);
-            inc("reenc.run.count",               1);
+            inc("reenc.done.reencrypted", reenc);
+            inc("reenc.done.skipped.sameVersion", alreadyCurrent);
+            inc("reenc.run.count", 1);
 
-            writeSummary(
-                    ids.size(),
-                    reenc,
-                    sameVer,
-                    rep.timeMs(),
-                    rep.bytesAfter(),
-                    targetVer
-            );
-
-        } else {
-            // Should never occur in the ideal system
-            writeSummary(ids.size(), 0, ids.size(), 0L, before, targetVer);
         }
+
+        writeSummary(
+                ids.size(),
+                reenc,
+                alreadyCurrent,
+                timeMs,
+                afterBytes,
+                targetVer
+        );
+
+        return new ReencryptReport(
+                ids.size(),
+                reenc,
+                timeMs,
+                afterBytes - beforeBytes,
+                afterBytes
+        );
     }
 
+    public ReencryptReport runOnceWithVersion(
+            int targetVersion,
+            Set<String> idsToReencrypt
+    ) {
+        return runSelective(targetVersion, idsToReencrypt);
+    }
 
     private long bytesOnDisk() { return (sizer != null ? sizer.bytesOnDisk() : 0L); }
 

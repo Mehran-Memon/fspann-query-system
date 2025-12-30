@@ -73,6 +73,7 @@ public class ForwardSecureANNSystem {
     enum RatioSource {AUTO, GT, BASE}
     private final BackgroundReencryptionScheduler backgroundReencryptor;
     private final SystemConfig.PaperConfig paper;
+    private boolean forcedRotationDone = false;
 
     // Optional: use sharded metadata for large-scale deployments
     private final boolean useShardedMetadata = Boolean.parseBoolean(
@@ -729,7 +730,9 @@ public class ForwardSecureANNSystem {
                 );
             }
 
-            doReencrypt("Q" + qi, qs);
+// DISABLED: re-encryption must happen ONLY once after all queries
+// doReencrypt("Q" + qi, qs);
+
         }
     }
 
@@ -1382,35 +1385,6 @@ public class ForwardSecureANNSystem {
         }
     }
 
-    /**
-     * End-of-run re-encryption over the union of touched IDs.
-     */
-    /**
-     * Final phase of key rotation: delete all keys older than the target version.
-     * This must be called ONLY after complete re-encryption.
-     */
-    private void finalizeRotation(int targetVersion) {
-        if (!(keyService instanceof KeyRotationServiceImpl kr)) return;
-
-        try {
-            var kmGetter = kr.getClass().getDeclaredMethod("getKeyManager");
-            kmGetter.setAccessible(true);
-            Object kmObj = kmGetter.invoke(kr);
-            if (!(kmObj instanceof com.fspann.key.KeyManager km)) {
-                logger.error("finalizeRotation: keyManager unavailable");
-                return;
-            }
-
-            // SAFELY delete all keys older than the target version
-            km.deleteKeysOlderThan(targetVersion);
-            logger.info("Key rotation finalized: deleted all keys older than v{}", targetVersion);
-
-        } catch (Exception e) {
-            logger.error("finalizeRotation(v{}) failed", targetVersion, e);
-        }
-    }
-
-
     public PartitionedIndexService getIndexService() {
         return this.indexService;
     }
@@ -1473,6 +1447,24 @@ public class ForwardSecureANNSystem {
             this.cumulativeUnique = cumulativeUnique;
             this.rep = rep;
         }
+    }
+
+    private void forceRotateOnceAfterQueries(String reason) {
+        if (forcedRotationDone) return;
+
+        int before = keyService.getCurrentVersion().getVersion();
+
+        // HARD rotation, independent of policy
+        keyService.forceRotateNow();
+
+        int after = keyService.getCurrentVersion().getVersion();
+
+        logger.info(
+                "FORCED KEY ROTATION: v{} → v{} ({})",
+                before, after, reason
+        );
+
+        forcedRotationDone = true;
     }
 
     // ====== retrieved IDs auditor ====== //
@@ -1747,13 +1739,11 @@ public class ForwardSecureANNSystem {
             totalQueryTimeNs += Math.max(0L, ns);
         }
     }
-
     /** Façade: expose selective re-encryption hook */
     public ReencOutcome doReencrypt(String label, QueryServiceImpl qs) {
         // SECURITY: re-encrypt ALL ANN-touched candidates (not only returned)
         return maybeReencryptTouched(label, qs);
     }
-
     private void runSelectiveReencryptionIfNeeded() {
         if (!reencEnabled) {
             logger.info("Selective re-encryption disabled");
@@ -1764,16 +1754,61 @@ public class ForwardSecureANNSystem {
             return;
         }
 
-        int touched = reencTracker.uniqueCount();
+        // ------------------------------------------------------------
+        // 1. Force EXACTLY ONE rotation (post-query, per profile)
+        // ------------------------------------------------------------
+        if (!forcedRotationDone) {
+            forceRotateOnceAfterQueries("postQueryProfile");
+        }
+
+        // ------------------------------------------------------------
+        // 2. Drain touched IDs ONCE
+        // ------------------------------------------------------------
+        Set<String> touchedIds = reencTracker.drainTouchedIds();
+        int touched = touchedIds.size();
+
+        logger.info(
+                "Selective re-encryption START | touchedPoints={}",
+                touched
+        );
+
         if (touched == 0) {
-            logger.warn("No candidates touched; skipping selective re-encryption");
+            logger.warn("No touched vectors; skipping selective re-encryption");
             return;
         }
 
-        logger.info("Running selective re-encryption on {} touched points", touched);
-
+        // ------------------------------------------------------------
+        // 3. Selective re-encryption ONLY on touched points
+        // ------------------------------------------------------------
         int targetVer = keyService.getCurrentVersion().getVersion();
-        reencCoordinator.runOnceWithVersion(targetVer);
+
+        long t0 = System.currentTimeMillis();
+        ReencryptReport report =
+                reencCoordinator.runOnceWithVersion(targetVer, touchedIds);
+        long t1 = System.currentTimeMillis();
+
+        logger.info(
+                "Selective re-encryption DONE | touched={} reencrypted={} timeMs={}",
+                touched,
+                report.reencryptedCount(),
+                (t1 - t0)
+        );
+
+        // ------------------------------------------------------------
+        // 4. DO NOT finalize / delete old keys (paper-safe)
+        // ------------------------------------------------------------
+
+        int oldVer = targetVer - 1;
+        int remaining = -1;
+        if (keyService instanceof KeyRotationServiceImpl kr) {
+            remaining = kr.migrationRemaining(oldVer);
+        }
+
+        logger.info(
+                "Migration status | oldVersion={} remainingVectors={}",
+                oldVer, remaining
+        );
+
     }
 
     /** Façade: max-K across auditK and K-variants */
@@ -1806,7 +1841,6 @@ public class ForwardSecureANNSystem {
         }
         return out;
     }
-
     public void flushAll() throws IOException {
         com.fspann.common.EncryptedPointBuffer buf = indexService.getPointBuffer();
         if (buf != null) buf.flushAll();
@@ -2201,6 +2235,12 @@ public class ForwardSecureANNSystem {
 
         // ---- SELECTIVE RE-ENCRYPT ----
         sys.runSelectiveReencryptionIfNeeded();
+
+        // AFTER selective re-encryption (appendix only)
+        if (Boolean.getBoolean("reenc.fullMigration")) {
+            logger.warn("APPENDIX MODE: Running FULL re-encryption migration");
+            keyService.finalizeRotation();   // migrate all remaining old-version points
+        }
 
         // ---- SHUTDOWN ----
         sys.shutdown();

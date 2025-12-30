@@ -12,114 +12,42 @@ import java.util.concurrent.ConcurrentHashMap;
  * Used for selective re-encryption at the end of a query batch.
  * Thread-safe implementation with ConcurrentHashMap.
  */
-public class ReencryptionTracker {
+    public class ReencryptionTracker {
 
-    private static final Logger log = LoggerFactory.getLogger(ReencryptionTracker.class);
+        private static final Logger log = LoggerFactory.getLogger(ReencryptionTracker.class);
 
-    // Track all touched IDs across session
-    private final Set<String> allTouched = ConcurrentHashMap.newKeySet();
+        private final Set<String> allTouched = ConcurrentHashMap.newKeySet();
+        private final Map<Integer, Set<String>> perQuery = new ConcurrentHashMap<>();
+        private volatile int totalTouches = 0;
 
-    // Track touches per query for diagnostics
-    private final Map<Integer, Set<String>> perQuery = new ConcurrentHashMap<>();
-
-    private volatile int totalTouches = 0;
-
-    public ReencryptionTracker() {
-        log.debug("ReencryptionTracker initialized");
-    }
-
-    /**
-     * Record a set of touched vector IDs from a query.
-     * Accumulates into the global touched set.
-     */
-    public void record(Set<String> touchedIds) {
-        if (touchedIds == null || touchedIds.isEmpty()) {
-            return;
+        public void record(Set<String> touchedIds) {
+            if (touchedIds == null || touchedIds.isEmpty()) return;
+            allTouched.addAll(touchedIds);
+            totalTouches += touchedIds.size();
         }
 
-        // Add all to global set
-        allTouched.addAll(touchedIds);
-        totalTouches += touchedIds.size();
-
-        log.debug("Recorded {} touched IDs (total unique: {})",
-                touchedIds.size(), allTouched.size());
-    }
-
-    /**
-     * Record touches for a specific query (for diagnostics).
-     */
-    public void recordQuery(int queryIndex, Set<String> touchedIds) {
-        if (touchedIds == null || touchedIds.isEmpty()) {
-            return;
+        public void recordQuery(int queryIndex, Set<String> touchedIds) {
+            if (touchedIds == null || touchedIds.isEmpty()) return;
+            perQuery.put(queryIndex, new HashSet<>(touchedIds));
+            record(touchedIds);
         }
 
-        perQuery.put(queryIndex, new HashSet<>(touchedIds));
-        record(touchedIds);
-    }
+        public Set<String> drainTouchedIds() {
+            Set<String> out = new HashSet<>(allTouched);
+            allTouched.clear();
+            perQuery.clear();
+            totalTouches = 0;
+            return out;
+        }
 
-    /**
-     * Get all touched IDs accumulated so far.
-     */
-    public Set<String> getTouched() {
-        return new HashSet<>(allTouched);
-    }
+        public int uniqueCount() {
+            return allTouched.size();
+        }
 
-    /**
-     * Drain all touched IDs and clear the tracker.
-     * This is typically called when committing re-encryption.
-     *
-     * @return a new Set containing all touched IDs (copy)
-     */
-    public Set<String> drainAll() {
-        Set<String> result = new HashSet<>(allTouched);
-        clear();
-        return result;
+        @Override
+        public String toString() {
+            return "ReencryptionTracker{unique=" + allTouched.size()
+                    + ", total=" + totalTouches
+                    + ", queries=" + perQuery.size() + "}";
+        }
     }
-
-    /**
-     * Get unique count of touched IDs.
-     */
-    public int uniqueCount() {
-        return allTouched.size();
-    }
-
-    /**
-     * Get total number of individual touches (may have duplicates).
-     */
-    public int totalTouches() {
-        return totalTouches;
-    }
-
-    /**
-     * Clear all recorded touches (typically at start of new session).
-     */
-    public void clear() {
-        allTouched.clear();
-        perQuery.clear();
-        totalTouches = 0;
-        log.debug("ReencryptionTracker cleared");
-    }
-
-    /**
-     * Get touches for a specific query.
-     */
-    public Set<String> getQueryTouches(int queryIndex) {
-        Set<String> touches = perQuery.get(queryIndex);
-        return (touches != null) ? new HashSet<>(touches) : Collections.emptySet();
-    }
-
-    /**
-     * Check if any IDs have been touched.
-     */
-    public boolean hasTouched() {
-        return !allTouched.isEmpty();
-    }
-
-    @Override
-    public String toString() {
-        return String.format(
-                "ReencryptionTracker{unique=%d, total=%d, queries=%d}",
-                allTouched.size(), totalTouches, perQuery.size()
-        );
-    }
-}

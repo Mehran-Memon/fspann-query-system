@@ -685,6 +685,21 @@ public class RocksDBMetadataManager implements AutoCloseable {
     }
 
     /**
+     * Count how many encrypted points are stored with a given key version.
+     * Diagnostic-only, used for migration safety checks.
+     */
+    public int countWithVersion(int keyVersion) throws IOException {
+        int count = 0;
+        for (EncryptedPoint ep : getAllEncryptedPoints()) {
+            if (ep != null && ep.getKeyVersion() == keyVersion) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+
+    /**
      * Get storage metrics tracker for this metadata manager.
      */
     public StorageMetrics getStorageMetrics() {
