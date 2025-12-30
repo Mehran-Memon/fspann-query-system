@@ -80,8 +80,9 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         final int table; // 0..L-1
 
         final List<DivisionState> divisions = new ArrayList<>();
+
         final List<EncryptedPoint> staged = new ArrayList<>();
-        final List<int[]> stagedHashes = new ArrayList<>();
+        final List<BitSet[]> stagedCodes = new ArrayList<>();
 
         DimensionState(int dim, int table) {
             this.dim = dim;
@@ -90,8 +91,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
     }
 
     private static final class DivisionState {
-        List<GreedyPartitioner.SubsetBounds> I = List.of();
-        Map<String, List<String>> tagToIds = new HashMap<>();
+        List<PrefixPartitioner.Partition> prefixPartitions;
     }
 
     private static class PendingVector {
@@ -281,11 +281,18 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
 
         // Stage into ALL tables (ℓ)
         for (DimensionState S : tables) {
-            int[] hashes = GFunctionRegistry.hashForTable(vec, S.table);
+
+            BitSet[] codes = new BitSet[cfg.getPaper().getDivisions()];
+
+            for (int d = 0; d < codes.length; d++) {
+                Coding.GFunction G =
+                        GFunctionRegistry.get(dim, S.table, d);
+                codes[d] = Coding.C(vec, G);
+            }
 
             synchronized (S) {
                 S.staged.add(pt);
-                S.stagedHashes.add(hashes);
+                S.stagedCodes.add(codes);
 
                 if (S.staged.size() >= DEFAULT_BUILD_THRESHOLD) {
                     build(S);
@@ -325,35 +332,34 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
 
         SystemConfig.PaperConfig pc = cfg.getPaper();
         int divisions = pc.getDivisions();
+        int fullBits = pc.getM() * pc.getLambda();
 
         S.divisions.clear();
 
         for (int d = 0; d < divisions; d++) {
-            List<GreedyPartitioner.Item> items =
-                    new ArrayList<>(S.staged.size());
+
+            Map<String, BitSet> idToCode =
+                    new HashMap<>(S.staged.size());
 
             for (int i = 0; i < S.staged.size(); i++) {
-                items.add(new GreedyPartitioner.Item(
+                idToCode.put(
                         S.staged.get(i).getId(),
-                        S.stagedHashes.get(i)[d]
-                ));
+                        S.stagedCodes.get(i)[d]
+                );
             }
 
-            long seedTD = tableSeed(S.table) + d;
-            GreedyPartitioner.BuildResult br =
-                    GreedyPartitioner.build(items, seedTD);
-
             DivisionState div = new DivisionState();
-            div.I = br.indexI;
-            div.tagToIds = br.tagToIds;
+            div.prefixPartitions =
+                    PrefixPartitioner.build(idToCode, fullBits);
+
             S.divisions.add(div);
         }
 
         S.staged.clear();
-        S.stagedHashes.clear();
+        S.stagedCodes.clear();
 
         logger.debug(
-                "Built MSANNP partitions: dim={} table={} divisions={}",
+                "Built MSANNP prefix partitions: dim={} table={} divisions={}",
                 S.dim, S.table, S.divisions.size()
         );
     }
@@ -375,109 +381,82 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         Objects.requireNonNull(token, "token");
         if (!frozen) throw new IllegalStateException("Index not finalized");
 
-        int override = probeOverride.get();
-        int effectiveRelax =
-                (override > 0 ? override : cfg.getRuntime().getMaxRelaxationDepth());
+        int dim = token.getDimension();
+        DimensionState[] tables = dims.get(dim);
+        if (tables == null) return List.of();
 
-        // Decrypt / hash query ONCE
-        int[][] qHashes = token.getHashesByTable();
-        if (qHashes == null) {
+        BitSet[][] qCodes = token.getBitCodes();
+        if (qCodes == null) {
             double[] qvec = cryptoService.decryptQuery(
                     token.getEncryptedQuery(),
                     token.getIv(),
                     keyService.getCurrentVersion().getKey()
             );
-            qHashes = GFunctionRegistry.hashAllTables(qvec);
+            qCodes = GFunctionRegistry.codeAllTables(qvec);
         }
 
-        int dim = token.getDimension();
-        DimensionState[] tables = dims.get(dim);
-        if (tables == null) return List.of();
-
-        final int K = token.getTopK();
-        final int requiredK = Math.max(K, cfg.getEval().getMaxK());
-
-        final int MAX_IDS =
+        int K = token.getTopK();
+        int requiredK = Math.max(K, cfg.getEval().getMaxK());
+        int MAX_IDS =
                 Math.max(cfg.getRuntime().getMaxCandidateFactor() * K, requiredK);
-
-        final int GLOBAL_CAP = cfg.getRuntime().getMaxGlobalCandidates();
-
-        // HARD CAP: ordering-safe, reviewer-safe
-        final int HARD_CAP = Math.min(
-                GLOBAL_CAP,
-                Math.max(MAX_IDS, requiredK * 2)
-        );
-
-        final int L = Math.min(tables.length, qHashes.length);
+        int HARD_CAP =
+                Math.min(cfg.getRuntime().getMaxGlobalCandidates(), MAX_IDS * 2);
 
         Map<String, Integer> score = new HashMap<>(HARD_CAP);
-        Set<String> deletedCache = new HashSet<>(2048);
+        Set<String> deleted = new HashSet<>(2048);
 
         int rawSeen = 0;
 
-        for (int relax = 0; relax <= effectiveRelax && score.size() < HARD_CAP; relax++) {
-            for (int t = 0; t < L && score.size() < HARD_CAP; t++) {
+        for (int t = 0; t < tables.length && score.size() < HARD_CAP; t++) {
+            DimensionState S = tables[t];
 
-                DimensionState S = tables[t];
-                if (S == null || S.divisions.isEmpty()) continue;
+            for (int d = 0; d < S.divisions.size() && score.size() < HARD_CAP; d++) {
+                DivisionState div = S.divisions.get(d);
+                BitSet q = qCodes[t][d];
 
-                int[] qhTable = qHashes[t];
-                int safeDivs = Math.min(S.divisions.size(), qhTable.length);
+                int fullBits = div.prefixPartitions.get(0).prefixLen;
 
-                for (int d = 0; d < safeDivs && score.size() < HARD_CAP; d++) {
-                    DivisionState div = S.divisions.get(d);
-                    int qh = qhTable[d];
+                for (PrefixPartitioner.Partition p : div.prefixPartitions) {
 
-                    for (GreedyPartitioner.SubsetBounds sb : div.I) {
+                    int relax = fullBits - p.prefixLen;
+                    if (relax > cfg.getRuntime().getMaxRelaxationDepth()) break;
 
-                        int dist;
-                        if (qh < sb.lower) dist = sb.lower - qh;
-                        else if (qh > sb.upper) dist = qh - sb.upper;
-                        else dist = 0;
+                    PrefixPartitioner.PrefixKey key =
+                            new PrefixPartitioner.PrefixKey(q, p.prefixLen);
 
-                        if (dist > relax) continue;
+                    List<String> ids = p.buckets.get(key);
+                    if (ids == null) continue;
 
-                        List<String> ids = div.tagToIds.get(sb.tag);
-                        if (ids == null) continue;
+                    for (String id : ids) {
+                        rawSeen++;
 
-                        for (String id : ids) {
-                            rawSeen++;
-
-                            if (deletedCache.contains(id)) continue;
-                            if (metadata.isDeleted(id)) {
-                                deletedCache.add(id);
-                                continue;
-                            }
-
-                            // Strong lexicographic ordering
-                            int weight =
-                                    (dist << 12) +   // dominant
-                                            (t    << 6)  +   // table consistency
-                                            d;               // division locality
-
-                            score.merge(id, weight, Integer::sum);
-
-                            if (score.size() >= HARD_CAP) break;
+                        if (deleted.contains(id)) continue;
+                        if (metadata.isDeleted(id)) {
+                            deleted.add(id);
+                            continue;
                         }
+
+                        int weight =
+                                (relax << 12) +
+                                        (t << 6) +
+                                        d;
+
+                        score.merge(id, weight, Integer::sum);
                         if (score.size() >= HARD_CAP) break;
                     }
                 }
             }
         }
 
-        // Order by accumulated score (lower = better)
         List<Map.Entry<String, Integer>> ordered =
                 new ArrayList<>(score.entrySet());
         ordered.sort(Comparator.comparingInt(Map.Entry::getValue));
 
-        int limit = Math.min(ordered.size(), HARD_CAP);
-
-        List<String> out = new ArrayList<>(limit);
-        for (int i = 0; i < limit; i++) {
+        List<String> out = new ArrayList<>();
+        for (int i = 0; i < Math.min(ordered.size(), HARD_CAP); i++) {
             out.add(ordered.get(i).getKey());
         }
 
-        // Metrics exposure
         lastTouched.set(out.size());
         lastTouchedIds.get().clear();
         lastTouchedIds.get().addAll(out);
@@ -485,8 +464,8 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
 
         if (out.size() < requiredK) {
             logger.warn(
-                    "Recall floor violated: returned={} required={} relaxDepth={}",
-                    out.size(), requiredK, effectiveRelax
+                    "Recall floor violated: returned={} required={}",
+                    out.size(), requiredK
             );
         }
 
@@ -518,12 +497,21 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
 
         DimensionState[] tables = dims.computeIfAbsent(dim, d -> newTableStates(d));
 
+        int divisions = cfg.getPaper().getDivisions();
+
         for (DimensionState S : tables) {
-            int[] hashes = GFunctionRegistry.hashForTable(vec, S.table);
+
+            BitSet[] codes = new BitSet[divisions];
+
+            for (int d = 0; d < divisions; d++) {
+                Coding.GFunction G =
+                        GFunctionRegistry.get(dim, S.table, d);
+                codes[d] = Coding.C(vec, G);
+            }
 
             synchronized (S) {
                 S.staged.add(pt);
-                S.stagedHashes.add(hashes);
+                S.stagedCodes.add(codes);
             }
         }
     }

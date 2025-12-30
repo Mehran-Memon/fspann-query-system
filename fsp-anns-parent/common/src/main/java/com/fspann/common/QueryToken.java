@@ -2,72 +2,88 @@ package com.fspann.common;
 
 import java.io.Serializable;
 import java.util.BitSet;
-import java.util.List;
 import java.util.Objects;
 
 /**
- * Unified query token supporting:
- *  - per-table LSH bucket expansions (legacy multiprobe path)
- *  - per-table precomputed codes (BitSet per division) for partitioned indexing (mSANNP)
+ * QueryToken — MSANNP ONLY (Peng et al.)
+ * =====================================
  *
- * NOTE: This token is encryption-only on the wire:
- *  - It carries IV + encryptedQuery bytes.
- *  - It does NOT carry the plaintext query vector.
+ * This token carries:
+ *  - Encrypted query payload (IV + ciphertext)
+ *  - Precomputed MSANNP bit codes per table/division
+ *
+ * IMPORTANT:
+ * ----------
+ * - NO legacy integer hashes
+ * - NO multiprobe buckets
+ * - Prefix matching ONLY (BitSet-based)
+ *
+ * This enforces correctness and prevents silent recall collapse.
  */
-public class QueryToken implements Serializable {
+public final class QueryToken implements Serializable {
 
-    private final List<List<Integer>> tableBuckets;
-    private final int numTables;
+    // =====================================================
+    // MSANNP Bit Codes: [table][division]
+    // =====================================================
+    private BitSet[][] bitCodes;
 
-    // MSANNP integer hashes
-    private final int[][] hashesByTable;
-
+    // =====================================================
+    // Encrypted query material
+    // =====================================================
     private final byte[] iv;
     private final byte[] encryptedQuery;
+
+    // =====================================================
+    // Query parameters
+    // =====================================================
     private final int topK;
-    private final String encryptionContext;
+    private final int numTables;
     private final int dimension;
     private final int version;
     private final int lambda;
+    private final String encryptionContext;
 
+    // =====================================================
+    // Constructor
+    // =====================================================
     public QueryToken(
-            List<List<Integer>> tableBuckets,
-            int[][] hashesByTable,
+            BitSet[][] bitCodes,
             byte[] iv,
             byte[] encryptedQuery,
             int topK,
             int numTables,
-            String encryptionContext,
             int dimension,
             int version,
-            int lambda
+            int lambda,
+            String encryptionContext
     ) {
-        this.tableBuckets = List.copyOf(Objects.requireNonNull(tableBuckets));
-        this.numTables = Math.max(1, numTables);
-        this.hashesByTable = deepCloneHashes2D(hashesByTable);
+        this.bitCodes = deepClone(bitCodes);
 
-        this.iv = iv.clone();
-        this.encryptedQuery = encryptedQuery.clone();
+        this.iv = Objects.requireNonNull(iv).clone();
+        this.encryptedQuery = Objects.requireNonNull(encryptedQuery).clone();
+
         this.topK = Math.max(1, topK);
-        this.encryptionContext = encryptionContext;
+        this.numTables = Math.max(1, numTables);
         this.dimension = dimension;
         this.version = version;
         this.lambda = lambda;
+        this.encryptionContext = encryptionContext;
     }
 
-    private static int[][] deepCloneHashes2D(int[][] src) {
-        if (src == null) return null;
-        int[][] out = new int[src.length][];
-        for (int t = 0; t < src.length; t++) {
-            out[t] = (src[t] == null) ? null : src[t].clone();
-        }
-        return out;
+    // =====================================================
+    // BitCode access (MSANNP core)
+    // =====================================================
+    public BitSet[][] getBitCodes() {
+        return deepClone(bitCodes);
     }
 
-    public List<List<Integer>> getTableBuckets() {
-        return tableBuckets;
+    public void setBitCodes(BitSet[][] bitCodes) {
+        this.bitCodes = deepClone(bitCodes);
     }
 
+    // =====================================================
+    // Encrypted payload access
+    // =====================================================
     public byte[] getIv() {
         return iv.clone();
     }
@@ -76,16 +92,15 @@ public class QueryToken implements Serializable {
         return encryptedQuery.clone();
     }
 
+    // =====================================================
+    // Metadata / diagnostics
+    // =====================================================
     public int getTopK() {
         return topK;
     }
 
     public int getNumTables() {
         return numTables;
-    }
-
-    public String getEncryptionContext() {
-        return encryptionContext;
     }
 
     public int getDimension() {
@@ -100,7 +115,27 @@ public class QueryToken implements Serializable {
         return lambda;
     }
 
-    public int[][] getHashesByTable() {
-        return hashesByTable;
+    public String getEncryptionContext() {
+        return encryptionContext;
+    }
+
+    // =====================================================
+    // Helpers
+    // =====================================================
+    private static BitSet[][] deepClone(BitSet[][] src) {
+        if (src == null) return null;
+
+        BitSet[][] out = new BitSet[src.length][];
+        for (int i = 0; i < src.length; i++) {
+            if (src[i] == null) {
+                out[i] = null;
+                continue;
+            }
+            out[i] = new BitSet[src[i].length];
+            for (int j = 0; j < src[i].length; j++) {
+                out[i][j] = (src[i][j] == null) ? null : (BitSet) src[i][j].clone();
+            }
+        }
+        return out;
     }
 }

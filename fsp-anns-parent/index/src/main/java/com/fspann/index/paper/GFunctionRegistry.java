@@ -242,6 +242,35 @@ public final class GFunctionRegistry {
         logger.warn("GFunctionRegistry RESET");
     }
 
+    /**
+     * Compute BitSet codes for one table (all divisions).
+     */
+    public static BitSet[] codeForTable(double[] vec, int table) {
+        validateVector(vec);
+
+        BitSet[] out = new BitSet[DIVISIONS];
+        for (int d = 0; d < DIVISIONS; d++) {
+            Coding.GFunction G = get(vec.length, table, d);
+            out[d] = Coding.C(vec, G);
+        }
+        return out;
+    }
+
+    /**
+     * Compute BitSet codes for all tables.
+     * Shape: [table][division]
+     */
+    public static BitSet[][] codeAllTables(double[] vec) {
+        validateVector(vec);
+
+        BitSet[][] out = new BitSet[TABLES][];
+        for (int t = 0; t < TABLES; t++) {
+            out[t] = codeForTable(vec, t);
+        }
+        return out;
+    }
+
+
     // ============================================================
     // UTILITIES
     // ============================================================

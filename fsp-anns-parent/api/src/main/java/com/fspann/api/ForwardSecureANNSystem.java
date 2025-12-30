@@ -361,10 +361,7 @@ public class ForwardSecureANNSystem {
                     new QueryTokenFactory(
                             cryptoService,
                             keyService,
-                            indexService,
-                            config,
-                            paper.getDivisions(),
-                            paper.getTables()
+                            config
                     );
 
             tokenFactories.put(dim, factory);
@@ -1349,28 +1346,19 @@ public class ForwardSecureANNSystem {
 
         StringBuilder sb = new StringBuilder(256);
 
-        // Version + dimension + topK
         sb.append("v").append(token.getVersion())
                 .append(":d").append(token.getDimension())
                 .append(":k").append(token.getTopK());
 
-        // MSANNP integer hashes: [table][division]
-        int[][] hashes = token.getHashesByTable();
-        if (hashes != null && hashes.length > 0) {
-            sb.append(":h");
-            for (int t = 0; t < hashes.length; t++) {
-                int[] row = hashes[t];
-                sb.append("|t").append(t);
-                if (row == null) {
-                    sb.append(":-");
-                    continue;
-                }
-                for (int h : row) {
-                    sb.append(',').append(h);
-                }
+        BitSet[][] codes = token.getBitCodes();
+        sb.append(":c");
+
+        for (int t = 0; t < codes.length; t++) {
+            sb.append("|t").append(t);
+            for (int d = 0; d < codes[t].length; d++) {
+                BitSet bs = codes[t][d];
+                sb.append(':').append(bs != null ? bs.hashCode() : 0);
             }
-        } else {
-            sb.append(":nohash");
         }
 
         return sb.toString();
