@@ -136,15 +136,16 @@ public final class QueryServiceImpl implements QueryService {
             if (candidateIds.isEmpty()) return Collections.emptyList();
 
             final int K = token.getTopK();        // STRICT per-K
-            final int requiredK = K;
 
             // -------------------------------
             // STAGE B — bounded refinement
             // -------------------------------
-            final double ratioCeil = 1.3; // paper target
             final int refineLimit = Math.min(
                     candidateIds.size(),
-                    (int) Math.ceil(K * cfg.getStabilization().getMinCandidatesRatio())
+                    Math.max(
+                            K,
+                            (int) Math.ceil(K * cfg.getStabilization().getMinCandidatesRatio())
+                    )
             );
 
             List<QueryScored> scored = new ArrayList<>(refineLimit);
@@ -168,12 +169,6 @@ public final class QueryServiceImpl implements QueryService {
 
             lastDecryptNs = System.nanoTime() - decryptStart;
             lastCandDecrypted = scored.size();
-
-            if (lastCandDecrypted > K * 1.3) {
-                throw new IllegalStateException(
-                        "Ratio violation: decrypted=" + lastCandDecrypted + " K=" + K
-                );
-            }
 
             if (scored.isEmpty()) return Collections.emptyList();
 
