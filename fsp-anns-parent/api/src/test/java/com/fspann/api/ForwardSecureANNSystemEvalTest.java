@@ -50,16 +50,20 @@ class ForwardSecureANNSystemEvalTest {
 
         List<QueryResult> ann =
                 List.of(new QueryResult("3", 0.0));
+        final int k = 5;
+        final int MAX_K = 100; // or derive from config
 
         QueryMetrics m =
                 sys.computeMetricsAtK(
-                        1,
+                        k,
+                        MAX_K,
                         ann,
                         0,
                         q,
                         qs,
                         gt
                 );
+
 
         assertEquals(1.0, m.precisionAtK(), 1e-12);
         assertEquals(1.0, m.ratioAtK(), 1e-12);
@@ -76,9 +80,13 @@ class ForwardSecureANNSystemEvalTest {
                 new QueryResult("7", 1.3)
         );
 
+        final int k = 5;
+        final int MAX_K = 100; // or derive from config
+
         QueryMetrics m =
                 sys.computeMetricsAtK(
-                        5,
+                        k,
+                        MAX_K,
                         ann,
                         0,
                         q,
@@ -98,15 +106,19 @@ class ForwardSecureANNSystemEvalTest {
         List<QueryResult> ann =
                 List.of(new QueryResult("0", 0.0));
 
+        final int k = 5;
+        final int MAX_K = 100; // or derive from config
+
         assertThrows(
                 IllegalStateException.class,
                 () -> sys.computeMetricsAtK(
-                        1,
+                        k,
+                        MAX_K,
                         ann,
                         0,
                         q,
                         qs,
-                        emptyGT
+                        gt
                 )
         );
     }
@@ -117,10 +129,14 @@ class ForwardSecureANNSystemEvalTest {
         List<QueryResult> ann =
                 List.of(new QueryResult("abc", 0.5));
 
+        final int k = 5;
+        final int MAX_K = 100; // or derive from config
+
         assertThrows(
                 IllegalStateException.class,
                 () -> sys.computeMetricsAtK(
-                        1,
+                        k,
+                        MAX_K,
                         ann,
                         0,
                         q,

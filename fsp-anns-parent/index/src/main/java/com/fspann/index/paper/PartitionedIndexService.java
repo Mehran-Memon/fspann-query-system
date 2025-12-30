@@ -375,7 +375,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
      * 1. Validates that token has codes for all tables
      * 2. Iterates through relaxation levels (0 to lambda)
      * 3. Unions candidates across all tables
-     * 4. Stops when MAX_IDS limit is reached
+     * 4. Stops when HARD_CAP (global safety limit) is reached
      */
     public List<String> lookupCandidateIds(QueryToken token) {
         Objects.requireNonNull(token, "token");
@@ -394,10 +394,8 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
 
         int K = token.getTopK();
         int requiredK = Math.max(K, cfg.getEval().getMaxK());
-        int MAX_IDS =
-                Math.max(cfg.getRuntime().getMaxCandidateFactor() * K, requiredK);
-        int HARD_CAP =
-                Math.min(cfg.getRuntime().getMaxGlobalCandidates(), MAX_IDS * 2);
+        int HARD_CAP = cfg.getRuntime().getMaxGlobalCandidates();
+
 
         Map<String, Integer> score = new HashMap<>(HARD_CAP);
         Set<String> deleted = new HashSet<>(2048);
@@ -406,7 +404,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         int fullBits = cfg.getPaper().getM() * cfg.getPaper().getLambda();
         int maxRelax = fullBits - 1;
 
-        for (int relax = 0; relax <= maxRelax && score.size() < HARD_CAP; relax++) {
+        for (int relax = 0; relax <= maxRelax && score.size() < HARD_CAP; relax++){
             int prefixLen = fullBits - relax;
 
             for (int t = 0; t < tables.length && score.size() < HARD_CAP; t++) {

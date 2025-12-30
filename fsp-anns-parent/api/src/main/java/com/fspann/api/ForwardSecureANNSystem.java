@@ -6,14 +6,12 @@ import com.fspann.crypto.AesGcmCryptoService;
 import com.fspann.crypto.CryptoService;
 import com.fspann.crypto.ReencryptionTracker;
 import com.fspann.crypto.SelectiveReencCoordinator;
-import com.fspann.index.paper.GFunctionRegistry;
 import com.fspann.index.paper.PartitionedIndexService;
 import com.fspann.common.KeyLifeCycleService;
 import com.fspann.key.BackgroundReencryptionScheduler;
 import com.fspann.key.KeyManager;
 import com.fspann.key.KeyRotationPolicy;
 import com.fspann.key.KeyRotationServiceImpl;
-import com.fspann.common.ReencryptReport;
 import com.fspann.loader.DefaultDataLoader;
 import com.fspann.loader.FormatLoader;
 import com.fspann.loader.GroundtruthManager;
@@ -633,9 +631,7 @@ public class ForwardSecureANNSystem {
         for (int qi = 0; qi < queries.size(); qi++) {
             double[] q = queries.get(qi);
 
-            // --------------------------------------------------
-            // Groundtruth NN (diagnostics only)
-            // --------------------------------------------------
+            // ------------------ Groundtruth (diagnostic only) ------------------
             String trueNNId = null;
             if (trustedGT) {
                 int[] gtIds = gt.getGroundtruthIds(qi, 1);
@@ -645,15 +641,12 @@ public class ForwardSecureANNSystem {
             }
             qs.setTrueNearestId(trueNNId);
 
-            // --------------------------------------------------
-            // Token creation ONCE (MAX_K)
-            // --------------------------------------------------
+            // ------------------ Token (ONCE, MAX_K) ------------------
             QueryToken baseToken = createToken(q, MAX_K, dim);
 
             long t0 = System.nanoTime();
             List<QueryResult> fullResults = qs.search(baseToken);
 
-            // Zero-touch fallback (ONCE per query)
             if (fullResults.isEmpty()) {
                 int baseProbes = config.getRuntime().getMaxCandidateFactor();
                 int fallbackProbes = Math.max(baseProbes * 2, 4);
@@ -666,9 +659,7 @@ public class ForwardSecureANNSystem {
             long t1 = System.nanoTime();
             addQueryTime(t1 - t0);
 
-            // --------------------------------------------------
-            // Metrics by truncation (paper-correct)
-            // --------------------------------------------------
+            // ------------------ Metrics (truncate only) ------------------
             for (int k : K_VARIANTS) {
 
                 List<QueryResult> atK =
@@ -678,6 +669,7 @@ public class ForwardSecureANNSystem {
 
                 QueryMetrics m = computeMetricsAtK(
                         k,
+                        MAX_K,
                         atK,
                         qi,
                         q,
@@ -713,7 +705,7 @@ public class ForwardSecureANNSystem {
                         tokenBytes,
                         dim,
                         k,
-                        MAX_K,          // tokenKBase == MAX_K (paper-correct)
+                        MAX_K,
                         qi,
 
                         totalFlushed(),
@@ -737,11 +729,9 @@ public class ForwardSecureANNSystem {
                 );
             }
 
-            // one re-encryption hook per query (semantic only)
             doReencrypt("Q" + qi, qs);
         }
     }
-
 
 
     /**
@@ -764,6 +754,7 @@ public class ForwardSecureANNSystem {
      **/
     QueryMetrics computeMetricsAtK(
             int k,
+            int maxK,
             List<QueryResult> annResults,
             int queryIndex,
             double[] queryVector,
@@ -771,53 +762,54 @@ public class ForwardSecureANNSystem {
             GroundtruthManager gtMgr
     ) {
 
-        // ---------- 1. Ground Truth (MANDATORY) ----------
+        // ---------- Ground Truth ----------
         int[] gt = gtMgr.getGroundtruth(queryIndex, k);
         if (gt == null || gt.length < k) {
-            logger.warn(
-                    "GT missing for query={} K={}, skipping precision/ratio",
-                    queryIndex, k
+            return new QueryMetrics(
+                    Double.NaN,
+                    Double.NaN,
+                    Double.NaN,
+                    qs.getLastCandTotal() / (double) maxK
             );
-            return new QueryMetrics(Double.NaN, Double.NaN,
-                    qs.getLastCandTotal() / (double) k);
         }
 
-        // ---------- 2. Resolve ANN base indices ----------
+        // ---------- Resolve ANN indices ----------
         int upto = Math.min(k, annResults.size());
         int[] annIdx = new int[upto];
-
         for (int i = 0; i < upto; i++) {
             annIdx[i] = resolveBaseIndex(annResults.get(i));
         }
 
-        // ---------- 3. Precision@K (PPANN) ----------
+        // ---------- Recall@K (paper metric) ----------
         Set<Integer> gtSet = new HashSet<>(k);
-        for (int i = 0; i < k; i++) {
-            gtSet.add(gt[i]);
-        }
+        for (int i = 0; i < k; i++) gtSet.add(gt[i]);
 
         int hits = 0;
         for (int i = 0; i < upto; i++) {
             if (gtSet.contains(annIdx[i])) hits++;
         }
 
-        double precisionAtK = hits / (double) k;
+        double recallAtK = hits / (double) k;
+        double precisionAtK = Double.NaN; // NOT used in paper
 
-        // ---------- 3b. Recall@K (PPANN, explicit) ----------
-        double recallAtK = hits / (double) k;   // SAME formula, explicit semantic
-
-        // ---------- 4. Distance Ratio@K (Peng et al.) ----------
+        // ---------- Distance Ratio@K ----------
         double distanceRatioAtK = Double.NaN;
 
         if (baseReader != null && k >= 20) {
             double ratioSum = 0.0;
             int used = 0;
-            int count = Math.min(k, annIdx.length);
 
-            for (int i = 0; i < count; i++) {
-                double dGt = baseReader.l2(queryVector, gt[i]);
+            for (int i = 0; i < upto; i++) {
+                int annId = annIdx[i];
+                int gtId  = gt[i];
+
+                if (annId < 0 || annId >= baseReader.count) continue;
+                if (gtId  < 0 || gtId  >= baseReader.count) continue;
+
+                double dGt = baseReader.l2(queryVector, gtId);
                 if (dGt <= 0) continue;
-                double dAnn = baseReader.l2(queryVector, annIdx[i]);
+
+                double dAnn = baseReader.l2(queryVector, annId);
                 ratioSum += dAnn / dGt;
                 used++;
             }
@@ -827,18 +819,16 @@ public class ForwardSecureANNSystem {
             }
         }
 
-
-        // ---------- 5. Candidate Ratio ----------
+        // ---------- Candidate Ratio (SEARCH COST) ----------
         int candidatesExamined = qs.getLastCandTotal();
-        double candidateRatioAtK = candidatesExamined / (double) k;
+        double candidateRatio = candidatesExamined / (double) maxK;
 
         return new QueryMetrics(
                 distanceRatioAtK,
                 precisionAtK,
                 recallAtK,
-                candidateRatioAtK
+                candidateRatio
         );
-
     }
 
     private int resolveBaseIndex(QueryResult r) {
@@ -2127,20 +2117,6 @@ public class ForwardSecureANNSystem {
 
             sys.finalizeForSearch();
 
-        // ===================== GFUNCTION REGISTRY INIT =====================
-            List<double[]> sampleForG =
-                    sampleBaseVectors(baseVecs, dimension, 50_000);
-
-            GFunctionRegistry.initialize(
-                    sampleForG,
-                    dimension,
-                    cfg.getPaper().getM(),
-                    cfg.getPaper().getLambda(),
-                    cfg.getPaper().getSeed(),
-                    cfg.getPaper().getTables(),
-                    cfg.getPaper().getDivisions()
-            );
-
             GroundtruthManager gt = new GroundtruthManager();
             gt.load(groundtruth);
 
@@ -2179,6 +2155,7 @@ public class ForwardSecureANNSystem {
 
             sys.runQueries(queries, dimension, gt, true);
 
+            sys.runSelectiveReencryptionIfNeeded();
 
             sys.shutdown();
 
