@@ -114,13 +114,12 @@ public class ForwardSecureANNSystem {
     /**
      * Global "touched" accumulator of vector IDs encountered during the run.
      */
-    private final Set<String> touchedGlobal = ConcurrentHashMap.newKeySet();
     private static final int FANOUT_WARN = Integer.getInteger("guard.fanout.warn", 2000);
 
     /**
      * Re-encryption mode:
      *   - "immediate": (legacy) perform re-encryption checks per query
-     *   - "end": (default) accumulate touched IDs and re-encrypt once at the end of the run
+     *   - "end": (default) touched IDs and re-encrypt once at the end of the run
      */
     private final String reencMode = System.getProperty("reenc.mode", "end");
     private static final Object REENC_CSV_LOCK = new Object();
@@ -196,7 +195,7 @@ public class ForwardSecureANNSystem {
 
         this.K_VARIANTS = (config.getEval().kVariants != null && config.getEval().kVariants.length > 0)
                 ? config.getEval().kVariants.clone()
-                : new int[]{1, 5, 10, 20, 40, 60, 80, 100};
+                : new int[]{1, 20, 40, 60, 80, 100};
 
         // selective re-encryption global toggle
         this.reencEnabled = propOr(
@@ -647,36 +646,39 @@ public class ForwardSecureANNSystem {
             qs.setTrueNearestId(trueNNId);
 
             // --------------------------------------------------
-            // Token creation ONCE (codes computed once)
+            // Token creation ONCE (MAX_K)
             // --------------------------------------------------
             QueryToken baseToken = createToken(q, MAX_K, dim);
 
+            long t0 = System.nanoTime();
+            List<QueryResult> fullResults = qs.search(baseToken);
+
+            // Zero-touch fallback (ONCE per query)
+            if (fullResults.isEmpty()) {
+                int baseProbes = config.getRuntime().getMaxCandidateFactor();
+                int fallbackProbes = Math.max(baseProbes * 2, 4);
+
+                indexService.setProbeOverride(fallbackProbes);
+                fullResults = qs.search(baseToken);
+                indexService.clearProbeOverride();
+            }
+
+            long t1 = System.nanoTime();
+            addQueryTime(t1 - t0);
+
+            // --------------------------------------------------
+            // Metrics by truncation (paper-correct)
+            // --------------------------------------------------
             for (int k : K_VARIANTS) {
 
-                QueryToken tokK = qs.deriveToken(baseToken, k);
+                List<QueryResult> atK =
+                        fullResults.isEmpty()
+                                ? Collections.emptyList()
+                                : fullResults.subList(0, Math.min(k, fullResults.size()));
 
-                long t0 = System.nanoTime();
-                List<QueryResult> results = qs.search(tokK);
-
-                // Zero-touch fallback (per-K, lawful)
-                if (results.isEmpty()) {
-                    int baseProbes = config.getRuntime().getMaxCandidateFactor();
-                    int fallbackProbes = Math.max(baseProbes * 2, 4);
-
-                    indexService.setProbeOverride(fallbackProbes);
-                    results = qs.search(tokK);
-                    indexService.clearProbeOverride();
-                }
-
-                long t1 = System.nanoTime();
-                addQueryTime(t1 - t0);
-
-                // --------------------------------------------------
-                // Metrics (TRUE per-K)
-                // --------------------------------------------------
                 QueryMetrics m = computeMetricsAtK(
                         k,
-                        results,
+                        atK,
                         qi,
                         q,
                         qs,
@@ -688,8 +690,8 @@ public class ForwardSecureANNSystem {
                 long decryptMs = qs.getLastDecryptNs() / 1_000_000L;
 
                 int tokenBytes =
-                        tokK.getEncryptedQuery().length +
-                                tokK.getIv().length;
+                        baseToken.getEncryptedQuery().length +
+                                baseToken.getIv().length;
 
                 profiler.recordQueryRow(
                         "Q" + qi + "_K" + k,
@@ -706,12 +708,12 @@ public class ForwardSecureANNSystem {
                         qs.getLastCandTotal(),
                         qs.getLastCandKept(),
                         qs.getLastCandDecrypted(),
-                        qs.getLastReturned(),
+                        atK.size(),
 
                         tokenBytes,
                         dim,
                         k,
-                        k,          // tokenKBase == k (correct)
+                        MAX_K,          // tokenKBase == MAX_K (paper-correct)
                         qi,
 
                         totalFlushed(),
@@ -733,11 +735,13 @@ public class ForwardSecureANNSystem {
                         qs.getLastTrueNNRank(),
                         qs.wasLastTrueNNSeen()
                 );
-
-                doReencrypt("Q" + qi + "_K" + k, qs);
             }
+
+            // one re-encryption hook per query (semantic only)
+            doReencrypt("Q" + qi, qs);
         }
     }
+
 
 
     /**
@@ -1352,7 +1356,6 @@ public class ForwardSecureANNSystem {
         }
     }
 
-    // Per-query hook: accumulate touched IDs; optionally do "immediate" re-encryption if requested.
     private ReencOutcome maybeReencryptTouched(String label, QueryServiceImpl qs) {
         boolean immediate = "immediate".equalsIgnoreCase(System.getProperty("reenc.mode", "end"));
 
@@ -1392,124 +1395,6 @@ public class ForwardSecureANNSystem {
     /**
      * End-of-run re-encryption over the union of touched IDs.
      */
-    private void finalizeReencryptionAtEnd() {
-        boolean enabled = reencEnabled;
-        try {
-            var rc = config.getReencryption();
-            if (rc != null) enabled = enabled && rc.isEnabled();
-        } catch (Throwable ignore) { /* ok */ }
-
-        final List<String> allTouchedUnique = new ArrayList<>(touchedGlobal);
-        final int uniqueCount = allTouchedUnique.size();
-
-        final KeyRotationServiceImpl kr =
-                (keyService instanceof KeyRotationServiceImpl)
-                        ? (KeyRotationServiceImpl) keyService
-                        : null;
-
-        if (!enabled || kr == null) {
-            appendReencCsv(
-                    reencCsv, "SUMMARY",
-                    (keyService != null && keyService.getCurrentVersion() != null)
-                            ? keyService.getCurrentVersion().getVersion()
-                            : -1,
-                    reencMode,
-                    uniqueCount, 0, uniqueCount,
-                    new ReencryptReport(0, 0, 0L, 0L, 0L)
-            );
-            return;
-        }
-
-        if (uniqueCount == 0) {
-            logger.warn(
-                    "No candidates touched for reencryption (mode={}, queries executed={})",
-                    reencMode, totalQueryTimeNs > 0
-            );
-
-            appendReencCsv(
-                    reencCsv, "SUMMARY",
-                    keyService.getCurrentVersion().getVersion(),
-                    reencMode,
-                    0, 0, 0,
-                    new ReencryptReport(0, 0, 0L, 0L, 0L)
-            );
-            return;
-        }
-
-        // ----------------------------
-        // BEGIN RE-ENCRYPTION PIPELINE
-        // ----------------------------
-
-        kr.freezeRotation(true);
-
-        final ReencryptReport rep;
-        final int targetVer;
-
-        try {
-            // 1. New version (NO pruning)
-            kr.forceRotateNow();
-            targetVer = keyService.getCurrentVersion().getVersion();
-
-            // 2. Selective re-encryption
-            StorageSizer sizer = () -> dirSize(pointsPath);
-            rep = kr.reencryptTouched(allTouchedUnique, targetVer, sizer);
-
-            // 3. Log summary
-            appendReencCsv(
-                    reencCsv, "SUMMARY",
-                    targetVer, reencMode,
-                    uniqueCount, 0, uniqueCount,
-                    rep
-            );
-
-            // 4. Finalize deletion of old keys
-            finalizeRotation(targetVer);
-
-        } finally {
-            // 5. Always unfreeze
-            kr.freezeRotation(false);
-        }
-
-        // ----------------------------
-        // BEGIN VERIFICATION BLOCK
-        // ----------------------------
-
-        boolean ok = true;
-        long measuredBytesAfter = dirSize(pointsPath);
-
-        if (rep.reencryptedCount() < 0) ok = false;
-        if (rep.bytesAfter() != measuredBytesAfter) ok = false;
-        if (rep.touchedCount() != uniqueCount) ok = false;
-
-        if (!ok) {
-            try {
-                synchronized (REENC_CSV_LOCK) {
-                    String line = String.format(
-                            Locale.ROOT,
-                            "SUMMARY_CHECK,%d,%s,%d,%d,%d,%d,%d,%d,%d,%d,%d%n",
-                            targetVer,
-                            reencMode,
-                            uniqueCount, 0, uniqueCount,
-                            rep.reencryptedCount(),
-                            tryGetLong(rep, "alreadyCurrentCount"),
-                            tryGetLong(rep, "retriedCount"),
-                            rep.timeMs(),
-                            rep.bytesDelta(),
-                            measuredBytesAfter
-                    );
-                    Files.writeString(
-                            reencCsv,
-                            line,
-                            StandardOpenOption.CREATE,
-                            StandardOpenOption.APPEND
-                    );
-                }
-            } catch (IOException e) {
-                logger.warn("Failed to append SUMMARY_CHECK", e);
-            }
-        }
-    }
-
     /**
      * Final phase of key rotation: delete all keys older than the target version.
      * This must be called ONLY after complete re-encryption.
@@ -1535,24 +1420,6 @@ public class ForwardSecureANNSystem {
         }
     }
 
-    private static void appendReencCsv(Path p, String qid, int ver, String modeStr,
-                                       int touched, int newUnique, int cumulativeUnique,
-                                       ReencryptReport r) {
-        try {
-            long alreadyCur = tryGetLong(r, "alreadyCurrentCount");
-            long retried = tryGetLong(r, "retriedCount");
-            synchronized (REENC_CSV_LOCK) {
-                String line = String.format(Locale.ROOT,
-                        "%s,%d,%s,%d,%d,%d,%d,%d,%d,%d,%d,%d%n",
-                        qid, ver, modeStr, touched, newUnique, cumulativeUnique,
-                        r.reencryptedCount(), alreadyCur, retried, r.timeMs(), r.bytesDelta(), r.bytesAfter());
-                Files.writeString(p, line, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-            }
-        } catch (IOException e) {
-            LoggerFactory.getLogger(ForwardSecureANNSystem.class)
-                    .warn("Failed to append re-encryption CSV for {}", qid, e);
-        }
-    }
 
     public PartitionedIndexService getIndexService() {
         return this.indexService;
@@ -1615,13 +1482,6 @@ public class ForwardSecureANNSystem {
         ReencOutcome(int cumulativeUnique, ReencReport rep) {
             this.cumulativeUnique = cumulativeUnique;
             this.rep = rep;
-        }
-    }
-
-    public void accumulateTouchedIds(Set<String> ids) {
-        if (ids != null && !ids.isEmpty()) {
-            touchedGlobal.addAll(ids);
-            logger.debug("Accumulated {} touched IDs (total now: {})", ids.size(), touchedGlobal.size());
         }
     }
 
@@ -1914,14 +1774,16 @@ public class ForwardSecureANNSystem {
             return;
         }
 
-        int touched = touchedGlobal.size();
+        int touched = reencTracker.uniqueCount();
         if (touched == 0) {
             logger.warn("No candidates touched; skipping selective re-encryption");
             return;
         }
 
         logger.info("Running selective re-encryption on {} touched points", touched);
-        finalizeReencryptionAtEnd();
+
+        int targetVer = keyService.getCurrentVersion().getVersion();
+        reencCoordinator.runOnceWithVersion(targetVer);
     }
 
     /** Façade: max-K across auditK and K-variants */

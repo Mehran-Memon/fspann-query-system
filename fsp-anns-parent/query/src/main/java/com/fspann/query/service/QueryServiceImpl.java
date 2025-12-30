@@ -135,7 +135,7 @@ public final class QueryServiceImpl implements QueryService {
 
             if (candidateIds.isEmpty()) return Collections.emptyList();
 
-            final int K = token.getTopK();        // STRICT per-K
+            final int K = token.getTopK();
 
             // -------------------------------
             // STAGE B — bounded refinement

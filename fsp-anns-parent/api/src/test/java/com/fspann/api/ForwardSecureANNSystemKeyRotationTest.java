@@ -97,12 +97,4 @@ public class ForwardSecureANNSystemKeyRotationTest {
         system.shutdown();
     }
 
-    @Test
-    @DisplayName("Test system accumulates touched IDs")
-    public void testTouchedIdAccumulation() throws Exception {
-        Set<String> touched = new HashSet<>(Arrays.asList("v-1", "v-2", "v-3"));
-        system.accumulateTouchedIds(touched);
-
-        system.shutdown();
-    }
 }

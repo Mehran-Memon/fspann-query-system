@@ -14,7 +14,7 @@ public class SelectiveReencCoordinator {
     private final ReencryptionTracker tracker;
     private final MeterRegistry meters;
     private final int batchSize = Integer.getInteger("reenc.batchSize", 2000);
-    private final int minTouched = Integer.getInteger("reenc.minTouched", 10_000);
+    private final int minTouched = Integer.getInteger("reenc.minTouched", 1 );
 
     private final Path resultsDir;
     private final StorageSizer sizer;
@@ -38,10 +38,6 @@ public class SelectiveReencCoordinator {
         long before = bytesOnDisk();
         if (ids.isEmpty()) {
             writeSummary(0, 0, 0, 0L, before, targetVer);
-            return;
-        }
-        if (ids.size() < minTouched) {
-            writeSummary(ids.size(), 0, 0, 0L, before, targetVer);
             return;
         }
 
