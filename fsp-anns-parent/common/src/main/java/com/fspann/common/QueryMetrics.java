@@ -7,24 +7,24 @@ package com.fspann.common;
  * DEFINITIONS (PAPER-ALIGNED):
  *
  * Primary (used in paper, plots, comparisons):
- *   - candidateRatioAtK : (# refined / distance-evaluated candidates) / K
- *     → This is Peng et al.'s RATIO (search efficiency)
+ *   - distanceRatioAtK : avg(||returned_i - query|| / ||groundtruth_i - query||)
+ *     → This is Peng et al.'s RATIO (result quality)
+ *     → Perfect = 1.0, higher = farther from true neighbors
  *
- * Secondary (diagnostic only, NOT used for comparison):
- *   - distanceRatioAtK  : avg(dist_ann_i / dist_gt_i), i = 1..K
+ * Secondary (diagnostic, measures search efficiency):
+ *   - candidateRatioAtK : (# refined / distance-evaluated candidates) / K
+ *     → Measures search cost (how many vectors decrypted/scored)
+ *     → Lower is more efficient
  *
  * Quality:
- *   - recallAtK         : |GT ∩ ANN| / K
- *
- * NOTE:
- *   precisionAtK is intentionally REMOVED (not used, misleading).
+ *   - recallAtK : |GT ∩ ANN| / K
  */
 public final class QueryMetrics {
 
-    // --- PRIMARY (Peng) ---
+    // --- SECONDARY (search efficiency) ---
     private final double candidateRatioAtK;
 
-    // --- SECONDARY (diagnostic) ---
+    // --- PRIMARY (paper metric - Peng et al.) ---
     private final double distanceRatioAtK;
 
     // --- QUALITY ---
@@ -46,16 +46,18 @@ public final class QueryMetrics {
 
     /**
      * PRIMARY ratio used in the paper (Peng et al.)
-     */
-    public double candidateRatioAtK() {
-        return candidateRatioAtK;
-    }
-
-    /**
-     * Distance quality diagnostic (NOT the paper ratio)
+     * This measures RESULT QUALITY.
      */
     public double distanceRatioAtK() {
         return distanceRatioAtK;
+    }
+
+    /**
+     * SECONDARY: Search efficiency metric.
+     * This measures SEARCH COST (not result quality).
+     */
+    public double candidateRatioAtK() {
+        return candidateRatioAtK;
     }
 
     /**
@@ -69,21 +71,11 @@ public final class QueryMetrics {
     // BACKWARD COMPATIBILITY (DO NOT USE IN NEW CODE)
     // ------------------------------------------------------------------
 
-    /**
-     * @deprecated DO NOT USE.
-     * Kept only so legacy code does not break.
-     * Historically misused to mean "ratio".
-     */
-    @Deprecated
-    public double ratioAtK() {
-        return candidateRatioAtK;
-    }
-
     @Override
     public String toString() {
         return String.format(
-                "QueryMetrics{candidateRatio=%.4f, distanceRatio=%.4f, recall=%.4f}",
-                candidateRatioAtK, distanceRatioAtK, recallAtK
+                "QueryMetrics{distanceRatio=%.4f, candidateRatio=%.4f, recall=%.4f}",
+                distanceRatioAtK, candidateRatioAtK, recallAtK
         );
     }
 }

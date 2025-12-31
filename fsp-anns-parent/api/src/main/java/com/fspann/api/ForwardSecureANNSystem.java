@@ -691,7 +691,8 @@ public class ForwardSecureANNSystem {
                         decryptMs,
                         lastInsertMs(),
 
-                        m.candidateRatioAtK(),
+                        m.distanceRatioAtK(),      // ← PAPER RATIO (quality)
+                        m.candidateRatioAtK(),     // ← SEARCH EFFICIENCY (cost)
                         m.recallAtK(),
 
                         qs.getLastCandTotal(),
@@ -724,7 +725,7 @@ public class ForwardSecureANNSystem {
                         qs.getLastTrueNNRank(),
                         qs.wasLastTrueNNSeen()
                 );
-            }
+          }
 
         }
     }
@@ -831,8 +832,8 @@ public class ForwardSecureANNSystem {
         double candidateRatioAtK = refinedCandidates / (double) k;
 
         return new QueryMetrics(
-                candidateRatioAtK,
-                distanceRatioAtK,
+                refinedCandidates / (double) k,  // ← searchEfficiencyRatio (NOT paper ratio)
+                distanceRatioAtK,                 // ← THIS IS the paper ratio!
                 recallAtK
         );
     }
