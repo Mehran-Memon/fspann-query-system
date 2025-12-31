@@ -8,11 +8,16 @@ import java.util.*;
  */
 public final class Aggregates {
 
-    public double avgCandidateRatio;
+    // PRIMARY (paper metric)
+    public double avgDistanceRatio;         // ← Paper ratio (quality)
+
+    // SECONDARY (search efficiency)
+    public double avgCandidateRatio;        // ← Search cost
+
     public double avgRecall;
     public double avgServerMs;
     public double avgClientMs;
-    public double avgRunMs;             // TRUE ART
+    public double avgRunMs;
     public double avgDecryptMs;
 
     public double avgTokenBytes;
@@ -31,10 +36,10 @@ public final class Aggregates {
     public long spacePointsBytes;
 
     public Map<Integer, Double> recallAtK = new HashMap<>();
+    public Map<Integer, Double> distanceRatioAtK = new HashMap<>();   // ← ADDED
 
     public Aggregates() {}
 
-    /** ART = average runMs (end-to-end), NOT server+client */
     public double getAvgArtMs() {
         return avgRunMs;
     }
@@ -48,8 +53,11 @@ public final class Aggregates {
         int count = rows.size();
         int runCount = 0;
 
-        double sumRatio = 0.0;
-        int ratioCount = 0;
+        double sumDistanceRatio = 0.0;      // ← Paper ratio
+        int distanceRatioCount = 0;
+
+        double sumCandidateRatio = 0.0;     // ← Search efficiency
+        int candidateRatioCount = 0;
 
         double sumRecall = 0.0;
         int recallCount = 0;
@@ -67,15 +75,24 @@ public final class Aggregates {
         double sumCandD = 0.0;
         double sumRet   = 0.0;
 
-        Map<Integer, List<Double>> pAtK = new HashMap<>();
         Map<Integer, List<Double>> rAtK = new HashMap<>();
+        Map<Integer, List<Double>> drAtK = new HashMap<>();  // ← Distance ratio@K
 
         for (Profiler.QueryRow r : rows) {
 
-            // ---------- Ratio (K >= 20 only, NaN already enforced upstream) ----------
+            // ---------- Distance Ratio (PAPER METRIC, K >= 20 only) ----------
+            if (r.tokenK >= 20 && Double.isFinite(r.distanceRatio) && r.distanceRatio > 0) {
+                sumDistanceRatio += r.distanceRatio;
+                distanceRatioCount++;
+
+                drAtK.computeIfAbsent(r.tokenK, k -> new ArrayList<>())
+                        .add(r.distanceRatio);
+            }
+
+            // ---------- Candidate Ratio (SEARCH EFFICIENCY) ----------
             if (Double.isFinite(r.candidateRatio)) {
-                sumRatio += r.candidateRatio;
-                ratioCount++;
+                sumCandidateRatio += r.candidateRatio;
+                candidateRatioCount++;
             }
 
             // ---------- Timing ----------
@@ -116,8 +133,15 @@ public final class Aggregates {
         }
 
         // ---------- Final averages ----------
-        a.avgCandidateRatio      = ratioCount > 0 ? (sumRatio / ratioCount) : 0.0;   // avg_ratio_20_100
-        a.avgRecall     = recallCount > 0 ? (sumRecall / recallCount) : 0.0;
+        a.avgDistanceRatio = distanceRatioCount > 0
+                ? (sumDistanceRatio / distanceRatioCount)
+                : Double.NaN;
+
+        a.avgCandidateRatio = candidateRatioCount > 0
+                ? (sumCandidateRatio / candidateRatioCount)
+                : 0.0;
+
+        a.avgRecall = recallCount > 0 ? (sumRecall / recallCount) : 0.0;
 
         a.avgServerMs   = sumServer / count;
         a.avgClientMs   = sumClient / count;
@@ -137,6 +161,14 @@ public final class Aggregates {
             a.recallAtK.put(
                     e.getKey(),
                     e.getValue().stream().mapToDouble(Double::doubleValue).average().orElse(0.0)
+            );
+        }
+
+        // ---------- Distance Ratio@K (PAPER METRIC) ----------
+        for (var e : drAtK.entrySet()) {
+            a.distanceRatioAtK.put(
+                    e.getKey(),
+                    e.getValue().stream().mapToDouble(Double::doubleValue).average().orElse(Double.NaN)
             );
         }
 

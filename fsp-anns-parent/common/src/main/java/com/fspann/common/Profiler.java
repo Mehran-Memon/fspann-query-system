@@ -4,38 +4,14 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.util.*;
 
-/**
- * Profiler
- *
- * Responsibilities:
- *  - Store per-label timings (ns)
- *  - Store per-query metrics needed by Aggregates
- *  - Backwards compatible with previous Profiler API
- *
- * NOTE:
- *  Aggregation is NOT done here. This class only stores
- *  atomic observations. ForwardSecureANNSystem performs
- *  aggregation and sends Aggregates → EvaluationSummaryPrinter.
- */
 public final class Profiler {
 
-    /* -----------------------------------------------------
-     * Timing buckets: generic label → list<durationNs>
-     * ----------------------------------------------------- */
     private final Map<String, Long> startTimes = new HashMap<>();
     private final Map<String, List<Long>> timings = new LinkedHashMap<>();
-
-    /* -----------------------------------------------------
-     * Per-query unified metrics (one row per query)
-     * ----------------------------------------------------- */
     private final List<QueryRow> queryRows = new ArrayList<>();
-
-    /* Optional: arbitrary multi-column tables (e.g., debug) */
     private final List<String[]> topKRecords = new ArrayList<>();
 
-    /* -----------------------------------------------------
-     * TIMING API
-     * ----------------------------------------------------- */
+    // --- TIMING API (unchanged) ---
 
     public synchronized void start(String label) {
         startTimes.put(label, System.nanoTime());
@@ -66,10 +42,6 @@ public final class Profiler {
         return (v == null) ? Collections.emptyList() : new ArrayList<>(v);
     }
 
-    /* -----------------------------------------------------
-     * RESET
-     * ----------------------------------------------------- */
-
     public synchronized void reset() {
         startTimes.clear();
         timings.clear();
@@ -77,14 +49,14 @@ public final class Profiler {
         topKRecords.clear();
     }
 
-    /* -----------------------------------------------------
-     * PER-QUERY METRIC API  (Option-C)
-     * ----------------------------------------------------- */
+    // --- PER-QUERY METRIC API (UPDATED: added distanceRatio) ---
 
     /**
      * Store all unified query metrics in one structured row.
-     * ForwardSecureANNSystem constructs QueryEvaluationResult
-     * and then calls this method to persist it.
+     *
+     * CRITICAL: Both ratios must be provided:
+     *   - distanceRatio: Paper metric (quality)
+     *   - candidateRatio: Search efficiency (cost)
      */
     public synchronized void recordQueryRow(
             String label,
@@ -93,7 +65,8 @@ public final class Profiler {
             double runMs,
             double decryptMs,
             double insertMs,
-            double candidateRatio,
+            double distanceRatio,      // ← ADDED: Paper ratio (quality)
+            double candidateRatio,      // ← Search efficiency (cost)
             double recall,
             int candTotal,
             int candKept,
@@ -125,6 +98,7 @@ public final class Profiler {
                 runMs,
                 decryptMs,
                 insertMs,
+                distanceRatio,
                 candidateRatio,
                 recall,
                 candTotal,
@@ -152,15 +126,11 @@ public final class Profiler {
         ));
     }
 
-
-    /** Defensive copy of stored rows. */
     public synchronized List<QueryRow> getQueryRows() {
         return new ArrayList<>(queryRows);
     }
 
-    /* -----------------------------------------------------
-     * Top-K debug rows
-     * ----------------------------------------------------- */
+    // --- Top-K debug rows (unchanged) ---
 
     public synchronized void addTopKRecord(String... cols) {
         if (cols != null) topKRecords.add(Arrays.copyOf(cols, cols.length));
@@ -172,31 +142,29 @@ public final class Profiler {
         return out;
     }
 
-    /* -----------------------------------------------------
-     * OPTIONAL CSV export (legacy compatibility)
-     * Still only exports basic trio (server/client/candidateRatio),
-     * full CSV produced by EvaluationSummaryPrinter instead.
-     * ----------------------------------------------------- */
+    // --- CSV export (legacy) ---
 
     public synchronized void exportQueryMetricsCsv(String fp) throws IOException {
         try (FileWriter fw = new FileWriter(fp)) {
-            fw.write("label,serverMs,clientMs,candidate_ratio\n");
+            fw.write("label,serverMs,clientMs,distance_ratio,candidate_ratio\n");
             for (QueryRow qr : queryRows) {
                 fw.write(String.format(Locale.ROOT,
-                        "%s,%.6f,%.6f,%.6f%n",
+                        "%s,%.6f,%.6f,%.6f,%.6f%n",
                         qr.label,
                         qr.serverMs,
                         qr.clientMs,
+                        qr.distanceRatio,
                         qr.candidateRatio));
             }
         }
     }
 
-    public void exportToCSV(String fp) throws IOException { exportQueryMetricsCsv(fp); }
+    public void exportToCSV(String fp) throws IOException {
+        exportQueryMetricsCsv(fp);
+    }
 
-    /* -----------------------------------------------------
-     * QUERY ROW DTO – unify with QueryEvaluationResult
-     * ----------------------------------------------------- */
+    // --- QUERY ROW DTO (UPDATED: split ratios) ---
+
     public static final class QueryRow {
         public final String label;
 
@@ -206,7 +174,8 @@ public final class Profiler {
         public final double decryptMs;
         public final double insertMs;
 
-        public final double candidateRatio;
+        public final double distanceRatio;      // ← Paper ratio (quality)
+        public final double candidateRatio;     // ← Search efficiency
         public final double recall;
 
         public final int candTotal;
@@ -245,9 +214,9 @@ public final class Profiler {
                 double runMs,
                 double decryptMs,
                 double insertMs,
+                double distanceRatio,       // ← ADDED
                 double candidateRatio,
                 double recall,
-
                 int candTotal,
                 int candKept,
                 int candDecrypted,
@@ -279,6 +248,7 @@ public final class Profiler {
             this.decryptMs = decryptMs;
             this.insertMs = insertMs;
 
+            this.distanceRatio = distanceRatio;
             this.candidateRatio = candidateRatio;
             this.recall = recall;
 

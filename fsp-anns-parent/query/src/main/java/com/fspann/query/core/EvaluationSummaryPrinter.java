@@ -6,24 +6,12 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
 
-/**
- * Unified summary + multi-CSV writer for academic analysis.
- *
- * Outputs:
- *   summary.csv   → original schema (kept for backward compatibility)
- *   accuracy.csv  → ratio@K + precision@K + ART splits
- *   cost.csv      → re-encryption, storage, work-units, token bytes
- */
 public final class EvaluationSummaryPrinter {
 
     private static final Logger log = LoggerFactory.getLogger(EvaluationSummaryPrinter.class);
 
-    public static final List<Integer> STANDARD_KS =
-            List.of(20, 40, 60, 80, 100);
+    public static final List<Integer> STANDARD_KS = List.of(20, 40, 60, 80, 100);
 
-    // ---------------------------------------------------------------------
-    // MAIN ENTRY: produces three CSVs
-    // ---------------------------------------------------------------------
     public static void printAndWriteCsv(
             String datasetName,
             String profileName,
@@ -36,14 +24,18 @@ public final class EvaluationSummaryPrinter {
     ) {
         Objects.requireNonNull(agg);
 
-        // HUMAN READABLE PAPER-LINE ------------------------------------------------
+        // HUMAN READABLE PAPER-LINE
         String recallLine = compactRecall(agg.recallAtK, STANDARD_KS);
+        String distRatioLine = compactRecall(agg.distanceRatioAtK, STANDARD_KS);
 
         log.info(String.format(Locale.ROOT,
-                "AvgCandidateRatio=%.4f | Recall@K[%s] | Server=%.2f ms | Client=%.2f ms | ART=%.2f ms | Decrypt=%.2f ms | " +
+                "DistanceRatio=%.4f | CandidateRatio=%.4f | Recall@K[%s] | DistRatio@K[%s] | " +
+                        "Server=%.2f ms | Client=%.2f ms | ART=%.2f ms | Decrypt=%.2f ms | " +
                         "TokenB=%.1f | WorkU=%.1f | Cand{T=%d,K=%d,D=%d,R=%d} | DS=%s | Profile=%s",
+                nz(agg.avgDistanceRatio),
                 nz(agg.avgCandidateRatio),
                 recallLine,
+                distRatioLine,
                 nz(agg.avgServerMs),
                 nz(agg.avgClientMs),
                 nz(agg.getAvgArtMs()),
@@ -69,32 +61,22 @@ public final class EvaluationSummaryPrinter {
                     agg.spaceMetaBytes, agg.spacePointsBytes));
         }
 
-        // ----------
-        // Write summary.csv (legacy)
-        // ----------
         if (summaryCsvPath != null) {
             writeSummaryCsv(datasetName, profileName, m, lambda, divisions,
                     totalIndexTimeMs, agg, summaryCsvPath);
         }
 
-        // ----------
-        // Write accuracy.csv
-        // ----------
         Path accCsv = summaryCsvPath.resolveSibling("accuracy.csv");
         writeAccuracyCsv(datasetName, profileName, m, lambda, divisions,
                 totalIndexTimeMs, agg, accCsv);
 
-        // ----------
-        // Write cost.csv
-        // ----------
         Path costCsv = summaryCsvPath.resolveSibling("cost.csv");
         writeCostCsv(datasetName, profileName, m, lambda, divisions,
                 totalIndexTimeMs, agg, costCsv);
     }
 
-    // ---------------------------------------------------------------------
-    // SUMMARY.CSV (old schema, backward compatible + avgPrecision)
-    // ---------------------------------------------------------------------
+    // --- SUMMARY.CSV (UPDATED: both ratios) ---
+
     private static void writeSummaryCsv(
             String dataset,
             String profile,
@@ -121,9 +103,8 @@ public final class EvaluationSummaryPrinter {
         }
     }
 
-    // ---------------------------------------------------------------------
-    // ACCURACY.CSV (ratio + precision + ART)
-    // ---------------------------------------------------------------------
+    // --- ACCURACY.CSV (UPDATED: both ratios) ---
+
     private static void writeAccuracyCsv(
             String dataset,
             String profile,
@@ -141,8 +122,10 @@ public final class EvaluationSummaryPrinter {
             if (!exists) {
                 StringBuilder h = new StringBuilder();
                 h.append("dataset,profile,m,lambda,divisions,index_time_ms,");
-                h.append("avg_candidate_ratio,avg_recall,avg_server_ms,avg_client_ms,avg_art_ms,avg_decrypt_ms,");
+                h.append("avg_distance_ratio,avg_candidate_ratio,avg_recall,");
+                h.append("avg_server_ms,avg_client_ms,avg_art_ms,avg_decrypt_ms,");
                 for (int k : STANDARD_KS) h.append("recall_at_").append(k).append(",");
+                for (int k : STANDARD_KS) h.append("distance_ratio_at_").append(k).append(",");
                 String header = h.substring(0, h.length() - 1);
                 Files.write(out, (header + "\n").getBytes(StandardCharsets.UTF_8),
                         StandardOpenOption.CREATE, StandardOpenOption.APPEND);
@@ -155,16 +138,22 @@ public final class EvaluationSummaryPrinter {
             sb.append(lambda).append(",");
             sb.append(divisions).append(",");
             sb.append(indexMs).append(",");
+
+            sb.append(fmt(nz(a.avgDistanceRatio))).append(",");
             sb.append(fmt(nz(a.avgCandidateRatio))).append(",");
             sb.append(fmt(nz(a.avgRecall))).append(",");
+
             sb.append(fmt(nz(a.avgServerMs))).append(",");
             sb.append(fmt(nz(a.avgClientMs))).append(",");
             sb.append(fmt(nz(a.getAvgArtMs()))).append(",");
             sb.append(fmt(nz(a.avgDecryptMs))).append(",");
 
-
             for (int k : STANDARD_KS) {
                 sb.append(fmt(a.recallAtK.getOrDefault(k, Double.NaN))).append(",");
+            }
+
+            for (int k : STANDARD_KS) {
+                sb.append(fmt(a.distanceRatioAtK.getOrDefault(k, Double.NaN))).append(",");
             }
 
             String row = sb.substring(0, sb.length() - 1);
@@ -176,9 +165,8 @@ public final class EvaluationSummaryPrinter {
         }
     }
 
-    // ---------------------------------------------------------------------
-    // COST.CSV (re-encryption cost + storage + token bytes + work units)
-    // ---------------------------------------------------------------------
+    // --- COST.CSV (unchanged) ---
+
     private static void writeCostCsv(
             String dataset,
             String profile,
@@ -229,16 +217,17 @@ public final class EvaluationSummaryPrinter {
         }
     }
 
-    // ---------------------------------------------------------------------
-    // LEGACY SUMMARY HEADER (with avgPrecision added)
-    // ---------------------------------------------------------------------
+    // --- CSV HEADER (UPDATED: both ratios) ---
+
     private static String csvHeader() {
         StringBuilder sb = new StringBuilder();
         sb.append("dataset,profile,m,lambda,divisions,index_time_ms,");
-        sb.append("avg_candidate_ratio,avg_recall,avg_server_ms,avg_client_ms,avg_art_ms,avg_decrypt_ms,");
+        sb.append("avg_distance_ratio,avg_candidate_ratio,avg_recall,");
+        sb.append("avg_server_ms,avg_client_ms,avg_art_ms,avg_decrypt_ms,");
         sb.append("avg_token_bytes,avg_work_units,");
         sb.append("avg_cand_total,avg_cand_kept,avg_cand_decrypted,avg_returned,");
-        for (int k : STANDARD_KS) sb.append("p_at_").append(k).append(",");
+        for (int k : STANDARD_KS) sb.append("recall_at_").append(k).append(",");
+        for (int k : STANDARD_KS) sb.append("distance_ratio_at_").append(k).append(",");
         sb.append("reencrypt_count,reencrypt_bytes,reencrypt_ms,");
         sb.append("space_meta_bytes,space_points_bytes");
         return sb.toString();
@@ -259,8 +248,10 @@ public final class EvaluationSummaryPrinter {
         sb.append(m).append(",").append(lambda).append(",").append(divisions).append(",");
         sb.append(indexTimeMs).append(",");
 
+        sb.append(fmt(nz(a.avgDistanceRatio))).append(",");
         sb.append(fmt(nz(a.avgCandidateRatio))).append(",");
         sb.append(fmt(nz(a.avgRecall))).append(",");
+
         sb.append(fmt(nz(a.avgServerMs))).append(",");
         sb.append(fmt(nz(a.avgClientMs))).append(",");
         sb.append(fmt(nz(a.getAvgArtMs()))).append(",");
@@ -274,6 +265,14 @@ public final class EvaluationSummaryPrinter {
         sb.append(fmt(nz(a.avgCandDecrypted))).append(",");
         sb.append(fmt(nz(a.avgReturned))).append(",");
 
+        for (int k : STANDARD_KS) {
+            sb.append(fmt(a.recallAtK.getOrDefault(k, Double.NaN))).append(",");
+        }
+
+        for (int k : STANDARD_KS) {
+            sb.append(fmt(a.distanceRatioAtK.getOrDefault(k, Double.NaN))).append(",");
+        }
+
         sb.append(a.reencryptCount).append(",");
         sb.append(a.reencryptBytes).append(",");
         sb.append(fmt(nz(a.reencryptMs))).append(",");
@@ -283,9 +282,8 @@ public final class EvaluationSummaryPrinter {
         return sb.toString();
     }
 
-    // ---------------------------------------------------------------------
-    // Utils
-    // ---------------------------------------------------------------------
+    // --- UTILS (unchanged) ---
+
     private static int round(double v) { return (int) Math.round(v); }
 
     private static String compactRecall(Map<Integer, Double> rAtK, List<Integer> ks) {

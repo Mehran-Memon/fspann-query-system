@@ -184,6 +184,40 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
             logger.info("GFunctionRegistry initialized successfully");
             logger.info("Stats: {}", GFunctionRegistry.getStats());
 
+            // ← ADD: Sample omega values for verification
+            try {
+                Coding.GFunction g0 = GFunctionRegistry.get(dimension, 0, 0);
+
+                // Log first 5 omega values for first GFunction
+                double[] omega = g0.omega;
+                if (omega != null && omega.length > 0) {
+                    StringBuilder sb = new StringBuilder();
+                    for (int i = 0; i < Math.min(5, omega.length); i++) {
+                        sb.append(String.format("%.2f", omega[i]));
+                        if (i < Math.min(4, omega.length - 1)) sb.append(", ");
+                    }
+                    logger.info("Sample omega[table=0,div=0]: [{}...] (showing first 5 of {})",
+                            sb.toString(), omega.length);
+
+                    // Check if hardcoded (all values near 1.0)
+                    boolean hardcoded = true;
+                    for (double w : omega) {
+                        if (Math.abs(w - 1.0) > 0.1) {
+                            hardcoded = false;
+                            break;
+                        }
+                    }
+
+                    if (hardcoded) {
+                        logger.error("⚠️ OMEGA VALUES ARE HARDCODED! All values near 1.0 - this will cause zero recall!");
+                    } else {
+                        logger.info("✓ Omega values are data-adaptive (not hardcoded)");
+                    }
+                }
+            } catch (Exception e) {
+                logger.warn("Could not inspect GFunction omega values", e);
+            }
+
         } catch (Exception e) {
             logger.error("FATAL: GFunctionRegistry initialization failed!", e);
             throw new RuntimeException("Failed to initialize GFunctionRegistry", e);
@@ -396,6 +430,12 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
                         50 * K
                 );
 
+        // ← DIAGNOSTIC: Sample query codes
+        try {
+            BitSet firstCode = qCodes[0][0];
+            logger.debug("Query code sample [table=0,div=0]: cardinality={} length={}",
+                    firstCode.cardinality(), firstCode.length());
+        } catch (Exception ignore) {}
 
         Map<String, Integer> score = new HashMap<>(HARD_CAP);
         Set<String> deleted = new HashSet<>(2048);
@@ -403,6 +443,9 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         int rawSeen = 0;
         int fullBits = cfg.getPaper().getM() * cfg.getPaper().getLambda();
         int maxRelax = fullBits - 1;
+
+        // ← DIAGNOSTIC: Track candidates at each relaxation level
+        int[] candidatesAtRelax = new int[Math.min(5, maxRelax + 1)];
 
         for (int relax = 0; relax <= maxRelax && score.size() < HARD_CAP; relax++){
             int prefixLen = fullBits - relax;
@@ -443,6 +486,11 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
                     }
                 }
             }
+
+            // ← DIAGNOSTIC: Capture candidates at this relaxation level
+            if (relax < candidatesAtRelax.length) {
+                candidatesAtRelax[relax] = score.size();
+            }
         }
 
         List<Map.Entry<String, Integer>> ordered =
@@ -458,6 +506,16 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         lastTouchedIds.get().clear();
         lastTouchedIds.get().addAll(out);
         lastRawVisited = rawSeen;
+
+        // ← DIAGNOSTIC: Summary log
+        StringBuilder relaxBreakdown = new StringBuilder();
+        for (int r = 0; r < candidatesAtRelax.length; r++) {
+            relaxBreakdown.append("r").append(r).append("=").append(candidatesAtRelax[r]);
+            if (r < candidatesAtRelax.length - 1) relaxBreakdown.append(", ");
+        }
+
+        logger.info("LSH Lookup: K={} | rawSeen={} | uniqueCands={} | returned={} | deleted={} | [{}]",
+                K, rawSeen, score.size(), out.size(), deleted.size(), relaxBreakdown.toString());
 
         if (out.size() < requiredK) {
             logger.warn(
