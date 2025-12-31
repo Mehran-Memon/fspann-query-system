@@ -79,7 +79,10 @@ public final class PrefixPartitioner {
 
         logger.debug("Building partitions: fullBits={}, numVectors={}", fullBits, idToCode.size());
 
-        // Relax from fullBits → 1
+        // Create partitions in DECREASING order: p=fullBits → p=1
+        // partition[0] will have p=fullBits (most specific)
+        // partition[fullBits-1] will have p=1 (most relaxed)
+
         for (int p = fullBits; p >= 1; p--) {
             Map<PrefixKey, List<String>> map = new HashMap<>();
 

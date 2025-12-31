@@ -324,12 +324,6 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
                 S.staged.add(pt);
                 S.stagedCodes.add(codes);
 
-                if (S.staged.size() >= DEFAULT_BUILD_THRESHOLD) {
-                    build(S);
-                    try {
-                        storageMetrics.updateDimensionStorage(dim);
-                    } catch (Exception ignore) {}
-                }
             }
         }
     }
@@ -364,12 +358,15 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         int divisions = pc.getDivisions();
         int fullBits = pc.getM() * pc.getLambda();
 
-        S.divisions.clear();
+        if (!S.divisions.isEmpty()) {
+            logger.warn("build() called on non-empty divisions - skipping");
+            return;
+        }
 
-        // ← ADD: Log GFunction used for first build
+        //Log GFunction used for first build
         if (S.table == 0) {
             Coding.GFunction g0 = GFunctionRegistry.get(S.dim, 0, 0);
-            logger.info("BUILD GFunction[table=0,div=0]: seed={}, m={}, lambda={}, omega[0]= %.2f, omega[5]=%.2f",
+            logger.info("BUILD GFunction[table=0,div=0]: seed={}, m={}, lambda={}, omega[0]={}, omega[5]={}",
                     g0.seed, g0.m, g0.lambda,
                     g0.omega[0],
                     g0.omega.length > 5 ? g0.omega[5] : -1.0
