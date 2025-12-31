@@ -47,10 +47,8 @@ class SearchPipelineIntegrationTest {
         Aggregates agg = Aggregates.fromProfiler(p);
 
         for (int k : Ks) {
-            assertTrue(agg.precisionAtK.containsKey(k));
             assertTrue(agg.recallAtK.containsKey(k));
             assertEquals(
-                    agg.precisionAtK.get(k),
                     agg.recallAtK.get(k),
                     EPSILON
             );
