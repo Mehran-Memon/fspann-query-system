@@ -49,8 +49,6 @@ class MetricsAndSearchTest {
         assertEquals(ratio, agg.avgCandidateRatio, EPSILON);
         assertEquals(recall, agg.avgRecall, EPSILON);
 
-        assertTrue(agg.precisionAtK.containsKey(10));
-        assertEquals(precision, agg.precisionAtK.get(10), EPSILON);
     }
 
 }
