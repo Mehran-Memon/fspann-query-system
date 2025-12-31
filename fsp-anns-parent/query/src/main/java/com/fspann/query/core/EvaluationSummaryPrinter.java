@@ -37,14 +37,13 @@ public final class EvaluationSummaryPrinter {
         Objects.requireNonNull(agg);
 
         // HUMAN READABLE PAPER-LINE ------------------------------------------------
-        String precLine = compactPrecision(agg.precisionAtK, STANDARD_KS);
+        String recallLine = compactRecall(agg.recallAtK, STANDARD_KS);
 
         log.info(String.format(Locale.ROOT,
-                "AvgRatio=%.4f | AvgPrecision=%.4f | P@K[%s] | Server=%.2f ms | Client=%.2f ms | ART=%.2f ms | Decrypt=%.2f ms | " +
+                "AvgCandidateRatio=%.4f | Recall@K[%s] | Server=%.2f ms | Client=%.2f ms | ART=%.2f ms | Decrypt=%.2f ms | " +
                         "TokenB=%.1f | WorkU=%.1f | Cand{T=%d,K=%d,D=%d,R=%d} | DS=%s | Profile=%s",
-                nz(agg.avgRatio),
-                nz(agg.avgPrecision),
-                precLine,
+                nz(agg.avgCandidateRatio),
+                recallLine,
                 nz(agg.avgServerMs),
                 nz(agg.avgClientMs),
                 nz(agg.getAvgArtMs()),
@@ -142,9 +141,8 @@ public final class EvaluationSummaryPrinter {
             if (!exists) {
                 StringBuilder h = new StringBuilder();
                 h.append("dataset,profile,m,lambda,divisions,index_time_ms,");
-                h.append("avg_ratio,avg_precision,avg_recall,avg_precision,avg_recall,avg_server_ms,avg_client_ms,avg_art_ms,avg_decrypt_ms,");
-                for (int k : STANDARD_KS) h.append("p_at_").append(k).append(",");
-                for (int k : STANDARD_KS) h.append("r_at_").append(k).append(",");
+                h.append("avg_candidate_ratio,avg_recall,avg_server_ms,avg_client_ms,avg_art_ms,avg_decrypt_ms,");
+                for (int k : STANDARD_KS) h.append("recall_at_").append(k).append(",");
                 String header = h.substring(0, h.length() - 1);
                 Files.write(out, (header + "\n").getBytes(StandardCharsets.UTF_8),
                         StandardOpenOption.CREATE, StandardOpenOption.APPEND);
@@ -153,24 +151,22 @@ public final class EvaluationSummaryPrinter {
             StringBuilder sb = new StringBuilder();
             sb.append(escape(dataset)).append(",");
             sb.append(escape(profile)).append(",");
-            sb.append(m).append(",").append(lambda).append(",").append(divisions).append(",");
+            sb.append(m).append(",");
+            sb.append(lambda).append(",");
+            sb.append(divisions).append(",");
             sb.append(indexMs).append(",");
-            sb.append(fmt(nz(a.avgRatio))).append(",");
-            sb.append(fmt(nz(a.avgPrecision))).append(",");
+            sb.append(fmt(nz(a.avgCandidateRatio))).append(",");
             sb.append(fmt(nz(a.avgRecall))).append(",");
             sb.append(fmt(nz(a.avgServerMs))).append(",");
             sb.append(fmt(nz(a.avgClientMs))).append(",");
             sb.append(fmt(nz(a.getAvgArtMs()))).append(",");
             sb.append(fmt(nz(a.avgDecryptMs))).append(",");
 
+
             for (int k : STANDARD_KS) {
-                double v = a.precisionAtK.getOrDefault(k, Double.NaN);
-                sb.append(fmt(v)).append(",");
+                sb.append(fmt(a.recallAtK.getOrDefault(k, Double.NaN))).append(",");
             }
-            for (int k : STANDARD_KS) {
-                double v = a.recallAtK.getOrDefault(k, Double.NaN);
-                sb.append(fmt(v)).append(",");
-            }
+
             String row = sb.substring(0, sb.length() - 1);
             Files.write(out, (row + "\n").getBytes(StandardCharsets.UTF_8),
                     StandardOpenOption.CREATE, StandardOpenOption.APPEND);
@@ -239,7 +235,7 @@ public final class EvaluationSummaryPrinter {
     private static String csvHeader() {
         StringBuilder sb = new StringBuilder();
         sb.append("dataset,profile,m,lambda,divisions,index_time_ms,");
-        sb.append("avg_ratio,avg_precision,avg_server_ms,avg_client_ms,avg_art_ms,avg_decrypt_ms,");
+        sb.append("avg_candidate_ratio,avg_recall,avg_server_ms,avg_client_ms,avg_art_ms,avg_decrypt_ms,");
         sb.append("avg_token_bytes,avg_work_units,");
         sb.append("avg_cand_total,avg_cand_kept,avg_cand_decrypted,avg_returned,");
         for (int k : STANDARD_KS) sb.append("p_at_").append(k).append(",");
@@ -263,8 +259,8 @@ public final class EvaluationSummaryPrinter {
         sb.append(m).append(",").append(lambda).append(",").append(divisions).append(",");
         sb.append(indexTimeMs).append(",");
 
-        sb.append(fmt(nz(a.avgRatio))).append(",");
-        sb.append(fmt(nz(a.avgPrecision))).append(",");
+        sb.append(fmt(nz(a.avgCandidateRatio))).append(",");
+        sb.append(fmt(nz(a.avgRecall))).append(",");
         sb.append(fmt(nz(a.avgServerMs))).append(",");
         sb.append(fmt(nz(a.avgClientMs))).append(",");
         sb.append(fmt(nz(a.getAvgArtMs()))).append(",");
@@ -277,11 +273,6 @@ public final class EvaluationSummaryPrinter {
         sb.append(fmt(nz(a.avgCandKept))).append(",");
         sb.append(fmt(nz(a.avgCandDecrypted))).append(",");
         sb.append(fmt(nz(a.avgReturned))).append(",");
-
-        for (int k : STANDARD_KS) {
-            double v = a.precisionAtK.getOrDefault(k, Double.NaN);
-            sb.append(fmt(v)).append(",");
-        }
 
         sb.append(a.reencryptCount).append(",");
         sb.append(a.reencryptBytes).append(",");
@@ -297,13 +288,13 @@ public final class EvaluationSummaryPrinter {
     // ---------------------------------------------------------------------
     private static int round(double v) { return (int) Math.round(v); }
 
-    private static String compactPrecision(Map<Integer, Double> pAtK, List<Integer> ks) {
-        if (pAtK == null || pAtK.isEmpty()) return "-";
-        int[] picks = {1, 10, 100};
+    private static String compactRecall(Map<Integer, Double> rAtK, List<Integer> ks) {
+        if (rAtK == null || rAtK.isEmpty()) return "-";
         ArrayList<String> parts = new ArrayList<>();
-        for (int k : picks) {
-            Double v = pAtK.get(k);
-            if (v != null && !v.isNaN()) parts.add(k + ":" + String.format(Locale.ROOT, "%.2f", v));
+        for (int k : ks) {
+            Double v = rAtK.get(k);
+            if (v != null && !v.isNaN())
+                parts.add(k + ":" + String.format(Locale.ROOT, "%.2f", v));
         }
         return parts.isEmpty() ? "-" : String.join(",", parts);
     }

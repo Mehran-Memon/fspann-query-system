@@ -26,7 +26,6 @@ class MetricsAndSearchTest {
                 "Q0_K10",
                 10.0, 20.0, 30.0, 5.0, 0.0,
                 ratio,
-                precision,
                 recall,
 
                 100, 50, 50, 10,
@@ -47,17 +46,11 @@ class MetricsAndSearchTest {
 
         Aggregates agg = Aggregates.fromProfiler(p);
 
-        assertEquals(ratio, agg.avgRatio, EPSILON);
-        assertEquals(precision, agg.avgPrecision, EPSILON);
+        assertEquals(ratio, agg.avgCandidateRatio, EPSILON);
         assertEquals(recall, agg.avgRecall, EPSILON);
 
         assertTrue(agg.precisionAtK.containsKey(10));
         assertEquals(precision, agg.precisionAtK.get(10), EPSILON);
     }
 
-    @Test
-    void testRecallEqualsPrecisionInvariant() {
-        QueryMetrics m = new QueryMetrics(1.3, 0.22, 0.24);
-        assertEquals(m.precisionAtK(), m.recallAtK(), EPSILON);
-    }
 }

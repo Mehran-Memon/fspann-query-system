@@ -4,45 +4,86 @@ package com.fspann.common;
  * Immutable per-(query, K) evaluation metrics.
  * SINGLE SOURCE OF TRUTH.
  *
- * Metrics:
- *   - distanceRatioAtK: Quality metric - average(dist_returned / dist_groundtruth) per position
- *   - precisionAtK:     Recall metric - fraction of true k-NNs in returned results
- *   - candidateRatioAtK: Efficiency metric - candidates_examined / K
+ * DEFINITIONS (PAPER-ALIGNED):
+ *
+ * Primary (used in paper, plots, comparisons):
+ *   - candidateRatioAtK : (# refined / distance-evaluated candidates) / K
+ *     → This is Peng et al.'s RATIO (search efficiency)
+ *
+ * Secondary (diagnostic only, NOT used for comparison):
+ *   - distanceRatioAtK  : avg(dist_ann_i / dist_gt_i), i = 1..K
+ *
+ * Quality:
+ *   - recallAtK         : |GT ∩ ANN| / K
+ *
+ * NOTE:
+ *   precisionAtK is intentionally REMOVED (not used, misleading).
  */
 public final class QueryMetrics {
 
-    private final double distanceRatioAtK;
-    private final double precisionAtK;
-    private final double recallAtK;              // NEW
+    // --- PRIMARY (Peng) ---
     private final double candidateRatioAtK;
 
+    // --- SECONDARY (diagnostic) ---
+    private final double distanceRatioAtK;
+
+    // --- QUALITY ---
+    private final double recallAtK;
+
     public QueryMetrics(
+            double candidateRatioAtK,
             double distanceRatioAtK,
-            double precisionAtK,
-            double recallAtK,
-            double candidateRatioAtK
+            double recallAtK
     ) {
-        this.distanceRatioAtK = distanceRatioAtK;
-        this.precisionAtK = precisionAtK;
-        this.recallAtK = recallAtK;
         this.candidateRatioAtK = candidateRatioAtK;
+        this.distanceRatioAtK  = distanceRatioAtK;
+        this.recallAtK         = recallAtK;
     }
 
-    // Backward compatibility
-    public QueryMetrics(double distanceRatioAtK, double precisionAtK, double candidateRatioAtK) {
-        this(distanceRatioAtK, precisionAtK, precisionAtK, candidateRatioAtK);
+    // ------------------------------------------------------------------
+    // ACCESSORS (EXPLICIT, NO AMBIGUITY)
+    // ------------------------------------------------------------------
+
+    /**
+     * PRIMARY ratio used in the paper (Peng et al.)
+     */
+    public double candidateRatioAtK() {
+        return candidateRatioAtK;
     }
 
-    public double ratioAtK() { return distanceRatioAtK; }
-    public double precisionAtK() { return precisionAtK; }
-    public double recallAtK() { return recallAtK; }          // NEW
-    public double candidateRatioAtK() { return candidateRatioAtK; }
+    /**
+     * Distance quality diagnostic (NOT the paper ratio)
+     */
+    public double distanceRatioAtK() {
+        return distanceRatioAtK;
+    }
+
+    /**
+     * Recall@K
+     */
+    public double recallAtK() {
+        return recallAtK;
+    }
+
+    // ------------------------------------------------------------------
+    // BACKWARD COMPATIBILITY (DO NOT USE IN NEW CODE)
+    // ------------------------------------------------------------------
+
+    /**
+     * @deprecated DO NOT USE.
+     * Kept only so legacy code does not break.
+     * Historically misused to mean "ratio".
+     */
+    @Deprecated
+    public double ratioAtK() {
+        return candidateRatioAtK;
+    }
 
     @Override
     public String toString() {
         return String.format(
-                "QueryMetrics{ratio=%.4f, precision=%.4f, recall=%.4f, candRatio=%.4f}",
-                distanceRatioAtK, precisionAtK, recallAtK, candidateRatioAtK
+                "QueryMetrics{candidateRatio=%.4f, distanceRatio=%.4f, recall=%.4f}",
+                candidateRatioAtK, distanceRatioAtK, recallAtK
         );
     }
 }

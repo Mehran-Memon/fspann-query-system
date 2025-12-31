@@ -53,7 +53,6 @@ public class ForwardSecureANNSystem {
     private final Profiler profiler;
     private final boolean verbose;
     private final RocksDBMetadataManager metadataManager;
-    private final TopKProfiler topKProfiler;
     private volatile boolean queryOnlyMode = false;
     private BaseVectorReader baseReader = null;
     private final ReencryptionTracker reencTracker;
@@ -215,8 +214,6 @@ public class ForwardSecureANNSystem {
         } catch (IOException ioe) {
             logger.warn("Could not create resultsDir {}; falling back to CWD", resultsDir, ioe);
         }
-
-        this.topKProfiler = new TopKProfiler(resultsDir.toString());
 
         this.configuredNoiseScale = (config.getCloak() != null)
                 ? Math.max(0.0, config.getCloak().noise)
@@ -694,8 +691,7 @@ public class ForwardSecureANNSystem {
                         decryptMs,
                         lastInsertMs(),
 
-                        m.ratioAtK(),
-                        m.precisionAtK(),
+                        m.candidateRatioAtK(),
                         m.recallAtK(),
 
                         qs.getLastCandTotal(),
@@ -730,9 +726,6 @@ public class ForwardSecureANNSystem {
                 );
             }
 
-// DISABLED: re-encryption must happen ONLY once after all queries
-// doReencrypt("Q" + qi, qs);
-
         }
     }
 
@@ -765,27 +758,35 @@ public class ForwardSecureANNSystem {
             GroundtruthManager gtMgr
     ) {
 
-        // ---------- Ground Truth ----------
+        // =========================================================
+        // Ground Truth
+        // =========================================================
         int[] gt = gtMgr.getGroundtruth(queryIndex, k);
         if (gt == null || gt.length < k) {
             return new QueryMetrics(
-                    Double.NaN,
-                    Double.NaN,
-                    Double.NaN,
-                    qs.getLastCandTotal() / (double) maxK
+                    Double.NaN,                 // candidateRatioAtK
+                    Double.NaN,                 // distanceRatioAtK
+                    Double.NaN                  // recallAtK
             );
         }
 
-        // ---------- Resolve ANN indices ----------
+        // =========================================================
+        // Resolve ANN indices
+        // =========================================================
         int upto = Math.min(k, annResults.size());
         int[] annIdx = new int[upto];
+
         for (int i = 0; i < upto; i++) {
             annIdx[i] = resolveBaseIndex(annResults.get(i));
         }
 
-        // ---------- Recall@K (paper metric) ----------
+        // =========================================================
+        // Recall@K  (QUALITY)
+        // =========================================================
         Set<Integer> gtSet = new HashSet<>(k);
-        for (int i = 0; i < k; i++) gtSet.add(gt[i]);
+        for (int i = 0; i < k; i++) {
+            gtSet.add(gt[i]);
+        }
 
         int hits = 0;
         for (int i = 0; i < upto; i++) {
@@ -793,9 +794,10 @@ public class ForwardSecureANNSystem {
         }
 
         double recallAtK = hits / (double) k;
-        double precisionAtK = Double.NaN; // NOT used in paper
 
-        // ---------- Distance Ratio@K ----------
+        // =========================================================
+        // Distance Ratio@K (DIAGNOSTIC ONLY)
+        // =========================================================
         double distanceRatioAtK = Double.NaN;
 
         if (baseReader != null && k >= 20) {
@@ -813,7 +815,7 @@ public class ForwardSecureANNSystem {
                 if (dGt <= 0) continue;
 
                 double dAnn = baseReader.l2(queryVector, annId);
-                ratioSum += dAnn / dGt;
+                ratioSum += (dAnn / dGt);
                 used++;
             }
 
@@ -822,15 +824,16 @@ public class ForwardSecureANNSystem {
             }
         }
 
-        // ---------- Candidate Ratio (SEARCH COST) ----------
-        int candidatesExamined = qs.getLastCandTotal();
-        double candidateRatio = candidatesExamined / (double) maxK;
+        // =========================================================
+        // Candidate Ratio@K  (PRIMARY — Peng et al.)
+        // =========================================================
+        int refinedCandidates = qs.getLastCandDecrypted(); // NOT total raw
+        double candidateRatioAtK = refinedCandidates / (double) k;
 
         return new QueryMetrics(
+                candidateRatioAtK,
                 distanceRatioAtK,
-                precisionAtK,
-                recallAtK,
-                candidateRatio
+                recallAtK
         );
     }
 
@@ -1203,7 +1206,7 @@ public class ForwardSecureANNSystem {
         Aggregates agg = Aggregates.fromProfiler(this.profiler);
 
         double avgArtMs   = agg.avgRunMs;        // canonical ART
-        double avgRatio   = agg.avgRatio;     // canonical ratio
+        double avgRatio   = agg.avgCandidateRatio;     // canonical ratio
 
         /* ====================================================================== */
         /* 3. REPRODUCIBLE METRICS SUMMARY                                        */
@@ -1240,17 +1243,7 @@ public class ForwardSecureANNSystem {
         );
 
         /* ====================================================================== */
-        /* 4. TOP-K PRECISION / RATIO EXPORT                                      */
-        /* ====================================================================== */
-
-        try {
-            topKProfiler.export(outDir.resolve("topk_evaluation.csv").toString());
-        } catch (Exception e) {
-            logger.warn("Failed to export top-K evaluation", e);
-        }
-
-        /* ====================================================================== */
-        /* 5. PAPER-READY SUMMARY CSV                                             */
+        /* 4. PAPER-READY SUMMARY CSV                                             */
         /* ====================================================================== */
 
         try {

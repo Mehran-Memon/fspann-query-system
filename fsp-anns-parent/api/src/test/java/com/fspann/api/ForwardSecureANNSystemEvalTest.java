@@ -65,8 +65,7 @@ class ForwardSecureANNSystemEvalTest {
                 );
 
 
-        assertEquals(1.0, m.precisionAtK(), 1e-12);
-        assertEquals(1.0, m.ratioAtK(), 1e-12);
+        assertEquals(1.0, m.candidateRatioAtK(), 1e-12);
     }
 
     @Test
@@ -94,7 +93,6 @@ class ForwardSecureANNSystemEvalTest {
                         gt
                 );
 
-        assertEquals(2.0 / 5.0, m.precisionAtK(), 1e-12);
         assertTrue(m.ratioAtK() >= 1.0);
     }
 
