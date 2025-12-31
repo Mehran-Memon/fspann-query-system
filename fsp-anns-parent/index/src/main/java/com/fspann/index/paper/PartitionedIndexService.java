@@ -536,7 +536,6 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         }
     }
 
-
     // =====================================================
     // FINALIZATION
     // =====================================================
@@ -661,6 +660,5 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
     public int getLastRawCandidateCount() {
         return lastRawVisited;
     }
-
 
 }

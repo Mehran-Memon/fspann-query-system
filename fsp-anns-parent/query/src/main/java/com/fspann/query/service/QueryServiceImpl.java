@@ -234,6 +234,9 @@ public final class QueryServiceImpl implements QueryService {
                 lastReturned = eff;
                 lastCandIds  = finalIds;
 
+                logger.info("QueryService returning: requested K={}, scored={}, returning={}",
+                        K, scored.size(), out.size());
+
                 // -------------------------------
                 // PATCH 3 — adaptive retry (ONCE)
                 // -------------------------------

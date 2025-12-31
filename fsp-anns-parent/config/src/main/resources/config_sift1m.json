@@ -15,7 +15,7 @@
   },
 
   "stabilization": {
-    "enabled": true,
+    "enabled": false,
     "alpha": 0.02,
     "minCandidatesRatio": 1.20
   },
