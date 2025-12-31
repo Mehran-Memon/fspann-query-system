@@ -162,27 +162,52 @@ public final class QueryServiceImpl implements QueryService {
                 List<QueryScored> scored = new ArrayList<>(refineLimit);
                 long decryptStart = System.nanoTime();
 
+                int notFound = 0;
+                int invalidVector = 0;
+                int decryptError = 0;
+
                 for (int i = 0; i < refineLimit; i++) {
                     String id = candidateIds.get(i);
                     try {
                         EncryptedPoint ep = index.loadPointIfActive(id);
-                        if (ep == null) continue;
+                        if (ep == null) {
+                            notFound++;
+                            if (notFound <= 5) {  // Log first 5 only
+                                logger.warn("Point {} not found in metadata", id);
+                            }
+                            continue;
+                        }
 
                         KeyVersion kvp = keyService.getVersion(ep.getKeyVersion());
                         double[] v = cryptoService.decryptFromPoint(ep, kvp.getKey());
-                        if (!isValid(v)) continue;
+
+                        if (!isValid(v)) {
+                            invalidVector++;
+                            if (invalidVector <= 5) {  // Log first 5 only
+                                logger.warn("Point {} decrypted to invalid vector (dim={}, null={})",
+                                        id, v != null ? v.length : -1, v == null);
+                            }
+                            continue;
+                        }
 
                         scored.add(new QueryScored(id, l2(qVec, v)));
                         touchedThisSession.add(id);
 
-                    } catch (Exception ignore) {}
+                    } catch (Exception e) {
+                        decryptError++;
+                        if (decryptError <= 5) {  // Log first 5 only
+                            logger.error("Failed to decrypt {}: {}", id, e.getMessage());
+                        }
+                    }
                 }
 
                 lastDecryptNs = System.nanoTime() - decryptStart;
                 lastCandDecrypted = scored.size();
 
-                if (scored.isEmpty()) return Collections.emptyList();
+                logger.info("Refinement: limit={} | notFound={} | invalidVec={} | decryptErr={} | scored={}",
+                        refineLimit, notFound, invalidVector, decryptError, scored.size());
 
+                if (scored.isEmpty()) return Collections.emptyList();
                 // -------------------------------
                 // STAGE C — rank & return
                 // -------------------------------
