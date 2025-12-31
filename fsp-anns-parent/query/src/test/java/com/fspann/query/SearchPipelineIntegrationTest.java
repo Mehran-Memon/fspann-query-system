@@ -25,7 +25,6 @@ class SearchPipelineIntegrationTest {
                     "Q_K" + k,
                     10.0, 10.0, 20.0, 5.0, 0.0,
                     1.0 + 0.01 * k,
-                    precision,
                     recall,
 
                     1000, 200, 200, k,
@@ -69,7 +68,6 @@ class SearchPipelineIntegrationTest {
                 "Q",
                 10.0, 10.0, 20.0, 5.0, 0.0,
                 1.2,
-                precision,
                 recall,
 
                 100, 50, 50, 10,

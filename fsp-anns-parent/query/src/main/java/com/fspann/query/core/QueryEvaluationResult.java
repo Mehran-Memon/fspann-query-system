@@ -16,7 +16,7 @@ public final class QueryEvaluationResult {
     private final int topKRequested;
     private final int retrieved;
     private final double ratio;
-    private final double precision;
+    private final double recall;
 
     // ---------------- Timing (ms) ----------------
     private final long timeMs;          // server-only
@@ -59,7 +59,7 @@ public final class QueryEvaluationResult {
             int topKRequested,
             int retrieved,
             double ratio,
-            double precision,
+            double recall,
             long timeMs,
             long clientTimeMs,
             long runTimeMs,
@@ -87,7 +87,7 @@ public final class QueryEvaluationResult {
         this.topKRequested = topKRequested;
         this.retrieved = retrieved;
         this.ratio = ratio;
-        this.precision = precision;
+        this.recall = recall;
 
         this.timeMs = timeMs;
         this.clientTimeMs = clientTimeMs;
@@ -119,64 +119,12 @@ public final class QueryEvaluationResult {
     }
 
     // =============================================================
-    //        LEGACY COMPATIBILITY CONSTRUCTOR (NO BREAKAGE)
-    // =============================================================
-
-    public QueryEvaluationResult(
-            int topKRequested,
-            int retrieved,
-            double ratio,
-            double precision,
-            long timeMs,
-            long insertTimeMs,
-            int candDecrypted,
-            int tokenSizeBytes,
-            int vectorDim,
-            int totalFlushedPoints,
-            int flushThreshold,
-            int touchedCount,
-            int reencryptedCount,
-            long reencTimeMs,
-            long reencBytesDelta,
-            long reencBytesAfter
-    ) {
-        this(
-                topKRequested,
-                retrieved,
-                ratio,
-                precision,
-                timeMs,
-                -1,        // client
-                -1,        // run
-                -1,        // decrypt
-                insertTimeMs,
-                -1, -1,    // candTotal/candKept
-                candDecrypted,
-                retrieved, // returned
-                tokenSizeBytes,
-                vectorDim,
-                totalFlushedPoints,
-                flushThreshold,
-                touchedCount,
-                reencryptedCount,
-                reencTimeMs,
-                reencBytesDelta,
-                reencBytesAfter,
-                null,        // denom source
-                topKRequested,
-                topKRequested,
-                -1,
-                "legacy"
-        );
-    }
-
-    // =============================================================
     //                       GETTERS
     // =============================================================
     public int getTopKRequested() { return topKRequested; }
     public int getRetrieved() { return retrieved; }
     public double getRatio() { return ratio; }
-    public double getPrecision() { return precision; }
+    public double getRecall() { return recall; }
 
     public long getTimeMs() { return timeMs; }
     public long getClientTimeMs() { return clientTimeMs; }

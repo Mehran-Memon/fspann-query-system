@@ -135,7 +135,7 @@ public class TopKProfiler {
 
                 // Precision + Ratio
                 final String ratioStr     = Double.isNaN(r.getRatio())     ? "NaN" : fmt4(r.getRatio());
-                final String precisionStr = Double.isNaN(r.getPrecision()) ? "NaN" : fmt4(r.getPrecision());
+                final String recallStr = Double.isNaN(r.getRecall()) ? "NaN" : fmt4(r.getRecall());
 
                 // Derived factors
                 final String cfReq = (topK > 0 && candTotal >= 0)   ? fmt6(div(candTotal, topK))   : "NaN";
@@ -146,7 +146,7 @@ public class TopKProfiler {
 
                 rows.add(new String[]{
                         qid, String.valueOf(topK), String.valueOf(returned),
-                        ratioStr, precisionStr,
+                        ratioStr, recallStr,
                         String.valueOf(serverMs), String.valueOf(clientMs),
                         String.valueOf(runMs), String.valueOf(decryptMs), String.valueOf(insertMs),
                         String.valueOf(candTotal), String.valueOf(candKept),

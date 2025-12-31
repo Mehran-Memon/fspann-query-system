@@ -119,8 +119,7 @@ public final class MicrometerProfiler {
                 decryptMs,
                 insertMs,
                 ratio,
-                precision,
-                recall,               // ✅ FORWARD IT
+                recall,
                 candTotal,
                 candKept,
                 candDec,

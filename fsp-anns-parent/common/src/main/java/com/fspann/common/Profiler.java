@@ -93,8 +93,7 @@ public final class Profiler {
             double runMs,
             double decryptMs,
             double insertMs,
-            double ratio,
-            double precision,
+            double candidateRatio,
             double recall,
             int candTotal,
             int candKept,
@@ -126,8 +125,7 @@ public final class Profiler {
                 runMs,
                 decryptMs,
                 insertMs,
-                ratio,
-                precision,
+                candidateRatio,
                 recall,
                 candTotal,
                 candKept,
@@ -176,20 +174,20 @@ public final class Profiler {
 
     /* -----------------------------------------------------
      * OPTIONAL CSV export (legacy compatibility)
-     * Still only exports basic trio (server/client/ratio),
+     * Still only exports basic trio (server/client/candidateRatio),
      * full CSV produced by EvaluationSummaryPrinter instead.
      * ----------------------------------------------------- */
 
     public synchronized void exportQueryMetricsCsv(String fp) throws IOException {
         try (FileWriter fw = new FileWriter(fp)) {
-            fw.write("label,serverMs,clientMs,ratio\n");
+            fw.write("label,serverMs,clientMs,candidate_ratio\n");
             for (QueryRow qr : queryRows) {
                 fw.write(String.format(Locale.ROOT,
                         "%s,%.6f,%.6f,%.6f%n",
                         qr.label,
                         qr.serverMs,
                         qr.clientMs,
-                        qr.ratio));
+                        qr.candidateRatio));
             }
         }
     }
@@ -208,8 +206,7 @@ public final class Profiler {
         public final double decryptMs;
         public final double insertMs;
 
-        public final double ratio;
-        public final double precision;
+        public final double candidateRatio;
         public final double recall;
 
         public final int candTotal;
@@ -248,8 +245,7 @@ public final class Profiler {
                 double runMs,
                 double decryptMs,
                 double insertMs,
-                double ratio,
-                double precision,
+                double candidateRatio,
                 double recall,
 
                 int candTotal,
@@ -283,8 +279,7 @@ public final class Profiler {
             this.decryptMs = decryptMs;
             this.insertMs = insertMs;
 
-            this.ratio = ratio;
-            this.precision = precision;
+            this.candidateRatio = candidateRatio;
             this.recall = recall;
 
             this.candTotal = candTotal;

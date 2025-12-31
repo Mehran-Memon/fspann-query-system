@@ -8,9 +8,8 @@ import java.util.*;
  */
 public final class Aggregates {
 
-    public double avgRatio;
-    public double avgPrecision;         // NEW: direct average precision
-    public double avgRecall;                     // NEW
+    public double avgCandidateRatio;
+    public double avgRecall;
     public double avgServerMs;
     public double avgClientMs;
     public double avgRunMs;             // TRUE ART
@@ -31,8 +30,6 @@ public final class Aggregates {
     public long spaceMetaBytes;
     public long spacePointsBytes;
 
-    /** Precision broken down by K value */
-    public Map<Integer, Double> precisionAtK = new HashMap<>();
     public Map<Integer, Double> recallAtK = new HashMap<>();
 
     public Aggregates() {}
@@ -53,9 +50,6 @@ public final class Aggregates {
 
         double sumRatio = 0.0;
         int ratioCount = 0;
-
-        double sumPrecision = 0.0;
-        int precisionCount = 0;
 
         double sumRecall = 0.0;
         int recallCount = 0;
@@ -79,8 +73,8 @@ public final class Aggregates {
         for (Profiler.QueryRow r : rows) {
 
             // ---------- Ratio (K >= 20 only, NaN already enforced upstream) ----------
-            if (Double.isFinite(r.ratio)) {
-                sumRatio += r.ratio;
+            if (Double.isFinite(r.candidateRatio)) {
+                sumRatio += r.candidateRatio;
                 ratioCount++;
             }
 
@@ -104,15 +98,6 @@ public final class Aggregates {
             if (r.candDecrypted >= 0) sumCandD += r.candDecrypted;
             if (r.candReturned >= 0)  sumRet   += r.candReturned;
 
-            // ---------- Precision@K ----------
-            if (r.precision >= 0.0 && r.precision <= 1.0) {
-                sumPrecision += r.precision;
-                precisionCount++;
-                if (r.tokenK >= 20) {
-                    pAtK.computeIfAbsent(r.tokenK, k -> new ArrayList<>()).add(r.precision);
-                }
-            }
-
             // ---------- Recall@K ----------
             if (r.recall >= 0.0 && r.recall <= 1.0) {
                 sumRecall += r.recall;
@@ -131,8 +116,7 @@ public final class Aggregates {
         }
 
         // ---------- Final averages ----------
-        a.avgRatio      = ratioCount > 0 ? (sumRatio / ratioCount) : 0.0;   // avg_ratio_20_100
-        a.avgPrecision  = precisionCount > 0 ? (sumPrecision / precisionCount) : 0.0;
+        a.avgCandidateRatio      = ratioCount > 0 ? (sumRatio / ratioCount) : 0.0;   // avg_ratio_20_100
         a.avgRecall     = recallCount > 0 ? (sumRecall / recallCount) : 0.0;
 
         a.avgServerMs   = sumServer / count;
@@ -147,14 +131,6 @@ public final class Aggregates {
         a.avgCandKept      = sumCandK / count;
         a.avgCandDecrypted = sumCandD / count;
         a.avgReturned      = sumRet   / count;
-
-        // ---------- Precision@K ----------
-        for (var e : pAtK.entrySet()) {
-            a.precisionAtK.put(
-                    e.getKey(),
-                    e.getValue().stream().mapToDouble(Double::doubleValue).average().orElse(0.0)
-            );
-        }
 
         // ---------- Recall@K ----------
         for (var e : rAtK.entrySet()) {
