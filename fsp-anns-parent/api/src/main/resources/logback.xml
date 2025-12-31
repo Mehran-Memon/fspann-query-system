@@ -6,7 +6,7 @@
         </encoder>
     </appender>
 
-    <root level="WARN">
+    <root level="INFO">
         <appender-ref ref="FILE" />
     </root>
 
@@ -19,4 +19,12 @@
     <logger name="com.fspann.crypto.AesGcmCryptoService" level="INFO" />
     <logger name="com.fspann.key.KeyRotationServiceImpl" level="INFO" />
     <logger name="com.fspann.key.KeyManager" level="INFO" />
+    <logger name="com.fspann.api.GroundtruthValidator" level="INFO" />
+    <logger name="com.fspann.loader.GroundtruthManager" level="INFO" />
+    <logger name="com.fspann.loader.StreamingBatchLoader" level="INFO" />
+
+    <logger name="org.rocksdb" level="WARN" />
+    <logger name="io.micrometer" level="WARN" />
+    <logger name="org.apache" level="WARN" />
+
 </configuration>

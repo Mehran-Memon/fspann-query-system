@@ -92,21 +92,58 @@ public final class QueryTokenFactory {
         // =====================================================
         BitSet[][] bitCodes = new BitSet[tables][divisions];
 
+        // ← ADD: Track if this is first query for detailed logging
+        boolean isFirstQuery = (topK == 100); // Assume first call is with K=100
+
         for (int t = 0; t < tables; t++) {
             for (int d = 0; d < divisions; d++) {
-                Coding.GFunction G =
-                        GFunctionRegistry.get(dim, t, d);
+                Coding.GFunction G = GFunctionRegistry.get(dim, t, d);
+
+                // ← ADD: Log GFunction parameters for first query, table 0, division 0
+                if (isFirstQuery && t == 0 && d == 0) {
+                    log.info("QUERY GFunction[table=0,div=0]: seed={}, m={}, lambda={}, omega[0]={:.2f}, omega[5]={:.2f}",
+                            G.seed, G.m, G.lambda,
+                            G.omega[0],
+                            G.omega.length > 5 ? G.omega[5] : -1.0
+                    );
+
+                    // Log first 5 omega values
+                    StringBuilder omegaStr = new StringBuilder();
+                    for (int i = 0; i < Math.min(5, G.omega.length); i++) {
+                        omegaStr.append(String.format("%.2f", G.omega[i]));
+                        if (i < Math.min(4, G.omega.length - 1)) omegaStr.append(", ");
+                    }
+                    log.info("QUERY omega sample[table=0,div=0]: [{}...]", omegaStr.toString());
+                }
 
                 bitCodes[t][d] = Coding.C(vec, G);
+
+                // ← ADD: Log BitSet characteristics for first query
+                if (isFirstQuery && t == 0 && d == 0) {
+                    BitSet code = bitCodes[t][d];
+                    log.info("QUERY BitSet[table=0,div=0]: length={}, cardinality={}, first10bits={}",
+                            code.length(),
+                            code.cardinality(),
+                            getBitString(code, 10)
+                    );
+                }
             }
         }
 
+        // ← ADD: Validation
         for (int t = 0; t < tables; t++) {
             if (bitCodes[t].length != divisions) {
                 throw new IllegalStateException(
                         "BitCode dimension mismatch at table " + t
                 );
             }
+        }
+
+        // ← ADD: Log query vector sample for first query
+        if (isFirstQuery) {
+            log.info("QUERY vector sample: first 5 dims = [{:.2f}, {:.2f}, {:.2f}, {:.2f}, {:.2f}]",
+                    vec[0], vec[1], vec[2], vec[3], vec[4]
+            );
         }
 
         // =====================================================
@@ -128,6 +165,16 @@ public final class QueryTokenFactory {
                 "dim_" + dim + "_v" + kv.getVersion()
         );
     }
+
+    // Helper method to convert BitSet to binary string
+    private String getBitString(BitSet bs, int maxBits) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < Math.min(maxBits, bs.length()); i++) {
+            sb.append(bs.get(i) ? '1' : '0');
+        }
+        return sb.toString();
+    }
+
 
     // =====================================================
     // DERIVE TOKEN (change topK only)

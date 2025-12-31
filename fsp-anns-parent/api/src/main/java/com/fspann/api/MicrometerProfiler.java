@@ -4,7 +4,7 @@ import com.fspann.common.Profiler;
 import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.Timer;   // ✅ Micrometer Timer
+import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -30,7 +30,8 @@ public final class MicrometerProfiler {
 
     private final DistributionSummary clientSummary;
     private final DistributionSummary serverSummary;
-    private final DistributionSummary ratioSummary;
+    private final DistributionSummary distanceRatioSummary;      // ← Paper ratio
+    private final DistributionSummary candidateRatioSummary;     // ← Search efficiency
 
     public MicrometerProfiler(MeterRegistry reg, Profiler baseProfiler) {
         this.registry = Objects.requireNonNull(reg, "registry");
@@ -42,8 +43,13 @@ public final class MicrometerProfiler {
         this.serverSummary =
                 DistributionSummary.builder("fspann.query.server_ms")
                         .register(registry);
-        this.ratioSummary =
-                DistributionSummary.builder("fspann.query.ratio")
+        this.distanceRatioSummary =
+                DistributionSummary.builder("fspann.query.distance_ratio")
+                        .description("Paper ratio (quality metric)")
+                        .register(registry);
+        this.candidateRatioSummary =
+                DistributionSummary.builder("fspann.query.candidate_ratio")
+                        .description("Search efficiency metric")
                         .register(registry);
     }
 
@@ -75,7 +81,7 @@ public final class MicrometerProfiler {
     }
 
     /* --------------------------------------------------------
-     * QUERY ROW WRAPPER (NN-rank aware)
+     * QUERY ROW WRAPPER (UPDATED: both ratios)
      * -------------------------------------------------------- */
 
     public synchronized void recordQueryRow(
@@ -85,9 +91,9 @@ public final class MicrometerProfiler {
             double runMs,
             double decryptMs,
             double insertMs,
-            double ratio,
-            double precision,
-            double recall,                 // ✅ ADD THIS
+            double distanceRatio,          // ← Paper ratio (quality)
+            double candidateRatio,         // ← Search efficiency
+            double recall,
             int candTotal,
             int candKept,
             int candDec,
@@ -118,7 +124,8 @@ public final class MicrometerProfiler {
                 runMs,
                 decryptMs,
                 insertMs,
-                ratio,
+                distanceRatio,         // ← Pass both ratios
+                candidateRatio,
                 recall,
                 candTotal,
                 candKept,
@@ -146,7 +153,14 @@ public final class MicrometerProfiler {
 
         clientSummary.record(clientMs);
         serverSummary.record(serverMs);
-        ratioSummary.record(ratio);
+
+        // Record both ratio metrics
+        if (Double.isFinite(distanceRatio)) {
+            distanceRatioSummary.record(distanceRatio);
+        }
+        if (Double.isFinite(candidateRatio)) {
+            candidateRatioSummary.record(candidateRatio);
+        }
     }
 
     /* --------------------------------------------------------

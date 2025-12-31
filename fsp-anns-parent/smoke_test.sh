@@ -17,8 +17,8 @@ echo ""
 # ================= USER PARAMETERS =================
 
 TEST_DATASET="SIFT1M"
-TEST_PROFILE="M32"          # BASE or profile name
-QUERY_LIMIT=200             # Smoke test queries only
+TEST_PROFILE="M14"          # BASE or profile name
+QUERY_LIMIT=20             # Smoke test queries only
 
 # ================= PATHS =================
 

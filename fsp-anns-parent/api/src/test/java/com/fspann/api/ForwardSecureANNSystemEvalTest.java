@@ -93,7 +93,7 @@ class ForwardSecureANNSystemEvalTest {
                         gt
                 );
 
-        assertTrue(m.ratioAtK() >= 1.0);
+        assertTrue(m.candidateRatioAtK() >= 1.0);
     }
 
     @Test

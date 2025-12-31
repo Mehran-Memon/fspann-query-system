@@ -1,5 +1,8 @@
 package com.fspann.index.paper;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.Serializable;
 import java.util.*;
 
@@ -10,6 +13,8 @@ import java.util.*;
  * Relaxation is implemented by shortening prefix length.
  */
 public final class PrefixPartitioner {
+
+    private static final Logger logger = LoggerFactory.getLogger(PrefixPartitioner.class);
 
     private PrefixPartitioner() {}
 
@@ -35,6 +40,19 @@ public final class PrefixPartitioner {
             if (!(o instanceof PrefixKey k)) return false;
             return length == k.length && bits.equals(k.bits);
         }
+
+        @Override
+        public String toString() {
+            return "PrefixKey{length=" + length + ", bits=" + toBitString(bits, Math.min(10, length)) + "}";
+        }
+
+        private static String toBitString(BitSet bs, int maxBits) {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < maxBits; i++) {
+                sb.append(bs.get(i) ? '1' : '0');
+            }
+            return sb.toString();
+        }
     }
 
     // ============================================================
@@ -59,17 +77,35 @@ public final class PrefixPartitioner {
     ) {
         List<Partition> out = new ArrayList<>();
 
+        logger.debug("Building partitions: fullBits={}, numVectors={}", fullBits, idToCode.size());
+
         // Relax from fullBits → 1
         for (int p = fullBits; p >= 1; p--) {
             Map<PrefixKey, List<String>> map = new HashMap<>();
 
+            int sampleCount = 0;
             for (Map.Entry<String, BitSet> e : idToCode.entrySet()) {
                 PrefixKey key = new PrefixKey(e.getValue(), p);
                 map.computeIfAbsent(key, k -> new ArrayList<>()).add(e.getKey());
+
+                // LOG: First 5 keys for fullBits partition only
+                if (p == fullBits && sampleCount < 5) {
+                    logger.info("BUILD PARTITION KEY [p={}, listIndex={}]: id={}, key={}",
+                            p, out.size(), e.getKey(), key);
+                    sampleCount++;
+                }
             }
 
-            out.add(new Partition(p, map));
+            Partition partition = new Partition(p, map);
+            out.add(partition);
+
+            if (p == fullBits) {
+                logger.info("BUILD PARTITION SUMMARY [p={}, listIndex={}]: {} unique keys, {} total vectors",
+                        p, out.size() - 1, map.size(), idToCode.size());
+            }
         }
+
+        logger.debug("Built {} partitions (fullBits={} down to 1)", out.size(), fullBits);
 
         return out;
     }

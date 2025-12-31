@@ -366,10 +366,36 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
 
         S.divisions.clear();
 
-        for (int d = 0; d < divisions; d++) {
+        // ← ADD: Log GFunction used for first build
+        if (S.table == 0) {
+            Coding.GFunction g0 = GFunctionRegistry.get(S.dim, 0, 0);
+            logger.info("BUILD GFunction[table=0,div=0]: seed={}, m={}, lambda={}, omega[0]= %.2f, omega[5]=%.2f",
+                    g0.seed, g0.m, g0.lambda,
+                    g0.omega[0],
+                    g0.omega.length > 5 ? g0.omega[5] : -1.0
+            );
 
-            Map<String, BitSet> idToCode =
-                    new HashMap<>(S.staged.size());
+            // Log first 5 omega values
+            StringBuilder omegaStr = new StringBuilder();
+            for (int i = 0; i < Math.min(5, g0.omega.length); i++) {
+                omegaStr.append(String.format("%.2f", g0.omega[i]));
+                if (i < Math.min(4, g0.omega.length - 1)) omegaStr.append(", ");
+            }
+            logger.info("BUILD omega sample[table=0,div=0]: [{}...]", omegaStr.toString());
+
+            // ← ADD: Log a sample vector's BitSet code
+            if (!S.staged.isEmpty() && S.stagedCodes.size() > 0) {
+                BitSet sampleCode = S.stagedCodes.get(0)[0]; // First vector, first division
+                logger.info("BUILD BitSet sample[table=0,div=0]: length={}, cardinality={}, first10bits={}",
+                        sampleCode.length(),
+                        sampleCode.cardinality(),
+                        getBitString(sampleCode, 10)
+                );
+            }
+        }
+
+        for (int d = 0; d < divisions; d++) {
+            Map<String, BitSet> idToCode = new HashMap<>(S.staged.size());
 
             for (int i = 0; i < S.staged.size(); i++) {
                 idToCode.put(
@@ -379,8 +405,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
             }
 
             DivisionState div = new DivisionState();
-            div.prefixPartitions =
-                    PrefixPartitioner.build(idToCode, fullBits);
+            div.prefixPartitions = PrefixPartitioner.build(idToCode, fullBits);
 
             S.divisions.add(div);
         }
@@ -393,6 +418,16 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
                 S.dim, S.table, S.divisions.size()
         );
     }
+
+    // ← ADD: Helper method
+    private String getBitString(BitSet bs, int maxBits) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < Math.min(maxBits, bs.length()); i++) {
+            sb.append(bs.get(i) ? '1' : '0');
+        }
+        return sb.toString();
+    }
+
 
     // =====================================================
     // REAL RUN path: candidate IDs only (unions across tables)
@@ -424,18 +459,10 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
 
         int K = token.getTopK();
         int requiredK = Math.max(K, cfg.getEval().getMaxK());
-        int HARD_CAP =
-                Math.max(
-                        cfg.getRuntime().getMaxGlobalCandidates(),
-                        50 * K
-                );
-
-        // ← DIAGNOSTIC: Sample query codes
-        try {
-            BitSet firstCode = qCodes[0][0];
-            logger.debug("Query code sample [table=0,div=0]: cardinality={} length={}",
-                    firstCode.cardinality(), firstCode.length());
-        } catch (Exception ignore) {}
+        int HARD_CAP = Math.max(
+                cfg.getRuntime().getMaxGlobalCandidates(),
+                50 * K
+        );
 
         Map<String, Integer> score = new HashMap<>(HARD_CAP);
         Set<String> deleted = new HashSet<>(2048);
@@ -444,28 +471,71 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         int fullBits = cfg.getPaper().getM() * cfg.getPaper().getLambda();
         int maxRelax = fullBits - 1;
 
-        // ← DIAGNOSTIC: Track candidates at each relaxation level
+        // Track candidates at each relaxation level
         int[] candidatesAtRelax = new int[Math.min(5, maxRelax + 1)];
 
-        for (int relax = 0; relax <= maxRelax && score.size() < HARD_CAP; relax++){
+        // Track first query diagnostics
+        boolean isFirstRelax = true;
+
+        for (int relax = 0; relax <= maxRelax && score.size() < HARD_CAP; relax++) {
             int prefixLen = fullBits - relax;
+            int partitionIndex = fullBits - prefixLen;  // This is the list index
 
             for (int t = 0; t < tables.length && score.size() < HARD_CAP; t++) {
                 DimensionState S = tables[t];
 
                 for (int d = 0; d < S.divisions.size() && score.size() < HARD_CAP; d++) {
                     DivisionState div = S.divisions.get(d);
+
+                    // CRITICAL: Verify partition list size
+                    if (div.prefixPartitions == null || div.prefixPartitions.isEmpty()) {
+                        logger.error("FATAL: Division [t={}, d={}] has no partitions!", t, d);
+                        continue;
+                    }
+
+                    if (partitionIndex >= div.prefixPartitions.size()) {
+                        logger.error("FATAL: partitionIndex={} >= partitions.size()={} for relax={}, prefixLen={}",
+                                partitionIndex, div.prefixPartitions.size(), relax, prefixLen);
+                        continue;
+                    }
+
+                    // Get the partition
+                    PrefixPartitioner.Partition part = div.prefixPartitions.get(partitionIndex);
+
+                    // Verify partition prefixLen matches
+                    if (part.prefixLen != prefixLen) {
+                        logger.error("PARTITION MISMATCH: Expected prefixLen={}, got partition.prefixLen={} at index={}",
+                                prefixLen, part.prefixLen, partitionIndex);
+                    }
+
                     BitSet q = qCodes[t][d];
+                    PrefixPartitioner.PrefixKey key = new PrefixPartitioner.PrefixKey(q, prefixLen);
 
-                    // Find the ONE partition matching this prefixLen
-                    PrefixPartitioner.Partition part = div.prefixPartitions
-                            .get(fullBits - prefixLen); // index aligned with build()
+                    // LOG: First query detailed diagnostics
+                    if (isFirstRelax && t == 0 && d == 0) {
+                        logger.info("QUERY PARTITION LOOKUP [relax={}, t={}, d={}]:", relax, t, d);
+                        logger.info("  prefixLen={}, partitionIndex={}", prefixLen, partitionIndex);
+                        logger.info("  queryKey={}", key);
+                        logger.info("  partition.prefixLen={}, partition.buckets.size={}",
+                                part.prefixLen, part.buckets.size());
+                        logger.info("  queryKey IN partition: {}", part.buckets.containsKey(key));
 
-                    PrefixPartitioner.PrefixKey key =
-                            new PrefixPartitioner.PrefixKey(q, prefixLen);
+                        if (!part.buckets.containsKey(key)) {
+                            logger.warn("QUERY KEY NOT FOUND! Showing first 3 partition keys:");
+                            int count = 0;
+                            for (PrefixPartitioner.PrefixKey partKey : part.buckets.keySet()) {
+                                logger.warn("    Partition key {}: {}", count, partKey);
+                                if (++count >= 3) break;
+                            }
+                        }
+                    }
 
                     List<String> ids = part.buckets.get(key);
                     if (ids == null) continue;
+
+                    if (isFirstRelax && t == 0 && d == 0) {
+                        logger.info("Found {} candidates in this partition", ids.size());
+                    }
 
                     for (String id : ids) {
                         if (deleted.contains(id)) continue;
@@ -474,11 +544,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
                             continue;
                         }
 
-                        int weight =
-                                (relax << 12) +
-                                        (t << 6) +
-                                        d;
-
+                        int weight = (relax << 12) + (t << 6) + d;
                         score.merge(id, weight, Integer::sum);
                         rawSeen++;
 
@@ -487,14 +553,15 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
                 }
             }
 
-            // ← DIAGNOSTIC: Capture candidates at this relaxation level
+            // Capture candidates at this relaxation level
             if (relax < candidatesAtRelax.length) {
                 candidatesAtRelax[relax] = score.size();
             }
+
+            isFirstRelax = false;
         }
 
-        List<Map.Entry<String, Integer>> ordered =
-                new ArrayList<>(score.entrySet());
+        List<Map.Entry<String, Integer>> ordered = new ArrayList<>(score.entrySet());
         ordered.sort(Comparator.comparingInt(Map.Entry::getValue));
 
         List<String> out = new ArrayList<>();
@@ -507,7 +574,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         lastTouchedIds.get().addAll(out);
         lastRawVisited = rawSeen;
 
-        // ← DIAGNOSTIC: Summary log
+        // Summary log
         StringBuilder relaxBreakdown = new StringBuilder();
         for (int r = 0; r < candidatesAtRelax.length; r++) {
             relaxBreakdown.append("r").append(r).append("=").append(candidatesAtRelax[r]);
@@ -518,15 +585,11 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
                 K, rawSeen, score.size(), out.size(), deleted.size(), relaxBreakdown.toString());
 
         if (out.size() < requiredK) {
-            logger.warn(
-                    "Recall floor violated: returned={} required={}",
-                    out.size(), requiredK
-            );
+            logger.warn("Recall floor violated: returned={} required={}", out.size(), requiredK);
         }
 
         return out;
     }
-
     public EncryptedPoint loadPointIfActive(String id) {
         if (metadata.isDeleted(id)) return null;
         try {

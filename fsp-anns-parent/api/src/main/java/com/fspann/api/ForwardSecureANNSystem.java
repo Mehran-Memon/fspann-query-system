@@ -758,16 +758,15 @@ public class ForwardSecureANNSystem {
             QueryServiceImpl qs,
             GroundtruthManager gtMgr
     ) {
-
         // =========================================================
-        // Ground Truth
+        // Ground Truth with Offset Correction
         // =========================================================
         int[] gt = gtMgr.getGroundtruth(queryIndex, k);
         if (gt == null || gt.length < k) {
             return new QueryMetrics(
-                    Double.NaN,                 // candidateRatioAtK
-                    Double.NaN,                 // distanceRatioAtK
-                    Double.NaN                  // recallAtK
+                    Double.NaN,
+                    Double.NaN,
+                    Double.NaN
             );
         }
 
@@ -779,6 +778,17 @@ public class ForwardSecureANNSystem {
 
         for (int i = 0; i < upto; i++) {
             annIdx[i] = resolveBaseIndex(annResults.get(i));
+        }
+
+        // First query, K=100 only
+        if (queryIndex == 0 && k == 100) {
+            logger.info("RECALL DEBUG Query 0, K=100:");
+            logger.info("  GT top-10: {}",
+                    Arrays.stream(gt).limit(10).mapToObj(String::valueOf)
+                            .collect(java.util.stream.Collectors.joining(", ")));
+            logger.info("  ANN top-10: {}",
+                    Arrays.stream(annIdx).limit(10).mapToObj(String::valueOf)
+                            .collect(java.util.stream.Collectors.joining(", ")));
         }
 
         // =========================================================
@@ -828,12 +838,12 @@ public class ForwardSecureANNSystem {
         // =========================================================
         // Candidate Ratio@K  (PRIMARY — Peng et al.)
         // =========================================================
-        int refinedCandidates = qs.getLastCandDecrypted(); // NOT total raw
+        int refinedCandidates = qs.getLastCandDecrypted();
         double candidateRatioAtK = refinedCandidates / (double) k;
 
         return new QueryMetrics(
-                refinedCandidates / (double) k,  // ← searchEfficiencyRatio (NOT paper ratio)
-                distanceRatioAtK,                 // ← THIS IS the paper ratio!
+                candidateRatioAtK,       // search efficiency
+                distanceRatioAtK,        // paper quality ratio
                 recallAtK
         );
     }
@@ -2082,7 +2092,7 @@ public class ForwardSecureANNSystem {
                         batchSize
                 );
 
-        // >>> SINGLE SOURCE OF TRUTH <<<
+        // >>> SINGLE SOURCE OF TRUTH <
         SystemConfig cfg = sys.config;
 
         // =====================  KEY ROTATION POLICY =====================
@@ -2128,6 +2138,73 @@ public class ForwardSecureANNSystem {
         }
 
         // =====================================================================
+        // ✅ GT VALIDATION (WORKS FOR BOTH MODES)
+        // =====================================================================
+        GroundtruthManager gt = new GroundtruthManager();
+        gt.load(groundtruth);
+
+        // ← DIAGNOSTIC: Show GT ID range and first few queries
+        logger.info("GT DIAGNOSTIC: Loaded GT with ID range [{}, {}]",
+                gt.getMinId(), gt.getMaxId());
+        logger.info("GT DIAGNOSTIC: First 3 query neighbors:");
+        for (int qi = 0; qi < Math.min(3, queries.size()); qi++) {
+            int[] gtIds = gt.getGroundtruthIds(qi, 5);
+            logger.info("  Query {}: top-5 GT IDs = {}", qi, Arrays.toString(gtIds));
+        }
+
+        // ← VALIDATION: Run if source is "gt" or "auto"
+        if (cfg.getRatio() != null &&
+                ("gt".equalsIgnoreCase(cfg.getRatio().source) ||
+                        "auto".equalsIgnoreCase(cfg.getRatio().source))) {
+
+            int gtSampleSize = cfg.getRatio().gtSample;
+            double gtTolerance = cfg.getRatio().gtMismatchTolerance;
+
+            if (gtSampleSize <= 0) gtSampleSize = 100;
+            if (gtTolerance <= 0) gtTolerance = 0.05;
+
+            logger.info("Validating groundtruth: samples={}, tolerance={}%",
+                    gtSampleSize, gtTolerance * 100);
+
+            // ← ONLY validate if we have base vectors (not in query-only restore mode)
+            if (Files.exists(baseVecs)) {
+                GroundtruthValidator.ValidationResult validation =
+                        GroundtruthValidator.validate(
+                                baseVecs,
+                                queries,
+                                gt,
+                                dimension,
+                                gtSampleSize,
+                                gtTolerance
+                        );
+
+                if (!validation.valid) {
+                    logger.error("GT Validation FAILED: {}", validation.message);
+                    logger.error("Mismatched queries (first 10): {}", validation.mismatchedQueries);
+                    logger.error("This likely means:");
+                    logger.error("  1. GT file is for a different dataset, OR");
+                    logger.error("  2. GT IDs have an offset (current range: [{}, {}])",
+                            gt.getMinId(), gt.getMaxId());
+                    logger.error("  3. You need to set GT_OFFSET in computeMetricsAtK()");
+
+                    // ← COMPUTE SUGGESTED OFFSET
+                    int suggestedOffset = gt.getMinId();
+                    if (suggestedOffset > 0 && suggestedOffset < 100) {
+                        logger.error("SUGGESTED FIX: Set GT_OFFSET = {} in computeMetricsAtK()",
+                                suggestedOffset);
+                    }
+
+                    throw new IllegalStateException(validation.message);
+                }
+
+                logger.info("GT validation confirms ID == base offset invariant for dim={}", dimension);
+                logger.info("GT Validation PASSED: {}", validation.message);
+            } else {
+                logger.warn("Skipping GT validation: base vectors not available in query-only mode");
+            }
+        }
+
+        // =====================================================================
         // QUERY-ONLY MODE
         // =====================================================================
         if (queryOnlyMode) {
@@ -2144,42 +2221,6 @@ public class ForwardSecureANNSystem {
             }
 
             sys.finalizeForSearch();
-
-            GroundtruthManager gt = new GroundtruthManager();
-            gt.load(groundtruth);
-
-            if ("gt".equalsIgnoreCase(cfg.getRatio().source) || "auto".equalsIgnoreCase(cfg.getRatio().source)) {
-
-                int gtSampleSize = cfg.getRatio().gtSample;       // e.g., 100
-                double gtTolerance = cfg.getRatio().gtMismatchTolerance;  // e.g., 0.05
-
-                if (gtSampleSize <= 0) gtSampleSize = 100;
-                if (gtTolerance <= 0) gtTolerance = 0.05;
-
-                logger.info("Validating groundtruth: samples={}, tolerance={}%",
-                        gtSampleSize, gtTolerance * 100);
-
-                GroundtruthValidator.ValidationResult validation =
-                        GroundtruthValidator.validate(
-                                baseVecs,           // Path to base vectors
-                                queries,            // Query vectors
-                                gt,                 // Groundtruth manager
-                                dimension,          // Vector dimension
-                                gtSampleSize,       // Number of queries to validate
-                                gtTolerance         // Allowed mismatch rate
-                        );
-
-                if (!validation.valid) {
-                    logger.error("GT Validation FAILED: {}", validation.message);
-                    logger.error("Mismatched queries (first 10): {}", validation.mismatchedQueries);
-                    throw new IllegalStateException(validation.message);
-                }
-                logger.info(
-                        "GT validation confirms ID == base offset invariant for dim={}",
-                        dimension
-                );
-                logger.info("GT Validation PASSED: {}", validation.message);
-            }
 
             sys.runQueries(queries, dimension, gt, true);
 
@@ -2212,9 +2253,6 @@ public class ForwardSecureANNSystem {
         sys.finalizeForSearch();
 
         // ---- QUERY + EVALUATE ----
-        GroundtruthManager gt = new GroundtruthManager();
-        gt.load(groundtruth);
-
         long q0 = System.currentTimeMillis();
         sys.runQueries(
                 queries,
@@ -2233,7 +2271,7 @@ public class ForwardSecureANNSystem {
         // AFTER selective re-encryption (appendix only)
         if (Boolean.getBoolean("reenc.fullMigration")) {
             logger.warn("APPENDIX MODE: Running FULL re-encryption migration");
-            keyService.finalizeRotation();   // migrate all remaining old-version points
+            keyService.finalizeRotation();
         }
 
         // ---- SHUTDOWN ----
@@ -2246,4 +2284,5 @@ public class ForwardSecureANNSystem {
 
         logger.info("FSP-ANN complete");
     }
+
 }
