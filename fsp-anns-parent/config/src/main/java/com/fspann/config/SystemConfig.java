@@ -225,7 +225,14 @@ public final class SystemConfig {
         private int refinementLimit = 20_000;
 
         @JsonProperty("maxGlobalCandidates")
-        private int maxGlobalCandidates = 2000;
+        private int maxGlobalCandidates = 20000;
+
+        @JsonProperty("probeOverride")
+        private int probeOverride = -1;
+
+        public int getProbeOverride() {
+            return probeOverride;
+        }
 
         public int getMaxCandidateFactor() {
             return Math.max(1, maxCandidateFactor);

@@ -423,29 +423,12 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
     // ← ADD: Helper method
     private String getBitString(BitSet bs, int maxBits) {
         StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < Math.min(maxBits, bs.length()); i++) {
+        for (int i = 0; i < Math.min(63, bs.size()); i++) {
             sb.append(bs.get(i) ? '1' : '0');
         }
         return sb.toString();
     }
 
-    private int collectPartition(
-            GreedyPartitioner.Partition p,
-            Map<String, Integer> score,
-            Set<String> deleted
-    ) {
-        int seen = 0;
-        for (String id : p.ids) {
-            if (deleted.contains(id)) continue;
-            if (metadata.isDeleted(id)) {
-                deleted.add(id);
-                continue;
-            }
-            score.merge(id, 1, Integer::sum);
-            seen++;
-        }
-        return seen;
-    }
 
     // =====================================================
     // REAL RUN path: candidate IDs only (unions across tables)
@@ -481,9 +464,9 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         final int K = token.getTopK();
         final int requiredK = Math.max(K, cfg.getEval().getMaxK());
         final int HARD_CAP = Math.max(cfg.getRuntime().getMaxGlobalCandidates(), 200 * K);
-        final int maxProbes = effectiveMaxProbes();
+        final int perDivisionMaxProbes = effectiveMaxProbes();
 
-        // score = min distance-to-partition-range across all hits (lower is better)
+        // bestScore[id] = minimum distance-to-partition-range seen so far
         Map<String, Long> bestScore = new HashMap<>(Math.min(HARD_CAP, 1 << 16));
         Set<String> deleted = new HashSet<>(2048);
         int rawSeen = 0;
@@ -492,38 +475,81 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
             DimensionState S = tables[t];
             if (S.divisions == null || S.divisions.isEmpty()) continue;
 
-            if (t >= qCodes.length) break;
-
             for (int d = 0; d < S.divisions.size() && bestScore.size() < HARD_CAP; d++) {
+                if (d >= qCodes[t].length) {
+                    throw new IllegalStateException(
+                            "Token divisions mismatch at table=" + t +
+                                    " expectedDivisions>=" + (d + 1)
+                    );
+                }
+
                 DivisionState div = S.divisions.get(d);
                 List<GreedyPartitioner.Partition> parts = div.partitions;
                 if (parts == null || parts.isEmpty()) continue;
 
-                if (d >= qCodes[t].length) {
-                    throw new IllegalStateException(
-                            "Token divisions mismatch at table=" + t + " expectedDivisions>=" + (d + 1)
-                    );
-                }
-
                 long qKey = GreedyPartitioner.computeKey(qCodes[t][d]);
                 int center = GreedyPartitioner.findNearestPartition(parts, qKey);
 
-                for (int probe = 0; probe < maxProbes && bestScore.size() < HARD_CAP; probe++) {
-                    int left = center - probe;
-                    int right = center + probe;
+                // PriorityQueue entries: [partitionIndex, distanceToRange]
+                PriorityQueue<long[]> probeQueue =
+                        new PriorityQueue<>(Comparator.comparingLong(a -> a[1]));
 
-                    if (left >= 0) {
-                        rawSeen += collectPartitionOrdered(parts.get(left), qKey, bestScore, deleted);
+                boolean[] visited = new boolean[parts.size()];
+
+                long centerDist = GreedyPartitioner.distanceToRange(
+                        qKey,
+                        parts.get(center).minKey,
+                        parts.get(center).maxKey
+                );
+
+                probeQueue.add(new long[]{center, centerDist});
+                visited[center] = true;
+
+                int probesUsed = 0;
+
+                while (!probeQueue.isEmpty()
+                        && probesUsed < perDivisionMaxProbes
+                        && bestScore.size() < HARD_CAP) {
+
+                    long[] cur = probeQueue.poll();
+                    int idx = (int) cur[0];
+                    probesUsed++;
+
+                    rawSeen += collectPartitionOrdered(
+                            parts.get(idx),
+                            qKey,
+                            bestScore,
+                            deleted
+                    );
+
+                    int left = idx - 1;
+                    if (left >= 0 && !visited[left]) {
+                        visited[left] = true;
+                        long dist = GreedyPartitioner.distanceToRange(
+                                qKey,
+                                parts.get(left).minKey,
+                                parts.get(left).maxKey
+                        );
+                        probeQueue.add(new long[]{left, dist});
                     }
-                    if (right < parts.size() && right != left) {
-                        rawSeen += collectPartitionOrdered(parts.get(right), qKey, bestScore, deleted);
+
+                    int right = idx + 1;
+                    if (right < parts.size() && !visited[right]) {
+                        visited[right] = true;
+                        long dist = GreedyPartitioner.distanceToRange(
+                                qKey,
+                                parts.get(right).minKey,
+                                parts.get(right).maxKey
+                        );
+                        probeQueue.add(new long[]{right, dist});
                     }
                 }
             }
         }
 
-        // order by bestScore asc (closest partitions first)
-        List<Map.Entry<String, Long>> ordered = new ArrayList<>(bestScore.entrySet());
+        // ---- FINAL ORDERING (AFTER ALL TABLES & DIVISIONS) ----
+        List<Map.Entry<String, Long>> ordered =
+                new ArrayList<>(bestScore.entrySet());
         ordered.sort(Comparator.comparingLong(Map.Entry::getValue));
 
         List<String> out = new ArrayList<>(Math.min(ordered.size(), HARD_CAP));
@@ -537,8 +563,8 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         lastRawVisited = rawSeen;
 
         logger.info(
-                "LSH Lookup: K={} | probes={} | rawSeen={} | uniqueCands={} | returned={} | deleted={}",
-                K, maxProbes, rawSeen, bestScore.size(), out.size(), deleted.size()
+                "LSH Lookup: K={} | perDivProbes={} | rawSeen={} | uniqueCands={} | returned={} | deleted={}",
+                K, perDivisionMaxProbes, rawSeen, bestScore.size(), out.size(), deleted.size()
         );
 
         if (out.size() < requiredK) {
@@ -564,15 +590,11 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
             Map<String, Long> bestScore,
             Set<String> deleted
     ) {
-        int seen = 0;
+        int newlySeen = 0;
 
         long dist = GreedyPartitioner.distanceToRange(qKey, p.minKey, p.maxKey);
 
         for (String id : p.ids) {
-            if (bestScore.size() >= Math.max(cfg.getRuntime().getMaxGlobalCandidates(), 1)) {
-                // soft guard; HARD_CAP is enforced outside, keep cheap here
-            }
-
             if (deleted.contains(id)) continue;
 
             if (metadata.isDeleted(id)) {
@@ -581,12 +603,14 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
             }
 
             Long prev = bestScore.get(id);
-            if (prev == null || dist < prev) {
+            if (prev == null) {
+                bestScore.put(id, dist);
+                newlySeen++;
+            } else if (dist < prev) {
                 bestScore.put(id, dist);
             }
-            seen++;
         }
-        return seen;
+        return newlySeen;
     }
 
     // =====================================================

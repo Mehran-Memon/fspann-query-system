@@ -322,6 +322,13 @@ public class ForwardSecureANNSystem {
                 );
 
 
+        if (config.getRuntime().getProbeOverride() > 0) {
+            logger.info(
+                    "Runtime probeOverride configured: {} (applied per-query)",
+                    config.getRuntime().getProbeOverride()
+            );
+        }
+
         // optional background re-encryption
         if (Boolean.parseBoolean(System.getProperty("reenc.background.enabled", "false"))) {
             int intervalMin = Integer.getInteger("reenc.background.intervalMin", 60);
@@ -629,6 +636,11 @@ public class ForwardSecureANNSystem {
         for (int qi = 0; qi < queries.size(); qi++) {
             double[] q = queries.get(qi);
 
+            int probeOverride = config.getRuntime().getProbeOverride();
+            if (probeOverride > 0) {
+                indexService.setProbeOverride(probeOverride);
+            }
+
             // ------------------ Groundtruth (diagnostic only) ------------------
             String trueNNId = null;
             if (trustedGT) {
@@ -726,7 +738,7 @@ public class ForwardSecureANNSystem {
                         qs.wasLastTrueNNSeen()
                 );
           }
-
+                        indexService.clearProbeOverride();
         }
     }
 

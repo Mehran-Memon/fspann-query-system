@@ -113,7 +113,7 @@ public final class QueryTokenFactory {
                         omegaStr.append(String.format("%.2f", G.omega[i]));
                         if (i < Math.min(4, G.omega.length - 1)) omegaStr.append(", ");
                     }
-                    log.info("QUERY omega sample[table=0,div=0]: [{}...]", omegaStr.toString());
+                    log.info("QUERY omega sample[table=0,div=0]: [{}]", omegaStr.toString());
                 }
 
                 bitCodes[t][d] = Coding.C(vec, G);
@@ -139,9 +139,9 @@ public final class QueryTokenFactory {
             }
         }
 
-        // ← ADD: Log query vector sample for first query
+        //Log query vector sample for first query
         if (isFirstQuery) {
-            log.info("QUERY vector sample: first 5 dims = [{:.2f}, {:.2f}, {:.2f}, {:.2f}, {:.2f}]",
+            log.info("QUERY vector sample: first 5 dims = [{}, {}, {}, {}, {}]",
                     vec[0], vec[1], vec[2], vec[3], vec[4]
             );
         }
