@@ -3,7 +3,7 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 
 # ============================================================
-# FSP-ANN MULTI-DATASET SWEEP RUNNER (PAPER-GRADE, JAVA-ONLY)
+# FSP-ANN MULTI-DATASET SWEEP RUNNER (PRODUCTION, PAPER-GRADE)
 # ============================================================
 
 # -------------------- PATHS --------------------
@@ -16,7 +16,11 @@ JVM_ARGS=(
   "-XX:+UseG1GC"
   "-XX:MaxGCPauseMillis=200"
   "-XX:+AlwaysPreTouch"
-  "-Xmx24g"
+
+  "-Xms256g"
+  "-Xmx256g"
+  "-Xmn128g"
+
   "-Dfile.encoding=UTF-8"
   "-Dreenc.mode=end"
   #"-Dreenc.fullMigration=true"
@@ -30,7 +34,6 @@ need_cmd() { command -v "$1" >/dev/null || die "Missing command: $1"; }
 
 need_cmd java
 need_cmd jq
-need_cmd jshell
 need_file "$JAR"
 
 mkdir -p "$OUT_ROOT"
@@ -71,9 +74,6 @@ declare -A GT=(
 ONLY_DATASET=""
 ONLY_PROFILE=""
 
-# ================= K VARIANTS ==================
-KLIST="20,40,60,80,100"
-
 # ================= GLOBAL SUMMARY =================
 
 GLOBAL_SUMMARY="$OUT_ROOT/global_summary.csv"
@@ -87,6 +87,7 @@ DATASETS=(SIFT1M glove-100 RedCaps)
 
 for ds in "${DATASETS[@]}"; do
   echo "DATASET START: $ds"
+
   cfg="${CFG[$ds]}"
   dim="${DIM[$ds]}"
   base="${BASE[$ds]}"
@@ -97,21 +98,23 @@ for ds in "${DATASETS[@]}"; do
 
   ds_root="$OUT_ROOT/$ds"
   mkdir -p "$ds_root"
+
   echo "profile,ART_ms,AvgRatio,ratio@20,ratio@40,ratio@60,ratio@80,ratio@100" \
     > "$ds_root/dataset_summary.csv"
 
   PROFILE_COUNT="$(jq '.profiles | length' "$cfg")"
-  ran_any=false
 
   for ((i=0;i<PROFILE_COUNT;i++)); do
     prof="$(jq -c ".profiles[$i]" "$cfg")"
     name="$(jq -r '.name' <<<"$prof")"
+
     [[ -n "$ONLY_PROFILE" && "$name" != "$ONLY_PROFILE" ]] && continue
-    ran_any=true
 
     overrides="$(jq -c '.overrides // {}' <<<"$prof")"
     run_dir="$ds_root/$name"
-    rm -rf "$run_dir"; mkdir -p "$run_dir/results"
+
+    rm -rf "$run_dir"
+    mkdir -p "$run_dir/results"
 
     final_cfg="$(jq -n '
       def deepmerge(a;b):
@@ -123,13 +126,15 @@ for ds in "${DATASETS[@]}"; do
       | .ratio.source="gt"
       | .ratio.gtPath=$gt
       | .ratio.allowComputeIfMissing=false
-    ' --argjson base "$BASE_JSON" --argjson ovr "$overrides" \
-       --arg res "$run_dir/results" --arg gt "$gt")"
+    ' --argjson base "$BASE_JSON" \
+      --argjson ovr "$overrides" \
+      --arg res "$run_dir/results" \
+      --arg gt "$gt")"
 
     echo "$final_cfg" > "$run_dir/config.json"
     sha256sum "$run_dir/config.json" > "$run_dir/config.sha256"
 
-    echo "RUNNING PROFILE: $ds | $name"
+    echo "RUNNING: $ds | $name (10k queries)"
 
     start_ts=$(date +%s)
 
@@ -137,12 +142,12 @@ for ds in "${DATASETS[@]}"; do
       "$run_dir/config.json" "$base" "$query" "$run_dir/keys.blob" \
       "$dim" "$run_dir" "$gt" "$BATCH_SIZE" \
       >"$run_dir/run.log" 2>&1; then
-        echo "FAILED: $ds | $name (see run.log)" >&2
+        echo "FAILED: $ds | $name"
         continue
     fi
 
     end_ts=$(date +%s)
-    echo "COMPLETED: $ds | $name | runtime=$((end_ts - start_ts))s"
+    echo "COMPLETED: $ds | $name | wall_time=$((end_ts - start_ts))s"
 
     acc="$run_dir/results/summary.csv"
     [[ -f "$acc" ]] || die "Missing summary.csv"
@@ -156,10 +161,10 @@ for ds in "${DATASETS[@]}"; do
       r20 r40 r60 r80 r100 \
     <<<"$row"
 
-    echo "$name,$avg_art,$avg_ratio,$p20,$p40,$p60,$p80,$p100,$((end_ts - start_ts))" \
-    >> "$ds_root/dataset_summary.csv"
-    echo "$ds,$name,$avg_art,$avg_ratio,$p20,$p40,$p60,$p80,$p100" >> "$GLOBAL_SUMMARY"
-  done
+    echo "$name,$avg_art,$avg_ratio,$p20,$p40,$p60,$p80,$p100" \
+      >> "$ds_root/dataset_summary.csv"
 
-  [[ "$ran_any" == true ]] || die "No profile executed for $ds"
+    echo "$ds,$name,$avg_art,$avg_ratio,$p20,$p40,$p60,$p80,$p100" \
+      >> "$GLOBAL_SUMMARY"
+  done
 done
