@@ -17,7 +17,7 @@ echo ""
 # ================= USER PARAMETERS =================
 
 TEST_DATASET="SIFT1M"
-TEST_PROFILE="M14"          # BASE or profile name
+TEST_PROFILE="M24"          # BASE or profile name
 QUERY_LIMIT=20             # Smoke test queries only
 
 # ================= PATHS =================
@@ -33,8 +33,8 @@ JvmArgs=(
   "-XX:+UseG1GC"
   "-XX:MaxGCPauseMillis=200"
   "-XX:+AlwaysPreTouch"
-  "-Xms64g"
-  "-Xmx128g"
+  "-Xms128g"
+  "-Xmx256g"
   "-XX:G1HeapRegionSize=32m"
   "-XX:+UseStringDeduplication"
   "-XX:ConcGCThreads=8"

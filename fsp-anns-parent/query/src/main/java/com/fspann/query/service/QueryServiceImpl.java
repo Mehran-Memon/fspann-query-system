@@ -248,7 +248,7 @@ public final class QueryServiceImpl implements QueryService {
                             lastReturned, lastCandDecrypted, K
                     );
 
-                    index.setProbeOverride(2);   // widen search
+                    index.setProbeOverride(10);
                     continue;                    // retry whole A–C once
                 }
 

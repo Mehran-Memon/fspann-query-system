@@ -75,6 +75,11 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
     private final List<PendingVector> pendingVectors =
             Collections.synchronizedList(new ArrayList<>());
 
+    // Greedy partition parameters (local defaults, no config dependency)
+    private static final int DEFAULT_GREEDY_BLOCK_SIZE = 64;
+    private static final int DEFAULT_MAX_PROBES = 5;
+
+
     private static final class DimensionState {
         final int dim;
         final int table; // 0..L-1
@@ -91,7 +96,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
     }
 
     private static final class DivisionState {
-        List<PrefixPartitioner.Partition> prefixPartitions;
+        List<GreedyPartitioner.Partition> partitions;
     }
 
     private static class PendingVector {
@@ -356,23 +361,23 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
 
         SystemConfig.PaperConfig pc = cfg.getPaper();
         int divisions = pc.getDivisions();
-        int fullBits = pc.getM() * pc.getLambda();
+        int blockSize = DEFAULT_GREEDY_BLOCK_SIZE;
 
         if (!S.divisions.isEmpty()) {
             logger.warn("build() called on non-empty divisions - skipping");
             return;
         }
 
-        //Log GFunction used for first build
+        // Log GFunction used for first build
         if (S.table == 0) {
             Coding.GFunction g0 = GFunctionRegistry.get(S.dim, 0, 0);
-            logger.info("BUILD GFunction[table=0,div=0]: seed={}, m={}, lambda={}, omega[0]={}, omega[5]={}",
+            logger.info(
+                    "BUILD GFunction[table=0,div=0]: seed={}, m={}, lambda={}, omega[0]={}, omega[5]={}",
                     g0.seed, g0.m, g0.lambda,
                     g0.omega[0],
                     g0.omega.length > 5 ? g0.omega[5] : -1.0
             );
 
-            // Log first 5 omega values
             StringBuilder omegaStr = new StringBuilder();
             for (int i = 0; i < Math.min(5, g0.omega.length); i++) {
                 omegaStr.append(String.format("%.2f", g0.omega[i]));
@@ -380,10 +385,10 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
             }
             logger.info("BUILD omega sample[table=0,div=0]: [{}...]", omegaStr.toString());
 
-            // ← ADD: Log a sample vector's BitSet code
-            if (!S.staged.isEmpty() && S.stagedCodes.size() > 0) {
-                BitSet sampleCode = S.stagedCodes.get(0)[0]; // First vector, first division
-                logger.info("BUILD BitSet sample[table=0,div=0]: length={}, cardinality={}, first10bits={}",
+            if (!S.staged.isEmpty() && !S.stagedCodes.isEmpty()) {
+                BitSet sampleCode = S.stagedCodes.get(0)[0];
+                logger.info(
+                        "BUILD BitSet sample[table=0,div=0]: length={}, cardinality={}, first10bits={}",
                         sampleCode.length(),
                         sampleCode.cardinality(),
                         getBitString(sampleCode, 10)
@@ -402,8 +407,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
             }
 
             DivisionState div = new DivisionState();
-            div.prefixPartitions = PrefixPartitioner.build(idToCode, fullBits);
-
+            div.partitions = GreedyPartitioner.build(idToCode, blockSize);
             S.divisions.add(div);
         }
 
@@ -411,8 +415,8 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         S.stagedCodes.clear();
 
         logger.debug(
-                "Built MSANNP prefix partitions: dim={} table={} divisions={}",
-                S.dim, S.table, S.divisions.size()
+                "Built MSANNP greedy partitions: dim={} table={} divisions={} blockSize={}",
+                S.dim, S.table, S.divisions.size(), blockSize
         );
     }
 
@@ -425,6 +429,23 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         return sb.toString();
     }
 
+    private int collectPartition(
+            GreedyPartitioner.Partition p,
+            Map<String, Integer> score,
+            Set<String> deleted
+    ) {
+        int seen = 0;
+        for (String id : p.ids) {
+            if (deleted.contains(id)) continue;
+            if (metadata.isDeleted(id)) {
+                deleted.add(id);
+                continue;
+            }
+            score.merge(id, 1, Integer::sum);
+            seen++;
+        }
+        return seen;
+    }
 
     // =====================================================
     // REAL RUN path: candidate IDs only (unions across tables)
@@ -449,120 +470,64 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
 
         BitSet[][] qCodes = token.getBitCodes();
         if (qCodes == null) {
+            throw new IllegalStateException("MSANNP violation: QueryToken missing BitSet codes");
+        }
+        if (qCodes.length != tables.length) {
             throw new IllegalStateException(
-                    "MSANNP violation: QueryToken missing BitSet codes"
+                    "Token tables mismatch: token=" + qCodes.length + " index=" + tables.length
             );
         }
 
-        int K = token.getTopK();
-        int requiredK = Math.max(K, cfg.getEval().getMaxK());
-        int HARD_CAP = Math.max(
-                cfg.getRuntime().getMaxGlobalCandidates(),
-                200 * K
-        );
+        final int K = token.getTopK();
+        final int requiredK = Math.max(K, cfg.getEval().getMaxK());
+        final int HARD_CAP = Math.max(cfg.getRuntime().getMaxGlobalCandidates(), 200 * K);
+        final int maxProbes = effectiveMaxProbes();
 
-        Map<String, Integer> score = new HashMap<>(HARD_CAP);
+        // score = min distance-to-partition-range across all hits (lower is better)
+        Map<String, Long> bestScore = new HashMap<>(Math.min(HARD_CAP, 1 << 16));
         Set<String> deleted = new HashSet<>(2048);
-
         int rawSeen = 0;
-        int fullBits = cfg.getPaper().getM() * cfg.getPaper().getLambda();
-        int maxRelax = fullBits - 1;
 
-        // Track candidates at each relaxation level
-        int[] candidatesAtRelax = new int[Math.min(5, maxRelax + 1)];
+        for (int t = 0; t < tables.length && bestScore.size() < HARD_CAP; t++) {
+            DimensionState S = tables[t];
+            if (S.divisions == null || S.divisions.isEmpty()) continue;
 
-        // Track first query diagnostics
-        boolean isFirstRelax = true;
+            if (t >= qCodes.length) break;
 
-        for (int relax = 0; relax <= maxRelax && score.size() < HARD_CAP; relax++) {
-            int prefixLen = fullBits - relax;
-            int partitionIndex = fullBits - prefixLen;  // This is the list index
+            for (int d = 0; d < S.divisions.size() && bestScore.size() < HARD_CAP; d++) {
+                DivisionState div = S.divisions.get(d);
+                List<GreedyPartitioner.Partition> parts = div.partitions;
+                if (parts == null || parts.isEmpty()) continue;
 
-            for (int t = 0; t < tables.length && score.size() < HARD_CAP; t++) {
-                DimensionState S = tables[t];
+                if (d >= qCodes[t].length) {
+                    throw new IllegalStateException(
+                            "Token divisions mismatch at table=" + t + " expectedDivisions>=" + (d + 1)
+                    );
+                }
 
-                for (int d = 0; d < S.divisions.size() && score.size() < HARD_CAP; d++) {
-                    DivisionState div = S.divisions.get(d);
+                long qKey = GreedyPartitioner.computeKey(qCodes[t][d]);
+                int center = GreedyPartitioner.findNearestPartition(parts, qKey);
 
-                    // CRITICAL: Verify partition list size
-                    if (div.prefixPartitions == null || div.prefixPartitions.isEmpty()) {
-                        logger.error("FATAL: Division [t={}, d={}] has no partitions!", t, d);
-                        continue;
+                for (int probe = 0; probe < maxProbes && bestScore.size() < HARD_CAP; probe++) {
+                    int left = center - probe;
+                    int right = center + probe;
+
+                    if (left >= 0) {
+                        rawSeen += collectPartitionOrdered(parts.get(left), qKey, bestScore, deleted);
                     }
-
-                    if (partitionIndex >= div.prefixPartitions.size()) {
-                        logger.error("FATAL: partitionIndex={} >= partitions.size()={} for relax={}, prefixLen={}",
-                                partitionIndex, div.prefixPartitions.size(), relax, prefixLen);
-                        continue;
-                    }
-
-                    // Get the partition
-                    PrefixPartitioner.Partition part = div.prefixPartitions.get(partitionIndex);
-
-                    // Verify partition prefixLen matches
-                    if (part.prefixLen != prefixLen) {
-                        logger.error("PARTITION MISMATCH: Expected prefixLen={}, got partition.prefixLen={} at index={}",
-                                prefixLen, part.prefixLen, partitionIndex);
-                    }
-
-                    BitSet q = qCodes[t][d];
-                    PrefixPartitioner.PrefixKey key = new PrefixPartitioner.PrefixKey(q, prefixLen);
-
-                    // LOG: First query detailed diagnostics
-                    if (isFirstRelax && t == 0 && d == 0) {
-                        logger.info("QUERY PARTITION LOOKUP [relax={}, t={}, d={}]:", relax, t, d);
-                        logger.info("  prefixLen={}, partitionIndex={}", prefixLen, partitionIndex);
-                        logger.info("  queryKey={}", key);
-                        logger.info("  partition.prefixLen={}, partition.buckets.size={}",
-                                part.prefixLen, part.buckets.size());
-                        logger.info("  queryKey IN partition: {}", part.buckets.containsKey(key));
-
-                        if (!part.buckets.containsKey(key)) {
-                            logger.warn("QUERY KEY NOT FOUND! Showing first 3 partition keys:");
-                            int count = 0;
-                            for (PrefixPartitioner.PrefixKey partKey : part.buckets.keySet()) {
-                                logger.warn("    Partition key {}: {}", count, partKey);
-                                if (++count >= 3) break;
-                            }
-                        }
-                    }
-
-                    List<String> ids = part.buckets.get(key);
-                    if (ids == null) continue;
-
-                    if (isFirstRelax && t == 0 && d == 0) {
-                        logger.info("Found {} candidates in this partition", ids.size());
-                    }
-
-                    for (String id : ids) {
-                        if (deleted.contains(id)) continue;
-                        if (metadata.isDeleted(id)) {
-                            deleted.add(id);
-                            continue;
-                        }
-
-                        int weight = (relax << 12) + (t << 6) + d;
-                        score.merge(id, weight, Integer::sum);
-                        rawSeen++;
-
-                        if (score.size() >= HARD_CAP) break;
+                    if (right < parts.size() && right != left) {
+                        rawSeen += collectPartitionOrdered(parts.get(right), qKey, bestScore, deleted);
                     }
                 }
             }
-
-            // Capture candidates at this relaxation level
-            if (relax < candidatesAtRelax.length) {
-                candidatesAtRelax[relax] = score.size();
-            }
-
-            isFirstRelax = false;
         }
 
-        List<Map.Entry<String, Integer>> ordered = new ArrayList<>(score.entrySet());
-        ordered.sort(Comparator.comparingInt(Map.Entry::getValue));
+        // order by bestScore asc (closest partitions first)
+        List<Map.Entry<String, Long>> ordered = new ArrayList<>(bestScore.entrySet());
+        ordered.sort(Comparator.comparingLong(Map.Entry::getValue));
 
-        List<String> out = new ArrayList<>();
-        for (int i = 0; i < Math.min(ordered.size(), HARD_CAP); i++) {
+        List<String> out = new ArrayList<>(Math.min(ordered.size(), HARD_CAP));
+        for (int i = 0; i < ordered.size() && out.size() < HARD_CAP; i++) {
             out.add(ordered.get(i).getKey());
         }
 
@@ -571,15 +536,10 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         lastTouchedIds.get().addAll(out);
         lastRawVisited = rawSeen;
 
-        // Summary log
-        StringBuilder relaxBreakdown = new StringBuilder();
-        for (int r = 0; r < candidatesAtRelax.length; r++) {
-            relaxBreakdown.append("r").append(r).append("=").append(candidatesAtRelax[r]);
-            if (r < candidatesAtRelax.length - 1) relaxBreakdown.append(", ");
-        }
-
-        logger.info("LSH Lookup: K={} | rawSeen={} | uniqueCands={} | returned={} | deleted={} | [{}]",
-                K, rawSeen, score.size(), out.size(), deleted.size(), relaxBreakdown.toString());
+        logger.info(
+                "LSH Lookup: K={} | probes={} | rawSeen={} | uniqueCands={} | returned={} | deleted={}",
+                K, maxProbes, rawSeen, bestScore.size(), out.size(), deleted.size()
+        );
 
         if (out.size() < requiredK) {
             logger.warn("Recall floor violated: returned={} required={}", out.size(), requiredK);
@@ -595,6 +555,38 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         } catch (Exception e) {
             return null;
         }
+    }
+
+
+    private int collectPartitionOrdered(
+            GreedyPartitioner.Partition p,
+            long qKey,
+            Map<String, Long> bestScore,
+            Set<String> deleted
+    ) {
+        int seen = 0;
+
+        long dist = GreedyPartitioner.distanceToRange(qKey, p.minKey, p.maxKey);
+
+        for (String id : p.ids) {
+            if (bestScore.size() >= Math.max(cfg.getRuntime().getMaxGlobalCandidates(), 1)) {
+                // soft guard; HARD_CAP is enforced outside, keep cheap here
+            }
+
+            if (deleted.contains(id)) continue;
+
+            if (metadata.isDeleted(id)) {
+                deleted.add(id);
+                continue;
+            }
+
+            Long prev = bestScore.get(id);
+            if (prev == null || dist < prev) {
+                bestScore.put(id, dist);
+            }
+            seen++;
+        }
+        return seen;
     }
 
     // =====================================================
@@ -721,5 +713,12 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
     public int getLastRawCandidateCount() {
         return lastRawVisited;
     }
+
+    private int effectiveMaxProbes() {
+        Integer o = probeOverride.get();
+        if (o != null && o > 0) return o;
+        return DEFAULT_MAX_PROBES;
+    }
+
 
 }

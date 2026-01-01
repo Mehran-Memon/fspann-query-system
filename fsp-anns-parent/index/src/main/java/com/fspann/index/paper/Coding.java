@@ -220,8 +220,8 @@ public final class Coding {
         // ============================================================
         // TUNING: Increase divisor for narrower buckets (lower recall, faster)
         //         Decrease divisor for wider buckets (higher recall, slower)
-        // Recommended starting point: 20.0 for SIFT1M
-        final double OMEGA_DIVISOR = 20.0;
+        // Recommended starting point: 2.0 for SIFT1M
+        final double OMEGA_DIVISOR = 2.5;
 
         double[] r = new double[m];
         double[] w = new double[m];
