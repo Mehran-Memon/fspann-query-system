@@ -458,7 +458,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         int requiredK = Math.max(K, cfg.getEval().getMaxK());
         int HARD_CAP = Math.max(
                 cfg.getRuntime().getMaxGlobalCandidates(),
-                50 * K
+                200 * K
         );
 
         Map<String, Integer> score = new HashMap<>(HARD_CAP);
@@ -587,6 +587,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
 
         return out;
     }
+
     public EncryptedPoint loadPointIfActive(String id) {
         if (metadata.isDeleted(id)) return null;
         try {

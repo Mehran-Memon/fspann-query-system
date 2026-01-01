@@ -27,14 +27,18 @@ JarPath="$ROOT/api/target/api-0.0.1-SNAPSHOT-shaded.jar"
 OutRoot="/mnt/data/mehran/SMOKE_TEST"
 Batch=100000
 
-# ================= JVM SETTINGS (FIXED: 16GB heap) =================
+# ================= JVM SETTINGS  =================
 
 JvmArgs=(
   "-XX:+UseG1GC"
   "-XX:MaxGCPauseMillis=200"
   "-XX:+AlwaysPreTouch"
-  "-Xms8g"
-  "-Xmx16g"
+  "-Xms64g"
+  "-Xmx128g"
+  "-XX:G1HeapRegionSize=32m"
+  "-XX:+UseStringDeduplication"
+  "-XX:ConcGCThreads=8"
+  "-XX:ParallelGCThreads=16"
   "-Dfile.encoding=UTF-8"
   "-Dreenc.mode=end"
 )
@@ -197,30 +201,30 @@ java "${JvmArgs[@]}" \
   "$Batch" \
   2>&1 | tee "$log"
 
-java_exit=$?
-end=$(date +%s)
-elapsed=$((end - start))
+  java_exit=$?
+  end=$(date +%s)
+  elapsed=$((end - start))
 
-echo ""
-echo "  Runtime: ${elapsed}s ($(($elapsed / 60))m $(($elapsed % 60))s)"
+  echo ""
+  echo "  Runtime: ${elapsed}s ($(($elapsed / 60))m $(($elapsed % 60))s)"
 
-if [ $java_exit -ne 0 ]; then
-  echo ""
-  echo "============================================"
-  echo " ERROR: Java process failed with exit code $java_exit"
-  echo "============================================"
-  echo ""
-  echo "Last 30 lines of log:"
-  tail -30 "$log"
-  echo ""
-  exit $java_exit
-fi
+  if [ $java_exit -ne 0 ]; then
+    echo ""
+    echo "============================================"
+    echo " ERROR: Java process failed with exit code $java_exit"
+    echo "============================================"
+    echo ""
+    echo "Last 30 lines of log:"
+    tail -30 "$log"
+    echo ""
+    exit $java_exit
+  fi
 
-echo ""
+  echo ""
 
 # ================= STEP 4: ANALYZE RESULTS =================
 
-echo "[STEP 4/5] Analyzing results..."
+  echo "[STEP 4/5] Analyzing results..."
 
 csv="$run_dir/results/profiler_metrics.csv"
 
@@ -256,15 +260,15 @@ echo ""
 header=$(head -1 "$csv")
 IFS=',' read -ra cols <<< "$header"
 
-ratio_col=-1
-precision_col=-1
+distance_ratio_col=-1
+recall_col=-1
 serverMs_col=-1
 clientMs_col=-1
 
 for i in "${!cols[@]}"; do
   case "${cols[$i]}" in
-    ratio) ratio_col=$((i+1)) ;;
-    precision) precision_col=$((i+1)) ;;
+    distance_ratio) distance_ratio_col=$((i+1)) ;;
+    recall) recall_col=$((i+1)) ;;
     serverMs) serverMs_col=$((i+1)) ;;
     clientMs) clientMs_col=$((i+1)) ;;
   esac
@@ -272,7 +276,7 @@ done
 
 # Check critical columns
 missing_cols=()
-[ $ratio_col -eq -1 ] && missing_cols+=("ratio")
+[ $distance_ratio_col -eq -1 ] && missing_cols+=("ratio")
 [ $serverMs_col -eq -1 ] && missing_cols+=("serverMs")
 [ $clientMs_col -eq -1 ] && missing_cols+=("clientMs")
 
@@ -283,16 +287,16 @@ if [ ${#missing_cols[@]} -gt 0 ]; then
 fi
 
 has_precision=false
-if [ $precision_col -ne -1 ]; then
-  has_precision=true
+if [ $recall_col -ne -1 ]; then
+  has_recall=true
 fi
 
 # Calculate statistics using awk with dynamic column handling
-stats=$(gawk -F',' -v rc="$ratio_col" -v pc="$precision_col" -v sc="$serverMs_col" -v cc="$clientMs_col" -v has_prec="$has_precision" '
+stats=$(gawk -F',' -v rc="$distance_ratio_col" -v pc="$recall_col" -v sc="$serverMs_col" -v cc="$clientMs_col" -v has_recall="$has_recall" '
 BEGIN {
     count = 0
     ratio_sum = 0; ratio_min = 999999; ratio_max = 0
-    prec_sum = 0; prec_min = 999999; prec_max = 0
+    recall_sum = 0; recall_min = 999999; recall_max = 0
     server_sum = 0; client_sum = 0
 }
 NR > 1 {
@@ -305,12 +309,12 @@ NR > 1 {
     if (r > ratio_max) ratio_max = r
     ratio_vals[count] = r
 
-    # Precision stats (if column exists)
-    if (has_prec == "true" && pc > 0) {
+    # Recall stats (if column exists)
+    if (has_recall == "true" && rec > 0) {
         p = $pc + 0
-        prec_sum += p
-        if (p < prec_min) prec_min = p
-        if (p > prec_max) prec_max = p
+        recall_sum += rec
+        if (rec < recall_min) recall_min = p
+        if (rec > recall_max) recall_max = p
     }
 
     # Latency stats
@@ -324,7 +328,7 @@ END {
     }
 
     ratio_mean = ratio_sum / count
-    prec_mean = (has_prec == "true" && pc > 0) ? prec_sum / count : -1
+    recall_mean = (has_recall == "true" && pc > 0) ? recall_sum / count : -1
     server_mean = server_sum / count
     client_mean = client_sum / count
 
@@ -342,14 +346,14 @@ END {
     ratio_p95 = sorted_ratios[int(n * 0.95)]
 
     # Use -1 for missing precision stats
-    if (prec_mean < 0) {
-        prec_min = -1
-        prec_max = -1
+    if (recall_mean < 0) {
+        recall_min = -1
+        recall_max = -1
     }
 
     printf "%d|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.2f|%.2f\n",
            count, ratio_mean, ratio_median, ratio_std, ratio_min, ratio_max, ratio_p95,
-           prec_mean, prec_min, prec_max, server_mean, client_mean
+           recall_mean, recall_min, recall_max, server_mean, client_mean
 }
 ' "$csv")
 
@@ -360,7 +364,7 @@ fi
 
 # Parse awk output
 IFS='|' read -r count ratio_mean ratio_median ratio_std ratio_min ratio_max ratio_p95 \
-                   prec_mean prec_min prec_max server_mean client_mean <<< "$stats"
+                   recall_mean recall_min recall_max server_mean client_mean <<< "$stats"
 
 if [ -z "$count" ] || [ "$count" -eq 0 ]; then
   echo "ERROR: No data found in CSV"
@@ -381,16 +385,14 @@ echo "  Max    : $ratio_max"
 echo "  P95    : $ratio_p95"
 echo ""
 
-# Display precision only if available
-if $has_precision && (( $(echo "$prec_mean >= 0" | bc -l) )); then
-  echo "Precision:"
-  echo "  Mean   : $prec_mean"
-  echo "  Min    : $prec_min"
-  echo "  Max    : $prec_max"
+if $has_recall && (( $(echo "$recall_mean >= 0" | bc -l) )); then
+  echo "Recall:"
+  echo "  Mean   : $recall_mean"
+  echo "  Min    : $recall_min"
+  echo "  Max    : $recall_max"
   echo ""
 else
-  echo "Precision: ⚠ NOT AVAILABLE"
-  echo "  → Add 'precision' column to Java CSV output (see docs/ADD_PRECISION_GUIDE.md)"
+  echo "Recall: ⚠ NOT AVAILABLE"
   echo ""
 fi
 
@@ -402,23 +404,22 @@ echo ""
 
 # Validate results
 ok_ratio=false
-ok_prec=false
+ok_recall=false
 
 # Ratio validation (critical)
 if (( $(echo "$ratio_mean <= 1.30" | bc -l) )); then
   ok_ratio=true
 fi
 
-# Precision validation (if available)
-if $has_precision && (( $(echo "$prec_mean >= 0" | bc -l) )); then
-  if (( $(echo "$prec_mean >= 0.85" | bc -l) )); then
-    ok_prec=true
+if $has_recall && (( $(echo "$recall_mean >= 0" | bc -l) )); then
+  if (( $(echo "$recall_mean >= 0.85" | bc -l) )); then
+    ok_recall=true
   else
-    ok_prec=false
+    ok_recall=false
   fi
 else
   # Skip precision validation if not available
-  ok_prec=true
+  ok_recall=true
 fi
 
 echo "=================================================="
@@ -431,19 +432,8 @@ else
   echo "  Ratio     : ✗ FAIL (mean=$ratio_mean, target≤1.30)"
 fi
 
-if $has_precision; then
-  if [ "$ok_prec" = true ]; then
-    echo "  Precision : ✓ PASS (mean=$prec_mean, target≥0.85)"
-  else
-    echo "  Precision : ✗ FAIL (mean=$prec_mean, target≥0.85)"
-  fi
-else
-  echo "  Precision : ⚠ SKIP (not in CSV)"
-fi
-echo ""
-
 analysis_exit=0
-if [ "$ok_ratio" = true ] && [ "$ok_prec" = true ]; then
+if [ "$ok_ratio" = true ] && [ "$ok_recall" = true ]; then
   echo "✓ Smoke test PASSED"
   echo ""
 else
@@ -470,8 +460,8 @@ else
     echo ""
   fi
 
-  if $has_precision && [ "$ok_prec" = false ]; then
-    echo "  → PRECISION TOO LOW ($prec_mean < 0.85)"
+  if $has_precision && [ "$ok_recall" = false ]; then
+    echo "  → PRECISION TOO LOW ($recall_mean < 0.85)"
     echo ""
     echo "    Parameter tuning suggestions:"
     echo "    1. Increase lambda: λ=2 → λ=3"
@@ -528,21 +518,6 @@ else
   echo "  1. Adjust config parameters (see suggestions above)"
   echo "  2. Try different profile: M28, M32, or M28_L1"
   echo "  3. Rerun smoke test to validate changes"
-fi
-
-if ! $has_precision; then
-  echo ""
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "⚠ PRECISION COLUMN MISSING FROM CSV"
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo ""
-  echo "To add precision to CSV output, see: docs/ADD_PRECISION_GUIDE.md"
-  echo ""
-  echo "Quick summary:"
-  echo "  1. Load ground truth: int[][] gt = loadGroundTruth(gtPath, numQueries, topK)"
-  echo "  2. Compute per query: double prec = computePrecision(results, gt[q], topK)"
-  echo "  3. Add to CSV: writer.printf(\"...,%.4f\", ..., prec)"
-  echo ""
 fi
 
 exit $analysis_exit

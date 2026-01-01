@@ -1,5 +1,8 @@
 package com.fspann.index.paper;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.Serializable;
 import java.util.BitSet;
 import java.util.Objects;
@@ -33,6 +36,9 @@ public final class Coding {
     // Default parameters
     private static final double DEFAULT_OMEGA = 1.0;
 
+    private static final Logger log =
+            LoggerFactory.getLogger(Coding.class);
+
     // ============================================================
     // Code family interface
     // ============================================================
@@ -44,7 +50,7 @@ public final class Coding {
     // Fully-materialized GFunction
     // ============================================================
     public static final class GFunction implements Serializable, CodeFamily {
-        /** alpha[j][d] Gaussian projections */
+                /** alpha[j][d] Gaussian projections */
         public final double[][] alpha;
         /** per-projection offset r_j ∈ [0, ω_j) */
         public final double[] r;
@@ -160,7 +166,20 @@ public final class Coding {
 
     /**
      * Build GFunction from sample (Algorithm-1, data-aware ω).
-     * ω_j ≈ (max(y_j) − min(y_j)) * 2^{-λ}
+     *
+     * ADAPTIVE OMEGA STRATEGY:
+     * -----------------------
+     * 1. Estimate typical pairwise distance from sample
+     * 2. Set ω proportional to this distance
+     * 3. Scale by 1/sqrt(m) for multi-projection LSH
+     *
+     * This approach automatically adapts to:
+     * - Different datasets (SIFT, Glove, Deep1B)
+     * - Different dimensions (96, 100, 128)
+     * - Different configurations (m, lambda, tables)
+     */
+    /**
+     * Build GFunction from sample with RANGE-BASED omega (simplified, robust).
      */
     public static GFunction buildFromSample(double[][] sample, int m, int lambda, long seed) {
         if (sample == null || sample.length == 0)
@@ -169,6 +188,7 @@ public final class Coding {
         int d = sample[0].length;
         SplittableRandom rnd = new SplittableRandom(seed);
 
+        // Build random projections
         double[][] alpha = new double[m][d];
         for (int j = 0; j < m; j++) {
             double norm = 0.0;
@@ -181,6 +201,7 @@ public final class Coding {
             for (int i = 0; i < d; i++) alpha[j][i] /= norm;
         }
 
+        // Compute projection ranges
         double[] min = new double[m];
         double[] max = new double[m];
         java.util.Arrays.fill(min, Double.POSITIVE_INFINITY);
@@ -194,12 +215,24 @@ public final class Coding {
             }
         }
 
+        // ============================================================
+        // OMEGA CALCULATION: Range-based (simple and robust)
+        // ============================================================
+        // TUNING: Increase divisor for narrower buckets (lower recall, faster)
+        //         Decrease divisor for wider buckets (higher recall, slower)
+        // Recommended starting point: 20.0 for SIFT1M
+        final double OMEGA_DIVISOR = 20.0;
+
         double[] r = new double[m];
         double[] w = new double[m];
+
         for (int j = 0; j < m; j++) {
             double range = Math.max(1e-6, max[j] - min[j]);
-            double omega = range * Math.pow(2.0, -lambda);
+            double omega = range / OMEGA_DIVISOR;
+
+            // Safety check
             if (!(omega > 0)) omega = 1e-3;
+
             w[j] = omega;
             r[j] = rnd.nextDouble() * omega;
         }

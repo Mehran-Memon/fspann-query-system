@@ -130,10 +130,6 @@ for ds in "${DATASETS[@]}"; do
     sha256sum "$run_dir/config.json" > "$run_dir/config.sha256"
 
     echo "RUNNING PROFILE: $ds | $name"
-    echo "Config  : $run_dir/config.json"
-    echo "Base    : $base"
-    echo "Query   : $query"
-    echo "GT      : $gt"
 
     start_ts=$(date +%s)
 
