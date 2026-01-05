@@ -17,8 +17,8 @@ JVM_ARGS=(
   "-XX:MaxGCPauseMillis=200"
   "-XX:+AlwaysPreTouch"
 
-  "-Xms256g"
-  "-Xmx256g"
+  "-Xms320g"
+  "-Xmx340g"
   "-Xmn128g"
 
   "-Dfile.encoding=UTF-8"
