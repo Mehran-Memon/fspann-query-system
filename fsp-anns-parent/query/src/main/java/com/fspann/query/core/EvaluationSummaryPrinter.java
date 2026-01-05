@@ -10,7 +10,7 @@ public final class EvaluationSummaryPrinter {
 
     private static final Logger log = LoggerFactory.getLogger(EvaluationSummaryPrinter.class);
 
-    public static final List<Integer> STANDARD_KS = List.of(20, 40, 60, 80, 100);
+    public static final List<Integer> STANDARD_KS = List.of(10, 20, 40, 60, 80, 100);
 
     public static void printAndWriteCsv(
             String datasetName,

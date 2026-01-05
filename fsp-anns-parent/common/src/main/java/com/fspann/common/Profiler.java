@@ -11,8 +11,6 @@ public final class Profiler {
     private final List<QueryRow> queryRows = new ArrayList<>();
     private final List<String[]> topKRecords = new ArrayList<>();
 
-    // --- TIMING API (unchanged) ---
-
     public synchronized void start(String label) {
         startTimes.put(label, System.nanoTime());
     }

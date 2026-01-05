@@ -141,8 +141,6 @@ public final class Aggregates {
                 ? (sumCandidateRatio / candidateRatioCount)
                 : 0.0;
 
-        a.avgRecall = recallCount > 0 ? (sumRecall / recallCount) : 0.0;
-
         a.avgServerMs   = sumServer / count;
         a.avgClientMs   = sumClient / count;
         a.avgRunMs      = runCount > 0 ? (sumRun / runCount) : 0.0;
@@ -163,6 +161,8 @@ public final class Aggregates {
                     e.getValue().stream().mapToDouble(Double::doubleValue).average().orElse(0.0)
             );
         }
+
+        a.avgRecall = a.recallAtK.getOrDefault(10, 0.0);
 
         // ---------- Distance Ratio@K (PAPER METRIC) ----------
         for (var e : drAtK.entrySet()) {

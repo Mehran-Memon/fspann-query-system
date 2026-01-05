@@ -23,7 +23,7 @@ JVM_ARGS=(
 
   "-Dfile.encoding=UTF-8"
   "-Dreenc.mode=end"
-  #"-Dreenc.fullMigration=true"
+#  "-Dreenc.fullMigration=true"
 
 )
 
@@ -41,7 +41,7 @@ mkdir -p "$OUT_ROOT"
 # ================= DATASETS ====================
 
 declare -A CFG=(
-  ["SIFT1M"]="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/config/src/main/resources/config_sift1m.json"
+  ["SIFT1M"]="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/config/src/main/resources/config_sift1m_ablation.json"
   ["glove-100"]="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/config/src/main/resources/config_glove100.json"
   ["RedCaps"]="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/config/src/main/resources/config_redcaps.json"
 )

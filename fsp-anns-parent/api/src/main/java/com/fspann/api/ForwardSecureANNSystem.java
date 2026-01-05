@@ -193,7 +193,7 @@ public class ForwardSecureANNSystem {
 
         this.K_VARIANTS = (config.getEval().kVariants != null && config.getEval().kVariants.length > 0)
                 ? config.getEval().kVariants.clone()
-                : new int[]{1, 20, 40, 60, 80, 100};
+                : new int[]{1, 10, 20, 40, 60, 80, 100};
 
         // selective re-encryption global toggle
         this.reencEnabled = propOr(
