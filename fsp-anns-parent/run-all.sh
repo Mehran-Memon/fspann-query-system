@@ -18,7 +18,7 @@ JVM_ARGS=(
   "-XX:+AlwaysPreTouch"
 
   "-Xms320g"
-  "-Xmx340g"
+  "-Xmx354g"
   "-Xmn128g"
 
   "-Dfile.encoding=UTF-8"
@@ -161,10 +161,11 @@ ratio80=$(awk -F',' 'NR>1 {print $27}' "$acc")
 ratio100=$(awk -F',' 'NR>1 {print $28}' "$acc")
 
 
-    echo "$name,$avg_art,$avg_ratio,$p20,$p40,$p60,$p80,$p100" \
-      >> "$ds_root/dataset_summary.csv"
+echo "$name,$avg_art,$avg_ratio,$ratio20,$ratio40,$ratio60,$ratio80,$ratio100" \
+  >> "$ds_root/dataset_summary.csv"
 
-    echo "$ds,$name,$avg_art,$avg_ratio,$p20,$p40,$p60,$p80,$p100" \
-      >> "$GLOBAL_SUMMARY"
+echo "$ds,$name,$avg_art,$avg_ratio,$ratio20,$ratio40,$ratio60,$ratio80,$ratio100" \
+  >> "$GLOBAL_SUMMARY"
+
   done
 done
