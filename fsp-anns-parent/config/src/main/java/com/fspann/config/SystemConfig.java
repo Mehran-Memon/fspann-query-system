@@ -250,13 +250,28 @@ public final class SystemConfig {
             return Math.max(1, earlyStopCandidates);
         }
 
-        public int getRefinementLimit() {
-            return Math.max(1, refinementLimit);
-        }
 
         public int getMaxGlobalCandidates() {
             return Math.max(1, maxGlobalCandidates);
         }
+
+        private transient Integer refinementLimitOverride = null;
+
+        public int getRefinementLimit() {
+            return (refinementLimitOverride != null)
+                    ? refinementLimitOverride
+                    : refinementLimit;
+        }
+
+        public void overrideRefinementLimit(int limit) {
+            this.refinementLimitOverride = Math.max(1, limit);
+        }
+
+        public void clearRefinementLimitOverride() {
+            this.refinementLimitOverride = null;
+        }
+
+
     }
 
     public static final class StabilizationConfig {
@@ -290,7 +305,7 @@ public final class SystemConfig {
         public boolean writeGlobalPrecisionCsv = true;
 
         @JsonProperty("kVariants")
-        public int[] kVariants = {1, 5, 10, 20, 50, 100};
+        public int[] kVariants = {1, 10, 20, 40, 60, 80, 100};
 
         public int getMaxK() {
             int max = 1;

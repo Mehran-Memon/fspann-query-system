@@ -56,6 +56,8 @@ public final class QueryServiceImpl implements QueryService {
 
     // one-run touched set (for forward security)
     private final Set<String> touchedThisSession = ConcurrentHashMap.newKeySet();
+    private final ThreadLocal<Integer> refinementLimitOverride = new ThreadLocal<>();
+    private int lastUniqueCandidates = 0;
 
     // --- NN rank diagnostics ---
     private volatile int lastTrueNNRank = -1;
@@ -135,6 +137,7 @@ public final class QueryServiceImpl implements QueryService {
                 // STAGE A — candidate IDs
                 // -------------------------------
                 List<String> candidateIds = index.lookupCandidateIds(token);
+                this.lastUniqueCandidates = candidateIds.size();
 
                 lastCandTotal = index.getLastRawCandidateCount();
                 lastCandKept  = candidateIds.size();
@@ -142,22 +145,18 @@ public final class QueryServiceImpl implements QueryService {
                 if (candidateIds.isEmpty()) return Collections.emptyList();
 
                 // -------------------------------
-                // STAGE B — bounded refinement
+                // STAGE B — bounded refinement (CONFIG-DRIVEN)
                 // -------------------------------
-                final int minDecryptFloor = Math.max(3500, 35 * K);
+                final int runtimeLimit =
+                        getEffectiveRefinementLimit(cfg.getRuntime().getRefinementLimit());
 
-                final int refineLimit = Math.min(
-                        candidateIds.size(),
-                        Math.max(
-                                minDecryptFloor,
-                                Math.max(
-                                        K,
-                                        (int) Math.ceil(
-                                                K * cfg.getStabilization().getMinCandidatesRatio()
-                                        )
-                                )
-                        )
-                );
+                final int evalLimit = candidateIds.size();
+
+                final int refineLimit =
+                        refinementLimitOverride.get() != null
+                                ? Math.min(evalLimit, runtimeLimit)
+                                : evalLimit;
+
 
                 List<QueryScored> scored = new ArrayList<>(refineLimit);
                 long decryptStart = System.nanoTime();
@@ -204,8 +203,21 @@ public final class QueryServiceImpl implements QueryService {
                 lastDecryptNs = System.nanoTime() - decryptStart;
                 lastCandDecrypted = scored.size();
 
-                logger.info("Refinement: limit={} | notFound={} | invalidVec={} | decryptErr={} | scored={}",
-                        refineLimit, notFound, invalidVector, decryptError, scored.size());
+                logger.info(
+                        "Refinement limits: candidates={} refineLimit={} runtimeLimit={} K={}",
+                        candidateIds.size(), refineLimit, runtimeLimit, K
+                );
+
+                logger.info(
+                        "Refinement: limit={} (cfg={}) | notFound={} | invalidVec={} | decryptErr={} | scored={}",
+                        refineLimit,
+                        cfg.getRuntime().getRefinementLimit(),
+                        notFound,
+                        invalidVector,
+                        decryptError,
+                        scored.size()
+                );
+
 
                 if (scored.isEmpty()) return Collections.emptyList();
                 // -------------------------------
@@ -249,7 +261,8 @@ public final class QueryServiceImpl implements QueryService {
                     );
 
                     index.setProbeOverride(10);
-                    continue;                    // retry whole A–C once
+                    clearRefinementLimit();
+                    continue;
                 }
 
                 return out;
@@ -358,8 +371,6 @@ public final class QueryServiceImpl implements QueryService {
         return lastTrueNNSeen;
     }
     private boolean needRetry(int K) {
-        // retry if we failed to return K
-        // OR refinement was too shallow to be reliable
         return lastReturned < K
                 || lastCandDecrypted < (10 * K);
     }
@@ -368,6 +379,22 @@ public final class QueryServiceImpl implements QueryService {
             throw new IllegalStateException("QueryTokenFactory not available");
         }
         return tokenFactory.derive(base, k);
+    }
+    public void setRefinementLimit(int limit) {
+        refinementLimitOverride.set(limit);
+    }
+    public void clearRefinementLimit() {
+        refinementLimitOverride.remove();
+    }
+    public int getEffectiveRefinementLimit(int defaultLimit) {
+        Integer v = refinementLimitOverride.get();
+        return (v != null && v > 0) ? v : defaultLimit;
+    }
+    public int getLastEffectiveRefinementLimit() {
+        return getEffectiveRefinementLimit(cfg.getRuntime().getRefinementLimit());
+    }
+    public int getLastUniqueCandidates() {
+        return lastUniqueCandidates;
     }
 
 

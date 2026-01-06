@@ -23,6 +23,8 @@ public final class Aggregates {
     public double avgTokenBytes;
     public double avgWorkUnits;
 
+    public double avgRefinementLimit;
+
     public double avgCandTotal;
     public double avgCandKept;
     public double avgCandDecrypted;
@@ -61,6 +63,9 @@ public final class Aggregates {
 
         double sumRecall = 0.0;
         int recallCount = 0;
+
+        double sumRefineLimit = 0.0;
+        int refineLimitCount = 0;
 
         double sumServer = 0.0;
         double sumClient = 0.0;
@@ -119,9 +124,7 @@ public final class Aggregates {
             if (r.recall >= 0.0 && r.recall <= 1.0) {
                 sumRecall += r.recall;
                 recallCount++;
-                if (r.tokenK >= 20) {
-                    rAtK.computeIfAbsent(r.tokenK, k -> new ArrayList<>()).add(r.recall);
-                }
+                rAtK.computeIfAbsent(r.tokenK, k -> new ArrayList<>()).add(r.recall);
             }
 
             // ---------- Re-encryption ----------
@@ -130,6 +133,12 @@ public final class Aggregates {
                 a.reencryptBytes += Math.max(0, r.reencBytesDelta);
                 a.reencryptMs    += Math.max(0, r.reencTimeMs);
             }
+
+            if (r.refinementLimit > 0) {
+                sumRefineLimit += r.refinementLimit;
+                refineLimitCount++;
+            }
+
         }
 
         // ---------- Final averages ----------
@@ -171,6 +180,10 @@ public final class Aggregates {
                     e.getValue().stream().mapToDouble(Double::doubleValue).average().orElse(Double.NaN)
             );
         }
+
+        a.avgRefinementLimit = refineLimitCount > 0
+                ? (sumRefineLimit / refineLimitCount)
+                : 0.0;
 
         return a;
     }

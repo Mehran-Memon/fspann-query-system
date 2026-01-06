@@ -22,15 +22,15 @@
 
   "runtime": {
     "precisionMode": false,
-    "refinementLimit": 5000,
-    "maxCandidateFactor": 3,
-    "maxRelaxationDepth": 4
+    "refinementLimit": 50000,
+    "maxCandidateFactor": 10,
+    "maxRelaxationDepth": 8
   },
 
   "eval": {
     "computePrecision": true,
     "writeGlobalPrecisionCsv": true,
-    "kVariants": [1, 20, 40, 60, 80, 100]
+    "kVariants": [1, 10, 20, 40, 60, 80, 100]
   },
 
   "ratio": {

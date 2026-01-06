@@ -641,6 +641,12 @@ public class ForwardSecureANNSystem {
                 indexService.setProbeOverride(probeOverride);
             }
 
+            int refinementLimitOverride = config.getRuntime().getRefinementLimit();
+            if (refinementLimitOverride > 0) {
+                qs.setRefinementLimit(refinementLimitOverride);
+            }
+
+
             // ------------------ Groundtruth (diagnostic only) ------------------
             String trueNNId = null;
             if (trustedGT) {
@@ -664,6 +670,8 @@ public class ForwardSecureANNSystem {
                 indexService.setProbeOverride(fallbackProbes);
                 fullResults = qs.search(baseToken);
                 indexService.clearProbeOverride();
+                qs.clearRefinementLimit();
+
             }
 
             long t1 = System.nanoTime();
@@ -695,6 +703,19 @@ public class ForwardSecureANNSystem {
                         baseToken.getEncryptedQuery().length +
                                 baseToken.getIv().length;
 
+                if (qi == 0 && (k == 10 || k == 100)) {
+                    logger.info(
+                            "PIPELINE DEBUG q={}, k={}: touched={}, candTotal={}, kept={}, decrypted={}, returned={}",
+                            qi, k,
+                            indexService.getLastTouchedCount(),
+                            qs.getLastCandTotal(),
+                            qs.getLastCandKept(),
+                            qs.getLastCandDecrypted(),
+                            atK.size()
+                    );
+                }
+
+
                 profiler.recordQueryRow(
                         "Q" + qi + "_K" + k,
                         serverMs,
@@ -716,6 +737,7 @@ public class ForwardSecureANNSystem {
                         dim,
                         k,
                         MAX_K,
+                        config.getRuntime().getRefinementLimit(),
                         qi,
 
                         totalFlushed(),
@@ -792,38 +814,76 @@ public class ForwardSecureANNSystem {
             annIdx[i] = resolveBaseIndex(annResults.get(i));
         }
 
-        // First query, K=100 only
-        if (queryIndex == 0 && k == 100) {
-            logger.info("RECALL DEBUG Query 0, K=100:");
-            logger.info("  GT top-10: {}",
-                    Arrays.stream(gt).limit(10).mapToObj(String::valueOf)
-                            .collect(java.util.stream.Collectors.joining(", ")));
-            logger.info("  ANN top-10: {}",
-                    Arrays.stream(annIdx).limit(10).mapToObj(String::valueOf)
-                            .collect(java.util.stream.Collectors.joining(", ")));
+        // ================= ID + DISTANCE SANITY (Query 0 only) =================
+        if (queryIndex == 0 && k == 10 && baseReader != null) {
+            logger.info("SANITY CHECK: Query 0, K=10");
+
+            for (int i = 0; i < Math.min(10, upto); i++) {
+                int annId = annIdx[i];
+                double dAnn = (annId >= 0 && annId < baseReader.count)
+                        ? baseReader.l2(queryVector, annId)
+                        : Double.NaN;
+
+                logger.info("ANN[{}] -> id={}, dist={}", i, annId, dAnn);
+            }
+
+            for (int i = 0; i < Math.min(10, gt.length); i++) {
+                int gtId = gt[i];
+                double dGt = (gtId >= 0 && gtId < baseReader.count)
+                        ? baseReader.l2(queryVector, gtId)
+                        : Double.NaN;
+
+                logger.info("GT [{}] -> id={}, dist={}", i, gtId, dGt);
+            }
         }
 
-        // =========================================================
-        // Recall@K  (QUALITY)
-        // =========================================================
-        Set<Integer> gtSet = new HashSet<>(k);
+
+        // First query, K=100 only
+        if (queryIndex == 0 && k == 100 && baseReader != null) {
+            logger.info("DISTANCE COMPARISON (top-10):");
+            for (int i = 0; i < 10; i++) {
+                int annId = annIdx[i];
+                int gtId  = gt[i];
+
+                double dAnn = baseReader.l2(queryVector, annId);
+                double dGt  = baseReader.l2(queryVector, gtId);
+
+                logger.info(
+                        "rank {} -> ANN(id={}, d={}) | GT(id={}, d={}) | ratio={}",
+                        i, annId, dAnn, gtId, dGt,
+                        (dGt > 0 ? dAnn / dGt : Double.NaN)
+                );
+            }
+        }
+
+
+            // Recall@K: ANN vs GT@MAX_K
+
+        int[] gtMax = gtMgr.getGroundtruth(queryIndex, maxK);
+        if (gtMax == null || gtMax.length < k) {
+            return new QueryMetrics(Double.NaN, Double.NaN, Double.NaN);
+        }
+
+        Set<Integer> gtTopK = new HashSet<>(k);
         for (int i = 0; i < k; i++) {
-            gtSet.add(gt[i]);
+            gtTopK.add(gtMax[i]);
         }
 
         int hits = 0;
-        for (int i = 0; i < upto; i++) {
-            if (gtSet.contains(annIdx[i])) hits++;
+        for (int i = 0; i < Math.min(k, annResults.size()); i++) {
+            int id = resolveBaseIndex(annResults.get(i));
+            if (gtTopK.contains(id)) hits++;
         }
 
         double recallAtK = hits / (double) k;
 
+
         // =========================================================
-        // Distance Ratio@K (DIAGNOSTIC ONLY)
+        // Distance Ratio@K
         // =========================================================
         double distanceRatioAtK = Double.NaN;
 
-        if (baseReader != null && k >= 20) {
+        if (baseReader != null && k >= 10) {
             double ratioSum = 0.0;
             int used = 0;
 
@@ -848,10 +908,25 @@ public class ForwardSecureANNSystem {
         }
 
         // =========================================================
-        // Candidate Ratio@K  (PRIMARY — Peng et al.)
+        // Candidate Ratio@K
         // =========================================================
-        int refinedCandidates = qs.getLastCandDecrypted();
-        double candidateRatioAtK = refinedCandidates / (double) k;
+        int uniqueCandidates = qs.getLastUniqueCandidates();
+        double candidateRatioAtK =
+                (uniqueCandidates > 0)
+                        ? (uniqueCandidates / (double) k)
+                        : Double.NaN;
+
+        // ================= METRIC CONSISTENCY CHECK =================
+        if (!Double.isNaN(distanceRatioAtK)
+                && distanceRatioAtK < 1.1
+                && recallAtK < 0.5) {
+
+            logger.warn(
+                    "INCONSISTENT METRICS: q={}, K={}, ratio={}, recall={}, candRatio={}",
+                    queryIndex, k, distanceRatioAtK, recallAtK,
+                    qs.getLastUniqueCandidates() / (double) k
+            );
+        }
 
         return new QueryMetrics(
                 candidateRatioAtK,       // search efficiency
@@ -1229,7 +1304,8 @@ public class ForwardSecureANNSystem {
         Aggregates agg = Aggregates.fromProfiler(this.profiler);
 
         double avgArtMs   = agg.avgRunMs;        // canonical ART
-        double avgRatio   = agg.avgCandidateRatio;     // canonical ratio
+        double avgRatio   = agg.avgDistanceRatio;     // canonical ratio
+        double avgCRatio = agg.avgCandidateRatio;
 
         /* ====================================================================== */
         /* 3. REPRODUCIBLE METRICS SUMMARY                                        */
@@ -1255,11 +1331,12 @@ public class ForwardSecureANNSystem {
                 outDir.resolve("metrics_summary.txt"),
                 String.format(
                         Locale.ROOT,
-                        "mode=partitioned%nconfig_sha256=%s%nkey_version=v%d%nART(ms)=%.3f%nAvgRatio=%.6f%n",
+                        "mode=mSANNP%nconfig_sha256=%s%nkey_version=v%d%nART(ms)=%.3f%nAvgRatio=%.6f%nAvgCRatio=%n",
                         cfgHash,
                         keyVer,
                         avgArtMs,
-                        avgRatio
+                        avgRatio,
+                        avgCRatio
                 ),
                 StandardOpenOption.CREATE,
                 StandardOpenOption.TRUNCATE_EXISTING

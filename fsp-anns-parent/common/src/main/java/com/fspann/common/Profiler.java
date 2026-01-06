@@ -74,6 +74,7 @@ public final class Profiler {
             int vectorDim,
             int tokenK,
             int tokenKBase,
+            int refinementLimit,
             int qIndex,
             int totalFlushed,
             int flushThreshold,
@@ -107,6 +108,7 @@ public final class Profiler {
                 vectorDim,
                 tokenK,
                 tokenKBase,
+                refinementLimit,
                 qIndex,
                 totalFlushed,
                 flushThreshold,
@@ -185,6 +187,7 @@ public final class Profiler {
         public final int vectorDim;
         public final int tokenK;
         public final int tokenKBase;
+        public final int refinementLimit;
         public final int qIndex;
 
         public final int totalFlushed;
@@ -223,6 +226,7 @@ public final class Profiler {
                 int vectorDim,
                 int tokenK,
                 int tokenKBase,
+                int refinementLimit,
                 int qIndex,
                 int totalFlushed,
                 int flushThreshold,
@@ -259,6 +263,7 @@ public final class Profiler {
             this.vectorDim = vectorDim;
             this.tokenK = tokenK;
             this.tokenKBase = tokenKBase;
+            this.refinementLimit = refinementLimit;
             this.qIndex = qIndex;
 
             this.totalFlushed = totalFlushed;

@@ -11,15 +11,22 @@ public final class GreedyPartitioner {
     // Partition (range-aware)
     // ============================================================
     public static final class Partition implements Serializable {
-        public final long minKey;   // inclusive
-        public final long maxKey;   // inclusive
-        public final long centerKey;
+        public final long minKey;      // inclusive (build-time only)
+        public final long maxKey;      // inclusive (build-time only)
+        public final long centerKey;   // build-time only
+
+        public final BitSet repCode;   // ← NEW: representative binary code
         public final List<String> ids;
 
-        Partition(long minKey, long maxKey, long centerKey, List<String> ids) {
+        Partition(long minKey,
+                  long maxKey,
+                  long centerKey,
+                  BitSet repCode,
+                  List<String> ids) {
             this.minKey = minKey;
             this.maxKey = maxKey;
             this.centerKey = centerKey;
+            this.repCode = repCode;
             this.ids = ids;
         }
     }
@@ -40,25 +47,38 @@ public final class GreedyPartitioner {
             ordered.add(Map.entry(e.getKey(), computeKey(e.getValue())));
         }
 
-        // 2) Sort by key
+        // 2) Sort by numeric key (ONLY for grouping)
         ordered.sort(Comparator.comparingLong(Map.Entry::getValue));
 
-        // 3) Partition into fixed-size blocks with min/max/center keys
+        // 3) Partition into blocks
         List<Partition> out = new ArrayList<>();
         for (int i = 0; i < ordered.size(); i += blockSize) {
             int end = Math.min(i + blockSize, ordered.size());
 
             long minK = ordered.get(i).getValue();
             long maxK = ordered.get(end - 1).getValue();
-            long centerK = ordered.get(i + ((end - i - 1) >>> 1)).getValue();
+            int mid = i + ((end - i - 1) >>> 1);
+            long centerK = ordered.get(mid).getValue();
 
             List<String> ids = new ArrayList<>(end - i);
-            for (int j = i; j < end; j++) ids.add(ordered.get(j).getKey());
+            for (int j = i; j < end; j++) {
+                ids.add(ordered.get(j).getKey());
+            }
 
-            out.add(new Partition(minK, maxK, centerK, ids));
+            // ← REPRESENTATIVE CODE (CRITICAL)
+            String repId = ordered.get(mid).getKey();
+            BitSet repCode = (BitSet) idToCode.get(repId).clone();
+
+            out.add(new Partition(minK, maxK, centerK, repCode, ids));
         }
 
         return out;
+    }
+
+    public static long hamming(BitSet a, BitSet b) {
+        BitSet x = (BitSet) a.clone();
+        x.xor(b);
+        return x.cardinality();
     }
 
     // ============================================================

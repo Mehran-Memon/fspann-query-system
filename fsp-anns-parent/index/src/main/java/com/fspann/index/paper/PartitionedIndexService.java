@@ -496,11 +496,10 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
 
                 boolean[] visited = new boolean[parts.size()];
 
-                long centerDist = GreedyPartitioner.distanceToRange(
-                        qKey,
-                        parts.get(center).minKey,
-                        parts.get(center).maxKey
-                );
+                BitSet qBits = qCodes[t][d];
+
+                GreedyPartitioner.Partition centerPart = parts.get(center);
+                long centerDist = GreedyPartitioner.hamming(qBits, centerPart.repCode);
 
                 probeQueue.add(new long[]{center, centerDist});
                 visited[center] = true;
@@ -517,7 +516,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
 
                     rawSeen += collectPartitionOrdered(
                             parts.get(idx),
-                            qKey,
+                            qBits,
                             bestScore,
                             deleted
                     );
@@ -525,22 +524,14 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
                     int left = idx - 1;
                     if (left >= 0 && !visited[left]) {
                         visited[left] = true;
-                        long dist = GreedyPartitioner.distanceToRange(
-                                qKey,
-                                parts.get(left).minKey,
-                                parts.get(left).maxKey
-                        );
+                        long dist = GreedyPartitioner.hamming(qBits, parts.get(left).repCode);
                         probeQueue.add(new long[]{left, dist});
                     }
 
                     int right = idx + 1;
                     if (right < parts.size() && !visited[right]) {
                         visited[right] = true;
-                        long dist = GreedyPartitioner.distanceToRange(
-                                qKey,
-                                parts.get(right).minKey,
-                                parts.get(right).maxKey
-                        );
+                        long dist = GreedyPartitioner.hamming(qBits, parts.get(right).repCode);
                         probeQueue.add(new long[]{right, dist});
                     }
                 }
@@ -586,13 +577,14 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
 
     private int collectPartitionOrdered(
             GreedyPartitioner.Partition p,
-            long qKey,
+            BitSet qBits,
             Map<String, Long> bestScore,
             Set<String> deleted
     ) {
         int newlySeen = 0;
 
-        long dist = GreedyPartitioner.distanceToRange(qKey, p.minKey, p.maxKey);
+        // Partition score = Hamming distance to representative
+        long partDist = GreedyPartitioner.hamming(qBits, p.repCode);
 
         for (String id : p.ids) {
             if (deleted.contains(id)) continue;
@@ -603,11 +595,9 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
             }
 
             Long prev = bestScore.get(id);
-            if (prev == null) {
-                bestScore.put(id, dist);
+            if (prev == null || partDist < prev) {
+                bestScore.put(id, partDist);
                 newlySeen++;
-            } else if (dist < prev) {
-                bestScore.put(id, dist);
             }
         }
         return newlySeen;

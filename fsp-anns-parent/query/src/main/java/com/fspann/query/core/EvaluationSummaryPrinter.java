@@ -10,7 +10,7 @@ public final class EvaluationSummaryPrinter {
 
     private static final Logger log = LoggerFactory.getLogger(EvaluationSummaryPrinter.class);
 
-    public static final List<Integer> STANDARD_KS = List.of(10, 20, 40, 60, 80, 100);
+    public static final List<Integer> STANDARD_KS = List.of(1, 10, 20, 40, 60, 80, 100);
 
     public static void printAndWriteCsv(
             String datasetName,
@@ -122,7 +122,7 @@ public final class EvaluationSummaryPrinter {
             if (!exists) {
                 StringBuilder h = new StringBuilder();
                 h.append("dataset,profile,m,lambda,divisions,index_time_ms,");
-                h.append("avg_distance_ratio,avg_candidate_ratio,avg_recall,");
+                h.append("avg_distance_ratio,avg_candidate_ratio,avg_recall,refinement_limit,");
                 h.append("avg_server_ms,avg_client_ms,avg_art_ms,avg_decrypt_ms,");
                 for (int k : STANDARD_KS) h.append("recall_at_").append(k).append(",");
                 for (int k : STANDARD_KS) h.append("distance_ratio_at_").append(k).append(",");
@@ -142,6 +142,8 @@ public final class EvaluationSummaryPrinter {
             sb.append(fmt(nz(a.avgDistanceRatio))).append(",");
             sb.append(fmt(nz(a.avgCandidateRatio))).append(",");
             sb.append(fmt(nz(a.avgRecall))).append(",");
+
+            sb.append(fmt(nz(a.avgRefinementLimit))).append(",");
 
             sb.append(fmt(nz(a.avgServerMs))).append(",");
             sb.append(fmt(nz(a.avgClientMs))).append(",");
@@ -185,7 +187,7 @@ public final class EvaluationSummaryPrinter {
                 String header =
                         "dataset,profile,m,lambda,divisions,index_time_ms," +
                                 "avg_token_bytes,avg_work_units," +
-                                "avg_cand_total,avg_cand_kept,avg_cand_decrypted,avg_returned," +
+                                "avg_cand_total,avg_cand_kept,avg_cand_decrypted,avg_returned,refinement_limit," +
                                 "reencrypt_count,reencrypt_bytes,reencrypt_ms," +
                                 "space_meta_bytes,space_points_bytes";
                 Files.write(out, (header + "\n").getBytes(StandardCharsets.UTF_8),
@@ -222,7 +224,7 @@ public final class EvaluationSummaryPrinter {
     private static String csvHeader() {
         StringBuilder sb = new StringBuilder();
         sb.append("dataset,profile,m,lambda,divisions,index_time_ms,");
-        sb.append("avg_distance_ratio,avg_candidate_ratio,avg_recall,");
+        sb.append("avg_distance_ratio,avg_candidate_ratio,avg_recall,refinement_limit,");
         sb.append("avg_server_ms,avg_client_ms,avg_art_ms,avg_decrypt_ms,");
         sb.append("avg_token_bytes,avg_work_units,");
         sb.append("avg_cand_total,avg_cand_kept,avg_cand_decrypted,avg_returned,");
@@ -251,6 +253,7 @@ public final class EvaluationSummaryPrinter {
         sb.append(fmt(nz(a.avgDistanceRatio))).append(",");
         sb.append(fmt(nz(a.avgCandidateRatio))).append(",");
         sb.append(fmt(nz(a.avgRecall))).append(",");
+        sb.append(fmt(nz(a.avgRefinementLimit))).append(",");
 
         sb.append(fmt(nz(a.avgServerMs))).append(",");
         sb.append(fmt(nz(a.avgClientMs))).append(",");
