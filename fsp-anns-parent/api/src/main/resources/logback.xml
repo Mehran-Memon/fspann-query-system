@@ -1,28 +1,42 @@
 <configuration>
+
+    <!-- ================= FILE ONLY ================= -->
     <appender name="FILE" class="ch.qos.logback.core.FileAppender">
         <file>logs/fsp-ann.log</file>
+        <append>true</append>
         <encoder>
             <pattern>%d{HH:mm:ss.SSS} %-5level [%logger{20}] - %msg%n</pattern>
         </encoder>
     </appender>
 
+    <!-- ================= ROOT ================= -->
     <root level="INFO">
         <appender-ref ref="FILE" />
     </root>
 
-    <!-- Enable INFO only for system progress and shutdown -->
+    <!-- ================= ALLOWED INFO ================= -->
+    <!-- System lifecycle, startup, shutdown -->
     <logger name="com.fspann.api.ForwardSecureANNSystem" level="INFO" />
-    <logger name="com.fspann.index.paper.PartitionedIndexService" level="INFO" />
-    <logger name="com.fspann.index.paper.GFunctionRegistry" level="INFO" />
-    <logger name="com.fspann.query.core.QueryTokenFactory" level="INFO" />
-    <logger name="com.fspann.query.service.QueryServiceImpl" level="INFO" />
-    <logger name="com.fspann.crypto.AesGcmCryptoService" level="INFO" />
-    <logger name="com.fspann.key.KeyRotationServiceImpl" level="INFO" />
-    <logger name="com.fspann.key.KeyManager" level="INFO" />
-    <logger name="com.fspann.api.GroundtruthValidator" level="INFO" />
-    <logger name="com.fspann.loader.GroundtruthManager" level="INFO" />
-    <logger name="com.fspann.loader.StreamingBatchLoader" level="INFO" />
 
+    <!-- Final evaluation summaries only -->
+    <logger name="com.fspann.query.core.EvaluationSummaryPrinter" level="INFO" />
+
+    <!-- ================= FORCE SILENT (CRITICAL) ================= -->
+    <!-- Query path: MUST be quiet -->
+    <logger name="com.fspann.query.service.QueryServiceImpl" level="WARN" />
+
+    <!-- Index probing & partition traversal -->
+    <logger name="com.fspann.index.paper.PartitionedIndexService" level="WARN" />
+    <logger name="com.fspann.index.paper.GFunctionRegistry" level="WARN" />
+
+    <!-- Crypto / keys -->
+    <logger name="com.fspann.crypto" level="WARN" />
+    <logger name="com.fspann.key" level="WARN" />
+
+    <!-- Loaders -->
+    <logger name="com.fspann.loader" level="WARN" />
+
+    <!-- External libraries -->
     <logger name="org.rocksdb" level="WARN" />
     <logger name="io.micrometer" level="WARN" />
     <logger name="org.apache" level="WARN" />
