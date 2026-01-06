@@ -1,13 +1,13 @@
 {
   "opsThreshold": 500000000,
   "ageThresholdMs": 86400000,
-  "reencryptionEnabled": true,
+  "reencryptionEnabled": false,
   "forwardSecurityEnabled": true,
   "profilerEnabled": true,
 
   "paper": {
     "enabled": true,
-    "m": 24,
+    "m": 32,
     "lambda": 2,
     "divisions": 8,
     "tables": 5,
@@ -22,9 +22,11 @@
 
   "runtime": {
     "precisionMode": false,
-    "refinementLimit": 50000,
+    "refinementLimit": 20000,
     "maxCandidateFactor": 10,
-    "maxRelaxationDepth": 8
+    "maxRelaxationDepth": 8,
+    "probeOverride": -1,
+    "hammingPrefilterThreshold": 0
   },
 
   "eval": {
@@ -39,21 +41,219 @@
     "gtMismatchTolerance": 0.05
   },
 
-"profiles": [
-    { "name": "M14", "overrides": { "paper": { "m": 14, "lambda": 2, "divisions": 8, "tables": 5 } } },
-    { "name": "M18", "overrides": { "paper": { "m": 18, "lambda": 2, "divisions": 8, "tables": 5 } } },
-    { "name": "M20", "overrides": { "paper": { "m": 20, "lambda": 2, "divisions": 8, "tables": 5 } } },
-    { "name": "M24", "overrides": { "paper": { "m": 24, "lambda": 2, "divisions": 8, "tables": 5 } } },
-    { "name": "M28", "overrides": { "paper": { "m": 28, "lambda": 2, "divisions": 8, "tables": 5 } } },
-    { "name": "M32", "overrides": { "paper": { "m": 32, "lambda": 2, "divisions": 8, "tables": 5 } } },
-    { "name": "L3", "overrides": { "paper": { "m": 24, "lambda": 3, "divisions": 8, "tables": 8 } } },
-    { "name": "D2", "overrides": { "paper": { "m": 20, "lambda": 2, "divisions": 2, "tables": 5 } } },
-    {"name": "M24_P5","overrides": {"paper": {"m": 24,"lambda": 2,"divisions": 8,"tables": 5},"runtime": {"probeOverride": 5 }}},
-    {"name": "M24_P7","overrides": {"paper": {"m": 24,"lambda": 2,"divisions": 8,"tables": 5},"runtime": {"probeOverride": 7 }}},
-    {"name": "M24_P9","overrides": {"paper": {"m": 24,"lambda": 2,"divisions": 8,"tables": 5},"runtime": {"probeOverride": 9 }}},
-    {"name": "M24_P12","overrides": {"paper": { "m": 24, "lambda": 2, "divisions": 8, "tables": 5 },"runtime": { "probeOverride": 12 }
-    }},
-    {"name": "M24_P16","overrides": {"paper": { "m": 24, "lambda": 2, "divisions": 8, "tables": 5 },"runtime": { "probeOverride": 16 }
-    }}
-]
+  "profiles": [
+    {
+      "name": "M14",
+      "overrides": {
+        "paper": { "m": 14, "lambda": 2, "divisions": 8, "tables": 5 }
+      }
+    },
+    {
+      "name": "M18",
+      "overrides": {
+        "paper": { "m": 18, "lambda": 2, "divisions": 8, "tables": 5 }
+      }
+    },
+    {
+      "name": "M20",
+      "overrides": {
+        "paper": { "m": 20, "lambda": 2, "divisions": 8, "tables": 5 }
+      }
+    },
+    {
+      "name": "M24",
+      "overrides": {
+        "paper": { "m": 24, "lambda": 2, "divisions": 8, "tables": 5 }
+      }
+    },
+    {
+      "name": "M28",
+      "overrides": {
+        "paper": { "m": 28, "lambda": 2, "divisions": 8, "tables": 5 }
+      }
+    },
+    {
+      "name": "M32",
+      "overrides": {
+        "paper": { "m": 32, "lambda": 2, "divisions": 8, "tables": 5 }
+      }
+    },
+
+    {
+      "name": "FAST_M24_P12_FULL",
+      "overrides": {
+        "paper": { "m": 24, "lambda": 2, "divisions": 8, "tables": 5 },
+        "runtime": { "probeOverride": 12, "refinementLimit": 15000 }
+      }
+    },
+
+    {
+      "name": "FAST_M24_P8_TIGHT",
+      "overrides": {
+        "paper": { "m": 24, "lambda": 2, "divisions": 8, "tables": 5 },
+        "runtime": { "probeOverride": 8, "refinementLimit": 6000 }
+      }
+    },
+    {
+      "name": "FAST_M24_P10_TIGHT",
+      "overrides": {
+        "paper": { "m": 24, "lambda": 2, "divisions": 8, "tables": 5 },
+        "runtime": { "probeOverride": 10, "refinementLimit": 8000 }
+      }
+    },
+
+    {
+      "name": "FAST_M28_P6",
+      "overrides": {
+        "paper": { "m": 28, "lambda": 2, "divisions": 8, "tables": 5 },
+        "runtime": { "probeOverride": 6, "refinementLimit": 6000 }
+      }
+    },
+    {
+      "name": "FAST_M28_P8",
+      "overrides": {
+        "paper": { "m": 28, "lambda": 2, "divisions": 8, "tables": 5 },
+        "runtime": { "probeOverride": 8, "refinementLimit": 8000 }
+      }
+    },
+    {
+      "name": "FAST_M32_P6",
+      "overrides": {
+        "paper": { "m": 32, "lambda": 2, "divisions": 8, "tables": 5 },
+        "runtime": { "probeOverride": 6, "refinementLimit": 6000 }
+      }
+    },
+    {
+      "name": "FAST_M32_P8",
+      "overrides": {
+        "paper": { "m": 32, "lambda": 2, "divisions": 8, "tables": 5 },
+        "runtime": { "probeOverride": 8, "refinementLimit": 8000 }
+      }
+    },
+
+    {
+      "name": "BALANCED_M32_P7",
+      "overrides": {
+        "paper": { "m": 32, "lambda": 2, "divisions": 8, "tables": 5 },
+        "runtime": { "probeOverride": 7, "refinementLimit": 7000 }
+      }
+    },
+    {
+      "name": "OPTIMAL_M32_P4",
+      "overrides": {
+        "paper": { "m": 32, "lambda": 2, "divisions": 8, "tables": 5 },
+        "runtime": { "probeOverride": 4, "refinementLimit": 2500 }
+      }
+    },
+
+    {
+      "name": "OPTIMAL_M32_P6",
+      "overrides": {
+        "paper": { "m": 32, "lambda": 2, "divisions": 8, "tables": 5 },
+        "runtime": { "probeOverride": 6, "refinementLimit": 16000 }
+      }
+    },
+    {
+      "name": "OPTIMAL_M32_P3_Hamming",
+      "overrides": {
+        "paper": { "m": 32, "lambda": 2, "divisions": 8, "tables": 5 },
+        "runtime": {
+          "probeOverride": 3,
+          "refinementLimit": 16000,
+          "hammingPrefilterThreshold": 20
+        }
+      }
+    },
+
+    {
+      "name": "FINAL_MAX_RECALL_P10_T8",
+      "description": "Maximum recall: 8 tables + 10 probes for PPANNS competition",
+      "overrides": {
+        "paper": { "m": 32, "lambda": 2, "divisions": 8, "tables": 8 },
+        "runtime": {
+          "probeOverride": 10,
+          "refinementLimit": 32000,
+          "maxGlobalCandidates": 40000,
+          "maxRelaxationDepth": 10,
+          "hammingPrefilterThreshold": 0
+        }
+      }
+    },
+
+    {
+      "name": "FINAL_BALANCED_P8_HAMMING10",
+      "description": "Balanced: 6 tables + 8 probes + aggressive Hamming filtering",
+      "overrides": {
+        "paper": { "m": 32, "lambda": 2, "divisions": 8, "tables": 6 },
+        "runtime": {
+          "probeOverride": 8,
+          "refinementLimit": 25000,
+          "maxGlobalCandidates": 30000,
+          "maxRelaxationDepth": 8,
+          "hammingPrefilterThreshold": 10
+        }
+      }
+    },
+
+    {
+      "name": "FINAL_BALANCED_HAMMING_6_Probe_16",
+      "overrides": {
+        "paper": { "m": 28, "lambda": 2, "divisions": 8, "tables": 10 },
+        "runtime": {
+          "probeOverride": 16,
+          "refinementLimit": 8000,
+          "maxGlobalCandidates": 12000,
+          "maxRelaxationDepth": 8,
+          "hammingPrefilterThreshold": 6
+        }
+      }
+    },
+
+    {
+      "name": "FINAL_BALANCED_HAMMING_6_Probe_20",
+      "overrides": {
+        "paper": { "m": 28, "lambda": 2, "divisions": 8, "tables": 10 },
+        "runtime": {
+          "probeOverride": 20,
+          "refinementLimit": 8000,
+          "maxGlobalCandidates": 12000,
+          "maxRelaxationDepth": 8,
+          "hammingPrefilterThreshold": 6
+        }
+      }
+    },
+
+    {
+      "name": "FINAL_BALANCED_TABLES_12_Probe_16",
+      "overrides": {
+        "paper": { "m": 28, "lambda": 2, "divisions": 8, "tables": 12 },
+        "runtime": {
+          "probeOverride": 16,
+          "refinementLimit": 8000,
+          "maxGlobalCandidates": 12000,
+          "maxRelaxationDepth": 8,
+          "hammingPrefilterThreshold": 6
+        }
+      }
+    },
+
+    {
+      "name": "SMOKE_RANKED_HAMMING",
+      "overrides": {
+        "paper": {
+          "m": 24,
+          "lambda": 2,
+          "divisions": 6,
+          "tables": 6
+        },
+        "runtime": {
+          "probeOverride": 8,
+          "refinementLimit": 3000,
+          "maxGlobalCandidates": 5000,
+          "hammingPrefilterThreshold": 6
+        }
+      }
+    }
+
+  ]
 }

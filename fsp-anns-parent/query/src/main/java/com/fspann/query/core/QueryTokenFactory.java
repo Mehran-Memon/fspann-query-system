@@ -101,7 +101,7 @@ public final class QueryTokenFactory {
 
                 // ← ADD: Log GFunction parameters for first query, table 0, division 0
                 if (isFirstQuery && t == 0 && d == 0) {
-                    log.info("QUERY GFunction[table=0,div=0]: seed={}, m={}, lambda={}, omega[0]={:.2f}, omega[5]={:.2f}",
+                    log.info("QUERY GFunction[table=0,div=0]: seed={}, m={}, lambda={}, omega[0]={}, omega[5]={}",
                             G.seed, G.m, G.lambda,
                             G.omega[0],
                             G.omega.length > 5 ? G.omega[5] : -1.0

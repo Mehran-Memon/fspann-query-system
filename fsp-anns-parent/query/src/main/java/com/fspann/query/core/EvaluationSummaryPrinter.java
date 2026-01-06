@@ -29,7 +29,7 @@ public final class EvaluationSummaryPrinter {
         String distRatioLine = compactRecall(agg.distanceRatioAtK, STANDARD_KS);
 
         log.info(String.format(Locale.ROOT,
-                "DistanceRatio=%.4f | CandidateRatio=%.4f | Recall@K[%s] | DistRatio@K[%s] | " +
+                "DistanceRatio=%.4f | Candidate_Expansion_Factor=%.4f | Recall@K[%s] | DistRatio@K[%s] | " +
                         "Server=%.2f ms | Client=%.2f ms | ART=%.2f ms | Decrypt=%.2f ms | " +
                         "TokenB=%.1f | WorkU=%.1f | Cand{T=%d,K=%d,D=%d,R=%d} | DS=%s | Profile=%s",
                 nz(agg.avgDistanceRatio),
@@ -122,7 +122,7 @@ public final class EvaluationSummaryPrinter {
             if (!exists) {
                 StringBuilder h = new StringBuilder();
                 h.append("dataset,profile,m,lambda,divisions,index_time_ms,");
-                h.append("avg_distance_ratio,avg_candidate_ratio,avg_recall,refinement_limit,");
+                h.append("avg_distance_ratio,avg_candidate_expansion_factor,avg_recall,refinement_limit,");
                 h.append("avg_server_ms,avg_client_ms,avg_art_ms,avg_decrypt_ms,");
                 for (int k : STANDARD_KS) h.append("recall_at_").append(k).append(",");
                 for (int k : STANDARD_KS) h.append("distance_ratio_at_").append(k).append(",");
@@ -224,7 +224,7 @@ public final class EvaluationSummaryPrinter {
     private static String csvHeader() {
         StringBuilder sb = new StringBuilder();
         sb.append("dataset,profile,m,lambda,divisions,index_time_ms,");
-        sb.append("avg_distance_ratio,avg_candidate_ratio,avg_recall,refinement_limit,");
+        sb.append("avg_distance_ratio,avg_candidate_expansion_factor,avg_recall,refinement_limit,");
         sb.append("avg_server_ms,avg_client_ms,avg_art_ms,avg_decrypt_ms,");
         sb.append("avg_token_bytes,avg_work_units,");
         sb.append("avg_cand_total,avg_cand_kept,avg_cand_decrypted,avg_returned,");

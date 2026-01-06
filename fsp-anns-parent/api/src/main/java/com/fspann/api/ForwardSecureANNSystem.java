@@ -618,6 +618,7 @@ public class ForwardSecureANNSystem {
         return qtf;
     }
 
+    // =================== runQueries ===================
     public void runQueries(
             List<double[]> queries,
             int dim,
@@ -628,7 +629,6 @@ public class ForwardSecureANNSystem {
         Objects.requireNonNull(gt, "groundtruth");
 
         QueryServiceImpl qs = getQueryServiceImpl();
-
         logger.info("Running explicit query loop: queries={}, dim={}", queries.size(), dim);
 
         final int MAX_K = Arrays.stream(K_VARIANTS).max().orElseThrow();
@@ -636,16 +636,16 @@ public class ForwardSecureANNSystem {
         for (int qi = 0; qi < queries.size(); qi++) {
             double[] q = queries.get(qi);
 
+            // ------------------ Apply configured overrides ------------------
             int probeOverride = config.getRuntime().getProbeOverride();
-            if (probeOverride > 0) {
+            if (probeOverride >= 0) {
                 indexService.setProbeOverride(probeOverride);
             }
 
-            int refinementLimitOverride = config.getRuntime().getRefinementLimit();
-            if (refinementLimitOverride > 0) {
-                qs.setRefinementLimit(refinementLimitOverride);
+            int refinementLimit = config.getRuntime().getRefinementLimit();
+            if (refinementLimit > 0) {
+                qs.setRefinementLimit(refinementLimit);
             }
-
 
             // ------------------ Groundtruth (diagnostic only) ------------------
             String trueNNId = null;
@@ -663,36 +663,32 @@ public class ForwardSecureANNSystem {
             long t0 = System.nanoTime();
             List<QueryResult> fullResults = qs.search(baseToken);
 
+            // ------------------ Fallback (PROBES ONLY) ------------------
             if (fullResults.isEmpty()) {
-                int baseProbes = config.getRuntime().getMaxCandidateFactor();
+                int baseProbes =
+                        (probeOverride >= 0)
+                                ? probeOverride
+                                : indexService.getDefaultMaxProbes();
+
                 int fallbackProbes = Math.max(baseProbes * 2, 4);
 
                 indexService.setProbeOverride(fallbackProbes);
                 fullResults = qs.search(baseToken);
-                indexService.clearProbeOverride();
-                qs.clearRefinementLimit();
-
+                indexService.clearProbeOverride(); // DO NOT touch refinement limit
             }
 
             long t1 = System.nanoTime();
             addQueryTime(t1 - t0);
 
-            // ------------------ Metrics (truncate only) ------------------
+            // ------------------ Metrics ------------------
             for (int k : K_VARIANTS) {
-
                 List<QueryResult> atK =
                         fullResults.isEmpty()
                                 ? Collections.emptyList()
                                 : fullResults.subList(0, Math.min(k, fullResults.size()));
 
                 QueryMetrics m = computeMetricsAtK(
-                        k,
-                        MAX_K,
-                        atK,
-                        qi,
-                        q,
-                        qs,
-                        gt
+                        k, MAX_K, atK, qi, q, qs, gt
                 );
 
                 long serverMs  = (long) boundedServerMs(qs, t0, t1);
@@ -703,19 +699,6 @@ public class ForwardSecureANNSystem {
                         baseToken.getEncryptedQuery().length +
                                 baseToken.getIv().length;
 
-                if (qi == 0 && (k == 10 || k == 100)) {
-                    logger.info(
-                            "PIPELINE DEBUG q={}, k={}: touched={}, candTotal={}, kept={}, decrypted={}, returned={}",
-                            qi, k,
-                            indexService.getLastTouchedCount(),
-                            qs.getLastCandTotal(),
-                            qs.getLastCandKept(),
-                            qs.getLastCandDecrypted(),
-                            atK.size()
-                    );
-                }
-
-
                 profiler.recordQueryRow(
                         "Q" + qi + "_K" + k,
                         serverMs,
@@ -724,8 +707,8 @@ public class ForwardSecureANNSystem {
                         decryptMs,
                         lastInsertMs(),
 
-                        m.distanceRatioAtK(),      // ← PAPER RATIO (quality)
-                        m.candidateRatioAtK(),     // ← SEARCH EFFICIENCY (cost)
+                        m.distanceRatioAtK(),     // PAPER METRIC
+                        m.candidateRatioAtK(),    // SEARCH COST
                         m.recallAtK(),
 
                         qs.getLastCandTotal(),
@@ -737,7 +720,7 @@ public class ForwardSecureANNSystem {
                         dim,
                         k,
                         MAX_K,
-                        config.getRuntime().getRefinementLimit(),
+                        refinementLimit,
                         qi,
 
                         totalFlushed(),
@@ -746,9 +729,7 @@ public class ForwardSecureANNSystem {
                         indexService.getLastTouchedCount(),
                         reencTracker.uniqueCount(),
 
-                        0L,
-                        0L,
-                        0L,
+                        0L, 0L, 0L,
 
                         ratioDenomLabelPublic(trustedGT),
                         "partitioned",
@@ -759,8 +740,10 @@ public class ForwardSecureANNSystem {
                         qs.getLastTrueNNRank(),
                         qs.wasLastTrueNNSeen()
                 );
-          }
-                        indexService.clearProbeOverride();
+            }
+
+            indexService.clearProbeOverride();
+            qs.clearRefinementLimit();
         }
     }
 
@@ -783,6 +766,7 @@ public class ForwardSecureANNSystem {
      *      - Lower is more efficient (minimum = 1.0)
      *
      **/
+// =================== computeMetricsAtK ===================
     QueryMetrics computeMetricsAtK(
             int k,
             int maxK,
@@ -792,103 +776,32 @@ public class ForwardSecureANNSystem {
             QueryServiceImpl qs,
             GroundtruthManager gtMgr
     ) {
-        // =========================================================
-        // Ground Truth with Offset Correction
-        // =========================================================
         int[] gt = gtMgr.getGroundtruth(queryIndex, k);
         if (gt == null || gt.length < k) {
-            return new QueryMetrics(
-                    Double.NaN,
-                    Double.NaN,
-                    Double.NaN
-            );
-        }
-
-        // =========================================================
-        // Resolve ANN indices
-        // =========================================================
-        int upto = Math.min(k, annResults.size());
-        int[] annIdx = new int[upto];
-
-        for (int i = 0; i < upto; i++) {
-            annIdx[i] = resolveBaseIndex(annResults.get(i));
-        }
-
-        // ================= ID + DISTANCE SANITY (Query 0 only) =================
-        if (queryIndex == 0 && k == 10 && baseReader != null) {
-            logger.info("SANITY CHECK: Query 0, K=10");
-
-            for (int i = 0; i < Math.min(10, upto); i++) {
-                int annId = annIdx[i];
-                double dAnn = (annId >= 0 && annId < baseReader.count)
-                        ? baseReader.l2(queryVector, annId)
-                        : Double.NaN;
-
-                logger.info("ANN[{}] -> id={}, dist={}", i, annId, dAnn);
-            }
-
-            for (int i = 0; i < Math.min(10, gt.length); i++) {
-                int gtId = gt[i];
-                double dGt = (gtId >= 0 && gtId < baseReader.count)
-                        ? baseReader.l2(queryVector, gtId)
-                        : Double.NaN;
-
-                logger.info("GT [{}] -> id={}, dist={}", i, gtId, dGt);
-            }
-        }
-
-
-        // First query, K=100 only
-        if (queryIndex == 0 && k == 100 && baseReader != null) {
-            logger.info("DISTANCE COMPARISON (top-10):");
-            for (int i = 0; i < 10; i++) {
-                int annId = annIdx[i];
-                int gtId  = gt[i];
-
-                double dAnn = baseReader.l2(queryVector, annId);
-                double dGt  = baseReader.l2(queryVector, gtId);
-
-                logger.info(
-                        "rank {} -> ANN(id={}, d={}) | GT(id={}, d={}) | ratio={}",
-                        i, annId, dAnn, gtId, dGt,
-                        (dGt > 0 ? dAnn / dGt : Double.NaN)
-                );
-            }
-        }
-
-
-            // Recall@K: ANN vs GT@MAX_K
-
-        int[] gtMax = gtMgr.getGroundtruth(queryIndex, maxK);
-        if (gtMax == null || gtMax.length < k) {
             return new QueryMetrics(Double.NaN, Double.NaN, Double.NaN);
         }
 
+        // ------------------ Recall@K ------------------
+        int[] gtMax = gtMgr.getGroundtruth(queryIndex, maxK);
         Set<Integer> gtTopK = new HashSet<>(k);
-        for (int i = 0; i < k; i++) {
-            gtTopK.add(gtMax[i]);
-        }
+        for (int i = 0; i < k; i++) gtTopK.add(gtMax[i]);
 
         int hits = 0;
         for (int i = 0; i < Math.min(k, annResults.size()); i++) {
             int id = resolveBaseIndex(annResults.get(i));
             if (gtTopK.contains(id)) hits++;
         }
-
         double recallAtK = hits / (double) k;
 
-
-        // =========================================================
-        // Distance Ratio@K
-        // =========================================================
+        // ------------------ Distance Ratio@K (Peng) ------------------
         double distanceRatioAtK = Double.NaN;
 
-        if (baseReader != null && k >= 10) {
-            double ratioSum = 0.0;
+        if (baseReader != null && annResults.size() >= k) {
+            double sum = 0.0;
             int used = 0;
 
-            for (int i = 0; i < upto; i++) {
-                int annId = annIdx[i];
+            for (int i = 0; i < k; i++) {
+                int annId = resolveBaseIndex(annResults.get(i));
                 int gtId  = gt[i];
 
                 if (annId < 0 || annId >= baseReader.count) continue;
@@ -898,39 +811,25 @@ public class ForwardSecureANNSystem {
                 if (dGt <= 0) continue;
 
                 double dAnn = baseReader.l2(queryVector, annId);
-                ratioSum += (dAnn / dGt);
+                sum += (dAnn / dGt);
                 used++;
             }
 
-            if (used > 0) {
-                distanceRatioAtK = ratioSum / used;
+            if (used == k) {
+                distanceRatioAtK = sum / k;
             }
         }
 
-        // =========================================================
-        // Candidate Ratio@K
-        // =========================================================
+        // ------------------ Candidate Expansion Factor ------------------
         int uniqueCandidates = qs.getLastUniqueCandidates();
         double candidateRatioAtK =
                 (uniqueCandidates > 0)
-                        ? (uniqueCandidates / (double) k)
+                        ? ((double) uniqueCandidates / (double) k)
                         : Double.NaN;
 
-        // ================= METRIC CONSISTENCY CHECK =================
-        if (!Double.isNaN(distanceRatioAtK)
-                && distanceRatioAtK < 1.1
-                && recallAtK < 0.5) {
-
-            logger.warn(
-                    "INCONSISTENT METRICS: q={}, K={}, ratio={}, recall={}, candRatio={}",
-                    queryIndex, k, distanceRatioAtK, recallAtK,
-                    qs.getLastUniqueCandidates() / (double) k
-            );
-        }
-
         return new QueryMetrics(
-                candidateRatioAtK,       // search efficiency
-                distanceRatioAtK,        // paper quality ratio
+                candidateRatioAtK,
+                distanceRatioAtK,
                 recallAtK
         );
     }
@@ -1331,7 +1230,7 @@ public class ForwardSecureANNSystem {
                 outDir.resolve("metrics_summary.txt"),
                 String.format(
                         Locale.ROOT,
-                        "mode=mSANNP%nconfig_sha256=%s%nkey_version=v%d%nART(ms)=%.3f%nAvgRatio=%.6f%nAvgCRatio=%n",
+                        "mode=mSANNP%nconfig_sha256=%s%nkey_version=v%d%nART(ms)=%.3f%nAvgRatio=%.6f%nAvgCRatio=%.6f%n",
                         cfgHash,
                         keyVer,
                         avgArtMs,

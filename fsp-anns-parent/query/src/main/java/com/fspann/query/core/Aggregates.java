@@ -46,134 +46,66 @@ public final class Aggregates {
         return avgRunMs;
     }
 
+    // =================== Aggregates.fromProfiler ===================
     public static Aggregates fromProfiler(Profiler p) {
         Aggregates a = new Aggregates();
-
         List<Profiler.QueryRow> rows = p.getQueryRows();
         if (rows.isEmpty()) return a;
 
-        int count = rows.size();
-        int runCount = 0;
+        Map<Integer, List<Double>> drAtK = new HashMap<>();
+        Map<Integer, List<Double>> rAtK  = new HashMap<>();
 
-        double sumDistanceRatio = 0.0;      // ← Paper ratio
-        int distanceRatioCount = 0;
+        double sumCandRatio = 0.0; int candCnt = 0;
+        double sumRecall = 0.0; int recallCnt = 0;
 
-        double sumCandidateRatio = 0.0;     // ← Search efficiency
-        int candidateRatioCount = 0;
+        double sumServer = 0, sumClient = 0, sumRun = 0, sumDecrypt = 0;
+        int runCnt = 0;
 
-        double sumRecall = 0.0;
-        int recallCount = 0;
-
-        double sumRefineLimit = 0.0;
-        int refineLimitCount = 0;
-
-        double sumServer = 0.0;
-        double sumClient = 0.0;
-        double sumRun = 0.0;
-        double sumDecrypt = 0.0;
-
-        double sumTokenBytes = 0.0;
-        double sumWorkUnits = 0.0;
-
-        double sumCandT = 0.0;
-        double sumCandK = 0.0;
-        double sumCandD = 0.0;
-        double sumRet   = 0.0;
-
-        Map<Integer, List<Double>> rAtK = new HashMap<>();
-        Map<Integer, List<Double>> drAtK = new HashMap<>();  // ← Distance ratio@K
+        double sumTokenBytes = 0;
+        double sumRefLimit = 0;
+        double sumCandTotal = 0;
+        double sumCandKept = 0;
+        double sumCandDec = 0;
+        double sumReturned = 0;
 
         for (Profiler.QueryRow r : rows) {
 
-            // ---------- Distance Ratio (PAPER METRIC, K >= 20 only) ----------
-            if (r.tokenK >= 20 && Double.isFinite(r.distanceRatio) && r.distanceRatio > 0) {
-                sumDistanceRatio += r.distanceRatio;
-                distanceRatioCount++;
-
+            // ---- Ratio@K (paper metric) ----
+            if (Double.isFinite(r.distanceRatio)) {
                 drAtK.computeIfAbsent(r.tokenK, k -> new ArrayList<>())
                         .add(r.distanceRatio);
             }
 
-            // ---------- Candidate Ratio (SEARCH EFFICIENCY) ----------
+            // ---- Candidate expansion factor ----
             if (Double.isFinite(r.candidateRatio)) {
-                sumCandidateRatio += r.candidateRatio;
-                candidateRatioCount++;
+                sumCandRatio += r.candidateRatio;
+                candCnt++;
             }
 
-            // ---------- Timing ----------
+            // ---- Recall ----
+            if (r.recall >= 0 && r.recall <= 1.0) {
+                sumRecall += r.recall;
+                recallCnt++;
+                rAtK.computeIfAbsent(r.tokenK, k -> new ArrayList<>())
+                        .add(r.recall);
+            }
+
+            // ---- Timings ----
             sumServer  += nz(r.serverMs);
             sumClient  += nz(r.clientMs);
             sumDecrypt += nz(r.decryptMs);
+            if (r.runMs > 0) { sumRun += r.runMs; runCnt++; }
 
-            if (r.runMs > 0) {
-                sumRun += r.runMs;
-                runCount++;
-            }
-
-            // ---------- Token / Work ----------
-            sumTokenBytes += nz(r.tokenBytes);
-            sumWorkUnits  += r.vectorDim;
-
-            // ---------- Candidate pipeline ----------
-            if (r.candTotal >= 0)     sumCandT += r.candTotal;
-            if (r.candKept >= 0)      sumCandK += r.candKept;
-            if (r.candDecrypted >= 0) sumCandD += r.candDecrypted;
-            if (r.candReturned >= 0)  sumRet   += r.candReturned;
-
-            // ---------- Recall@K ----------
-            if (r.recall >= 0.0 && r.recall <= 1.0) {
-                sumRecall += r.recall;
-                recallCount++;
-                rAtK.computeIfAbsent(r.tokenK, k -> new ArrayList<>()).add(r.recall);
-            }
-
-            // ---------- Re-encryption ----------
-            if (r.reencCount > 0) {
-                a.reencryptCount += r.reencCount;
-                a.reencryptBytes += Math.max(0, r.reencBytesDelta);
-                a.reencryptMs    += Math.max(0, r.reencTimeMs);
-            }
-
-            if (r.refinementLimit > 0) {
-                sumRefineLimit += r.refinementLimit;
-                refineLimitCount++;
-            }
-
+            // ---- Costs / counts ----
+            sumTokenBytes += r.tokenBytes;
+            sumRefLimit   += r.refinementLimit;
+            sumCandTotal  += r.candTotal;
+            sumCandKept   += r.candKept;
+            sumCandDec    += r.candDecrypted;
+            sumReturned   += r.candReturned;
         }
 
-        // ---------- Final averages ----------
-        a.avgDistanceRatio = distanceRatioCount > 0
-                ? (sumDistanceRatio / distanceRatioCount)
-                : Double.NaN;
-
-        a.avgCandidateRatio = candidateRatioCount > 0
-                ? (sumCandidateRatio / candidateRatioCount)
-                : 0.0;
-
-        a.avgServerMs   = sumServer / count;
-        a.avgClientMs   = sumClient / count;
-        a.avgRunMs      = runCount > 0 ? (sumRun / runCount) : 0.0;
-        a.avgDecryptMs  = sumDecrypt / count;
-
-        a.avgTokenBytes = sumTokenBytes / count;
-        a.avgWorkUnits  = sumWorkUnits / count;
-
-        a.avgCandTotal     = sumCandT / count;
-        a.avgCandKept      = sumCandK / count;
-        a.avgCandDecrypted = sumCandD / count;
-        a.avgReturned      = sumRet   / count;
-
-        // ---------- Recall@K ----------
-        for (var e : rAtK.entrySet()) {
-            a.recallAtK.put(
-                    e.getKey(),
-                    e.getValue().stream().mapToDouble(Double::doubleValue).average().orElse(0.0)
-            );
-        }
-
-        a.avgRecall = a.recallAtK.getOrDefault(10, 0.0);
-
-        // ---------- Distance Ratio@K (PAPER METRIC) ----------
+        // ---- Per-K aggregates ----
         for (var e : drAtK.entrySet()) {
             a.distanceRatioAtK.put(
                     e.getKey(),
@@ -181,9 +113,35 @@ public final class Aggregates {
             );
         }
 
-        a.avgRefinementLimit = refineLimitCount > 0
-                ? (sumRefineLimit / refineLimitCount)
-                : 0.0;
+        for (var e : rAtK.entrySet()) {
+            a.recallAtK.put(
+                    e.getKey(),
+                    e.getValue().stream().mapToDouble(Double::doubleValue).average().orElse(0.0)
+            );
+        }
+
+        // ---- Headline paper metrics ----
+        a.avgDistanceRatio =
+                a.distanceRatioAtK.getOrDefault(100, Double.NaN);
+
+        a.avgRecall         = a.recallAtK.getOrDefault(10, 0.0);
+        a.avgCandidateRatio = candCnt > 0 ? sumCandRatio / candCnt : 0.0;
+
+        int n = rows.size();
+
+        a.avgServerMs        = sumServer / n;
+        a.avgClientMs        = sumClient / n;
+        a.avgDecryptMs       = sumDecrypt / n;
+        a.avgRunMs           = runCnt > 0 ? sumRun / runCnt : 0.0;
+
+        a.avgTokenBytes      = sumTokenBytes / n;
+        a.avgRefinementLimit = sumRefLimit / n;
+        a.avgCandTotal       = sumCandTotal / n;
+        a.avgCandKept        = sumCandKept / n;
+        a.avgCandDecrypted   = sumCandDec / n;
+        a.avgReturned        = sumReturned / n;
+
+        a.avgWorkUnits       = 0.0; // intentionally unused
 
         return a;
     }

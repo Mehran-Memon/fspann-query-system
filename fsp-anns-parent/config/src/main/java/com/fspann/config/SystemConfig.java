@@ -126,6 +126,61 @@ public final class SystemConfig {
             );
         }
 
+// Get active profile from system property
+        String activeProfile = System.getProperty("cli.profile", "BASE");
+
+        if (cfg.profiles != null && !activeProfile.equals("BASE")) {
+            ProfileConfig selected = null;
+
+            // Find matching profile
+            for (ProfileConfig p : cfg.profiles) {
+                if (p.name != null && p.name.equals(activeProfile)) {
+                    selected = p;
+                    break;
+                }
+            }
+
+            if (selected != null && selected.overrides != null) {
+                // Apply paper overrides
+                if (selected.overrides.paper != null) {
+                    PaperConfig po = selected.overrides.paper;
+                    if (po.m > 0) cfg.paper.m = po.m;
+                    if (po.lambda > 0) cfg.paper.lambda = po.lambda;
+                    if (po.divisions > 0) cfg.paper.divisions = po.divisions;
+                    if (po.tables > 0) cfg.paper.tables = po.tables;
+                    if (po.seed != 0) cfg.paper.seed = po.seed;
+                }
+
+                // Apply runtime overrides
+                if (selected.overrides.runtime != null) {
+                    RuntimeConfig ro = selected.overrides.runtime;
+
+                    // Apply refinementLimit
+                    if (ro.refinementLimit > 0) {
+                        cfg.runtime.refinementLimit = ro.refinementLimit;
+                    }
+
+                    // Apply probeOverride (critical!)
+                    if (ro.probeOverride >= 0) {
+                        cfg.runtime.probeOverride = ro.probeOverride;
+                    }
+
+                    // Apply other runtime params
+                    if (ro.maxCandidateFactor > 0) {
+                        cfg.runtime.maxCandidateFactor = ro.maxCandidateFactor;
+                    }
+                }
+
+                // Apply stabilization overrides
+                if (selected.overrides.stabilization != null) {
+                    StabilizationConfig so = selected.overrides.stabilization;
+                    cfg.stabilization.enabled = so.enabled;
+                    cfg.stabilization.alpha = so.alpha;
+                    cfg.stabilization.minCandidatesRatio = so.minCandidatesRatio;
+                }
+            }
+        }
+
         cfg.numShards      = clamp(cfg.numShards, 1, MAX_SHARDS);
         cfg.opsThreshold   = clamp(cfg.opsThreshold, 1L, MAX_OPS_THRESHOLD);
         cfg.ageThresholdMs = clamp(cfg.ageThresholdMs, 0L, MAX_AGE_THRESHOLD);
@@ -182,22 +237,22 @@ public final class SystemConfig {
     public static final class PaperConfig {
 
         @JsonProperty("enabled")
-        private boolean enabled = true;
+        public boolean enabled = true;
 
         @JsonProperty("m")
-        private int m = 24;
+        public int m = 24;
 
         @JsonProperty("lambda")
-        private int lambda = 2;
+        public int lambda = 2;
 
         @JsonProperty("divisions")
-        private int divisions = 3;
+        public int divisions = 3;
 
         @JsonProperty("tables")
-        private int tables = 6;
+        public int tables = 6;
 
         @JsonProperty("seed")
-        private long seed = 13L;
+        public long seed = 13L;
 
         public boolean isEnabled() { return enabled; }
         public int getM() { return Math.max(1, m); }
@@ -210,25 +265,25 @@ public final class SystemConfig {
     public static final class RuntimeConfig {
 
         @JsonProperty("maxCandidateFactor")
-        private int maxCandidateFactor = 600;
+        public int maxCandidateFactor = 600;
 
         @JsonProperty("maxRefinementFactor")
-        private int maxRefinementFactor = 200;
+        public int maxRefinementFactor = 200;
 
         @JsonProperty("maxRelaxationDepth")
-        private int maxRelaxationDepth = Integer.MAX_VALUE;
+        public int maxRelaxationDepth = Integer.MAX_VALUE;
 
         @JsonProperty("earlyStopCandidates")
-        private int earlyStopCandidates = Integer.MAX_VALUE;
+        public int earlyStopCandidates = Integer.MAX_VALUE;
 
         @JsonProperty("refinementLimit")
-        private int refinementLimit = 20_000;
+        public int refinementLimit = 20_000;
 
         @JsonProperty("maxGlobalCandidates")
-        private int maxGlobalCandidates = 20000;
+        public int maxGlobalCandidates = 20000;
 
         @JsonProperty("probeOverride")
-        private int probeOverride = -1;
+        public int probeOverride = -1;
 
         public int getProbeOverride() {
             return probeOverride;
@@ -255,7 +310,7 @@ public final class SystemConfig {
             return Math.max(1, maxGlobalCandidates);
         }
 
-        private transient Integer refinementLimitOverride = null;
+        public transient Integer refinementLimitOverride = null;
 
         public int getRefinementLimit() {
             return (refinementLimitOverride != null)
@@ -271,19 +326,27 @@ public final class SystemConfig {
             this.refinementLimitOverride = null;
         }
 
+        private int hammingPrefilterThreshold = 0;  // 0 = disabled, >0 = threshold
 
+        public int getHammingPrefilterThreshold() {
+            return hammingPrefilterThreshold;
+        }
+
+        public void setHammingPrefilterThreshold(int threshold) {
+            this.hammingPrefilterThreshold = threshold;
+        }
     }
 
     public static final class StabilizationConfig {
 
         @JsonProperty("enabled")
-        private boolean enabled = true;
+        public boolean enabled = true;
 
         @JsonProperty("alpha")
-        private double alpha = 0.06;
+        public double alpha = 0.06;
 
         @JsonProperty("minCandidatesRatio")
-        private double minCandidatesRatio = 1.5;
+        public double minCandidatesRatio = 1.5;
 
         public boolean isEnabled() { return enabled; }
 

@@ -75,6 +75,19 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
     private final List<PendingVector> pendingVectors =
             Collections.synchronizedList(new ArrayList<>());
 
+    /**
+     * Candidate with pre-computed Hamming distance to query.
+     * Used for pre-decrypt filtering.
+     */
+    public record CandidateWithScore(String id, long hammingDist)
+            implements Comparable<CandidateWithScore> {
+
+        @Override
+        public int compareTo(CandidateWithScore other) {
+            return Long.compare(this.hammingDist, other.hammingDist);
+        }
+    }
+
     // Greedy partition parameters (local defaults, no config dependency)
     private static final int DEFAULT_GREEDY_BLOCK_SIZE = 64;
     private static final int DEFAULT_MAX_PROBES = 5;
@@ -463,7 +476,10 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
 
         final int K = token.getTopK();
         final int requiredK = Math.max(K, cfg.getEval().getMaxK());
-        final int HARD_CAP = Math.max(cfg.getRuntime().getMaxGlobalCandidates(), 200 * K);
+        final int HARD_CAP = Math.max(
+                cfg.getRuntime().getMaxGlobalCandidates(),
+                cfg.getRuntime().getRefinementLimit()
+        );
         final int perDivisionMaxProbes = effectiveMaxProbes();
 
         // bestScore[id] = minimum distance-to-partition-range seen so far
@@ -565,6 +581,139 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         return out;
     }
 
+    /**
+     * Lookup candidates WITH Hamming scores for pre-decrypt filtering.
+     * This method returns the Hamming distances that are already computed
+     * during candidate retrieval, enabling cheap pre-filtering before decryption.
+     *
+     * @param token Query token with bitsets
+     * @return List of candidates with Hamming distances, sorted by distance
+     */
+    public List<CandidateWithScore> lookupCandidatesWithScores(QueryToken token) {
+        Objects.requireNonNull(token, "token");
+        if (!frozen) throw new IllegalStateException("Index not finalized");
+
+        int dim = token.getDimension();
+        DimensionState[] tables = dims.get(dim);
+        if (tables == null) return List.of();
+
+        BitSet[][] qCodes = token.getBitCodes();
+        if (qCodes == null) {
+            throw new IllegalStateException("MSANNP violation: QueryToken missing BitSet codes");
+        }
+        if (qCodes.length != tables.length) {
+            throw new IllegalStateException(
+                    "Token tables mismatch: token=" + qCodes.length + " index=" + tables.length
+            );
+        }
+
+        final int K = token.getTopK();
+        final int requiredK = Math.max(K, cfg.getEval().getMaxK());
+        final int HARD_CAP = Math.max(
+                cfg.getRuntime().getMaxGlobalCandidates(),
+                cfg.getRuntime().getRefinementLimit()
+        );
+        final int perDivisionMaxProbes = effectiveMaxProbes();
+
+        // bestScore[id] = minimum Hamming distance seen across all tables/divisions
+        Map<String, Long> bestScore = new HashMap<>(Math.min(HARD_CAP, 1 << 16));
+        Set<String> deleted = new HashSet<>(2048);
+        int rawSeen = 0;
+
+        // Same candidate retrieval logic as lookupCandidateIds()
+        for (int t = 0; t < tables.length && bestScore.size() < HARD_CAP; t++) {
+            DimensionState S = tables[t];
+            if (S.divisions == null || S.divisions.isEmpty()) continue;
+
+            for (int d = 0; d < S.divisions.size() && bestScore.size() < HARD_CAP; d++) {
+                if (d >= qCodes[t].length) {
+                    throw new IllegalStateException(
+                            "Token divisions mismatch at table=" + t +
+                                    " expectedDivisions>=" + (d + 1)
+                    );
+                }
+
+                DivisionState div = S.divisions.get(d);
+                List<GreedyPartitioner.Partition> parts = div.partitions;
+                if (parts == null || parts.isEmpty()) continue;
+
+                long qKey = GreedyPartitioner.computeKey(qCodes[t][d]);
+                int center = GreedyPartitioner.findNearestPartition(parts, qKey);
+
+                PriorityQueue<long[]> probeQueue =
+                        new PriorityQueue<>(Comparator.comparingLong(a -> a[1]));
+
+                boolean[] visited = new boolean[parts.size()];
+                BitSet qBits = qCodes[t][d];
+
+                GreedyPartitioner.Partition centerPart = parts.get(center);
+                long centerDist = GreedyPartitioner.hamming(qBits, centerPart.repCode);
+
+                probeQueue.add(new long[]{center, centerDist});
+                visited[center] = true;
+
+                int probesUsed = 0;
+
+                while (!probeQueue.isEmpty()
+                        && probesUsed < perDivisionMaxProbes
+                        && bestScore.size() < HARD_CAP) {
+
+                    long[] cur = probeQueue.poll();
+                    int idx = (int) cur[0];
+                    probesUsed++;
+
+                    rawSeen += collectPartitionOrdered(
+                            parts.get(idx),
+                            qBits,
+                            bestScore,
+                            deleted
+                    );
+
+                    int left = idx - 1;
+                    if (left >= 0 && !visited[left]) {
+                        visited[left] = true;
+                        long dist = GreedyPartitioner.hamming(qBits, parts.get(left).repCode);
+                        probeQueue.add(new long[]{left, dist});
+                    }
+
+                    int right = idx + 1;
+                    if (right < parts.size() && !visited[right]) {
+                        visited[right] = true;
+                        long dist = GreedyPartitioner.hamming(qBits, parts.get(right).repCode);
+                        probeQueue.add(new long[]{right, dist});
+                    }
+                }
+            }
+        }
+
+        // ---- RETURN WITH SCORES (key change!) ----
+        List<CandidateWithScore> result = new ArrayList<>(bestScore.size());
+        for (Map.Entry<String, Long> entry : bestScore.entrySet()) {
+            result.add(new CandidateWithScore(entry.getKey(), entry.getValue()));
+        }
+
+        // Sort by Hamming distance (ascending)
+        result.sort(Comparator.comparingLong(CandidateWithScore::hammingDist));
+
+        lastTouched.set(result.size());
+        lastTouchedIds.get().clear();
+        for (CandidateWithScore c : result) {
+            lastTouchedIds.get().add(c.id());
+        }
+        lastRawVisited = rawSeen;
+
+        logger.info(
+                "LSH Lookup (with scores): K={} | perDivProbes={} | rawSeen={} | uniqueCands={} | returned={} | deleted={}",
+                K, perDivisionMaxProbes, rawSeen, bestScore.size(), result.size(), deleted.size()
+        );
+
+        if (result.size() < requiredK) {
+            logger.warn("Recall floor violated: returned={} required={}", result.size(), requiredK);
+        }
+
+        return result;
+    }
+
     public EncryptedPoint loadPointIfActive(String id) {
         if (metadata.isDeleted(id)) return null;
         try {
@@ -573,7 +722,6 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
             return null;
         }
     }
-
 
     private int collectPartitionOrdered(
             GreedyPartitioner.Partition p,
@@ -731,8 +879,21 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
     private int effectiveMaxProbes() {
         Integer o = probeOverride.get();
         if (o != null && o > 0) return o;
+
+        int cfgOverride = cfg.getRuntime().getProbeOverride();
+        if (cfgOverride > 0) return cfgOverride;
+
         return DEFAULT_MAX_PROBES;
     }
+
+    /**
+     * Default per-division probe budget (paper baseline).
+     * Does NOT include runtime overrides.
+     */
+    public int getDefaultMaxProbes() {
+        return DEFAULT_MAX_PROBES;
+    }
+
 
 
 }

@@ -22,7 +22,7 @@
 
   "runtime": {
     "precisionMode": false,
-    "refinementLimit": 3500,
+    "refinementLimit": 12000,
     "maxCandidateFactor": 4,
     "maxRelaxationDepth": 6
   },

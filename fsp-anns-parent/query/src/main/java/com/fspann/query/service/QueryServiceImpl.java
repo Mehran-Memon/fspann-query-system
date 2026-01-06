@@ -101,6 +101,21 @@ public final class QueryServiceImpl implements QueryService {
     public List<QueryResult> search(QueryToken token) {
         if (token == null) return Collections.emptyList();
 
+        if (lastCandTotal == 0) {
+            int cfgLimit = cfg.getRuntime().getRefinementLimit();
+            int cfgProbe = cfg.getRuntime().getProbeOverride();
+            int cfgHammingThreshold = cfg.getRuntime().getHammingPrefilterThreshold();
+
+            logger.info("QUERY CONFIG VALIDATION:");
+            logger.info("refinementLimit: {}", cfgLimit);
+            logger.info("probeOverride: {}", cfgProbe);
+            logger.info("hammingPrefilterThreshold: {} (0=disabled)", cfgHammingThreshold);
+
+            if (cfgProbe > 0) {
+                logger.info("Profile-specific probeOverride active");
+            }
+        }
+
         clearLastMetrics();
         touchedThisSession.clear();
 
@@ -125,7 +140,6 @@ public final class QueryServiceImpl implements QueryService {
         }
 
         final long serverStart = System.nanoTime();
-
         boolean retried = false;
 
         try {
@@ -134,29 +148,75 @@ public final class QueryServiceImpl implements QueryService {
             while (true) {
 
                 // -------------------------------
-                // STAGE A — candidate IDs
+                // STAGE A — candidate IDs WITH SCORES
                 // -------------------------------
-                List<String> candidateIds = index.lookupCandidateIds(token);
-                this.lastUniqueCandidates = candidateIds.size();
+                List<PartitionedIndexService.CandidateWithScore> candidatesWithScores =
+                        index.lookupCandidatesWithScores(token);
 
                 lastCandTotal = index.getLastRawCandidateCount();
-                lastCandKept  = candidateIds.size();
+                lastCandKept = candidatesWithScores.size();
 
-                if (candidateIds.isEmpty()) return Collections.emptyList();
+                if (candidatesWithScores.isEmpty()) return Collections.emptyList();
+
+                candidatesWithScores.sort(
+                        Comparator.comparingLong(
+                                PartitionedIndexService.CandidateWithScore::hammingDist
+                        )
+                );
+
+                // STAGE A.5 — RANKED HAMMING WITH FALLBACK
+
+                final int hammingThreshold = cfg.getRuntime().getHammingPrefilterThreshold();
+                final int runtimeLimit =
+                        getEffectiveRefinementLimit(cfg.getRuntime().getRefinementLimit());
+
+                List<String> candidateIds = new ArrayList<>(runtimeLimit);
+                int belowThreshold = 0;
+                int fallbackUsed = 0;
+
+                if (hammingThreshold > 0) {
+
+                    // 1) Take all candidates within threshold (ranked already)
+                    for (PartitionedIndexService.CandidateWithScore c : candidatesWithScores) {
+                        if (c.hammingDist() <= hammingThreshold) {
+                            candidateIds.add(c.id());
+                            belowThreshold++;
+                            if (candidateIds.size() >= runtimeLimit) break;
+                        }
+                    }
+
+                    // 2) Fallback: fill remaining slots with best-ranked outside threshold
+                    if (candidateIds.size() < runtimeLimit) {
+                        for (PartitionedIndexService.CandidateWithScore c : candidatesWithScores) {
+                            if (c.hammingDist() > hammingThreshold) {
+                                candidateIds.add(c.id());
+                                fallbackUsed++;
+                                if (candidateIds.size() >= runtimeLimit) break;
+                            }
+                        }
+                    }
+
+                    logger.info(
+                            "Ranked Hamming filter: total={} threshold={} ≤T={} fallback={} final={}",
+                            candidatesWithScores.size(),
+                            hammingThreshold,
+                            belowThreshold,
+                            fallbackUsed,
+                            candidateIds.size()
+                    );
+
+                } else {
+                    // No threshold: take top R directly
+                    for (PartitionedIndexService.CandidateWithScore c : candidatesWithScores) {
+                        candidateIds.add(c.id());
+                        if (candidateIds.size() >= runtimeLimit) break;
+                    }
+                }
 
                 // -------------------------------
                 // STAGE B — bounded refinement (CONFIG-DRIVEN)
                 // -------------------------------
-                final int runtimeLimit =
-                        getEffectiveRefinementLimit(cfg.getRuntime().getRefinementLimit());
-
-                final int evalLimit = candidateIds.size();
-
-                final int refineLimit =
-                        refinementLimitOverride.get() != null
-                                ? Math.min(evalLimit, runtimeLimit)
-                                : evalLimit;
-
+                final int refineLimit = Math.min(candidateIds.size(), runtimeLimit);
 
                 List<QueryScored> scored = new ArrayList<>(refineLimit);
                 long decryptStart = System.nanoTime();
@@ -165,13 +225,23 @@ public final class QueryServiceImpl implements QueryService {
                 int invalidVector = 0;
                 int decryptError = 0;
 
+                logger.info(
+                        "EFFECTIVE LIMITS: K={} refinementLimit={} probeOverride={} hammingThreshold={}",
+                        K,
+                        getLastEffectiveRefinementLimit(),
+                        cfg.getRuntime().getProbeOverride(),
+                        hammingThreshold
+                );
+
+                this.lastUniqueCandidates = candidateIds.size();
+
                 for (int i = 0; i < refineLimit; i++) {
                     String id = candidateIds.get(i);
                     try {
                         EncryptedPoint ep = index.loadPointIfActive(id);
                         if (ep == null) {
                             notFound++;
-                            if (notFound <= 5) {  // Log first 5 only
+                            if (notFound <= 5) {
                                 logger.warn("Point {} not found in metadata", id);
                             }
                             continue;
@@ -182,7 +252,7 @@ public final class QueryServiceImpl implements QueryService {
 
                         if (!isValid(v)) {
                             invalidVector++;
-                            if (invalidVector <= 5) {  // Log first 5 only
+                            if (invalidVector <= 5) {
                                 logger.warn("Point {} decrypted to invalid vector (dim={}, null={})",
                                         id, v != null ? v.length : -1, v == null);
                             }
@@ -194,7 +264,7 @@ public final class QueryServiceImpl implements QueryService {
 
                     } catch (Exception e) {
                         decryptError++;
-                        if (decryptError <= 5) {  // Log first 5 only
+                        if (decryptError <= 5) {
                             logger.error("Failed to decrypt {}: {}", id, e.getMessage());
                         }
                     }
@@ -209,17 +279,19 @@ public final class QueryServiceImpl implements QueryService {
                 );
 
                 logger.info(
-                        "Refinement: limit={} (cfg={}) | notFound={} | invalidVec={} | decryptErr={} | scored={}",
+                        "Refinement: limit={} (cfg={}) | belowThreshold={} | fallbackUsed={}\n | notFound={} | invalidVec={} | decryptErr={} | scored={}",
                         refineLimit,
                         cfg.getRuntime().getRefinementLimit(),
+                        belowThreshold,
+                        fallbackUsed,
                         notFound,
                         invalidVector,
                         decryptError,
                         scored.size()
                 );
 
-
                 if (scored.isEmpty()) return Collections.emptyList();
+
                 // -------------------------------
                 // STAGE C — rank & return
                 // -------------------------------
@@ -244,7 +316,7 @@ public final class QueryServiceImpl implements QueryService {
                 }
 
                 lastReturned = eff;
-                lastCandIds  = finalIds;
+                lastCandIds = finalIds;
 
                 logger.info("QueryService returning: requested K={}, scored={}, returning={}",
                         K, scored.size(), out.size());
@@ -261,7 +333,6 @@ public final class QueryServiceImpl implements QueryService {
                     );
 
                     index.setProbeOverride(10);
-                    clearRefinementLimit();
                     continue;
                 }
 
@@ -269,7 +340,7 @@ public final class QueryServiceImpl implements QueryService {
             }
 
         } finally {
-            index.clearProbeOverride();  // CRITICAL: always reset
+            index.clearProbeOverride();
 
             lastServerNs = System.nanoTime() - serverStart;
             lastClientNs = System.nanoTime() - clientStart;
@@ -395,6 +466,11 @@ public final class QueryServiceImpl implements QueryService {
     }
     public int getLastUniqueCandidates() {
         return lastUniqueCandidates;
+    }
+    public double getLastRefinementUtilization() {
+        int limit = getLastEffectiveRefinementLimit();
+        if (limit <= 0) return 0.0;
+        return (double) lastCandDecrypted / (double) limit;
     }
 
 

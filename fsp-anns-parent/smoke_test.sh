@@ -9,16 +9,14 @@ set -Eeuo pipefail
 # End-to-end validation with parameter tuning guidance
 # FIXED: Deep merge for profile overrides + 16GB heap
 
-echo "============================================"
 echo "  FSP-ANN Smoke Test (Linux)"
-echo "============================================"
 echo ""
 
 # ================= USER PARAMETERS =================
 
 TEST_DATASET="SIFT1M"
-TEST_PROFILE="M24"          # BASE or profile name
-QUERY_LIMIT=20             # Smoke test queries only
+TEST_PROFILE="SMOKE_RANKED_HAMMING"          # BASE or profile name
+QUERY_LIMIT=20                                  # Smoke test queries only
 
 # ================= PATHS =================
 
@@ -152,7 +150,9 @@ run_dir="$OutRoot/${TEST_DATASET}_${TEST_PROFILE}"
 rm -rf "$run_dir"
 mkdir -p "$run_dir/results"
 
-# Override paths for smoke test
+# ========================================================
+# FIXED: Only override paths, NOT runtime parameters
+# ========================================================
 final_config=$(echo "$merged_config" | jq \
   --arg resultsDir "$run_dir/results" \
   --arg gtPath "$gt" \
@@ -161,9 +161,7 @@ final_config=$(echo "$merged_config" | jq \
   .ratio.source = "gt" |
   .ratio.gtPath = $gtPath |
   .ratio.gtSample = 10 |
-  .runtime.precisionMode = false |
-  .runtime.refinementLimit = 3000 |
-  .runtime.maxCandidateFactor = 3
+  .runtime.precisionMode = false
   ')
 
 # Write final config
@@ -171,13 +169,32 @@ final_config_path="$run_dir/config.json"
 echo "$final_config" > "$final_config_path"
 echo "  Config written: $final_config_path"
 
-# ADDED: Verify applied parameters
+# ========================================================
+# VERIFICATION: Log applied parameters
+# ========================================================
+echo "  Applied config values:"
 m_value=$(echo "$final_config" | jq -r '.paper.m')
 lambda_value=$(echo "$final_config" | jq -r '.paper.lambda')
 divisions_value=$(echo "$final_config" | jq -r '.paper.divisions')
-echo "  Applied params: m=$m_value λ=$lambda_value divisions=$divisions_value"
-echo ""
+tables_value=$(echo "$final_config" | jq -r '.paper.tables')
+refinement_value=$(echo "$final_config" | jq -r '.runtime.refinementLimit')
+probe_value=$(echo "$final_config" | jq -r '.runtime.probeOverride')
 
+echo "    m=$m_value λ=$lambda_value divisions=$divisions_value tables=$tables_value"
+echo "    refinementLimit=$refinement_value probeOverride=$probe_value"
+
+# Validation
+if [ "$refinement_value" = "3000" ]; then
+  echo "    ⚠️  WARNING: refinementLimit=3000 (old hardcoded value)"
+fi
+if [ "$refinement_value" = "20000" ] || [ "$refinement_value" -ge 50000 ]; then
+  echo "    ✓ refinementLimit looks good"
+fi
+if [ "$probe_value" != "-1" ] && [ "$probe_value" != "null" ]; then
+  echo "    ✓ probeOverride=$probe_value (from profile)"
+fi
+
+echo ""
 # ================= STEP 3: RUN SYSTEM =================
 
 echo "[STEP 3/5] Running smoke test..."
