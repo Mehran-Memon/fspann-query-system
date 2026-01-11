@@ -47,37 +47,32 @@ echo "Disk space: ${AVAILABLE_GB}GB available"
 # ================= DATASETS ====================
 
 declare -A CFG=(
-  ["SIFT1M"]="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/config/src/main/resources/config_sift1m.json"
   ["glove-100"]="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/config/src/main/resources/config_glove100.json"
   ["RedCaps"]="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/config/src/main/resources/config_redcaps.json"
 )
 
 declare -A DIM=(
-  ["SIFT1M"]=128
   ["glove-100"]=100
   ["RedCaps"]=512
 )
 
 declare -A BASE=(
-  ["SIFT1M"]="/mnt/data/mehran/Datasets/SIFT1M/sift_base.fvecs"
   ["glove-100"]="/mnt/data/mehran/Datasets/glove-100/glove-100_base.fvecs"
   ["RedCaps"]="/mnt/data/mehran/Datasets/redcaps/redcaps_base.fvecs"
 )
 
 declare -A QUERY=(
-  ["SIFT1M"]="/mnt/data/mehran/Datasets/SIFT1M/sift_query.fvecs"
   ["glove-100"]="/mnt/data/mehran/Datasets/glove-100/glove-100_query.fvecs"
   ["RedCaps"]="/mnt/data/mehran/Datasets/redcaps/redcaps_query.fvecs"
 )
 
 declare -A GT=(
-  ["SIFT1M"]="/mnt/data/mehran/Datasets/SIFT1M/sift_query_groundtruth.ivecs"
   ["glove-100"]="/mnt/data/mehran/Datasets/glove-100/glove-100_groundtruth.ivecs"
   ["RedCaps"]="/mnt/data/mehran/Datasets/redcaps/redcaps_query_groundtruth.ivecs"
 )
 
 # ================= FILTERS =====================
-ONLY_DATASET=""
+ONLY_DATASET="RedCaps"
 ONLY_PROFILE=""
 
 # ================= TRACKING ====================
@@ -85,9 +80,9 @@ FAILED_PROFILES=()
 SWEEP_START=$(date +%s)
 
 echo "SWEEP STARTED: $(date)"
-echo "Datasets: SIFT1M-128, Glove-100, RedCaps-512"
-echo "Profiles per dataset: 9"
-echo "Total profiles: 27"
+echo "Datasets: Glove-100, RedCaps-512"
+echo "Profiles per dataset: 3"
+echo "Total profiles: 6"
 echo ""
 
 # ================= GLOBAL SUMMARY =================
@@ -98,7 +93,7 @@ echo "dataset,profile,ART_ms,AvgRatio,recall_at_100,ratio@20,ratio@40,ratio@60,r
 
 # ================= MAIN LOOP ======================
 
-DATASETS=(SIFT1M glove-100 RedCaps)
+DATASETS=(glove-100 RedCaps)
 [[ -n "$ONLY_DATASET" ]] && DATASETS=("$ONLY_DATASET")
 
 for ds in "${DATASETS[@]}"; do
