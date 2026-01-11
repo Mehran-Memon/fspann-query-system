@@ -7,9 +7,9 @@
 
   "paper": {
     "enabled": true,
-    "m": 32,
+    "m": 20,
     "lambda": 2,
-    "divisions": 6,
+    "divisions": 8,
     "tables": 5,
     "seed": 13
   },
@@ -35,23 +35,23 @@
   },
 
   "ratio": {
-    "source": "gt",
-    "gtSample": 200,
+    "source": "none",
+    "gtSample": 0,
     "gtMismatchTolerance": 0.05
   },
 
   "profiles": [
     {
-      "name": "P2_ULTRAFAST_FIXED",
-      "description": "512-dim conservative scaling for sub-second",
+      "name": "P4_SCALE_25M",
+      "description": "25M scalability (25× baseline), P4 speed config",
       "overrides": {
-        "paper": { "m": 32, "lambda": 2, "divisions": 6, "tables": 5 },
+        "paper": { "m": 20, "lambda": 2, "divisions": 8, "tables": 5 },
         "runtime": {
-          "probeOverride": 2,
-          "refinementLimit": 5000,
-          "maxGlobalCandidates": 7000,
-          "maxCandidateFactor": 2,
-          "maxRelaxationDepth": 4,
+          "probeOverride": 4,
+          "refinementLimit": 8000,
+          "maxGlobalCandidates": 10000,
+          "maxCandidateFactor": 3,
+          "maxRelaxationDepth": 5,
           "hammingPrefilterThreshold": 0
         }
       }

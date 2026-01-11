@@ -108,24 +108,26 @@
     },
 
     {
-      "name": "M32_ABLATION",
-      "description": "Ablation: Projection count (m=32, larger index)",
+      "name": "P2_ULTRAFAST",
+      "description": "Trade-off point 0: Ultra-fast baseline (<1s target)",
       "overrides": {
-        "paper": { "m": 32, "lambda": 2, "divisions": 8, "tables": 6 },
+        "paper": { "m": 18, "lambda": 2, "divisions": 8, "tables": 4 },
         "runtime": {
-          "probeOverride": 8,
-          "refinementLimit": 16000,
-          "maxGlobalCandidates": 20000,
+          "probeOverride": 2,
+          "refinementLimit": 5000,
+          "maxGlobalCandidates": 6000,
+          "maxCandidateFactor": 2,
+          "maxRelaxationDepth": 4,
           "hammingPrefilterThreshold": 0
         }
       }
     },
 
     {
-      "name": "LAMBDA3_ABLATION",
-      "description": "Ablation: Relaxation depth (λ=3, deeper search)",
+      "name": "M32_ABLATION",
+      "description": "Ablation: Projection count (m=32, larger index)",
       "overrides": {
-        "paper": { "m": 24, "lambda": 3, "divisions": 8, "tables": 6 },
+        "paper": { "m": 32, "lambda": 2, "divisions": 8, "tables": 6 },
         "runtime": {
           "probeOverride": 8,
           "refinementLimit": 16000,
@@ -150,31 +152,15 @@
     },
 
     {
-      "name": "HAMMING_RANKED",
-      "description": "Optimization: Ranked Hamming pre-filtering speedup",
-      "overrides": {
-        "paper": { "m": 24, "lambda": 2, "divisions": 8, "tables": 6 },
-        "runtime": {
-          "probeOverride": 8,
-          "refinementLimit": 12000,
-          "maxGlobalCandidates": 20000,
-          "maxCandidateFactor": 5,
-          "maxRelaxationDepth": 7,
-          "hammingPrefilterThreshold": 99
-        }
-      }
-    },
-
-    {
       "name": "NO_REENCRYPT",
       "description": "Ablation: Quantify re-encryption security overhead",
       "overrides": {
         "reencryptionEnabled": false,
-        "paper": { "m": 24, "lambda": 2, "divisions": 8, "tables": 6 },
+        "paper": { "m": 20, "lambda": 2, "divisions": 8, "tables": 6 },
         "runtime": {
-          "probeOverride": 8,
-          "refinementLimit": 16000,
-          "maxGlobalCandidates": 20000,
+          "probeOverride": 4,
+          "refinementLimit": 10000,
+          "maxGlobalCandidates": 15000,
           "hammingPrefilterThreshold": 0
         }
       }
