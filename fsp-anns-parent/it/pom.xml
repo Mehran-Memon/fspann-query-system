@@ -1,0 +1,166 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             http://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.fspann</groupId>
+        <artifactId>fsp-anns-parent</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>it</artifactId>
+    <packaging>jar</packaging>
+    <name>Integration Tests</name>
+
+    <dependencies>
+
+        <!-- All project modules -->
+        <dependency>
+            <groupId>com.fspann</groupId>
+            <artifactId>common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fspann</groupId>
+            <artifactId>config</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fspann</groupId>
+            <artifactId>loader</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fspann</groupId>
+            <artifactId>crypto</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fspann</groupId>
+            <artifactId>keymanagement</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fspann</groupId>
+            <artifactId>index</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fspann</groupId>
+            <artifactId>query</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fspann</groupId>
+            <artifactId>api</artifactId>
+        </dependency>
+
+        <!-- JUnit -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Mockito – version must be explicit -->
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <version>5.14.2</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Micrometer & Prometheus -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+
+        <!-- RocksDB required for metadata tests -->
+        <dependency>
+            <groupId>org.rocksdb</groupId>
+            <artifactId>rocksdbjni</artifactId>
+        </dependency>
+
+    </dependencies>
+
+    <build>
+        <plugins>
+
+            <!-- Run *IT.java tests -->
+                    <!-- ADD THIS: Surefire for *Test.java files -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <version>3.0.0-M5</version>
+                        <configuration>
+                            <!-- Force kill after 30 seconds if hung -->
+                            <forkedProcessTimeoutInSeconds>30</forkedProcessTimeoutInSeconds>
+
+                            <!-- Don't reuse JVM to prevent resource leaks -->
+                            <forkCount>1</forkCount>
+                            <reuseForks>false</reuseForks>
+
+                            <!-- Exit cleanly -->
+                            <shutdown>exit</shutdown>
+
+                            <!-- Memory settings -->
+                            <argLine>
+                                -Xmx8g
+                                -Xss4m
+                                -XX:+CrashOnOutOfMemoryError
+                            </argLine>
+
+                            <!-- System properties -->
+                            <systemPropertyVariables>
+                                <test.env>true</test.env>
+                                <rocksdb.stats>false</rocksdb.stats>
+                            </systemPropertyVariables>
+                        </configuration>
+                    </plugin>
+
+                    <!-- KEEP THIS: Failsafe for *IT.java tests -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <version>3.0.0-M5</version>
+                        <executions>
+                            <execution>
+                                <goals>
+                                    <goal>integration-test</goal>
+                                    <goal>verify</goal>
+                                </goals>
+                                <configuration>
+                                    <includes>
+                                        <include>**/*IT.java</include>
+                                        <include>**/*IntegrationTest.java</include>
+                                    </includes>
+
+                                    <forkCount>1</forkCount>
+                                    <reuseForks>false</reuseForks>
+                                    <parallel>none</parallel>
+                                    <useUnlimitedThreads>false</useUnlimitedThreads>
+
+                                    <forkedProcessExitTimeoutInSeconds>20</forkedProcessExitTimeoutInSeconds>
+                                    <shutdown>exit</shutdown>
+
+                                    <argLine>
+                                        -Xmx8g
+                                        -Xss4m
+                                        -XX:+CrashOnOutOfMemoryError
+                                    </argLine>
+
+                                    <systemPropertyVariables>
+                                        <test.env>true</test.env>
+                                        <rocksdb.stats>false</rocksdb.stats>
+                                    </systemPropertyVariables>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+
+        </plugins>
+    </build>
+
+</project>

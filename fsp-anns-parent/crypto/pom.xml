@@ -11,7 +11,7 @@
     </parent>
 
     <artifactId>crypto</artifactId>
-    <name>FSP‑ANN Crypto Service</name>
+    <name>FSPANN Crypto Service</name>
 
     <dependencies>
         <!-- Core crypto utils & AES-GCM -->

@@ -1,150 +1,131 @@
 package com.fspann.index.paper;
 
-import com.fspann.common.EncryptedPoint;
-
 import java.io.Serializable;
-import java.security.SecureRandom;
 import java.util.*;
 
-/**
- * GreedyPartitioner (Algorithm-2)
- * --------------------------------
- * Implements multi-table LSH and partitioning strategy with forward-secure indexing.
- * This engine:
- *   - Builds multiple LSH partitions using G_m and divides data into smaller, locality-aware subregions.
- *   - Supports forward security by implementing key evolution and selective re-encryption.
- *   - Provides fast query retrieval while maintaining secure storage of metadata and vectors.
- */
 public final class GreedyPartitioner {
 
     private GreedyPartitioner() {}
 
-    /** In-memory item used during building. */
-    public static final class Item {
-        public final String id;
-        public final EncryptedPoint point;
-        public final BitSet code;
-        public Item(String id, EncryptedPoint point, BitSet code) {
-            this.id = Objects.requireNonNull(id);
-            this.point = Objects.requireNonNull(point);
-            this.code = (BitSet) Objects.requireNonNull(code).clone();
+    // ============================================================
+    // Partition (range-aware)
+    // ============================================================
+    public static final class Partition implements Serializable {
+        public final long minKey;      // inclusive (build-time only)
+        public final long maxKey;      // inclusive (build-time only)
+        public final long centerKey;   // build-time only
+
+        public final BitSet repCode;   // ← NEW: representative binary code
+        public final List<String> ids;
+
+        Partition(long minKey,
+                  long maxKey,
+                  long centerKey,
+                  BitSet repCode,
+                  List<String> ids) {
+            this.minKey = minKey;
+            this.maxKey = maxKey;
+            this.centerKey = centerKey;
+            this.repCode = repCode;
+            this.ids = ids;
         }
     }
 
-    /** Subset bounds + tag entry for the map index I. */
-    public static final class SubsetBounds implements Serializable {
-        public final BitSet lower;   // inclusive
-        public final BitSet upper;   // inclusive
-        public final String tag;     // random tag (opaque)
-        public final int codeBits;   // for lexicographic comparisons
-        public SubsetBounds(BitSet lower, BitSet upper, String tag, int codeBits) {
-            this.lower = (BitSet)lower.clone();
-            this.upper = (BitSet)upper.clone();
-            this.tag = Objects.requireNonNull(tag);
-            this.codeBits = codeBits;
-        }
-        @Override public String toString() {
-            return "SubsetBounds{tag="+tag+",lower="+asBin(lower, codeBits)+",upper="+asBin(upper, codeBits)+"}";
-        }
-    }
+    // ============================================================
+    // Build greedy partitions (sorted by key)
+    // ============================================================
+    public static List<Partition> build(
+            Map<String, BitSet> idToCode,
+            int blockSize
+    ) {
+        if (idToCode == null || idToCode.isEmpty()) return List.of();
+        if (blockSize <= 0) throw new IllegalArgumentException("blockSize must be > 0");
 
-    /** Output of a build pass. */
-    public static final class BuildResult {
-        public final List<SubsetBounds> indexI;         // sorted by lower
-        public final Map<String, List<EncryptedPoint>> tagToSubset; // tag -> points
-        public final int w;
-        public BuildResult(List<SubsetBounds> indexI, Map<String, List<EncryptedPoint>> tagToSubset, int w) {
-            this.indexI = indexI;
-            this.tagToSubset = tagToSubset;
-            this.w = w;
+        // 1) Convert BitSet -> sortable long key
+        List<Map.Entry<String, Long>> ordered = new ArrayList<>(idToCode.size());
+        for (var e : idToCode.entrySet()) {
+            ordered.add(Map.entry(e.getKey(), computeKey(e.getValue())));
         }
-    }
 
-    // Comparator: lexicographic BitSet comparison using fixed codeBits
-    public static final class CodeComparator implements Comparator<BitSet> {
-        private final int codeBits;
-        public CodeComparator(int codeBits) { this.codeBits = codeBits; }
-        @Override public int compare(BitSet a, BitSet b) {
-            for (int i = codeBits - 1; i >= 0; i--) { // msb-first
-                boolean ai = a.get(i);
-                boolean bi = b.get(i);
-                if (ai != bi) return ai ? 1 : -1;
+        // 2) Sort by numeric key (ONLY for grouping)
+        ordered.sort(Comparator.comparingLong(Map.Entry::getValue));
+
+        // 3) Partition into blocks
+        List<Partition> out = new ArrayList<>();
+        for (int i = 0; i < ordered.size(); i += blockSize) {
+            int end = Math.min(i + blockSize, ordered.size());
+
+            long minK = ordered.get(i).getValue();
+            long maxK = ordered.get(end - 1).getValue();
+            int mid = i + ((end - i - 1) >>> 1);
+            long centerK = ordered.get(mid).getValue();
+
+            List<String> ids = new ArrayList<>(end - i);
+            for (int j = i; j < end; j++) {
+                ids.add(ordered.get(j).getKey());
             }
-            return 0;
+
+            // ← REPRESENTATIVE CODE (CRITICAL)
+            String repId = ordered.get(mid).getKey();
+            BitSet repCode = (BitSet) idToCode.get(repId).clone();
+
+            out.add(new Partition(minK, maxK, centerK, repCode, ids));
         }
+
+        return out;
     }
 
-    /** Build partitions from items already coded to BitSet C(v). */
-    public static BuildResult build(List<Item> items, int codeBits, long tagSeed) {
-        if (items == null || items.isEmpty()) {
-            return new BuildResult(Collections.emptyList(), Collections.emptyMap(), 0);
-        }
+    public static long hamming(BitSet a, BitSet b) {
+        BitSet x = (BitSet) a.clone();
+        x.xor(b);
+        return x.cardinality();
+    }
 
-        // Group by exact code to compute w and to prevent splitting
-        Map<BitSet, List<Item>> byCode = new TreeMap<>(new CodeComparator(codeBits));
-        for (Item it : items) {
-            BitSet key = (BitSet) it.code.clone();
-            byCode.computeIfAbsent(key, k -> new ArrayList<>()).add(it);
-        }
-        int w = 0;
-        for (List<Item> group : byCode.values()) w = Math.max(w, group.size());
-
-        // Sweep groups in lex order, forming chunks of <= w, respecting whole-code groups.
-        List<SubsetBounds> indexI = new ArrayList<>();
-        Map<String, List<EncryptedPoint>> tagToSubset = new LinkedHashMap<>();
-
-        SecureRandom tagRnd = new SecureRandom(longToBytes(tagSeed));
-        CodeComparator cmp = new CodeComparator(codeBits);
-
-        List<Map.Entry<BitSet, List<Item>>> groups = new ArrayList<>(byCode.entrySet());
-        int i = 0;
-        while (i < groups.size()) {
-            int taken = 0;
-            BitSet lower = (BitSet) groups.get(i).getKey().clone();
-            List<EncryptedPoint> subset = new ArrayList<>();
-
-            int start = i;
-            while (i < groups.size()) {
-                List<Item> g = groups.get(i).getValue();
-                if (taken + g.size() > w && taken > 0) break; // next subset
-                subsetAdd(subset, g);
-                taken += g.size();
-                i++;
+    // ============================================================
+    // BitSet -> sortable long (MSB-first safe)
+    // ============================================================
+    public static long computeKey(BitSet bs) {
+        long v = 0L;
+        int len = Math.min(63, bs.size());
+        for (int i = 0; i < len; i++) {
+            if (bs.get(i)) {
+                v |= (1L << (62 - i));
             }
-            BitSet upper = (BitSet) groups.get(i - 1).getKey().clone();
-            String tag = randomTag(tagRnd);
+        }
+        return v;
+    }
 
-            indexI.add(new SubsetBounds(lower, upper, tag, codeBits));
-            tagToSubset.put(tag, subset);
+    // ============================================================
+    // Find nearest partition by key (binary search by range)
+    // ============================================================
+    public static int findNearestPartition(List<Partition> parts, long qKey) {
+        if (parts == null || parts.isEmpty()) return 0;
+
+        int lo = 0, hi = parts.size() - 1;
+        while (lo <= hi) {
+            int mid = (lo + hi) >>> 1;
+            Partition p = parts.get(mid);
+
+            if (qKey < p.minKey) hi = mid - 1;
+            else if (qKey > p.maxKey) lo = mid + 1;
+            else return mid; // inside range
         }
 
-        // Ensure indexI is sorted by lower
-        indexI.sort((a, b) -> cmp.compare(a.lower, b.lower));
-        return new BuildResult(indexI, tagToSubset, w);
+        // Not inside any range: return closest boundary partition
+        if (lo <= 0) return 0;
+        if (lo >= parts.size()) return parts.size() - 1;
+
+        Partition left = parts.get(lo - 1);
+        Partition right = parts.get(lo);
+
+        long dl = distanceToRange(qKey, left.minKey, left.maxKey);
+        long dr = distanceToRange(qKey, right.minKey, right.maxKey);
+        return (dl <= dr) ? (lo - 1) : lo;
     }
 
-    private static void subsetAdd(List<EncryptedPoint> subset, List<Item> group) {
-        for (Item it : group) subset.add(it.point);
-    }
-
-    private static String randomTag(SecureRandom rnd) {
-        byte[] b = new byte[16];
-        rnd.nextBytes(b);
-        StringBuilder sb = new StringBuilder(32);
-        for (byte x : b) sb.append(String.format("%02x", x));
-        return sb.toString();
-    }
-
-    private static String asBin(BitSet bs, int bits) {
-        StringBuilder sb = new StringBuilder(bits);
-        for (int i = bits - 1; i >= 0; i--) sb.append(bs.get(i) ? '1' : '0');
-        return sb.toString();
-    }
-
-    private static byte[] longToBytes(long x) {
-        return new byte[] {
-                (byte)(x >>> 56), (byte)(x >>> 48), (byte)(x >>> 40), (byte)(x >>> 32),
-                (byte)(x >>> 24), (byte)(x >>> 16), (byte)(x >>>  8), (byte)(x)
-        };
+    public static long distanceToRange(long q, long minK, long maxK) {
+        if (q < minK) return minK - q;
+        if (q > maxK) return q - maxK;
+        return 0L;
     }
 }

@@ -12,7 +12,7 @@
     </parent>
 
     <artifactId>query</artifactId>
-    <name>FSP‑ANN Query Service</name>
+    <name>FSPANN Query Service</name>
 
     <dependencies>
         <!-- Index layer -->
@@ -72,6 +72,11 @@
             <groupId>org.mockito</groupId>
             <artifactId>mockito-junit-jupiter</artifactId>
             <version>5.14.2</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-params</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

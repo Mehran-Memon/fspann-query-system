@@ -1,436 +1,238 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 IFS=$'\n\t'
 
-# ============================
-# FSP-ANN (multi-dataset, multi-profile batch) — Linux bash
-# - Disables GT recompute; uses explicit GT path
-# - Integrates EvaluationSummaryPrinter (expects Java side in place)
-# - Consolidates per-profile results into per-dataset combined files
-# ============================
+# ============================================================
+# FSP-ANN MULTI-DATASET SWEEP RUNNER (PRODUCTION, PAPER-GRADE)
+# ============================================================
 
-# ---- required paths ----
-JarPath="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/api/target/api-0.0.1-SNAPSHOT-jar-with-dependencies.jar"
-ConfigPath="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/config/src/main/resources/config.json"
-OutRoot="/mnt/data/mehran/fsp-ann"
+# -------------------- PATHS --------------------
+JAR="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/api/target/api-0.0.1-SNAPSHOT-shaded.jar"
+OUT_ROOT="/mnt/data/mehran"
+BATCH_SIZE=100000
 
-# ---- alpha and JVM system props ----
-Alpha="0.1"
-JvmArgs=(
-  "-XX:+UseG1GC" "-XX:MaxGCPauseMillis=200" "-XX:+AlwaysPreTouch"
-  "-Ddisable.exit=true"
+# -------------------- JVM ----------------------
+JVM_ARGS=(
+  "-XX:+UseG1GC"
+  "-XX:MaxGCPauseMillis=200"
+  "-XX:+AlwaysPreTouch"
+
+  "-Xms320g"
+  "-Xmx354g"
+  "-Xmn128g"
+
   "-Dfile.encoding=UTF-8"
   "-Dreenc.mode=end"
-  "-Dreenc.minTouched=5000"
-  "-Dreenc.batchSize=2000"
-  "-Dlog.progress.everyN=0"
-  "-Dpaper.buildThreshold=2000000"
-  "-Djava.security.egd=file:/dev/./urandom"
-  "-Dpaper.alpha=${Alpha}"
 )
 
-# ---- app batch size arg ----
-Batch="100000"
+# -------------------- SAFETY -------------------
+die() { echo "ERROR: $*" >&2; exit 1; }
+need_file() { [[ -f "$1" ]] || die "Missing file: $1"; }
+need_cmd() { command -v "$1" >/dev/null || die "Missing command: $1"; }
 
-# ---- profile filter ----
-# - "" => all
-# - exact name => that profile only
-# - wildcard => pattern (e.g., "*ell3*")
-OnlyProfile=""
+need_cmd java
+need_cmd jq
+need_file "$JAR"
 
-# ---- toggles ----
-CleanPerRun="true"
-QueryOnly="false"
-RestoreVersion=""
+mkdir -p "$OUT_ROOT"
 
-# ---------- helpers ----------
-die() { echo "Error: $*" >&2; exit 1; }
-
-have_java() { command -v java >/dev/null 2>&1; }
-
-safe_resolve() {
-  # usage: safe_resolve <path> [allowMissing=true|false]
-  local p="${1:-}" allow="${2:-false}"
-  if [[ "$allow" == "true" && ! -e "$p" ]]; then
-    printf "%s" "$p"; return 0
-  fi
-  if command -v realpath >/dev/null 2>&1; then
-    realpath "$p" 2>/dev/null || printf "%s" "$p"
-  else
-    printf "%s" "$p"
-  fi
-}
-
-ensure_files() {
-  local base="$1" query="$2" gt="$3" ok=0
-  [[ -f "$base" ]] || { echo "Missing base:  $base" >&2; ok=1; }
-  [[ -f "$query" ]] || { echo "Missing query: $query" >&2; ok=1; }
-  [[ -f "$gt"    ]] || { echo "Missing GT:    $gt" >&2; ok=1; }
-  return $ok
-}
-
-fast_delete_dir() {
-  local target="$1"
-  [[ -d "$target" ]] || { rm -f "$target" >/dev/null 2>&1 || true; return 0; }
-  local empty="/tmp/empty_$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid)"
-  mkdir -p "$empty"
-  rsync -a --delete "${empty}/" "${target}/" >/dev/null 2>&1 || true
-  rm -rf "$target" "$empty" 2>/dev/null || true
-}
-
-clean_run_metadata() {
-  local run_dir="$1"
-  local paths=("$run_dir/metadata" "$run_dir/points" "$run_dir/results")
-  for p in "${paths[@]}"; do
-    [[ -e "$p" ]] && { echo "Cleaning $p ..."; fast_delete_dir "$p"; }
-    mkdir -p "$p"
-  done
-}
-
-sha256_of() {
-  local p="$1"
-  [[ -f "$p" ]] || { printf ""; return 0; }
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$p" | awk '{print $1}'
-  else
-    openssl dgst -sha256 "$p" | awk '{print $2}'
-  fi
-}
-
-detect_fvecs_dim() {
-  # Reads first 4 bytes (int32 little-endian) => dim
-  local path="$1"
-  python - "$path" <<'PY'
-import sys,struct
-p=sys.argv[1]
-with open(p,'rb') as f:
-    b=f.read(4)
-    if len(b)!=4:
-        print("", end="")
-        sys.exit(0)
-    print(struct.unpack('<i',b)[0], end="")
-PY
-}
-
-json_merge_with_overrides() {
-  # jq-merge base JSON with overrides JSON (top-level keys; merge objects at keys)
-  local base_json="$1" ovr_json="$2"
-  jq -c --argjson ovr "${ovr_json}" '
-    def merge_at_top(a;b):
-      reduce (b|keys[]) as $k (a;
-        if (a[$k]|type=="object") and (b[$k]|type=="object")
-          then .[$k] = (a[$k] + b[$k])
-        else .[$k] = b[$k]
-        end);
-    merge_at_top(.; $ovr)
-  ' <<< "$base_json"
-}
-
-# --- helpers for combining results ---
-profile_from_path() {
-  # input: /.../<dataset>/<profile>/results/<file>
-  local p="$1"
-  local parent="$(dirname "$p")"  # .../<profile>/results
-  basename "$(dirname "$parent")" # <profile>
-}
-
-combine_csv_with_profile() {
-  # combine_csv_with_profile <out_csv> <colname> <file1> <file2> ...
-  local out="$1"; shift
-  local colname="$1"; shift
-  local header_done="false"
-  mkdir -p "$(dirname "$out")"
-  rm -f "$out"
-  for f in "$@"; do
-    [[ -f "$f" ]] || continue
-    local prof; prof="$(profile_from_path "$f")"
-    if [[ "$header_done" == "false" ]]; then
-      { echo "${colname},$(head -n1 "$f")"
-        tail -n +2 "$f" | awk -v p="$prof" 'NF{print p","$0}'
-      } > "$out"
-      header_done="true"
-    else
-      tail -n +2 "$f" | awk -v p="$prof" 'NF{print p","$0}' >> "$out"
-    fi
-  done
-}
-
-concat_txt_with_profile() {
-  # concat_txt_with_profile <out_txt> <file1> <file2> ...
-  local out="$1"; shift
-  mkdir -p "$(dirname "$out")"
-  rm -f "$out"
-  for f in "$@"; do
-    [[ -f "$f" ]] || continue
-    local prof; prof="$(profile_from_path "$f")"
-    {
-      echo "===== PROFILE: ${prof} ====="
-      cat "$f"
-      echo
-    } >> "$out"
-  done
-}
-
-# ---------- sanity ----------
-command -v jq >/dev/null 2>&1 || die "jq not found. Install: sudo apt-get install -y jq"
-have_java || die "Java not found in PATH. Install JDK or add 'java' to PATH."
-[[ -f "$JarPath"    ]] || die "Jar not found: $JarPath"
-[[ -f "$ConfigPath" ]] || die "Config not found: $ConfigPath"
-mkdir -p "$OutRoot"
-
-# ---------- read config ----------
-cfg_json="$(cat "$ConfigPath")"
-profiles_count="$(jq '.profiles|length' <<<"$cfg_json")"
-[[ "$profiles_count" -gt 0 ]] || die "config.json must contain a non-empty 'profiles' array."
-
-# Build base payload (back-compat w/ optional 'base' node)
-if jq -e '.base' >/dev/null 2>&1 <<<"$cfg_json"; then
-  base_json="$(jq -c '.base' <<<"$cfg_json")"
-else
-  base_json="$(jq -c 'del(.profiles)' <<<"$cfg_json")"
+# Check disk space
+AVAILABLE_GB=$(df -BG "$OUT_ROOT" | tail -1 | awk '{print $4}' | sed 's/G//')
+REQUIRED_GB=60
+if [ "$AVAILABLE_GB" -lt "$REQUIRED_GB" ]; then
+  die "Insufficient disk space: ${AVAILABLE_GB}GB available, ${REQUIRED_GB}GB required"
 fi
+echo "Disk space: ${AVAILABLE_GB}GB available"
 
-# ---------- dataset matrix ----------
-# If Dim is "", it will be auto-detected from base file header.
-# Format: Name::Base::Query::GT::Dim
-DATASETS=(
-  "Enron::/mnt/data/mehran/Datasets/Enron/enron_base.fvecs::/mnt/data/mehran/Datasets/Enron/enron_query.fvecs::/mnt/data/mehran/Datasets/Enron/enron_groundtruth.ivecs::1369"
-  "audio::/mnt/data/mehran/Datasets/audio/audio_base.fvecs::/mnt/data/mehran/Datasets/audio/audio_query.fvecs::/mnt/data/mehran/Datasets/audio/audio_groundtruth.ivecs::192"
-  "SIFT1M::/mnt/data/mehran/Datasets/SIFT1M/sift_base.fvecs::/mnt/data/mehran/Datasets/SIFT1M/sift_query.fvecs::/mnt/data/mehran/Datasets/SIFT1M/sift_query_groundtruth.ivecs::128"
-  "synthetic_128::/mnt/data/mehran/Datasets/synthetic_128/base.fvecs::/mnt/data/mehran/Datasets/synthetic_128/query.fvecs::/mnt/data/mehran/Datasets/synthetic_128/groundtruth.ivecs::128"
-  "synthetic_256::/mnt/data/mehran/Datasets/synthetic_256/base.fvecs::/mnt/data/mehran/Datasets/synthetic_256/query.fvecs::/mnt/data/mehran/Datasets/synthetic_256/groundtruth.ivecs::256"
-  "synthetic_512::/mnt/data/mehran/Datasets/synthetic_512/base.fvecs::/mnt/data/mehran/Datasets/synthetic_512/query.fvecs::/mnt/data/mehran/Datasets/synthetic_512/groundtruth.ivecs::512"
-  "synthetic_1024::/mnt/data/mehran/Datasets/synthetic_1024/base.fvecs::/mnt/data/mehran/Datasets/synthetic_1024/query.fvecs::/mnt/data/mehran/Datasets/synthetic_1024/groundtruth.ivecs::1024"
-  "glove-100::/mnt/data/mehran/Datasets/glove-100/glove-100_base.fvecs::/mnt/data/mehran/Datasets/glove-100/glove-100_query.fvecs::/mnt/data/mehran/Datasets/glove-100/glove-100_groundtruth.ivecs::100"
+# ================= DATASETS ====================
+
+declare -A CFG=(
+  ["SIFT1M"]="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/config/src/main/resources/config_sift1m.json"
+  ["glove-100"]="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/config/src/main/resources/config_glove100.json"
+  ["RedCaps"]="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/config/src/main/resources/config_redcaps.json"
 )
 
-# ---------- MAIN LOOP: datasets x profiles ----------
+declare -A DIM=(
+  ["SIFT1M"]=128
+  ["glove-100"]=100
+  ["RedCaps"]=512
+)
+
+declare -A BASE=(
+  ["SIFT1M"]="/mnt/data/mehran/Datasets/SIFT1M/sift_base.fvecs"
+  ["glove-100"]="/mnt/data/mehran/Datasets/glove-100/glove-100_base.fvecs"
+  ["RedCaps"]="/mnt/data/mehran/Datasets/redcaps/redcaps_base.fvecs"
+)
+
+declare -A QUERY=(
+  ["SIFT1M"]="/mnt/data/mehran/Datasets/SIFT1M/sift_query.fvecs"
+  ["glove-100"]="/mnt/data/mehran/Datasets/glove-100/glove-100_query.fvecs"
+  ["RedCaps"]="/mnt/data/mehran/Datasets/redcaps/redcaps_query.fvecs"
+)
+
+declare -A GT=(
+  ["SIFT1M"]="/mnt/data/mehran/Datasets/SIFT1M/sift_query_groundtruth.ivecs"
+  ["glove-100"]="/mnt/data/mehran/Datasets/glove-100/glove-100_groundtruth.ivecs"
+  ["RedCaps"]="/mnt/data/mehran/Datasets/redcaps/redcaps_query_groundtruth.ivecs"
+)
+
+# ================= FILTERS =====================
+ONLY_DATASET=""
+ONLY_PROFILE=""
+
+# ================= TRACKING ====================
+FAILED_PROFILES=()
+SWEEP_START=$(date +%s)
+
+echo "SWEEP STARTED: $(date)"
+echo "Datasets: SIFT1M-128, Glove-100, RedCaps-512"
+echo "Profiles per dataset: 9"
+echo "Total profiles: 27"
+echo ""
+
+# ================= GLOBAL SUMMARY =================
+
+GLOBAL_SUMMARY="$OUT_ROOT/global_summary.csv"
+echo "dataset,profile,ART_ms,AvgRatio,recall_at_100,ratio@20,ratio@40,ratio@60,ratio@80,ratio@100" \
+  > "$GLOBAL_SUMMARY"
+
+# ================= MAIN LOOP ======================
+
+DATASETS=(SIFT1M glove-100 RedCaps)
+[[ -n "$ONLY_DATASET" ]] && DATASETS=("$ONLY_DATASET")
+
 for ds in "${DATASETS[@]}"; do
-# robust split on "::<exactly>"
-Name="$(awk -F '::' '{print $1}' <<<"$ds")"
-Base="$(awk -F '::' '{print $2}' <<<"$ds")"
-Query="$(awk -F '::' '{print $3}' <<<"$ds")"
-GT="$(awk -F '::' '{print $4}' <<<"$ds")"
-Dim="$(awk -F '::' '{print $5}' <<<"$ds")"
+  echo "DATASET: $ds"
 
-  if [[ -z "$Dim" ]]; then
-    [[ -f "$Base" ]] || { echo "Skipping $Name (missing base)"; continue; }
-    Dim="$(detect_fvecs_dim "$Base")"
-    [[ -n "$Dim" ]] || die "Could not detect dimension for $Name from $Base. Set Dim explicitly."
-  fi
+  cfg="${CFG[$ds]}"
+  dim="${DIM[$ds]}"
+  base="${BASE[$ds]}"
+  query="${QUERY[$ds]}"
+  gt="${GT[$ds]}"
 
-  if ! ensure_files "$Base" "$Query" "$GT"; then
-    echo "Skipping $Name due to missing files."
-    continue
-  fi
+  # Validate config exists and has profiles
+  [[ -f "$cfg" ]] || die "Config not found: $cfg"
+  PROFILE_COUNT="$(jq '.profiles | length' "$cfg")"
+  [[ "$PROFILE_COUNT" -gt 0 ]] || die "No profiles in config: $cfg"
+  echo "  Profiles to run: $PROFILE_COUNT"
 
-  datasetRoot="${OutRoot}/${Name}"
-  mkdir -p "$datasetRoot"
+  BASE_JSON="$(jq -c 'del(.profiles)' "$cfg")"
 
-  # Iterate profiles from config.json
-  while IFS= read -r profile; do
-    label="$(jq -r '.name // empty' <<<"$profile")"
-    [[ -n "$label" ]] || continue
+  ds_root="$OUT_ROOT/$ds"
+  mkdir -p "$ds_root"
 
-    # Apply filter if provided
-    if [[ -n "$OnlyProfile" ]]; then
-      if [[ "$OnlyProfile" == *"*"* || "$OnlyProfile" == *"?"* ]]; then
-        [[ "$label" == $OnlyProfile ]] || continue
-      else
-        [[ "$label" == "$OnlyProfile" ]] || continue
-      fi
+  echo "dataset,profile,ART_ms,AvgRatio,recall_at_100,ratio@20,ratio@40,ratio@60,ratio@80,ratio@100" \
+    > "$ds_root/dataset_summary.csv"
+
+  for ((i=0;i<PROFILE_COUNT;i++)); do
+    prof="$(jq -c ".profiles[$i]" "$cfg")"
+    name="$(jq -r '.name' <<<"$prof")"
+
+    [[ -n "$ONLY_PROFILE" && "$name" != "$ONLY_PROFILE" ]] && continue
+
+    echo ""
+    echo "[$ds] Running profile $((i+1))/$PROFILE_COUNT: $name"
+
+    overrides="$(jq -c '.overrides // {}' <<<"$prof")"
+    run_dir="$ds_root/$name"
+
+    rm -rf "$run_dir"
+    mkdir -p "$run_dir/results"
+
+    final_cfg="$(jq -n '
+      def deepmerge(a;b):
+        reduce (b|keys_unsorted[]) as $k (a;
+          .[$k]=(if (a[$k]|type)=="object" and (b[$k]|type)=="object"
+                 then deepmerge(a[$k];b[$k]) else b[$k] end));
+      deepmerge($base;$ovr)
+      | .output.resultsDir=$res
+      | .ratio.source="gt"
+      | .ratio.gtPath=$gt
+      | .ratio.allowComputeIfMissing=false
+    ' --argjson base "$BASE_JSON" \
+      --argjson ovr "$overrides" \
+      --arg res "$run_dir/results" \
+      --arg gt "$gt")"
+
+    echo "$final_cfg" > "$run_dir/config.json"
+    sha256sum "$run_dir/config.json" > "$run_dir/config.sha256"
+
+    start_ts=$(date +%s)
+
+    if ! java "${JVM_ARGS[@]}" -jar "$JAR" \
+      "$run_dir/config.json" "$base" "$query" "$run_dir/keys.blob" \
+      "$dim" "$run_dir" "$gt" "$BATCH_SIZE" \
+      >"$run_dir/run.log" 2>&1; then
+        echo "  ❌ FAILED: $ds | $name"
+        FAILED_PROFILES+=("$ds/$name")
+        continue
     fi
 
-    runDir="${datasetRoot}/${label}"
-    mkdir -p "$runDir"
-    if [[ "$CleanPerRun" == "true" ]]; then
-      clean_run_metadata "$runDir"
+    end_ts=$(date +%s)
+    duration=$((end_ts - start_ts))
+    echo "  ✓ COMPLETED in ${duration}s"
+
+    acc="$run_dir/results/summary.csv"
+    if [[ ! -f "$acc" ]]; then
+      echo "  ⚠️  WARNING: Missing summary.csv"
+      FAILED_PROFILES+=("$ds/$name (no summary)")
+      continue
     fi
 
-    # Merge base + overrides
-    ovr_json="$(jq -c '.overrides // {}' <<<"$profile")"
-    final_json="$(json_merge_with_overrides "$base_json" "$ovr_json")"
-
-    # Ensure output/eval/cloak exist and set fields
-    final_json="$(jq -c \
-      --arg resultsDir "${runDir}/results" \
-      '.output |= (. // {})
-       | .output.resultsDir = $resultsDir
-       | .output.exportArtifacts = true
-       | .output.suppressLegacyMetrics = true
-       | .eval |= (. // {})
-       | .eval.computePrecision = true
-       | .eval.writeGlobalPrecisionCsv = true
-       | .cloak |= (. // {})
-       | .cloak.noise = 0.0
-      ' <<<"$final_json")"
-
-    # ratio: enforce GT path & disable recompute
-    final_json="$(jq -c \
-      --arg gtPath "$(safe_resolve "$GT")" \
-      '.ratio |= (. // {})
-       | .ratio.source = "gt"
-       | .ratio.gtPath = $gtPath
-       | .ratio.gtSample = ( .ratio.gtSample // 10000 )
-       | .ratio.gtMismatchTolerance = 0.0
-       | .ratio.autoComputeGT = false
-       | .ratio.allowComputeIfMissing = false
-      ' <<<"$final_json")"
-
-    # Paper vs LSH knobs (preserve your logic)
-    final_json="$(jq -c '
-      .paper |= (. // {})
-      | if (.paper.enabled // false) then
-          (.paper.seed |= (. // 13))
-          | .lsh |= (. // {})
-          | .lsh.numTables = 0
-          | .lsh.rowsPerBand = 0
-          | .lsh.probeShards = 0
-        else
-          .
-        end
-    ' <<<"$final_json")"
-
-    # Write run-specific config
-    tmpConf="${runDir}/config.json"
-    echo "$final_json" > "$tmpConf"
-
-# args
-keysFile="${runDir}/keystore.blob"
-gtArg="$(safe_resolve "$GT")" # ignored when gtPath provided & compute disabled
-dataArg="$Base"
-queryArg="$Query"
-
-declare -a restoreFlags=()   # <— add declare to ensure array exists
-
-if [[ "$QueryOnly" == "true" ]]; then
-  dataArg="POINTS_ONLY"
-  restoreFlags+=("-Dquery.only=true")
-  if [[ -n "${RestoreVersion}" ]]; then
-    restoreFlags+=("-Drestore.version=${RestoreVersion}")
-  fi
-fi
-
-# Build java arg list (order preserved)
-argList=()
-argList+=("${JvmArgs[@]}")
-
-# add restoreFlags only if non-empty (avoids unbound expansion with set -u)
-if ((${#restoreFlags[@]})); then
-  argList+=("${restoreFlags[@]}")
-fi
-
-argList+=("-Dbase.path=$(safe_resolve "$Base" true)")
-argList+=("-jar" "$(safe_resolve "$JarPath")")
-argList+=("$(safe_resolve "$tmpConf")")
-argList+=("$(safe_resolve "$dataArg" true)")
-argList+=("$(safe_resolve "$queryArg" true)")
-argList+=("$(safe_resolve "$keysFile" true)")
-argList+=("${Dim}")
-argList+=("$(safe_resolve "$runDir")")
-argList+=("$(safe_resolve "$gtArg")")
-argList+=("${Batch}")
-
-    # Manifest
-    manifest_json="$(jq -n -c \
-      --arg dataset "$Name" \
-      --arg dimension "$Dim" \
-      --arg profile "$label" \
-      --arg queryOnly "$QueryOnly" \
-      --arg batchSize "$Batch" \
-      --arg jarPath "$(safe_resolve "$JarPath")" \
-      --arg jarSha256 "$(sha256_of "$(safe_resolve "$JarPath")")" \
-      --arg configPath "$(safe_resolve "$tmpConf")" \
-      --arg configSha256 "$(sha256_of "$(safe_resolve "$tmpConf")")" \
-      --arg baseVectors "$(safe_resolve "$Base" true)" \
-      --arg queryVectors "$(safe_resolve "$Query" true)" \
-      --arg gtPath "$(safe_resolve "$GT" true)" \
-      --arg alpha "$Alpha" \
-      --arg timestampUtc "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-      --argjson jvmArgs "$(printf '%s\n' "${JvmArgs[@]}" | jq -R . | jq -s .)" '
-      {
-        dataset: $dataset,
-        dimension: ($dimension|tonumber),
-        profile: $profile,
-        queryOnly: ($queryOnly=="true"),
-        batchSize: ($batchSize|tonumber),
-        jarPath: $jarPath,
-        jarSha256: $jarSha256,
-        configPath: $configPath,
-        configSha256: $configSha256,
-        baseVectors: $baseVectors,
-        queryVectors: $queryVectors,
-        gtPath: $gtPath,
-        jvmArgs: $jvmArgs,
-        alpha: ($alpha|tonumber),
-        timestampUtc: $timestampUtc
-      }')"
-    echo "$manifest_json" > "${runDir}/manifest.json"
-
-    # Log commandline
-    printf "%s\n" "java ${argList[*]}" > "${runDir}/cmdline.txt"
-
-    # Run (filter GT progress from console; full log kept)
-    combinedLog="${runDir}/run.out.log"
-    start_ts="$(date +%s)"
-    set +e
-    java "${argList[@]}" 2>&1 | tee "$combinedLog" | grep -Ev '^\[[0-9]+/[0-9]+\]\s+ queries processed \(GT\)' || true
-    exit_code=${PIPESTATUS[0]}
-    set -e
-    end_ts="$(date +%s)"
-    elapsed="$((end_ts - start_ts))"
-    printf "ElapsedSec=%.1f\n" "$elapsed" > "${runDir}/elapsed.txt"
-
-    if [[ "$exit_code" -ne 0 ]]; then
-      echo "Run failed: dataset=${Name}, profile=${label}, exit=${exit_code}" >&2
-    else
-      echo "Completed: ${Name} (${label})"
+    # Validate CSV has enough columns
+    COL_COUNT=$(head -1 "$acc" | awk -F',' '{print NF}')
+    if [ "$COL_COUNT" -lt 28 ]; then
+      echo "  ⚠️  WARNING: CSV has only $COL_COUNT columns (expected 28+)"
+      FAILED_PROFILES+=("$ds/$name (invalid CSV)")
+      continue
     fi
 
-  done < <(jq -c '.profiles[]' <<<"$cfg_json")
+    avg_art=$(awk -F',' 'NR>1 {print $13}' "$acc")
+    avg_ratio=$(awk -F',' 'NR>1 {print $7}' "$acc")
+    recall_100=$(awk -F',' 'NR>1 {print $23}' "$acc")
+    ratio20=$(awk -F',' 'NR>1 {print $24}' "$acc")
+    ratio40=$(awk -F',' 'NR>1 {print $25}' "$acc")
+    ratio60=$(awk -F',' 'NR>1 {print $26}' "$acc")
+    ratio80=$(awk -F',' 'NR>1 {print $27}' "$acc")
+    ratio100=$(awk -F',' 'NR>1 {print $28}' "$acc")
 
-  # ---- per-dataset merges ----
-  mapfile -t g_prec        < <(find "${datasetRoot}" -type f -path "*/results/global_precision.csv"        2>/dev/null)
-  mapfile -t g_results     < <(find "${datasetRoot}" -type f -path "*/results/results_table.csv"           2>/dev/null)
-  mapfile -t g_topk        < <(find "${datasetRoot}" -type f -path "*/results/topk_evaluation.csv"         2>/dev/null)
-  mapfile -t g_reenc       < <(find "${datasetRoot}" -type f -path "*/results/reencrypt_metrics.csv"       2>/dev/null)
-  mapfile -t g_samples     < <(find "${datasetRoot}" -type f -path "*/results/retrieved_samples.csv"       2>/dev/null)
-  mapfile -t g_worst       < <(find "${datasetRoot}" -type f -path "*/results/retrieved_worst.csv"         2>/dev/null)
-  mapfile -t g_stor_sum    < <(find "${datasetRoot}" -type f -path "*/results/storage_summary.csv"         2>/dev/null)
-  mapfile -t g_metrics_txt < <(find "${datasetRoot}" -type f -path "*/results/metrics_summary.txt"         2>/dev/null)
-  mapfile -t g_break_txt   < <(find "${datasetRoot}" -type f -path "*/results/storage_breakdown.txt"       2>/dev/null)
-  mapfile -t g_readme      < <(find "${datasetRoot}" -type f -path "*/results/README_results_columns.txt"  2>/dev/null)
+    echo "$ds,$name,$avg_art,$avg_ratio,$recall_100,$ratio20,$ratio40,$ratio60,$ratio80,$ratio100" \
+      >> "$ds_root/dataset_summary.csv"
 
-  combinedResults="${datasetRoot}/combined_results.csv"
-  combinedPrecision="${datasetRoot}/combined_precision.csv"
-  combinedTopk="${datasetRoot}/combined_evaluation.csv"
-  combinedReenc="${datasetRoot}/combined_reencrypt_metrics.csv"
-  combinedSamples="${datasetRoot}/combined_retrieved_samples.csv"
-  combinedWorst="${datasetRoot}/combined_retrieved_worst.csv"
-  combinedStorSum="${datasetRoot}/combined_storage_summary.csv"
-  combinedMetricsTxt="${datasetRoot}/combined_metrics_summary.txt"
-  combinedStorBreakTxt="${datasetRoot}/combined_storage_breakdown.txt"
+    echo "$ds,$name,$avg_art,$avg_ratio,$recall_100,$ratio20,$ratio40,$ratio60,$ratio80,$ratio100" \
+      >> "$GLOBAL_SUMMARY"
 
-  [[ "${#g_results[@]}"  -gt 0 ]] && combine_csv_with_profile "$combinedResults"   "profile" "${g_results[@]}"
-  [[ "${#g_prec[@]}"     -gt 0 ]] && combine_csv_with_profile "$combinedPrecision" "profile" "${g_prec[@]}"
-  [[ "${#g_topk[@]}"     -gt 0 ]] && combine_csv_with_profile "$combinedTopk"      "profile" "${g_topk[@]}"
-  [[ "${#g_reenc[@]}"    -gt 0 ]] && combine_csv_with_profile "$combinedReenc"     "profile" "${g_reenc[@]}"
-  [[ "${#g_samples[@]}"  -gt 0 ]] && combine_csv_with_profile "$combinedSamples"   "profile" "${g_samples[@]}"
-  [[ "${#g_worst[@]}"    -gt 0 ]] && combine_csv_with_profile "$combinedWorst"     "profile" "${g_worst[@]}"
-  [[ "${#g_stor_sum[@]}" -gt 0 ]] && combine_csv_with_profile "$combinedStorSum"   "profile" "${g_stor_sum[@]}"
+    echo "  Recall@100: $recall_100 | ART: ${avg_art}ms"
+  done
 
-  [[ "${#g_metrics_txt[@]}" -gt 0 ]] && concat_txt_with_profile "$combinedMetricsTxt"   "${g_metrics_txt[@]}"
-  [[ "${#g_break_txt[@]}"   -gt 0 ]] && concat_txt_with_profile "$combinedStorBreakTxt" "${g_break_txt[@]}"
-
-  if [[ "${#g_readme[@]}" -gt 0 ]]; then
-    mkdir -p "${datasetRoot}/results_readme"
-    cp -n "${g_readme[0]}" "${datasetRoot}/results_readme/README_results_columns.txt" || true
-  fi
-
-  if command -v tar >/dev/null 2>&1; then
-    # archive all per-profile results/ folders (shallow)
-    mapfile -t results_dirs < <(find "${datasetRoot}" -maxdepth 2 -type d -name "results" -printf '%P\n' 2>/dev/null)
-    [[ "${#results_dirs[@]}" -gt 0 ]] && tar -czf "${datasetRoot}/all_results_tarball.tgz" -C "${datasetRoot}" "${results_dirs[@]}" 2>/dev/null || true
-  fi
-
+  echo ""
+  echo "✓ $ds completed"
 done
+
+# ================= FINAL SUMMARY =================
+
+SWEEP_END=$(date +%s)
+SWEEP_DURATION=$((SWEEP_END - SWEEP_START))
+SWEEP_HOURS=$((SWEEP_DURATION / 3600))
+SWEEP_MINS=$(((SWEEP_DURATION % 3600) / 60))
+
+echo ""
+echo "SWEEP COMPLETED: $(date)"
+echo "Total Duration: ${SWEEP_HOURS}h ${SWEEP_MINS}m"
+
+if [ ${#FAILED_PROFILES[@]} -gt 0 ]; then
+  echo ""
+  echo "⚠️  FAILED PROFILES (${#FAILED_PROFILES[@]}):"
+  for fail in "${FAILED_PROFILES[@]}"; do
+    echo "  - $fail"
+  done
+else
+  echo ""
+  echo "ll profiles completed successfully!"
+fi
+
+echo ""
+echo "Results:"
+echo "  Global summary: $GLOBAL_SUMMARY"
+echo "  Per-dataset: $OUT_ROOT/{SIFT1M,glove-100,RedCaps}/dataset_summary.csv"
+echo ""

@@ -1,0 +1,55 @@
+{
+  "opsThreshold": 500000000,
+  "ageThresholdMs": 86400000,
+  "reencryptionEnabled": true,
+  "forwardSecurityEnabled": true,
+  "profilerEnabled": true,
+
+  "paper": {
+    "enabled": true,
+    "m": 24,
+    "lambda": 2,
+    "divisions": 3,
+    "tables": 6,
+    "seed": 13
+  },
+
+  "stabilization": {
+    "enabled": true,
+    "alpha": 0.02,
+    "minCandidatesRatio": 1.1
+  },
+
+  "runtime": {
+    "precisionMode": false,
+    "refinementLimit": 3000,
+    "maxCandidateFactor": 3,
+    "maxRelaxationDepth": 6
+  },
+
+  "eval": {
+    "computePrecision": true,
+    "writeGlobalPrecisionCsv": true,
+    "kVariants": [1, 20, 40, 60, 80, 100]
+  },
+
+  "ratio": {
+    "source": "gt",
+    "gtSample": 10
+  },
+
+  "profiles": [
+    { "name": "M16", "overrides": { "paper": { "m": 16, "lambda": 2, "divisions": 3, "tables": 6 } } },
+    { "name": "M20", "overrides": { "paper": { "m": 20, "lambda": 2, "divisions": 3, "tables": 6 } } },
+    { "name": "M24", "overrides": { "paper": { "m": 24, "lambda": 2, "divisions": 3, "tables": 6 } } },
+
+    {
+      "name": "M24_P12",
+      "overrides": {
+        "paper": { "m": 24, "lambda": 2, "divisions": 3, "tables": 6 },
+        "runtime": { "probeOverride": 12 }
+      }
+    }
+  ]
+
+}

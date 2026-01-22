@@ -1,0 +1,183 @@
+{
+  "opsThreshold": 500000000,
+  "ageThresholdMs": 86400000,
+  "reencryptionEnabled": true,
+  "forwardSecurityEnabled": true,
+  "profilerEnabled": true,
+
+  "paper": {
+    "enabled": true,
+    "m": 20,
+    "lambda": 2,
+    "divisions": 3,
+    "tables": 6,
+    "seed": 13
+  },
+
+  "stabilization": {
+    "enabled": false,
+    "alpha": 0.02,
+    "minCandidatesRatio": 1.25
+  },
+
+  "runtime": {
+    "precisionMode": false,
+    "probeOverride": -1,
+    "refinementLimit": 20000,
+    "maxCandidateFactor": 6,
+    "maxGlobalCandidates": 30000,
+    "maxRelaxationDepth": 7,
+    "hammingPrefilterThreshold": 0
+  },
+
+  "eval": {
+    "computePrecision": true,
+    "writeGlobalPrecisionCsv": true,
+    "kVariants": [1, 10, 20, 40, 60, 80, 100]
+  },
+
+  "ratio": {
+    "source": "gt",
+    "gtSample": 200,
+    "gtMismatchTolerance": 0.05
+  },
+
+  "profiles": [
+    {
+      "name": "P4_FAST",
+      "description": "Trade-off point 1: Fast baseline (<1s target)",
+      "overrides": {
+        "paper": { "m": 16, "lambda": 2, "divisions": 3, "tables": 5 },
+        "runtime": {
+          "probeOverride": 4,
+          "refinementLimit": 8000,
+          "maxGlobalCandidates": 12000,
+          "maxCandidateFactor": 3,
+          "maxRelaxationDepth": 5,
+          "hammingPrefilterThreshold": 0
+        }
+      }
+    },
+
+    {
+      "name": "P8_BALANCED",
+      "description": "Trade-off point 2: PRIMARY RESULT (production config)",
+      "overrides": {
+        "paper": { "m": 20, "lambda": 2, "divisions": 3, "tables": 6 },
+        "runtime": {
+          "probeOverride": 8,
+          "refinementLimit": 16000,
+          "maxGlobalCandidates": 22000,
+          "maxCandidateFactor": 5,
+          "maxRelaxationDepth": 6,
+          "hammingPrefilterThreshold": 0
+        }
+      }
+    },
+
+    {
+      "name": "P12_HIGHRECALL",
+      "description": "Trade-off point 3: High recall config",
+      "overrides": {
+        "paper": { "m": 20, "lambda": 2, "divisions": 3, "tables": 6 },
+        "runtime": {
+          "probeOverride": 12,
+          "refinementLimit": 24000,
+          "maxGlobalCandidates": 32000,
+          "maxCandidateFactor": 7,
+          "maxRelaxationDepth": 8,
+          "hammingPrefilterThreshold": 0
+        }
+      }
+    },
+
+    {
+      "name": "P16_MAXRECALL",
+      "description": "Trade-off point 4: Maximum recall (diminishing returns)",
+      "overrides": {
+        "paper": { "m": 20, "lambda": 2, "divisions": 3, "tables": 8 },
+        "runtime": {
+          "probeOverride": 16,
+          "refinementLimit": 32000,
+          "maxGlobalCandidates": 45000,
+          "maxCandidateFactor": 10,
+          "maxRelaxationDepth": 9,
+          "hammingPrefilterThreshold": 0
+        }
+      }
+    },
+
+    {
+      "name": "M26_ABLATION",
+      "description": "Ablation: Projection count (m=26, larger index)",
+      "overrides": {
+        "paper": { "m": 26, "lambda": 2, "divisions": 3, "tables": 6 },
+        "runtime": {
+          "probeOverride": 8,
+          "refinementLimit": 16000,
+          "maxGlobalCandidates": 22000,
+          "hammingPrefilterThreshold": 0
+        }
+      }
+    },
+
+    {
+      "name": "LAMBDA3_ABLATION",
+      "description": "Ablation: Relaxation depth (λ=3, deeper search)",
+      "overrides": {
+        "paper": { "m": 20, "lambda": 3, "divisions": 3, "tables": 6 },
+        "runtime": {
+          "probeOverride": 8,
+          "refinementLimit": 16000,
+          "maxGlobalCandidates": 22000,
+          "hammingPrefilterThreshold": 0
+        }
+      }
+    },
+
+    {
+      "name": "DIV4_ABLATION",
+      "description": "Ablation: Partition granularity (divisions=4, finer)",
+      "overrides": {
+        "paper": { "m": 20, "lambda": 2, "divisions": 4, "tables": 6 },
+        "runtime": {
+          "probeOverride": 8,
+          "refinementLimit": 16000,
+          "maxGlobalCandidates": 22000,
+          "hammingPrefilterThreshold": 0
+        }
+      }
+    },
+
+    {
+      "name": "HAMMING_RANKED",
+      "description": "Optimization: Ranked Hamming pre-filtering speedup",
+      "overrides": {
+        "paper": { "m": 20, "lambda": 2, "divisions": 3, "tables": 6 },
+        "runtime": {
+          "probeOverride": 8,
+          "refinementLimit": 12000,
+          "maxGlobalCandidates": 22000,
+          "maxCandidateFactor": 5,
+          "maxRelaxationDepth": 6,
+          "hammingPrefilterThreshold": 99
+        }
+      }
+    },
+
+    {
+      "name": "NO_REENCRYPT",
+      "description": "Ablation: Quantify re-encryption security overhead",
+      "overrides": {
+        "reencryptionEnabled": false,
+        "paper": { "m": 20, "lambda": 2, "divisions": 3, "tables": 6 },
+        "runtime": {
+          "probeOverride": 8,
+          "refinementLimit": 16000,
+          "maxGlobalCandidates": 22000,
+          "hammingPrefilterThreshold": 0
+        }
+      }
+    }
+  ]
+}

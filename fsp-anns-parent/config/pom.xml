@@ -12,7 +12,7 @@
     </parent>
 
     <artifactId>config</artifactId>
-    <name>FSP‑ANN Configuration</name>
+    <name>FSPANN Configuration</name>
 
     <dependencies>
 

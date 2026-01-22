@@ -7,7 +7,7 @@
   </parent>
   <modelVersion>4.0.0</modelVersion>
   <artifactId>api</artifactId>
-  <name>FSP‑ANN API Service</name>
+  <name>FSPANN API Service</name>
   <build>
     <plugins>
       <plugin>
@@ -108,6 +108,22 @@
         <exclusion>
           <artifactId>apiguardian-api</artifactId>
           <groupId>org.apiguardian</groupId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.mockito</groupId>
+      <artifactId>mockito-core</artifactId>
+      <version>5.14.2</version>
+      <scope>test</scope>
+      <exclusions>
+        <exclusion>
+          <artifactId>byte-buddy-agent</artifactId>
+          <groupId>net.bytebuddy</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>objenesis</artifactId>
+          <groupId>org.objenesis</groupId>
         </exclusion>
       </exclusions>
     </dependency>

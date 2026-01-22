@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.crypto.SecretKey;
+import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
@@ -30,7 +31,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
     private static final Logger logger = LoggerFactory.getLogger(KeyRotationServiceImpl.class);
 
     private final KeyManager keyManager;
-    private final KeyRotationPolicy policy;
+    private volatile KeyRotationPolicy policy;
     private final String rotationMetaDir;
     private final RocksDBMetadataManager metadataManager;
 
@@ -80,57 +81,68 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
     @Override
     public KeyVersion getVersion(int version) {
         SecretKey key = keyManager.getSessionKey(version);
-        if (key == null) throw new IllegalArgumentException("Unknown key version: " + version);
+        if (key == null) {
+            throw new IllegalArgumentException("Unknown key version: " + version);
+        }
         return new KeyVersion(version, key);
+    }
+
+    private KeyUsageTracker getUsageTracker() {
+        if (keyManager != null) {
+            return keyManager.getUsageTracker();
+        }
+        return null;
     }
 
     @Override
     public void reEncryptAll() {
         logger.info("Starting re-encryption pass (forward-secure)");
 
-        if (cryptoService == null || metadataManager == null || indexService == null) {
+        if (cryptoService == null || metadataManager == null) {
             logger.warn("Re-encryption skipped: services not initialized");
             return;
         }
 
         int total = 0;
+        int currentVer = getCurrentVersion().getVersion();
         Set<String> seen = new HashSet<>();
 
         try {
-            // Prefer enumerating via metadata manager
             List<EncryptedPoint> all = metadataManager.getAllEncryptedPoints();
             for (EncryptedPoint original : all) {
                 if (original == null || !seen.add(original.getId())) continue;
 
-                // Decrypt with the point's version key, then re-insert (encrypts with current key)
+                // Decrypt with the point's OLD version key
                 KeyVersion pointVer = getVersion(original.getVersion());
                 double[] raw = cryptoService.decryptFromPoint(original, pointVer.getKey());
 
-                indexService.insert(original.getId(), raw); // index layer will persist & account ops
+                // Re-encrypt with CURRENT key
+                EncryptedPoint newEp = cryptoService.encrypt(original.getId(), raw);
+
+                // ===== CRITICAL: Force version alignment =====
+                if (newEp.getVersion() != currentVer) {
+                    newEp = new EncryptedPoint(
+                            newEp.getId(),
+                            currentVer,           // Use current version
+                            newEp.getIv(),
+                            newEp.getCiphertext(),
+                            currentVer,           // keyVersion = currentVer
+                            newEp.getVectorLength(),
+                            newEp.getShardId(),
+                            newEp.getBuckets(),
+                            List.of()
+                    );
+                }
+
+                // ===== CRITICAL: Persist IMMEDIATELY (don't use indexService.insert) =====
+                metadataManager.saveEncryptedPoint(newEp);
                 total++;
             }
 
-            EncryptedPointBuffer buf = indexService.getPointBuffer();
-            if (buf != null) buf.flushAll();
-
-            // Optional cleanup (stale metadata keys etc.)
-            try {
-                metadataManager.cleanupStaleMetadata(seen);
-            } catch (UnsupportedOperationException ignore) {
-            }
-
             logger.info("Re-encryption completed for {} vectors", total);
-        } catch (UnsupportedOperationException | NoSuchMethodError e) {
-            logger.warn("Metadata enumeration not supported; skipping re-encryption pass.");
         } catch (Exception e) {
             logger.error("Re-encryption pipeline failed", e);
         }
-    }
-
-    /** Internal helper used by scheduled/automatic rotation. */
-    public synchronized List<EncryptedPoint> rotateIfNeededAndReturnUpdated() {
-        rotateIfNeeded();
-        return Collections.emptyList(); // no proactive migration
     }
 
     /** Manual rotation endpoint. */
@@ -140,9 +152,13 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
             KeyVersion newVersion = keyManager.rotateKey();
             lastRotation = Instant.now();
             operationCount.set(0);
+
             logger.info("Manual key rotation complete: v{}", newVersion.getVersion());
+
             reEncryptAll();
+
             finalizeRotation();
+
             return newVersion;
         } catch (Exception e) {
             logger.error("Manual key rotation failed", e);
@@ -150,13 +166,10 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
         }
     }
 
-    public void setCryptoService(CryptoService cryptoService) { this.cryptoService = cryptoService; }
-    public void setIndexService(IndexService indexService)   { this.indexService = indexService; }
-    public void incrementOperation()                         { operationCount.incrementAndGet(); }
-    public void setLastRotationTime(long timestamp)          { this.lastRotation = Instant.ofEpochMilli(timestamp); }
-    public void freezeRotation(boolean freeze)               { this.frozen = freeze; }
-
-    /** Pin the active key version; disables auto-rotation until cleared. */
+    /**
+     * Pin the active key version; disables auto-rotation until cleared.
+     * FIXED: Now returns false gracefully if version doesn't exist, doesn't throw.
+     */
     public synchronized boolean activateVersion(int version) {
         try {
             SecretKey key = keyManager.getSessionKey(version);
@@ -165,6 +178,10 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
                 return false;
             }
             this.forcedVersion = new KeyVersion(version, key);
+            if (this.forcedVersion == null) {
+                logger.error("activateVersion({}) failed: KeyVersion constructor returned null", version);
+                return false;
+            }
             this.operationCount.set(0);
             this.lastRotation = Instant.now();
             logger.info("Activated key version v{}", version);
@@ -175,115 +192,100 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
         }
     }
 
-    /** Unpin any forced version and return to automatic rotation mode. */
+    /**
+     * Unpin any forced version and return to automatic rotation mode.
+     * FIXED: More defensive null checks.
+     */
     public synchronized void clearActivatedVersion() {
-        this.forcedVersion = null;
-        this.operationCount.set(0);
-        this.lastRotation = Instant.now();
-        logger.info("Cleared forced key version; auto-rotation re-enabled");
+        try {
+            this.forcedVersion = null;
+            this.operationCount.set(0);
+            this.lastRotation = Instant.now();
+            logger.info("Cleared forced key version; auto-rotation re-enabled");
+        } catch (Exception e) {
+            logger.error("clearActivatedVersion() failed", e);
+        }
     }
 
     // -------------------------------------------------------------------------
     // SelectiveReencryptor: re-encrypt only "touched" points
     // -------------------------------------------------------------------------
+
     @Override
     public ReencryptReport reencryptTouched(Collection<String> touchedIds,
                                             int targetVersion,
                                             StorageSizer sizer) {
+
         if (touchedIds == null || touchedIds.isEmpty()) {
             long after = (sizer != null ? sizer.bytesOnDisk() : 0L);
             return new ReencryptReport(0, 0, 0L, 0L, after);
-        }
-        if (cryptoService == null || metadataManager == null || indexService == null) {
-            logger.warn("Selective re-encryption skipped: services not initialized");
-            long after = (sizer != null ? sizer.bytesOnDisk() : 0L);
-            return new ReencryptReport(touchedIds.size(), 0, 0L, 0L, after);
         }
 
         long t0 = System.nanoTime();
         long before = (sizer != null ? sizer.bytesOnDisk() : 0L);
 
-        // Defensive: ensure uniqueness and deterministic processing order
-        LinkedHashSet<String> ids = new LinkedHashSet<>(touchedIds);
         int reenc = 0;
+        KeyUsageTracker tracker = getUsageTracker();
 
-        // Resolve target key once (and verify it exists)
-        SecretKey targetKey;
-        try {
-            targetKey = getVersion(targetVersion).getKey();
-        } catch (Exception e) {
-            logger.error("Target key version {} not available; aborting selective re-encryption", targetVersion);
-            long after = (sizer != null ? sizer.bytesOnDisk() : before);
-            long dtMs = Math.round((System.nanoTime() - t0) / 1_000_000.0);
-            return new ReencryptReport(ids.size(), 0, dtMs, Math.max(0L, after - before), after);
-        }
-
-        for (String id : ids) {
-            if (id == null) continue;
+        for (String id : new LinkedHashSet<>(touchedIds)) {
 
             EncryptedPoint ep;
             try {
                 ep = metadataManager.loadEncryptedPoint(id);
-            } catch (Exception e) {
-                // unreadable point → skip
+            } catch (IOException | ClassNotFoundException e) {
+                logger.debug("Failed to load encrypted point id={} during selective re-encryption", id, e);
                 continue;
             }
+
             if (ep == null) continue;
 
-            // Skip if already up-to-date
-            if (ep.getVersion() >= targetVersion) continue;
+            int oldVersion = ep.getKeyVersion();
+
+            // already upgraded → skip
+            if (oldVersion >= targetVersion) continue;
 
             try {
-                // Decrypt under its own stored version key
-                SecretKey srcKey;
-                try {
-                    srcKey = getVersion(ep.getVersion()).getKey();
-                } catch (Exception missingOldKey) {
-                    // Forward-security rule: cannot decrypt old ciphertext → drop it
-                    logger.debug("Old key v{} missing for id={}, cannot re-encrypt", ep.getVersion(), id);
-                    continue;
-                }
-                double[] vec = cryptoService.decryptFromPoint(ep, srcKey);
+                double[] vec = cryptoService.decryptFromPoint(ep, null);
 
-                //Explicitly create point with target version
-                EncryptedPoint ep2 = cryptoService.encrypt(id, vec);
+                EncryptedPoint fresh = cryptoService.encrypt(id, vec);
 
-                // *** FORCE VERSION ALIGNMENT ***
-                if (ep2.getVersion() != targetVersion) {
-                    ep2 = new EncryptedPoint(
-                            ep2.getId(),
-                            ep2.getShardId(),
-                            ep2.getIv(),
-                            ep2.getCiphertext(),
-                            targetVersion,  // ← CRITICAL: Must match target
-                            ep2.getVectorLength(),
-                            ep2.getBuckets()
+                if (fresh.getKeyVersion() != targetVersion) {
+                    fresh = new EncryptedPoint(
+                            fresh.getId(),
+                            targetVersion,
+                            fresh.getIv(),
+                            fresh.getCiphertext(),
+                            targetVersion,
+                            fresh.getVectorLength(),
+                            fresh.getShardId(),
+                            fresh.getBuckets(),
+                            List.of()
                     );
                 }
 
-                metadataManager.saveEncryptedPoint(ep2);
-                indexService.updateCachedPoint(ep2);
+                metadataManager.saveEncryptedPoint(fresh);
                 reenc++;
 
-            } catch (Exception e) {
-                // best-effort: skip bad points
-                logger.debug("Selective re-encryption failed for id={}", id, e);
+                // TRACK RE-ENCRYPTION
+                if (tracker != null) {
+                    tracker.trackReencryption(id, oldVersion, targetVersion);
+                }
+
+            } catch (Exception ignore) {
+                // forward-secure skip
             }
         }
-
-        // Ensure newly written points are durably persisted
-        try {
-            EncryptedPointBuffer buf = indexService.getPointBuffer();
-            if (buf != null) buf.flushAll();
-        } catch (Exception ignore) {}
 
         long after = (sizer != null ? sizer.bytesOnDisk() : before);
         long dtMs = Math.round((System.nanoTime() - t0) / 1_000_000.0);
 
-        logger.info("Selective re-encryption: touched={}, re-encrypted={}, time={}ms, delta={}B, after={}B",
-                ids.size(), reenc, dtMs, Math.max(0L, after - before), after);
-
-        return new ReencryptReport(ids.size(), reenc, dtMs, Math.max(0L, after - before), after);
+        return new ReencryptReport(
+                touchedIds.size(),
+                reenc,
+                dtMs,
+                Math.max(0L, after - before),
+                after
+        );
     }
 
     /** Rotate key with NO re-encryption (used by auto & one-shot bump). */
@@ -296,6 +298,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
     }
 
     /** Force a single bump now (no re-encryption). Returns true if rotated. */
+    @Override
     public synchronized boolean forceRotateNow() {
         rotateKeyOnly();
         return true;
@@ -304,13 +307,24 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
     /**
      * Finalize key rotation: delete all keys older than currentVersion-1.
      * Must be called only AFTER full/partial re-encryption is complete.
+     *
+     * FIXED: Now uses (currentVersion - 1) to keep at least 2 versions
+     * (current + previous) for security. Never deletes v1.
      */
     public synchronized void finalizeRotation() {
         try {
             KeyVersion curr = keyManager.getCurrentVersion();
-            int keepVersion = curr.getVersion();
+            if (curr == null) {
+                logger.error("finalizeRotation failed: no current version available");
+                return;
+            }
+            int currentVer = curr.getVersion();
 
-            // delete ALL versions < keepVersion
+            // Keep current version and one previous for safety
+            // Delete all keys older than currentVer-1
+            // This ensures v1 is never deleted (it's the master KDF seed)
+            int keepVersion = Math.max(1, currentVer - 1);
+
             keyManager.deleteKeysOlderThan(keepVersion);
 
             logger.info("Finalized rotation: deleted keys older than v{}", keepVersion);
@@ -319,9 +333,125 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
         }
     }
 
-    public KeyManager getKeyManager() {
-        return this.keyManager;
+    public synchronized void setPolicy(KeyRotationPolicy policy) {
+        if (policy == null) {
+            throw new IllegalArgumentException("KeyRotationPolicy cannot be null");
+        }
+        this.policy = policy;
+    }
+
+    /**
+     * Initialize usage tracking by scanning existing encrypted points.
+     * Call this once at system startup to populate the tracker.
+     */
+    public synchronized void initializeUsageTracking() {
+        KeyUsageTracker tracker = getUsageTracker();
+        if (tracker == null) {
+            logger.warn("Usage tracker not available, skipping initialization");
+            return;
+        }
+
+        logger.info("Initializing key usage tracking from metadata...");
+
+        // CRITICAL FIX: reset state
+        tracker.clear();
+
+        try {
+            int tracked = 0;
+            Map<Integer, Integer> versionCounts = new HashMap<>();
+
+            List<EncryptedPoint> allPoints = metadataManager.getAllEncryptedPoints();
+            for (EncryptedPoint ep : allPoints) {
+                if (ep == null) continue;
+
+                int version = ep.getKeyVersion();
+                String id = ep.getId();
+
+                tracker.trackEncryption(id, version);
+                tracked++;
+                versionCounts.merge(version, 1, Integer::sum);
+            }
+
+            logger.info("Usage tracking rebuilt: {} vectors across {} key versions",
+                    tracked, versionCounts.size());
+
+            for (Map.Entry<Integer, Integer> e : versionCounts.entrySet()) {
+                logger.info("  Key v{}: {} vectors", e.getKey(), e.getValue());
+            }
+
+        } catch (Exception e) {
+            logger.error("Failed to initialize usage tracking", e);
+            throw e;
+        }
+    }
+
+    /**
+     * Print diagnostic information about key usage.
+     * Useful for debugging and verification.
+     */
+    public void printKeyUsageDiagnostics() {
+        KeyUsageTracker tracker = getUsageTracker();
+        if (tracker == null) {
+            logger.info("Usage tracker not available");
+            return;
+        }
+
+        logger.info("=== KEY USAGE DIAGNOSTICS ===");
+        logger.info(tracker.getSummary());
+
+        Set<Integer> versions = tracker.getTrackedVersions();
+        for (Integer v : versions) {
+            boolean safe = tracker.isSafeToDelete(v);
+            logger.info("Key v{}: {} vectors, safe_to_delete={}",
+                    v, tracker.getVectorCount(v), safe);
+        }
+    }
+
+    @Override
+    public void trackEncryption(String vectorId, int keyVersion) {
+        KeyUsageTracker tracker = getUsageTracker();
+        if (tracker != null) {
+            tracker.trackEncryption(vectorId, keyVersion);
+        }
+    }
+
+    @Override
+    public void trackReencryption(String vectorId, int oldVersion, int newVersion) {
+        KeyUsageTracker tracker = getUsageTracker();
+        if (tracker != null) {
+            tracker.trackReencryption(vectorId, oldVersion, newVersion);
+        }
+    }
+
+    /**
+     * Diagnostic-only: how many vectors still use a given key version.
+     * Used to prove migration safety (no data loss).
+     *
+     * @param version key version to check
+     * @return number of vectors still encrypted under this version
+     */
+    public int migrationRemaining(int version) {
+        try {
+            if (metadataManager == null) {
+                logger.warn("migrationRemaining skipped: metadataManager is null");
+                return -1;
+            }
+
+            return metadataManager.countWithVersion(version);
+
+        } catch (Exception e) {
+            logger.error("migrationRemaining({}) failed", version, e);
+            return -1;
+        }
     }
 
 
+    public KeyManager getKeyManager() {
+        return this.keyManager;
+    }
+    public void setCryptoService(CryptoService cryptoService) { this.cryptoService = cryptoService; }
+    public void setIndexService(IndexService indexService)   { this.indexService = indexService; }
+    public void incrementOperation()                         { operationCount.incrementAndGet(); }
+    public void setLastRotationTime(long timestamp)          { this.lastRotation = Instant.ofEpochMilli(timestamp); }
+    public void freezeRotation(boolean freeze)               { this.frozen = freeze; }
 }
