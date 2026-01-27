@@ -3,8 +3,20 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 
 # ============================================================
-# FSP-ANN COMPLETE SWEEP RUNNER (THESIS-GRADE)
+# FSP-ANN COMPLETE SWEEP RUNNER
 # ============================================================
+
+export TMPDIR="/mnt/data/mehran/tmp"
+export JAVA_TOOL_OPTIONS="-Djava.io.tmpdir=$TMPDIR"
+
+mkdir -p "$TMPDIR"
+chmod 777 "$TMPDIR"
+
+echo "=========================================="
+echo "TMPDIR: $TMPDIR ($(df -h $TMPDIR | tail -1 | awk '{print $4}') free)"
+echo "Root:   /tmp ($(df -h / | tail -1 | awk '{print $4}') free)"
+echo "=========================================="
+echo ""
 
 JAR="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/api/target/api-0.0.1-SNAPSHOT-shaded.jar"
 OUT_ROOT="/mnt/data/mehran"
@@ -19,6 +31,9 @@ JVM_ARGS=(
   "-Xmn128g"
   "-Dfile.encoding=UTF-8"
   "-Dreenc.mode=end"
+  "-Djava.io.tmpdir=$TMPDIR"
+  "-XX:+HeapDumpOnOutOfMemoryError"
+  "-XX:HeapDumpPath=$TMPDIR/heap_dumps"
 )
 
 die() { echo "ERROR: $*" >&2; exit 1; }
