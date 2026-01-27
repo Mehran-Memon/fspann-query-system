@@ -3,101 +3,105 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 
 # ============================================================
-# FSP-ANN MULTI-DATASET SWEEP RUNNER (PRODUCTION, PAPER-GRADE)
+# FSP-ANN COMPLETE SWEEP RUNNER (THESIS-GRADE)
 # ============================================================
 
-# -------------------- PATHS --------------------
 JAR="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/api/target/api-0.0.1-SNAPSHOT-shaded.jar"
 OUT_ROOT="/mnt/data/mehran"
 BATCH_SIZE=100000
 
-# -------------------- JVM ----------------------
 JVM_ARGS=(
   "-XX:+UseG1GC"
   "-XX:MaxGCPauseMillis=200"
   "-XX:+AlwaysPreTouch"
-
   "-Xms320g"
   "-Xmx354g"
   "-Xmn128g"
-
   "-Dfile.encoding=UTF-8"
   "-Dreenc.mode=end"
 )
 
-# -------------------- SAFETY -------------------
 die() { echo "ERROR: $*" >&2; exit 1; }
-need_file() { [[ -f "$1" ]] || die "Missing file: $1"; }
-need_cmd() { command -v "$1" >/dev/null || die "Missing command: $1"; }
+need_file() { [[ -f "$1" ]] || die "Missing: $1"; }
+need_cmd() { command -v "$1" >/dev/null || die "Missing: $1"; }
 
 need_cmd java
 need_cmd jq
 need_file "$JAR"
-
 mkdir -p "$OUT_ROOT"
 
-# Check disk space
+# ========== DISK SPACE CHECK ==========
 AVAILABLE_GB=$(df -BG "$OUT_ROOT" | tail -1 | awk '{print $4}' | sed 's/G//')
-REQUIRED_GB=60
+REQUIRED_GB=80
+
 if [ "$AVAILABLE_GB" -lt "$REQUIRED_GB" ]; then
-  die "Insufficient disk space: ${AVAILABLE_GB}GB available, ${REQUIRED_GB}GB required"
+  die "Insufficient disk: ${AVAILABLE_GB}GB available, need ${REQUIRED_GB}GB"
 fi
-echo "Disk space: ${AVAILABLE_GB}GB available"
+echo "✓ Disk space: ${AVAILABLE_GB}GB available"
 
-# ================= DATASETS ====================
-
+# ========== DATASET CONFIGURATION ==========
 declare -A CFG=(
+  ["SIFT1M"]="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/config/src/main/resources/config_sift1m.json"
   ["glove-100"]="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/config/src/main/resources/config_glove100.json"
   ["RedCaps"]="/home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent/config/src/main/resources/config_redcaps.json"
 )
 
 declare -A DIM=(
+  ["SIFT1M"]=128
   ["glove-100"]=100
   ["RedCaps"]=512
 )
 
 declare -A BASE=(
+  ["SIFT1M"]="/mnt/data/mehran/Datasets/SIFT1M/sift_base.fvecs"
   ["glove-100"]="/mnt/data/mehran/Datasets/glove-100/glove-100_base.fvecs"
   ["RedCaps"]="/mnt/data/mehran/Datasets/redcaps/redcaps_base.fvecs"
 )
 
 declare -A QUERY=(
+  ["SIFT1M"]="/mnt/data/mehran/Datasets/SIFT1M/sift_query.fvecs"
   ["glove-100"]="/mnt/data/mehran/Datasets/glove-100/glove-100_query.fvecs"
   ["RedCaps"]="/mnt/data/mehran/Datasets/redcaps/redcaps_query.fvecs"
 )
 
 declare -A GT=(
+  ["SIFT1M"]="/mnt/data/mehran/Datasets/SIFT1M/sift_query_groundtruth.ivecs"
   ["glove-100"]="/mnt/data/mehran/Datasets/glove-100/glove-100_groundtruth.ivecs"
   ["RedCaps"]="/mnt/data/mehran/Datasets/redcaps/redcaps_query_groundtruth.ivecs"
 )
 
-# ================= FILTERS =====================
-ONLY_DATASET="RedCaps"
+# Verify all files
+for ds in SIFT1M glove-100 RedCaps; do
+  need_file "${CFG[$ds]}"
+  need_file "${BASE[$ds]}"
+  need_file "${QUERY[$ds]}"
+  need_file "${GT[$ds]}"
+done
+
+ONLY_DATASET=""
 ONLY_PROFILE=""
 
-# ================= TRACKING ====================
 FAILED_PROFILES=()
 SWEEP_START=$(date +%s)
 
-echo "SWEEP STARTED: $(date)"
-echo "Datasets: Glove-100, RedCaps-512"
-echo "Profiles per dataset: 3"
-echo "Total profiles: 6"
+echo "FSP-ANNS SWEEP"
+echo "Started: $(date)"
+echo "Datasets: SIFT1M (12), Glove-100 (6), RedCaps (5)"
 echo ""
 
-# ================= GLOBAL SUMMARY =================
-
+# ========== GLOBAL SUMMARY CSV ==========
 GLOBAL_SUMMARY="$OUT_ROOT/global_summary.csv"
-echo "dataset,profile,ART_ms,AvgRatio,recall_at_100,ratio@20,ratio@40,ratio@60,ratio@80,ratio@100" \
-  > "$GLOBAL_SUMMARY"
+echo "dataset,profile,ART_ms,AvgRatio,recall_at_100" > "$GLOBAL_SUMMARY"
 
-# ================= MAIN LOOP ======================
-
-DATASETS=(glove-100 RedCaps)
+# ========== MAIN LOOP ==========
+DATASETS=(SIFT1M glove-100 RedCaps)
 [[ -n "$ONLY_DATASET" ]] && DATASETS=("$ONLY_DATASET")
 
 for ds in "${DATASETS[@]}"; do
+  echo ""
+  echo "=========================================="
   echo "DATASET: $ds"
+  echo "=========================================="
 
   cfg="${CFG[$ds]}"
   dim="${DIM[$ds]}"
@@ -105,129 +109,126 @@ for ds in "${DATASETS[@]}"; do
   query="${QUERY[$ds]}"
   gt="${GT[$ds]}"
 
-  # Validate config exists and has profiles
-  [[ -f "$cfg" ]] || die "Config not found: $cfg"
-  PROFILE_COUNT="$(jq '.profiles | length' "$cfg")"
-  [[ "$PROFILE_COUNT" -gt 0 ]] || die "No profiles in config: $cfg"
-  echo "  Profiles to run: $PROFILE_COUNT"
+  PROFILE_COUNT=$(jq '.profiles | length' "$cfg")
+  [[ "$PROFILE_COUNT" -gt 0 ]] || die "No profiles in $cfg"
 
-  BASE_JSON="$(jq -c 'del(.profiles)' "$cfg")"
+  echo "Profiles: $PROFILE_COUNT"
 
+  BASE_JSON=$(jq -c 'del(.profiles)' "$cfg")
   ds_root="$OUT_ROOT/$ds"
   mkdir -p "$ds_root"
 
-  echo "dataset,profile,ART_ms,AvgRatio,recall_at_100,ratio@20,ratio@40,ratio@60,ratio@80,ratio@100" \
-    > "$ds_root/dataset_summary.csv"
+  echo "dataset,profile,ART_ms,AvgRatio,recall_at_100" > "$ds_root/dataset_summary.csv"
 
   for ((i=0;i<PROFILE_COUNT;i++)); do
-    prof="$(jq -c ".profiles[$i]" "$cfg")"
-    name="$(jq -r '.name' <<<"$prof")"
+    prof=$(jq -c ".profiles[$i]" "$cfg")
+    name=$(jq -r '.name' <<<"$prof")
 
     [[ -n "$ONLY_PROFILE" && "$name" != "$ONLY_PROFILE" ]] && continue
 
     echo ""
-    echo "[$ds] Running profile $((i+1))/$PROFILE_COUNT: $name"
+    echo "[$ds] $((i+1))/$PROFILE_COUNT: $name"
+    echo "  Started: $(date +%H:%M:%S)"
 
-    overrides="$(jq -c '.overrides // {}' <<<"$prof")"
+    overrides=$(jq -c '.overrides // {}' <<<"$prof")
     run_dir="$ds_root/$name"
 
     rm -rf "$run_dir"
     mkdir -p "$run_dir/results"
 
-    final_cfg="$(jq -n '
+    # ========== CONFIG MERGE ==========
+    final_cfg=$(jq -n '
       def deepmerge(a;b):
         reduce (b|keys_unsorted[]) as $k (a;
           .[$k]=(if (a[$k]|type)=="object" and (b[$k]|type)=="object"
                  then deepmerge(a[$k];b[$k]) else b[$k] end));
       deepmerge($base;$ovr)
-      | .output.resultsDir=$res
-      | .ratio.source="gt"
       | .ratio.gtPath=$gt
-      | .ratio.allowComputeIfMissing=false
+      | .output.resultsDir=$res
     ' --argjson base "$BASE_JSON" \
       --argjson ovr "$overrides" \
-      --arg res "$run_dir/results" \
-      --arg gt "$gt")"
+      --arg gt "$gt" \
+      --arg res "$run_dir/results")
 
     echo "$final_cfg" > "$run_dir/config.json"
-    sha256sum "$run_dir/config.json" > "$run_dir/config.sha256"
 
     start_ts=$(date +%s)
 
+    # ========== RUN PROFILE ==========
     if ! java "${JVM_ARGS[@]}" -jar "$JAR" \
       "$run_dir/config.json" "$base" "$query" "$run_dir/keys.blob" \
       "$dim" "$run_dir" "$gt" "$BATCH_SIZE" \
       >"$run_dir/run.log" 2>&1; then
-        echo "  ❌ FAILED: $ds | $name"
+        echo "  ✗ FAILED"
         FAILED_PROFILES+=("$ds/$name")
         continue
     fi
 
     end_ts=$(date +%s)
     duration=$((end_ts - start_ts))
-    echo "  ✓ COMPLETED in ${duration}s"
+    mins=$((duration / 60))
+    echo "  ✓ DONE in ${mins}m"
 
+    # ========== EXTRACT METRICS ==========
     acc="$run_dir/results/summary.csv"
     if [[ ! -f "$acc" ]]; then
-      echo "  ⚠️  WARNING: Missing summary.csv"
+      echo "  ⚠️  No summary.csv"
       FAILED_PROFILES+=("$ds/$name (no summary)")
       continue
     fi
 
-    # Validate CSV has enough columns
-    COL_COUNT=$(head -1 "$acc" | awk -F',' '{print NF}')
-    if [ "$COL_COUNT" -lt 28 ]; then
-      echo "  ⚠️  WARNING: CSV has only $COL_COUNT columns (expected 28+)"
-      FAILED_PROFILES+=("$ds/$name (invalid CSV)")
+    # VALIDATED: Extract last data row
+    DATA_ROW=$(tail -1 "$acc")
+
+    # CORRECTED COLUMN MAPPING:
+    avg_art=$(echo "$DATA_ROW" | awk -F',' '{print $13}')      # avg_art_ms
+    avg_ratio=$(echo "$DATA_ROW" | awk -F',' '{print $7}')     # avg_distance_ratio
+    recall_100=$(echo "$DATA_ROW" | awk -F',' '{print $27}')   # recall_at_100
+
+    # Validate extracted values
+    if [[ -z "$avg_art" || -z "$avg_ratio" || -z "$recall_100" ]]; then
+      echo "  ⚠️  Failed to extract metrics"
+      FAILED_PROFILES+=("$ds/$name (extraction failed)")
       continue
     fi
 
-    avg_art=$(awk -F',' 'NR>1 {print $13}' "$acc")
-    avg_ratio=$(awk -F',' 'NR>1 {print $7}' "$acc")
-    recall_100=$(awk -F',' 'NR>1 {print $23}' "$acc")
-    ratio20=$(awk -F',' 'NR>1 {print $24}' "$acc")
-    ratio40=$(awk -F',' 'NR>1 {print $25}' "$acc")
-    ratio60=$(awk -F',' 'NR>1 {print $26}' "$acc")
-    ratio80=$(awk -F',' 'NR>1 {print $27}' "$acc")
-    ratio100=$(awk -F',' 'NR>1 {print $28}' "$acc")
+    echo "$ds,$name,$avg_art,$avg_ratio,$recall_100" >> "$ds_root/dataset_summary.csv"
+    echo "$ds,$name,$avg_art,$avg_ratio,$recall_100" >> "$GLOBAL_SUMMARY"
 
-    echo "$ds,$name,$avg_art,$avg_ratio,$recall_100,$ratio20,$ratio40,$ratio60,$ratio80,$ratio100" \
-      >> "$ds_root/dataset_summary.csv"
-
-    echo "$ds,$name,$avg_art,$avg_ratio,$recall_100,$ratio20,$ratio40,$ratio60,$ratio80,$ratio100" \
-      >> "$GLOBAL_SUMMARY"
-
-    echo "  Recall@100: $recall_100 | ART: ${avg_art}ms"
+    echo "  Recall@100: $recall_100 | ART: ${avg_art}ms | Ratio: $avg_ratio"
   done
 
   echo ""
   echo "✓ $ds completed"
 done
 
-# ================= FINAL SUMMARY =================
-
+# ========== FINAL SUMMARY ==========
 SWEEP_END=$(date +%s)
 SWEEP_DURATION=$((SWEEP_END - SWEEP_START))
 SWEEP_HOURS=$((SWEEP_DURATION / 3600))
 SWEEP_MINS=$(((SWEEP_DURATION % 3600) / 60))
 
 echo ""
-echo "SWEEP COMPLETED: $(date)"
-echo "Total Duration: ${SWEEP_HOURS}h ${SWEEP_MINS}m"
+echo "SWEEP COMPLETE"
+echo "Finished: $(date)"
+echo "Duration: ${SWEEP_HOURS}h ${SWEEP_MINS}m"
+echo ""
 
 if [ ${#FAILED_PROFILES[@]} -gt 0 ]; then
-  echo ""
-  echo "⚠️  FAILED PROFILES (${#FAILED_PROFILES[@]}):"
+  echo "⚠️  FAILED (${#FAILED_PROFILES[@]}):"
   for fail in "${FAILED_PROFILES[@]}"; do
     echo "  - $fail"
   done
 else
-  echo ""
-  echo "ll profiles completed successfully!"
+  echo "✅ ALL PROFILES SUCCESS!"
 fi
 
 echo ""
 echo "Results:"
-echo "  Global summary: $GLOBAL_SUMMARY"
-echo "  Per-dataset: $OUT_ROOT/{SIFT1M,glove-100,RedCaps}/dataset_summary.csv"
+echo "  Global: $GLOBAL_SUMMARY"
+echo "  SIFT1M: $OUT_ROOT/SIFT1M/dataset_summary.csv"
+echo "  Glove: $OUT_ROOT/glove-100/dataset_summary.csv"
+echo "  RedCaps: $OUT_ROOT/RedCaps/dataset_summary.csv"
 echo ""
+echo "Check P6_SWEET_SPOT first - must hit ≥85% recall!"
+echo "=========================================="

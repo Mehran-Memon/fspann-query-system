@@ -7,10 +7,10 @@
 
   "paper": {
     "enabled": true,
-    "m": 32,
+    "m": 80,
     "lambda": 2,
-    "divisions": 6,
-    "tables": 5,
+    "divisions": 4,
+    "tables": 8,
     "seed": 13
   },
 
@@ -21,9 +21,9 @@
   "runtime": {
     "precisionMode": false,
     "probeOverride": -1,
-    "refinementLimit": 25000,
+    "refinementLimit": 20000,
     "maxCandidateFactor": 6,
-    "maxGlobalCandidates": 35000,
+    "maxGlobalCandidates": 30000,
     "maxRelaxationDepth": 8,
     "hammingPrefilterThreshold": 0
   },
@@ -36,22 +36,84 @@
 
   "ratio": {
     "source": "gt",
-    "gtSample": 200,
-    "gtMismatchTolerance": 0.05
+    "gtSample": 100,
+    "gtMismatchTolerance": 0.08
   },
 
   "profiles": [
     {
-      "name": "P2_ULTRAFAST_FIXED",
-      "description": "512-dim conservative scaling for sub-second",
+      "name": "P6_M64",
+      "description": "TARGET: 40%+ recall (m=64 = 12.5% of 512-dim)",
       "overrides": {
-        "paper": { "m": 32, "lambda": 2, "divisions": 6, "tables": 5 },
+        "paper": { "m": 64, "lambda": 2, "divisions": 4, "tables": 7 },
         "runtime": {
-          "probeOverride": 2,
-          "refinementLimit": 5000,
-          "maxGlobalCandidates": 7000,
-          "maxCandidateFactor": 2,
-          "maxRelaxationDepth": 4,
+          "probeOverride": 6,
+          "refinementLimit": 14000,
+          "maxGlobalCandidates": 20000,
+          "maxCandidateFactor": 4,
+          "maxRelaxationDepth": 7,
+          "hammingPrefilterThreshold": 0
+        }
+      }
+    },
+
+    {
+      "name": "P8_M80",
+      "description": "TARGET: 60%+ recall (m=80 = 15.6% of dim, SIFT-equivalent)",
+      "overrides": {
+        "paper": { "m": 80, "lambda": 2, "divisions": 4, "tables": 8 },
+        "runtime": {
+          "probeOverride": 8,
+          "refinementLimit": 18000,
+          "maxGlobalCandidates": 26000,
+          "maxCandidateFactor": 5,
+          "maxRelaxationDepth": 8,
+          "hammingPrefilterThreshold": 0
+        }
+      }
+    },
+
+    {
+      "name": "P10_M96",
+      "description": "TARGET: 75%+ recall (m=96 = 18.75% of dim, aggressive)",
+      "overrides": {
+        "paper": { "m": 96, "lambda": 2, "divisions": 4, "tables": 10 },
+        "runtime": {
+          "probeOverride": 10,
+          "refinementLimit": 24000,
+          "maxGlobalCandidates": 36000,
+          "maxCandidateFactor": 6,
+          "maxRelaxationDepth": 9,
+          "hammingPrefilterThreshold": 0
+        }
+      }
+    },
+
+    {
+      "name": "M72_MIDDLE",
+      "description": "ABLATION: m=72 (14% of dim)",
+      "overrides": {
+        "paper": { "m": 72, "lambda": 2, "divisions": 4, "tables": 8 },
+        "runtime": {
+          "probeOverride": 8,
+          "refinementLimit": 16000,
+          "maxGlobalCandidates": 24000,
+          "maxRelaxationDepth": 8,
+          "hammingPrefilterThreshold": 0
+        }
+      }
+    },
+
+    {
+      "name": "DIV3_ULTRACOARSE",
+      "description": "ABLATION: divisions=3 (high-dim may need coarser)",
+      "overrides": {
+        "paper": { "m": 80, "lambda": 2, "divisions": 3, "tables": 8 },
+        "runtime": {
+          "probeOverride": 8,
+          "refinementLimit": 18000,
+          "maxGlobalCandidates": 26000,
+          "maxRelaxationDepth": 8,
           "hammingPrefilterThreshold": 0
         }
       }

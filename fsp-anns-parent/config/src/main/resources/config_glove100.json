@@ -7,7 +7,7 @@
 
   "paper": {
     "enabled": true,
-    "m": 26,
+    "m": 18,
     "lambda": 2,
     "divisions": 6,
     "tables": 6,
@@ -21,9 +21,9 @@
   "runtime": {
     "precisionMode": false,
     "probeOverride": -1,
-    "refinementLimit": 20000,
-    "maxCandidateFactor": 6,
-    "maxGlobalCandidates": 30000,
+    "refinementLimit": 16000,
+    "maxCandidateFactor": 5,
+    "maxGlobalCandidates": 22000,
     "maxRelaxationDepth": 7,
     "hammingPrefilterThreshold": 0
   },
@@ -36,66 +36,115 @@
 
   "ratio": {
     "source": "gt",
-    "gtSample": 200,
+    "gtSample": 150,
     "gtMismatchTolerance": 0.05
   },
 
   "profiles": [
     {
-      "name": "P2_ULTRAFAST",
-      "description": "100-dim speed baseline (<1s target)",
+      "name": "P6_OPTIMAL_M18",
+      "description": "TARGET: 70%+ recall (m=18 = 18% of 100-dim)",
       "overrides": {
-        "paper": {
-          "m": 24,
-          "lambda": 2,
-          "divisions": 6,
-          "tables": 5
-        },
-        "runtime": {
-          "probeOverride": 2,
-          "refinementLimit": 6000,
-          "maxGlobalCandidates": 8000,
-          "maxCandidateFactor": 2,
-          "maxRelaxationDepth": 5,
-          "hammingPrefilterThreshold": 0
-        }
-      }
-    },
-    {
-      "name": "P4_FAST",
-      "description": "100-dim balanced speed",
-      "overrides": {
-        "paper": {
-          "m": 26,
-          "lambda": 2,
-          "divisions": 6,
-          "tables": 6
-        },
-        "runtime": {
-          "probeOverride": 4,
-          "refinementLimit": 10000,
-          "maxGlobalCandidates": 14000,
-          "maxCandidateFactor": 3,
-          "maxRelaxationDepth": 6,
-          "hammingPrefilterThreshold": 0
-        }
-      }
-    },
-    {
-      "name": "P6_SPEED",
-      "description": "100-dim speed-optimized with better recall",
-      "overrides": {
-        "paper": {
-          "m": 28,
-          "lambda": 2,
-          "divisions": 6,
-          "tables": 7
-        },
+        "paper": { "m": 18, "lambda": 2, "divisions": 6, "tables": 6 },
         "runtime": {
           "probeOverride": 6,
-          "refinementLimit": 14000,
+          "refinementLimit": 12000,
           "maxGlobalCandidates": 18000,
           "maxCandidateFactor": 4,
+          "maxRelaxationDepth": 7,
+          "hammingPrefilterThreshold": 0
+        }
+      }
+    },
+
+    {
+      "name": "P8_BALANCED_M20",
+      "description": "TARGET: 80%+ recall (m=20 = 20% of dim)",
+      "overrides": {
+        "paper": { "m": 20, "lambda": 2, "divisions": 6, "tables": 7 },
+        "runtime": {
+          "probeOverride": 8,
+          "refinementLimit": 16000,
+          "maxGlobalCandidates": 22000,
+          "maxCandidateFactor": 5,
+          "maxRelaxationDepth": 7,
+          "hammingPrefilterThreshold": 0
+        }
+      }
+    },
+
+    {
+      "name": "P10_HIGH_M22",
+      "description": "TARGET: 85%+ recall (m=22 = 22% of dim)",
+      "overrides": {
+        "paper": { "m": 22, "lambda": 2, "divisions": 6, "tables": 8 },
+        "runtime": {
+          "probeOverride": 10,
+          "refinementLimit": 20000,
+          "maxGlobalCandidates": 28000,
+          "maxCandidateFactor": 6,
+          "maxRelaxationDepth": 8,
+          "hammingPrefilterThreshold": 0
+        }
+      }
+    },
+
+    {
+      "name": "M16_LOW",
+      "description": "ABLATION: m=16 (16% of dim, baseline)",
+      "overrides": {
+        "paper": { "m": 16, "lambda": 2, "divisions": 6, "tables": 6 },
+        "runtime": {
+          "probeOverride": 8,
+          "refinementLimit": 14000,
+          "maxGlobalCandidates": 20000,
+          "maxRelaxationDepth": 7,
+          "hammingPrefilterThreshold": 0
+        }
+      }
+    },
+
+    {
+      "name": "DIV4_COARSE",
+      "description": "ABLATION: divisions=4 (semantic embeddings may need coarser)",
+      "overrides": {
+        "paper": { "m": 18, "lambda": 2, "divisions": 4, "tables": 6 },
+        "runtime": {
+          "probeOverride": 8,
+          "refinementLimit": 14000,
+          "maxGlobalCandidates": 20000,
+          "maxRelaxationDepth": 7,
+          "hammingPrefilterThreshold": 0
+        }
+      }
+    },
+
+    {
+      "name": "P8_HAMMING",
+      "description": "OPTIMIZATION: Speed boost for semantic search",
+      "overrides": {
+        "paper": { "m": 20, "lambda": 2, "divisions": 6, "tables": 7 },
+        "runtime": {
+          "probeOverride": 8,
+          "refinementLimit": 12000,
+          "maxGlobalCandidates": 22000,
+          "maxCandidateFactor": 5,
+          "maxRelaxationDepth": 7,
+          "hammingPrefilterThreshold": 95
+        }
+      }
+    },
+
+    {
+      "name": "P8_M24_VALIDATION",
+      "description": "VALIDATION: Confirm m=24 baseline from previous run",
+      "overrides": {
+        "paper": { "m": 24, "lambda": 2, "divisions": 6, "tables": 7 },
+        "runtime": {
+          "probeOverride": 8,
+          "refinementLimit": 16000,
+          "maxGlobalCandidates": 22000,
+          "maxCandidateFactor": 5,
           "maxRelaxationDepth": 7,
           "hammingPrefilterThreshold": 0
         }
