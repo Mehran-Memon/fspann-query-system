@@ -4,7 +4,7 @@ import org.rocksdb.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
+import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
@@ -24,7 +24,8 @@ public class RocksDBMetadataManager implements AutoCloseable {
     private final String baseDir;
     private final Options options;
     private volatile boolean closed = false;
-
+    private static final int POINTS_PER_FILE = 1000;
+    private final ConcurrentHashMap<Path, Object> batchLocks = new ConcurrentHashMap<>();
     private static final Object INIT_LOCK = new Object();
 
     // Track old point files for deferred cleanup
@@ -86,9 +87,27 @@ public class RocksDBMetadataManager implements AutoCloseable {
 
         this.options = new Options()
                 .setCreateIfMissing(true)
-                .setWriteBufferSize(16 * 1024 * 1024)
-                .setMaxBackgroundJobs(2)
-                .setCompressionType(CompressionType.NO_COMPRESSION)
+
+                // Scalability fixes for 25M+ vectors
+                .setWriteBufferSize(256 * 1024 * 1024)      // 256MB (was 16MB)
+                .setMaxWriteBufferNumber(4)                  // 4 buffers
+                .setMinWriteBufferNumberToMerge(2)
+
+                .setTargetFileSizeBase(256 * 1024 * 1024)   // 256MB SST files
+                .setMaxBytesForLevelBase(1024 * 1024 * 1024) // 1GB for L1
+
+                .setLevel0FileNumCompactionTrigger(8)       // Start compaction at 8 files
+                .setLevel0SlowdownWritesTrigger(20)
+                .setLevel0StopWritesTrigger(36)
+
+                .setMaxBackgroundJobs(8)                    // 8 threads (was 2)
+                .setIncreaseParallelism(Math.max(2, Runtime.getRuntime().availableProcessors() / 2))
+
+                .setCompressionType(CompressionType.SNAPPY_COMPRESSION)  // Enable compression
+                .setBottommostCompressionType(CompressionType.ZSTD_COMPRESSION)
+
+                .setMaxOpenFiles(1000)
+                .setKeepLogFileNum(2)
                 .setInfoLogLevel(InfoLogLevel.ERROR_LEVEL);
 
         try {
@@ -330,50 +349,46 @@ public class RocksDBMetadataManager implements AutoCloseable {
 
     // ------------------- points persistence -------------------
 
-    /**
-     * ISSUE #2 FIX: Now properly synchronized to prevent concurrent writes
-     * ISSUE #3 FIX: Deferred secure deletion (moved to background cleanup)
-     * ISSUE #4 FIX: Metadata written FIRST (atomic in RocksDB), then point file
-     */
+    private Object getBatchLock(Path batchFile) {
+        return batchLocks.computeIfAbsent(batchFile, k -> new Object());
+    }
+
     public synchronized void saveEncryptedPoint(EncryptedPoint pt) throws IOException {
         Objects.requireNonNull(pt, "pt");
 
-        String safeVersion = "v" + pt.getVersion();
-        Path versionDir = Paths.get(baseDir, safeVersion);
-        Files.createDirectories(versionDir);
+        // Calculate batch file
+        long pointId = Long.parseLong(pt.getId());
+        long batchId = pointId / POINTS_PER_FILE;
 
-        // ISSUE #4 FIX: Step 1 - Update metadata FIRST (RocksDB is atomic)
+        String safeVersion = "v" + pt.getVersion();
+        Path batchFile = Paths.get(baseDir, safeVersion,
+                String.format("batch_%08d.dat", batchId));
+
+        // Append to batch file
+        synchronized (getBatchLock(batchFile)) {
+            Files.createDirectories(batchFile.getParent());
+
+            try (DataOutputStream dos = new DataOutputStream(
+                    new BufferedOutputStream(
+                            new FileOutputStream(batchFile.toFile(), true)))) {
+
+                byte[] serialized = PersistenceUtils.serializePoint(pt);
+                dos.writeInt(serialized.length);
+                dos.write(serialized);
+            }
+        }
+
+        // Update metadata
         Map<String, String> meta = new HashMap<>();
         meta.put("version", String.valueOf(pt.getVersion()));
         meta.put("shardId", String.valueOf(pt.getShardId()));
         meta.put("dim", String.valueOf(pt.getVectorLength()));
-        try {
-            updateVectorMetadata(pt.getId(), meta);
-        } catch (RuntimeException e) {
-            logger.error("Failed to update metadata for {}", pt.getId(), e);
-            throw e;
-        }
+        meta.put("batchFile", batchFile.getFileName().toString());
+        meta.put("offsetInBatch", String.valueOf(pointId % POINTS_PER_FILE));
 
-        // ISSUE #4 FIX: Step 2 - NOW save point file
-        Path tmp = versionDir.resolve(pt.getId() + ".point.tmp");
-        Path dst = versionDir.resolve(pt.getId() + ".point");
-
-        try {
-            PersistenceUtils.saveObject(pt, tmp.toString(), baseDir);
-            Files.move(tmp, dst, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-        } catch (IOException e) {
-            logger.error("Failed to save point file for {}", pt.getId(), e);
-            throw e;
-        }
-
-        // ISSUE #3 FIX: Queue old version files for cleanup, don't do it now
-        queueOldVersionFileForCleanup(pt.getId(), pt.getVersion());
+        updateVectorMetadata(pt.getId(), meta);
     }
 
-    /**
-     * ISSUE #2 FIX: Now properly synchronized
-     * ISSUE #3 FIX: Batch operations don't do per-point secure deletion
-     */
     public synchronized void saveEncryptedPointsBatch(Collection<EncryptedPoint> points) throws IOException {
         if (points == null || points.isEmpty()) return;
 
@@ -526,19 +541,52 @@ public class RocksDBMetadataManager implements AutoCloseable {
     public EncryptedPoint loadEncryptedPoint(String id) throws IOException, ClassNotFoundException {
         Objects.requireNonNull(id, "id");
         Map<String, String> meta = getVectorMetadata(id);
+
         if (meta.isEmpty() || !meta.containsKey("version")) {
             return null;
         }
 
         String ver = meta.get("version");
         String safeVersion = ver.startsWith("v") ? ver : "v" + ver;
-        Path p = Paths.get(baseDir, safeVersion, id + ".point");
-        if (!Files.exists(p)) {
-            return null;
-        }
-        return PersistenceUtils.loadObject(p.toString(), baseDir, EncryptedPoint.class);
-    }
 
+        // Check if using batch file format
+        if (meta.containsKey("batchFile")) {
+            // New batched format
+            String batchFileName = meta.get("batchFile");
+            int offset = Integer.parseInt(meta.get("offsetInBatch"));
+
+            Path batchFile = Paths.get(baseDir, safeVersion, batchFileName);
+            if (!Files.exists(batchFile)) {
+                return null;
+            }
+
+            // Read from batch file
+            try (DataInputStream dis = new DataInputStream(
+                    new BufferedInputStream(
+                            new FileInputStream(batchFile.toFile())))) {
+
+                // Skip to the correct offset
+                for (int i = 0; i < offset; i++) {
+                    int len = dis.readInt();
+                    dis.skipBytes(len);
+                }
+
+                // Read this point
+                int len = dis.readInt();
+                byte[] data = new byte[len];
+                dis.readFully(data);
+
+                return PersistenceUtils.deserializePoint(data);
+            }
+        } else {
+            // Old individual file format (backward compatibility)
+            Path p = Paths.get(baseDir, safeVersion, id + ".point");
+            if (!Files.exists(p)) {
+                return null;
+            }
+            return PersistenceUtils.loadObject(p.toString(), baseDir, EncryptedPoint.class);
+        }
+    }
     public void cleanupStaleMetadata(Set<String> validIds) {
         Objects.requireNonNull(validIds, "validIds");
         RocksIterator it = null;

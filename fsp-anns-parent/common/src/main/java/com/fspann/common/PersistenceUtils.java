@@ -86,4 +86,50 @@ public class PersistenceUtils {
             throw e;
         }
     }
+
+    /**
+     * Serialize an EncryptedPoint to byte array (for batching).
+     *
+     * @param point The EncryptedPoint to serialize
+     * @return Serialized bytes
+     * @throws IOException If serialization fails
+     */
+    public static byte[] serializePoint(EncryptedPoint point) throws IOException {
+        Objects.requireNonNull(point, "Point cannot be null");
+
+        try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
+             ObjectOutputStream oos = new ObjectOutputStream(baos)) {
+            oos.writeObject(point);
+            oos.flush();
+            return baos.toByteArray();
+        } catch (IOException e) {
+            logger.error("Failed to serialize point {}", point.getId(), e);
+            throw e;
+        }
+    }
+
+    /**
+     * Deserialize an EncryptedPoint from byte array.
+     *
+     * @param data The serialized bytes
+     * @return The deserialized EncryptedPoint
+     * @throws IOException If deserialization fails
+     * @throws ClassNotFoundException If EncryptedPoint class not found
+     */
+    public static EncryptedPoint deserializePoint(byte[] data) throws IOException, ClassNotFoundException {
+        Objects.requireNonNull(data, "Data cannot be null");
+
+        try (ByteArrayInputStream bais = new ByteArrayInputStream(data);
+             ObjectInputStream ois = new ObjectInputStream(bais)) {
+            Object obj = ois.readObject();
+            if (!(obj instanceof EncryptedPoint)) {
+                throw new ClassCastException("Deserialized object is not an EncryptedPoint");
+            }
+            return (EncryptedPoint) obj;
+        } catch (IOException | ClassNotFoundException e) {
+            logger.error("Failed to deserialize point", e);
+            throw e;
+        }
+    }
+
 }
