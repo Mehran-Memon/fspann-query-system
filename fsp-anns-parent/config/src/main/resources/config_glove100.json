@@ -149,6 +149,29 @@
           "hammingPrefilterThreshold": 0
         }
       }
+    },
+
+    {
+      "name": "P8_RESCUE_ALPHA",
+      "description": "CRITICAL FIX: Wide buckets (m=16) + Deep Scan (Alpha 0.3)",
+      "overrides": {
+        "paper": {
+          "m": 16,
+          "lambda": 2.5,
+          "divisions": 4,
+          "tables": 10
+        },
+        "stabilization": {
+          "enabled": true,
+          "alpha": 0.30,
+          "minCandidatesRatio": 1.5
+        },
+        "runtime": {
+          "probeOverride": 24,
+          "refinementLimit": 40000,
+          "maxGlobalCandidates": 60000
+        }
+      }
     }
   ]
 }
