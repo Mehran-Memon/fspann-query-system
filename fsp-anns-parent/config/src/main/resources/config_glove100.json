@@ -7,24 +7,26 @@
 
   "paper": {
     "enabled": true,
-    "m": 18,
-    "lambda": 2,
-    "divisions": 6,
-    "tables": 6,
+    "m": 16,
+    "lambda": 2.5,
+    "divisions": 4,
+    "tables": 10,
     "seed": 13
   },
 
   "stabilization": {
-    "enabled": false
+    "enabled": true,
+    "alpha": 0.30,
+    "minCandidatesRatio": 1.5
   },
 
   "runtime": {
     "precisionMode": false,
     "probeOverride": -1,
-    "refinementLimit": 16000,
-    "maxCandidateFactor": 5,
-    "maxGlobalCandidates": 22000,
-    "maxRelaxationDepth": 7,
+    "refinementLimit": 40000,
+    "maxCandidateFactor": 10,
+    "maxGlobalCandidates": 50000,
+    "maxRelaxationDepth": 9,
     "hammingPrefilterThreshold": 0
   },
 
@@ -42,118 +44,8 @@
 
   "profiles": [
     {
-      "name": "P6_OPTIMAL_M18",
-      "description": "TARGET: 70%+ recall (m=18 = 18% of 100-dim)",
-      "overrides": {
-        "paper": { "m": 18, "lambda": 2, "divisions": 6, "tables": 6 },
-        "runtime": {
-          "probeOverride": 6,
-          "refinementLimit": 12000,
-          "maxGlobalCandidates": 18000,
-          "maxCandidateFactor": 4,
-          "maxRelaxationDepth": 7,
-          "hammingPrefilterThreshold": 0
-        }
-      }
-    },
-
-    {
-      "name": "P8_BALANCED_M20",
-      "description": "TARGET: 80%+ recall (m=20 = 20% of dim)",
-      "overrides": {
-        "paper": { "m": 20, "lambda": 2, "divisions": 6, "tables": 7 },
-        "runtime": {
-          "probeOverride": 8,
-          "refinementLimit": 16000,
-          "maxGlobalCandidates": 22000,
-          "maxCandidateFactor": 5,
-          "maxRelaxationDepth": 7,
-          "hammingPrefilterThreshold": 0
-        }
-      }
-    },
-
-    {
-      "name": "P10_HIGH_M22",
-      "description": "TARGET: 85%+ recall (m=22 = 22% of dim)",
-      "overrides": {
-        "paper": { "m": 22, "lambda": 2, "divisions": 6, "tables": 8 },
-        "runtime": {
-          "probeOverride": 10,
-          "refinementLimit": 20000,
-          "maxGlobalCandidates": 28000,
-          "maxCandidateFactor": 6,
-          "maxRelaxationDepth": 8,
-          "hammingPrefilterThreshold": 0
-        }
-      }
-    },
-
-    {
-      "name": "M16_LOW",
-      "description": "ABLATION: m=16 (16% of dim, baseline)",
-      "overrides": {
-        "paper": { "m": 16, "lambda": 2, "divisions": 6, "tables": 6 },
-        "runtime": {
-          "probeOverride": 8,
-          "refinementLimit": 14000,
-          "maxGlobalCandidates": 20000,
-          "maxRelaxationDepth": 7,
-          "hammingPrefilterThreshold": 0
-        }
-      }
-    },
-
-    {
-      "name": "DIV4_COARSE",
-      "description": "ABLATION: divisions=4 (semantic embeddings may need coarser)",
-      "overrides": {
-        "paper": { "m": 18, "lambda": 2, "divisions": 4, "tables": 6 },
-        "runtime": {
-          "probeOverride": 8,
-          "refinementLimit": 14000,
-          "maxGlobalCandidates": 20000,
-          "maxRelaxationDepth": 7,
-          "hammingPrefilterThreshold": 0
-        }
-      }
-    },
-
-    {
-      "name": "P8_HAMMING",
-      "description": "OPTIMIZATION: Speed boost for semantic search",
-      "overrides": {
-        "paper": { "m": 20, "lambda": 2, "divisions": 6, "tables": 7 },
-        "runtime": {
-          "probeOverride": 8,
-          "refinementLimit": 12000,
-          "maxGlobalCandidates": 22000,
-          "maxCandidateFactor": 5,
-          "maxRelaxationDepth": 7,
-          "hammingPrefilterThreshold": 95
-        }
-      }
-    },
-
-    {
-      "name": "P8_M24_VALIDATION",
-      "description": "VALIDATION: Confirm m=24 baseline from previous run",
-      "overrides": {
-        "paper": { "m": 24, "lambda": 2, "divisions": 6, "tables": 7 },
-        "runtime": {
-          "probeOverride": 8,
-          "refinementLimit": 16000,
-          "maxGlobalCandidates": 22000,
-          "maxCandidateFactor": 5,
-          "maxRelaxationDepth": 7,
-          "hammingPrefilterThreshold": 0
-        }
-      }
-    },
-
-    {
       "name": "P8_RESCUE_ALPHA",
-      "description": "CRITICAL FIX: Wide buckets (m=16) + Deep Scan (Alpha 0.3)",
+      "description": "TARGET: >70% Recall. Strategy: Wide buckets (m=16) + Deep Scan (Alpha=0.3)",
       "overrides": {
         "paper": {
           "m": 16,
@@ -168,8 +60,30 @@
         },
         "runtime": {
           "probeOverride": 24,
-          "refinementLimit": 40000,
+          "refinementLimit": 45000,
           "maxGlobalCandidates": 60000
+        }
+      }
+    },
+    {
+      "name": "P12_RESCUE_DEEP",
+      "description": "BACKUP: Even deeper probe if P8 fails",
+      "overrides": {
+        "paper": {
+          "m": 16,
+          "lambda": 2.5,
+          "divisions": 4,
+          "tables": 10
+        },
+        "stabilization": {
+          "enabled": true,
+          "alpha": 0.40,
+          "minCandidatesRatio": 2.0
+        },
+        "runtime": {
+          "probeOverride": 32,
+          "refinementLimit": 60000,
+          "maxGlobalCandidates": 80000
         }
       }
     }
