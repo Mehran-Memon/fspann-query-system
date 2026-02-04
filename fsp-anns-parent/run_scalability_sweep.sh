@@ -33,10 +33,9 @@ JVM_ARGS=(
 
 # -------------------- EXPERIMENT CONFIG --------------------
 DIMENSION=128
-BATCH_SIZE=100000
+BATCH_SIZE=1000000
 
-# !!! 10M REMOVED - STARTING AT 25M !!!
-SIZES=("25m" "50m" "75m" "100m")
+SIZES=("100m")
 
 echo "=========================================="
 echo "   RESUMING SCALABILITY SWEEP             "
@@ -49,9 +48,7 @@ mkdir -p "$LARGE_TMP"
 
 for SIZE in "${SIZES[@]}"; do
     echo ""
-    echo "######################################################"
     echo "▶ STARTING EXPERIMENT: SIFT1B-${SIZE}"
-    echo "######################################################"
 
     DATA_FILE="$BASE_DIR/bigann_learn_${SIZE}.bvecs"
     RUN_DIR="$OUTPUT_ROOT/SIFT1B-${SIZE}"
