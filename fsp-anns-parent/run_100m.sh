@@ -1,4 +1,3 @@
-cat << 'EOF' > run_100m.sh
 #!/usr/bin/env bash
 # ============================================================
 # FSP-ANN 100M "BALANCED" ATTEMPT
@@ -28,6 +27,8 @@ JVM_ARGS=(
   "-Dfile.encoding=UTF-8"
   "-Djava.io.tmpdir=$LARGE_TMP"
   "-Dreenc.mode=end"
+  "-Dmetadata.sharded=true"
+  "-Dmetadata.shards=16"
 )
 
 # Experiment Config
@@ -64,4 +65,3 @@ java "${JVM_ARGS[@]}" -jar "$JAR" \
 PID=$!
 echo "✅ Process started with PID: $PID"
 echo "   Monitor with: tail -f $LOG_FILE"
-EOF

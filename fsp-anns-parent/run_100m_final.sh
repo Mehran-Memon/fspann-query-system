@@ -23,11 +23,13 @@ JVM_ARGS=(
   "-server"
   "-XX:+UseZGC"
   "-XX:+AlwaysPreTouch"
-  "-Xms160g"
+  "-Xms350g"
   "-Xmx160g"
   "-Dfile.encoding=UTF-8"
   "-Djava.io.tmpdir=$LARGE_TMP"
   "-Dreenc.mode=end"
+  "-Dmetadata.sharded=true"
+  "-Dmetadata.shards=16"
 )
 
 # Experiment Config
