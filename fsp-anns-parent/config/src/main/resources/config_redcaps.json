@@ -39,82 +39,31 @@
     "gtSample": 100,
     "gtMismatchTolerance": 0.08
   },
-
   "profiles": [
     {
-      "name": "P6_M64",
-      "description": "TARGET: 40%+ recall (m=64 = 12.5% of 512-dim)",
+      "name": "P_NUCLEAR_FINAL",
+      "description": "FINAL PAPER CONFIG: optimized for Angular/Semantic distribution",
       "overrides": {
-        "paper": { "m": 64, "lambda": 2, "divisions": 4, "tables": 7 },
+        "paper": {
+          "m": 8,
+          "k": 100,
+          "tables": 50,
+          "w": 0,
+          "l": 50,
+          "lambda": 2,
+          "divisions": 4,
+          "seed": 13
+        },
+        "stabilization": {
+          "enabled": true,
+          "alpha": 0.40,
+          "minCandidatesRatio": 2.0
+        },
         "runtime": {
-          "probeOverride": 6,
-          "refinementLimit": 14000,
-          "maxGlobalCandidates": 20000,
-          "maxCandidateFactor": 4,
-          "maxRelaxationDepth": 7,
-          "hammingPrefilterThreshold": 0
-        }
-      }
-    },
-
-    {
-      "name": "P8_M80",
-      "description": "TARGET: 60%+ recall (m=80 = 15.6% of dim, SIFT-equivalent)",
-      "overrides": {
-        "paper": { "m": 80, "lambda": 2, "divisions": 4, "tables": 8 },
-        "runtime": {
-          "probeOverride": 8,
-          "refinementLimit": 18000,
-          "maxGlobalCandidates": 26000,
-          "maxCandidateFactor": 5,
-          "maxRelaxationDepth": 8,
-          "hammingPrefilterThreshold": 0
-        }
-      }
-    },
-
-    {
-      "name": "P10_M96",
-      "description": "TARGET: 75%+ recall (m=96 = 18.75% of dim, aggressive)",
-      "overrides": {
-        "paper": { "m": 96, "lambda": 2, "divisions": 4, "tables": 10 },
-        "runtime": {
-          "probeOverride": 10,
-          "refinementLimit": 24000,
-          "maxGlobalCandidates": 36000,
-          "maxCandidateFactor": 6,
-          "maxRelaxationDepth": 9,
-          "hammingPrefilterThreshold": 0
-        }
-      }
-    },
-
-    {
-      "name": "M72_MIDDLE",
-      "description": "ABLATION: m=72 (14% of dim)",
-      "overrides": {
-        "paper": { "m": 72, "lambda": 2, "divisions": 4, "tables": 8 },
-        "runtime": {
-          "probeOverride": 8,
-          "refinementLimit": 16000,
-          "maxGlobalCandidates": 24000,
-          "maxRelaxationDepth": 8,
-          "hammingPrefilterThreshold": 0
-        }
-      }
-    },
-
-    {
-      "name": "DIV3_ULTRACOARSE",
-      "description": "ABLATION: divisions=3 (high-dim may need coarser)",
-      "overrides": {
-        "paper": { "m": 80, "lambda": 2, "divisions": 3, "tables": 8 },
-        "runtime": {
-          "probeOverride": 8,
-          "refinementLimit": 18000,
-          "maxGlobalCandidates": 26000,
-          "maxRelaxationDepth": 8,
-          "hammingPrefilterThreshold": 0
+          "probeOverride": 800,
+          "refinementLimit": 8000,
+          "maxGlobalCandidates": 100000,
+          "maxCandidateFactor": 15
         }
       }
     }

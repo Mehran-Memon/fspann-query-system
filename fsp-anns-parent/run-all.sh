@@ -93,7 +93,7 @@ for ds in SIFT1M glove-100 RedCaps; do
   need_file "${GT[$ds]}"
 done
 
-ONLY_DATASET=""
+ONLY_DATASET="glove-100"
 ONLY_PROFILE=""
 
 FAILED_PROFILES=()

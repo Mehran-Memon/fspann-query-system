@@ -41,49 +41,27 @@
     "gtSample": 150,
     "gtMismatchTolerance": 0.05
   },
-
   "profiles": [
     {
-      "name": "P8_RESCUE_ALPHA",
-      "description": "TARGET: >70% Recall. Strategy: Wide buckets (m=16) + Deep Scan (Alpha=0.3)",
+      "name": "P_BALANCED_NUCLEAR",
+      "description": "FINAL PAPER CONFIG: optimized for Angular/Semantic distribution",
       "overrides": {
         "paper": {
-          "m": 16,
-          "lambda": 2.5,
+          "m": 12,
+          "tables": 50,
+          "lambda": 2,
           "divisions": 4,
-          "tables": 10
+          "seed": 13
         },
         "stabilization": {
           "enabled": true,
-          "alpha": 0.30,
-          "minCandidatesRatio": 1.5
+          "alpha": 0.40
         },
         "runtime": {
-          "probeOverride": 24,
-          "refinementLimit": 45000,
-          "maxGlobalCandidates": 60000
-        }
-      }
-    },
-    {
-      "name": "P12_RESCUE_DEEP",
-      "description": "BACKUP: Even deeper probe if P8 fails",
-      "overrides": {
-        "paper": {
-          "m": 16,
-          "lambda": 2.5,
-          "divisions": 4,
-          "tables": 10
-        },
-        "stabilization": {
-          "enabled": true,
-          "alpha": 0.40,
-          "minCandidatesRatio": 2.0
-        },
-        "runtime": {
-          "probeOverride": 32,
-          "refinementLimit": 60000,
-          "maxGlobalCandidates": 80000
+          "probeOverride": 1200,
+          "refinementLimit": 25000,
+          "maxGlobalCandidates": 100000,
+          "maxCandidateFactor": 20
         }
       }
     }
