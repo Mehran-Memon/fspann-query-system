@@ -106,7 +106,7 @@ public class RocksDBMetadataManager implements AutoCloseable {
                 .setCompressionType(CompressionType.SNAPPY_COMPRESSION)  // Enable compression
                 .setBottommostCompressionType(CompressionType.ZSTD_COMPRESSION)
 
-                .setMaxOpenFiles(1000)
+                .setMaxOpenFiles(20000)
                 .setKeepLogFileNum(2)
                 .setInfoLogLevel(InfoLogLevel.ERROR_LEVEL);
 
