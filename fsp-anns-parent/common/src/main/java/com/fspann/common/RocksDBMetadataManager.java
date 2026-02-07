@@ -45,7 +45,7 @@ public class RocksDBMetadataManager implements AutoCloseable {
      * Path-based instance cache instead of singleton.
      * Each unique (dbPath, pointsPath) pair gets its own instance.
      */
-    public static RocksDBMetadataManager create(String dbPath, String pointsPath) throws IOException {
+    public static RocksDBMetadataManager create(String dbPath, String pointsPath) throws IOException, RocksDBException {
         Objects.requireNonNull(dbPath, "dbPath cannot be null");
         Objects.requireNonNull(pointsPath, "pointsPath cannot be null");
 
@@ -78,7 +78,7 @@ public class RocksDBMetadataManager implements AutoCloseable {
         }
     }
 
-    private RocksDBMetadataManager(String dbPath, String baseDir) throws IOException {
+    private RocksDBMetadataManager(String dbPath, String baseDir) throws IOException, RocksDBException {
         this.dbPath = dbPath;
         this.baseDir = baseDir;
 
@@ -87,28 +87,21 @@ public class RocksDBMetadataManager implements AutoCloseable {
 
         this.options = new Options()
                 .setCreateIfMissing(true)
-
-                // Scalability fixes for 25M+ vectors
-                .setWriteBufferSize(256 * 1024 * 1024)      // 256MB (was 16MB)
-                .setMaxWriteBufferNumber(4)                  // 4 buffers
+                .setWriteBufferSize(1024 * 1024 * 1024) // 1GB write buffer size
+                .setMaxWriteBufferNumber(8)             // Allow more buffers
                 .setMinWriteBufferNumberToMerge(2)
-
-                .setTargetFileSizeBase(256 * 1024 * 1024)   // 256MB SST files
-                .setMaxBytesForLevelBase(1024 * 1024 * 1024) // 1GB for L1
-
-                .setLevel0FileNumCompactionTrigger(8)       // Start compaction at 8 files
-                .setLevel0SlowdownWritesTrigger(20)
-                .setLevel0StopWritesTrigger(36)
-
-                .setMaxBackgroundJobs(8)                    // 8 threads (was 2)
-                .setIncreaseParallelism(Math.max(2, Runtime.getRuntime().availableProcessors() / 2))
-
-                .setCompressionType(CompressionType.SNAPPY_COMPRESSION)  // Enable compression
+                .setTargetFileSizeBase(512 * 1024 * 1024)  // 512MB SST files (smaller files may compact faster)
+                .setMaxBytesForLevelBase(1024 * 1024 * 1024) // 1GB for L1 level
+                .setLevel0FileNumCompactionTrigger(12)
+                .setLevel0SlowdownWritesTrigger(24)        // Trigger slow down when 24 files
+                .setLevel0StopWritesTrigger(40)            // Stop writes when 40 files are present
+                .setMaxBackgroundJobs(16)                  // Increase background compaction threads
+                .setIncreaseParallelism(16)                // Higher parallelism for RocksDB
+                .setCompressionType(CompressionType.SNAPPY_COMPRESSION)
                 .setBottommostCompressionType(CompressionType.ZSTD_COMPRESSION)
-
-                .setMaxOpenFiles(20000)
-                .setKeepLogFileNum(2)
-                .setInfoLogLevel(InfoLogLevel.ERROR_LEVEL);
+                .setMaxOpenFiles(50000)
+                .setKeepLogFileNum(4)  // Keep more logs for diagnostics
+                .setInfoLogLevel(InfoLogLevel.WARN_LEVEL); // Log compaction info for debugging
 
         try {
             this.db = RocksDB.open(this.options, dbPath);
@@ -119,6 +112,9 @@ public class RocksDBMetadataManager implements AutoCloseable {
 
         Path pointsDir = Paths.get(baseDir);
         Path metaDir = Paths.get(dbPath);
+        options.setStatsDumpPeriodSec(60);  // Log every 60 seconds
+        logger.info("RocksDB stats: {}", db.getProperty("rocksdb.stats"));
+
         this.storageMetrics = new StorageMetrics(pointsDir, metaDir);
         logger.info("StorageMetrics initialized for base={}, db={}", baseDir, dbPath);
 
