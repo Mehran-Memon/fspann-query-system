@@ -87,7 +87,7 @@ public class RocksDBMetadataManager implements AutoCloseable {
 
         this.options = new Options()
                 .setCreateIfMissing(true)
-                .setWriteBufferSize(1024 * 1024 * 1024) // 1GB write buffer size
+                .setWriteBufferSize(32 * 1024 * 1024)
                 .setMaxWriteBufferNumber(8)             // Allow more buffers
                 .setMinWriteBufferNumberToMerge(2)
                 .setTargetFileSizeBase(512 * 1024 * 1024)  // 512MB SST files (smaller files may compact faster)
