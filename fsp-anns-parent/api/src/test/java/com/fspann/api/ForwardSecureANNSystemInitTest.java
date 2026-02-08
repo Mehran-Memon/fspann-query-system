@@ -12,6 +12,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.io.TempDir;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.rocksdb.RocksDBException;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.IOException;
@@ -32,7 +34,7 @@ public class ForwardSecureANNSystemInitTest {
     Path tempDir;
 
     @BeforeEach
-    public void setUp() throws IOException {
+    public void setUp() throws IOException, RocksDBException {
         configPath = tempDir.resolve("config.yaml");
         Files.writeString(configPath, """
                 eval:

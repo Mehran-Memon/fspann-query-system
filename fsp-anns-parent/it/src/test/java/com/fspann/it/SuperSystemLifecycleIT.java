@@ -7,6 +7,7 @@ import com.fspann.common.RocksDBMetadataManager;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.rocksdb.RocksDBException;
 
 import java.io.IOException;
 import java.util.Arrays;
@@ -19,7 +20,7 @@ class SuperSystemLifecycleIT extends BaseUnifiedIT {
 
     @Test
     @DisplayName("Full lifecycle: index → query → persist → restore")
-    void fullLifecycleWorks() throws IOException, InterruptedException {
+    void fullLifecycleWorks() throws IOException, InterruptedException, RocksDBException {
         indexClusteredData(50);
 
         double[] query = new double[DIM];
