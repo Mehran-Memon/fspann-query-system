@@ -7,6 +7,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.io.TempDir;
+import org.rocksdb.RocksDBException;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.IOException;
@@ -23,7 +25,7 @@ public class RocksDBMetadataManagerPointPersistenceTest {
     Path tempDir;
 
     @BeforeEach
-    public void setUp() throws IOException {
+    public void setUp() throws IOException, RocksDBException {
         Path metadataPath = tempDir.resolve("metadata");
         Path pointsPath = tempDir.resolve("points");
         Files.createDirectories(metadataPath);

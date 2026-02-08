@@ -5,6 +5,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.io.TempDir;
+import org.rocksdb.RocksDBException;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.IOException;
@@ -31,7 +33,7 @@ public class RocksDBMetadataManagerLifecycleTest {
 
     @Test
     @DisplayName("Test manager closes cleanly")
-    public void testCloseCleanly() throws IOException {
+    public void testCloseCleanly() throws IOException, RocksDBException {
         RocksDBMetadataManager manager = RocksDBMetadataManager.create(
                 metadataPath.toString(), pointsPath.toString());
         manager.close();
@@ -39,7 +41,7 @@ public class RocksDBMetadataManagerLifecycleTest {
 
     @Test
     @DisplayName("Test manager reopens existing database")
-    public void testReopenDatabase() throws IOException {
+    public void testReopenDatabase() throws IOException, RocksDBException {
         RocksDBMetadataManager m1 = RocksDBMetadataManager.create(
                 metadataPath.toString(), pointsPath.toString());
 
@@ -59,7 +61,7 @@ public class RocksDBMetadataManagerLifecycleTest {
 
     @Test
     @DisplayName("Test log stats")
-    public void testLogStats() throws IOException {
+    public void testLogStats() throws IOException, RocksDBException {
         RocksDBMetadataManager manager = RocksDBMetadataManager.create(
                 metadataPath.toString(), pointsPath.toString());
 
@@ -70,7 +72,7 @@ public class RocksDBMetadataManagerLifecycleTest {
 
     @Test
     @DisplayName("Test print summary")
-    public void testPrintSummary() throws IOException {
+    public void testPrintSummary() throws IOException, RocksDBException {
         RocksDBMetadataManager manager = RocksDBMetadataManager.create(
                 metadataPath.toString(), pointsPath.toString());
 
