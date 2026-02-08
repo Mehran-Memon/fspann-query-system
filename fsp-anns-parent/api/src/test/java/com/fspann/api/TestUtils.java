@@ -7,6 +7,7 @@ import com.fspann.key.KeyManager;
 import com.fspann.key.KeyRotationPolicy;
 import com.fspann.key.KeyRotationServiceImpl;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.rocksdb.RocksDBException;
 
 import java.io.DataOutputStream;
 import java.io.IOException;
@@ -28,7 +29,7 @@ final class TestUtils {
         }
     }
 
-    static RocksDBMetadataManager mockMetadata(Path tmp) throws IOException {
+    static RocksDBMetadataManager mockMetadata(Path tmp) throws IOException, RocksDBException {
         Path meta = tmp.resolve("metadata");
         Path pts  = tmp.resolve("points");
         Files.createDirectories(meta);
