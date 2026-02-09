@@ -35,6 +35,7 @@ JVM_ARGS=(
   "-Djava.io.tmpdir=$LARGE_TMP"
   "-Dmetadata.sharded=true"
   "-Dmetadata.shards=16"
+  "-Dcom.fspann.metadata.max_open_files=160000"
 )
 
 # Batch Size: 100k (optimal for G1GC)
