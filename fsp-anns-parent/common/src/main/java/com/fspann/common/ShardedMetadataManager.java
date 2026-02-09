@@ -52,8 +52,14 @@ public class ShardedMetadataManager implements MetadataManager {
         this.storageMetrics = new StorageMetrics(Paths.get(baseDir), Paths.get(basePath));
 
         for (int i = 0; i < numShards; i++) {
+            // Create Metadata Shard Folder
             Path shardPath = Paths.get(basePath, "shard_" + i);
             Files.createDirectories(shardPath);
+
+            // ADD THIS: Create Points Shard Folder
+            Path pointsShardPath = Paths.get(baseDir, "shard_" + i);
+            Files.createDirectories(pointsShardPath);
+
             this.shardPaths[i] = shardPath;
 
             this.shardOptions[i] = new Options()
@@ -213,8 +219,8 @@ public class ShardedMetadataManager implements MetadataManager {
 
         long batchId = pointId / POINTS_PER_FILE;
         String safeVersion = "v" + pt.getVersion();
-        Path batchFile = Paths.get(baseDir, safeVersion, String.format("batch_%08d.dat", batchId));
-
+        int shardIdx = getShardIndex(pt.getId());
+        Path batchFile = Paths.get(baseDir, "shard_" + shardIdx, safeVersion, String.format("batch_%08d.dat", batchId));
         long fileOffset = 0;
         int serializedSize = 0;
 
@@ -270,7 +276,8 @@ public class ShardedMetadataManager implements MetadataManager {
         String batchFileName = meta.get("batchFile");
         long fileOffset = Long.parseLong(meta.get("fileOffset"));
 
-        Path batchPath = Paths.get(baseDir, safeVersion, batchFileName);
+        int shardIdx = getShardIndex(id);
+        Path batchPath = Paths.get(baseDir, "shard_" + shardIdx, safeVersion, batchFileName);
         if (!Files.exists(batchPath)) return null;
 
         // USE RANDOM ACCESS (Same as monolithic fix)
@@ -287,16 +294,20 @@ public class ShardedMetadataManager implements MetadataManager {
     public void saveEncryptedPointsBatch(Collection<EncryptedPoint> points) throws IOException {
         if (points == null || points.isEmpty()) return;
 
-        // Map to store final metadata for all points in this batch
+        // Group by batch file
         Map<String, Map<String, String>> finalMetadataUpdates = new HashMap<>();
         long totalBatchBytesWritten = 0;
 
-        // Group by batch file
+        // Group by sharded batch file path
         Map<Path, List<EncryptedPoint>> batchGroups = new HashMap<>();
         for (EncryptedPoint pt : points) {
             long pointId = Long.parseLong(pt.getId().replaceAll("[^0-9]", ""));
             long batchId = pointId / POINTS_PER_FILE;
-            Path batchFile = Paths.get(baseDir, "v" + pt.getVersion(), String.format("batch_%08d.dat", batchId));
+
+            // FIX: Include shard index here
+            int shardIdx = getShardIndex(pt.getId());
+            Path batchFile = Paths.get(baseDir, "shard_" + shardIdx, "v" + pt.getVersion(), String.format("batch_%08d.dat", batchId));
+
             batchGroups.computeIfAbsent(batchFile, k -> new ArrayList<>()).add(pt);
         }
 
