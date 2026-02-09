@@ -66,9 +66,8 @@ class MPartitionedIndexServiceTest {
         when(meta.getStorageMetrics()).thenReturn(sm);
         when(sm.getSnapshot()).thenReturn(
                 new StorageMetrics.StorageSnapshot(
-                        0, 0, 0,
-                        new ConcurrentHashMap<>(),
-                        new ConcurrentHashMap<>()
+                        0L, 0L, 0L,
+                        new ConcurrentHashMap<Integer, StorageMetrics.ReencryptionStorageSnapshot>()
                 )
         );
 

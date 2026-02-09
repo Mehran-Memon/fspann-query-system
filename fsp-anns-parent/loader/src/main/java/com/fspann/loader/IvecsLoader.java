@@ -26,8 +26,13 @@ public class IvecsLoader implements FormatLoader {
                     }
 
                     int k = buffer.getInt();
-                    int bytesNeeded = k * 4;
 
+                    // VALIDATION FOR UNIT TESTS
+                    if (k <= 0 || k > 1_000_000) {
+                        throw new IOException("Invalid dimension: " + k);
+                    }
+
+                    int bytesNeeded = k * 4;
                     if (buffer.remaining() < bytesNeeded) {
                         if (!refill()) return null;
                     }
@@ -37,6 +42,10 @@ public class IvecsLoader implements FormatLoader {
                         ids[i] = buffer.getInt();
                     }
                     return ids;
+                } catch (IOException e) {
+                    close();
+                    // Wrap in UncheckedIOException to satisfy IvecsLoaderTest
+                    throw new UncheckedIOException(e);
                 } catch (Exception e) {
                     close();
                     return null;
@@ -56,6 +65,7 @@ public class IvecsLoader implements FormatLoader {
 
             @Override public boolean hasNext() { return next != null; }
             @Override public int[] next() {
+                if (next == null) throw new NoSuchElementException();
                 int[] v = next;
                 next = readOne();
                 if (next == null) close();

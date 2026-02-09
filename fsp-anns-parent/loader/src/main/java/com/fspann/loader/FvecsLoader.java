@@ -12,9 +12,8 @@ public class FvecsLoader implements FormatLoader {
     @Override
     public Iterator<double[]> openVectorIterator(Path file) throws IOException {
         FileChannel channel = FileChannel.open(file);
-        // 1MB Direct Buffer bypasses the Java Heap
         ByteBuffer buffer = ByteBuffer.allocateDirect(1024 * 1024);
-        buffer.order(ByteOrder.LITTLE_ENDIAN); // FVECS is Little Endian
+        buffer.order(ByteOrder.LITTLE_ENDIAN);
         buffer.flip();
 
         return new Iterator<>() {
@@ -27,8 +26,13 @@ public class FvecsLoader implements FormatLoader {
                     }
 
                     int dim = buffer.getInt();
-                    int bytesNeeded = dim * 4;
 
+                    // VALIDATION FOR UNIT TESTS
+                    if (dim <= 0 || dim > 1_000_000) {
+                        throw new IOException("Invalid dimension: " + dim);
+                    }
+
+                    int bytesNeeded = dim * 4;
                     if (buffer.remaining() < bytesNeeded) {
                         if (!refill()) return null;
                     }
@@ -38,6 +42,10 @@ public class FvecsLoader implements FormatLoader {
                         v[i] = buffer.getFloat();
                     }
                     return v;
+                } catch (IOException e) {
+                    close();
+                    // Wrap in UncheckedIOException to satisfy FvecsLoaderTest
+                    throw new UncheckedIOException(e);
                 } catch (Exception e) {
                     close();
                     return null;
@@ -57,6 +65,7 @@ public class FvecsLoader implements FormatLoader {
 
             @Override public boolean hasNext() { return next != null; }
             @Override public double[] next() {
+                if (next == null) throw new NoSuchElementException();
                 double[] v = next;
                 next = readOne();
                 if (next == null) close();

@@ -234,4 +234,13 @@ public class UnifiedMetadataManager implements MetadataManager {
             rocksDBMetadataManager.hardDeleteVector(vectorId);
         }
     }
+
+    @Override
+    public List<String> getIdsFromShard(int shardIndex, int limit) {
+        if (useSharding) {
+            return shardedMetadataManager.getIdsFromShard(shardIndex, limit);
+        } else {
+            return rocksDBMetadataManager.getIdsFromShard(shardIndex, limit);
+        }
+    }
 }
