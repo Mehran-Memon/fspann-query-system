@@ -33,8 +33,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
     private final KeyManager keyManager;
     private volatile KeyRotationPolicy policy;
     private final String rotationMetaDir;
-    private final RocksDBMetadataManager metadataManager;
-
+    private final MetadataManager metadataManager;
     private volatile KeyVersion forcedVersion = null;
 
     private CryptoService cryptoService;
@@ -52,7 +51,7 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
         this.keyManager = Objects.requireNonNull(keyManager, "keyManager");
         this.policy = Objects.requireNonNull(policy, "policy");
         this.rotationMetaDir = Objects.requireNonNull(rotationMetaDir, "rotationMetaDir");
-        this.metadataManager = (RocksDBMetadataManager) Objects.requireNonNull(metadataManager, "metadataManager");
+        this.metadataManager = Objects.requireNonNull(metadataManager, "metadataManager");
         this.cryptoService = cryptoService;
     }
 

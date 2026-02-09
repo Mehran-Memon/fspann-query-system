@@ -178,4 +178,33 @@ public class UnifiedMetadataManager implements MetadataManager {
             rocksDBMetadataManager.logStats();
         }
     }
+// ===== New Interface Methods Delegation =====
+
+    @Override
+    public long sizePointsDir() {
+        if (useSharding) {
+            return shardedMetadataManager.sizePointsDir();
+        } else {
+            return rocksDBMetadataManager.sizePointsDir();
+        }
+    }
+
+    @Override
+    public int countWithVersion(int keyVersion) throws IOException {
+        if (useSharding) {
+            return shardedMetadataManager.countWithVersion(keyVersion);
+        } else {
+            return rocksDBMetadataManager.countWithVersion(keyVersion);
+        }
+    }
+
+    @Override
+    public int getVersionOfVector(String id) {
+        if (useSharding) {
+            return shardedMetadataManager.getVersionOfVector(id);
+        } else {
+            return rocksDBMetadataManager.getVersionOfVector(id);
+        }
+    }
+
 }

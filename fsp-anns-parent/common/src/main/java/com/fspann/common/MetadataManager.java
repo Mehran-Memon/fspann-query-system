@@ -97,4 +97,13 @@ public interface MetadataManager extends AutoCloseable {
     void printSummary();
 
     void logStats();
+
+    /** Returns total size of all point data on disk */
+    long sizePointsDir();
+
+    /** Counts vectors using a specific key version (for migration tracking) */
+    int countWithVersion(int keyVersion) throws IOException;
+
+    /** Returns the version of a specific vector */
+    int getVersionOfVector(String id);
 }

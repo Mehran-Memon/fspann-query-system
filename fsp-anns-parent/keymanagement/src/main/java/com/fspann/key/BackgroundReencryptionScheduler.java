@@ -25,7 +25,7 @@ public class BackgroundReencryptionScheduler {
     private final KeyRotationServiceImpl keyService;
     private final CryptoService cryptoService;
     private final IndexService indexService;
-    private final RocksDBMetadataManager metadataManager;
+    private final MetadataManager metadataManager;
     private final SelectiveReencryptor reencryptor;
 
     // Rate limiting: max points/sec to re-encrypt
@@ -47,7 +47,7 @@ public class BackgroundReencryptionScheduler {
         this.keyService = keyService;
         this.cryptoService = cryptoService;
         this.indexService = indexService;
-        this.metadataManager = (RocksDBMetadataManager) metadataManager;
+        this.metadataManager = metadataManager;
 
         if (!(keyService instanceof SelectiveReencryptor sr)) {
             throw new IllegalStateException(

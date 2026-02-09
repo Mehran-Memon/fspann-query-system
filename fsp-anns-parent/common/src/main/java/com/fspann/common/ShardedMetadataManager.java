@@ -10,6 +10,7 @@ import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 public class ShardedMetadataManager implements MetadataManager {
     private static final Logger logger = LoggerFactory.getLogger(ShardedMetadataManager.class);
@@ -466,5 +467,45 @@ public class ShardedMetadataManager implements MetadataManager {
 
     private String unescape(String in) {
         return in.replace("\\=", "=").replace("\\;", ";");
+    }
+
+
+    @Override
+    public long sizePointsDir() {
+        try (Stream<Path> walk = Files.walk(Paths.get(baseDir))) {
+            return walk.filter(Files::isRegularFile)
+                    .filter(p -> p.toString().endsWith(".point") || p.toString().endsWith(".dat"))
+                    .mapToLong(p -> {
+                        try { return Files.size(p); } catch (IOException e) { return 0L; }
+                    }).sum();
+        } catch (IOException e) { return 0L; }
+    }
+
+    @Override
+    public int countWithVersion(int keyVersion) throws IOException {
+        int total = 0;
+        // We aggregate the count from every shard
+        for (int i = 0; i < numShards; i++) {
+            try (RocksIterator it = shardDbs[i].newIterator()) {
+                for (it.seekToFirst(); it.isValid(); it.next()) {
+                    Map<String, String> meta = deserializeMetadata(it.value());
+                    String v = meta.get("version");
+                    if (v != null && Integer.parseInt(v.replaceAll("[^0-9]", "")) == keyVersion) {
+                        total++;
+                    }
+                }
+            }
+        }
+        return total;
+    }
+
+    @Override
+    public int getVersionOfVector(String id) {
+        Map<String, String> meta = getVectorMetadata(id);
+        if (meta.isEmpty()) return -1;
+        String v = meta.get("version");
+        try {
+            return (v == null) ? -1 : Integer.parseInt(v.replaceAll("[^0-9]", ""));
+        } catch (Exception e) { return -1; }
     }
 }

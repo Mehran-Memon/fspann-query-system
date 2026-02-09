@@ -40,7 +40,7 @@ public class AesGcmCryptoService implements CryptoService {
     public AesGcmCryptoService(
             MeterRegistry metrics,
             KeyLifeCycleService keyService,
-            RocksDBMetadataManager metadataManager
+            MetadataManager metadataManager
     ) {
         this.metrics = metrics;
         this.keyService = keyService;
