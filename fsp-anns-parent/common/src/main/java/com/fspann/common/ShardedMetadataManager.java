@@ -189,130 +189,133 @@ public class ShardedMetadataManager implements MetadataManager {
         }
     }
 
+
+    @Override
     public void saveEncryptedPoint(EncryptedPoint pt) throws IOException {
-        // REMOVED synchronized from method signature
-
         Objects.requireNonNull(pt, "pt");
-        long pointId = Long.parseLong(pt.getId());
+
+        // 1. Precise ID Parsing
+        long pointId;
+        try {
+            pointId = Long.parseLong(pt.getId().replaceAll("[^0-9]", ""));
+        } catch (Exception e) { pointId = 0; }
+
         long batchId = pointId / POINTS_PER_FILE;
-
         String safeVersion = "v" + pt.getVersion();
-        Path batchFile = Paths.get(baseDir, safeVersion,
-                String.format("batch_%08d.dat", batchId));
+        Path batchFile = Paths.get(baseDir, safeVersion, String.format("batch_%08d.dat", batchId));
 
-        // Lock only this specific batch file
+        long fileOffset = 0;
+
+        // 2. Lock-Protected Byte Offset Calculation
         synchronized (getBatchLock(batchFile)) {
             Files.createDirectories(batchFile.getParent());
+            File f = batchFile.toFile();
+            if (f.exists()) fileOffset = f.length();
 
-            try (DataOutputStream dos = new DataOutputStream(
-                    new BufferedOutputStream(
-                            new FileOutputStream(batchFile.toFile(), true)))) {
-
+            try (FileOutputStream fos = new FileOutputStream(f, true);
+                 DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(fos))) {
                 byte[] serialized = PersistenceUtils.serializePoint(pt);
                 dos.writeInt(serialized.length);
                 dos.write(serialized);
+                dos.flush();
             }
         }
 
-        // Update metadata (shard-specific, no global lock needed)
+        // 3. Shard-Aware Metadata Update
         Map<String, String> meta = new HashMap<>();
         meta.put("version", String.valueOf(pt.getVersion()));
+        meta.put("batchFile", batchFile.getFileName().toString());
+        meta.put("fileOffset", String.valueOf(fileOffset)); // USE BYTE OFFSET
         meta.put("shardId", String.valueOf(pt.getShardId()));
         meta.put("dim", String.valueOf(pt.getVectorLength()));
-        meta.put("batchFile", batchFile.getFileName().toString());
-        meta.put("offsetInBatch", String.valueOf(pointId % POINTS_PER_FILE));
 
         updateVectorMetadata(pt.getId(), meta);
     }
 
-
-    public void saveEncryptedPointsBatch(Collection<EncryptedPoint> points) throws IOException {
-        if (points == null || points.isEmpty()) return;
-
-        // Group points by batch file (sequentially)
-        Map<Path, List<EncryptedPoint>> batchGroups = new HashMap<>();
-        for (EncryptedPoint pt : points) {
-            long pointId = Long.parseLong(pt.getId());
-            long batchId = pointId / POINTS_PER_FILE;
-            String safeVersion = "v" + pt.getVersion();
-            Path batchFile = Paths.get(baseDir, safeVersion, String.format("batch_%08d.dat", batchId));
-
-            batchGroups.computeIfAbsent(batchFile, k -> new ArrayList<>()).add(pt);
-        }
-
-        // Write batch files sequentially
-        for (Map.Entry<Path, List<EncryptedPoint>> entry : batchGroups.entrySet()) {
-            Path batchFile = entry.getKey();
-            List<EncryptedPoint> batchPoints = entry.getValue();
-
-            // Sequentially write data to disk without parallelism
-            synchronized (getBatchLock(batchFile)) {
-                Files.createDirectories(batchFile.getParent());
-                try (DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(new FileOutputStream(batchFile.toFile(), true)))) {
-                    for (EncryptedPoint pt : batchPoints) {
-                        byte[] serialized = PersistenceUtils.serializePoint(pt);
-                        dos.writeInt(serialized.length);
-                        dos.write(serialized);
-                    }
-                }
-            }
-        }
-
-        // Update metadata after sequential batch writes
-        batchUpdateMetadata(points);
-    }
-
-    private Object getBatchLock(Path batchFile) {
-        return batchLocks.computeIfAbsent(batchFile, k -> new Object());
-    }
-
+    @Override
     public EncryptedPoint loadEncryptedPoint(String id) throws IOException, ClassNotFoundException {
         Objects.requireNonNull(id, "id");
         Map<String, String> meta = getVectorMetadata(id);
 
-        if (meta.isEmpty() || !meta.containsKey("version")) {
-            return null;
+        if (meta.isEmpty() || !meta.containsKey("batchFile") || !meta.containsKey("fileOffset")) {
+            return null; // or fallback to legacy .point logic if needed
         }
 
         String ver = meta.get("version");
         String safeVersion = ver.startsWith("v") ? ver : "v" + ver;
+        String batchFileName = meta.get("batchFile");
+        long fileOffset = Long.parseLong(meta.get("fileOffset"));
 
-        // Check if using batch file format
-        if (meta.containsKey("batchFile")) {
-            String batchFileName = meta.get("batchFile");
-            int offset = Integer.parseInt(meta.get("offsetInBatch"));
+        Path batchPath = Paths.get(baseDir, safeVersion, batchFileName);
+        if (!Files.exists(batchPath)) return null;
 
-            Path batchFile = Paths.get(baseDir, safeVersion, batchFileName);
-            if (!Files.exists(batchFile)) {
-                return null;
-            }
+        // USE RANDOM ACCESS (Same as monolithic fix)
+        try (RandomAccessFile raf = new RandomAccessFile(batchPath.toFile(), "r")) {
+            raf.seek(fileOffset);
+            int len = raf.readInt();
+            byte[] data = new byte[len];
+            raf.readFully(data);
+            return PersistenceUtils.deserializePoint(data);
+        }
+    }
 
-            // Read from batch file
-            try (DataInputStream dis = new DataInputStream(
-                    new BufferedInputStream(
-                            new FileInputStream(batchFile.toFile())))) {
+    public void saveEncryptedPointsBatch(Collection<EncryptedPoint> points) throws IOException {
+        if (points == null || points.isEmpty()) return;
 
-                // Skip to the correct offset
-                for (int i = 0; i < offset; i++) {
-                    int len = dis.readInt();
-                    dis.skipBytes(len);
+        // Map to store final metadata for all points in this batch
+        Map<String, Map<String, String>> finalMetadataUpdates = new HashMap<>();
+
+        // Group by batch file
+        Map<Path, List<EncryptedPoint>> batchGroups = new HashMap<>();
+        for (EncryptedPoint pt : points) {
+            long pointId = Long.parseLong(pt.getId().replaceAll("[^0-9]", ""));
+            long batchId = pointId / POINTS_PER_FILE;
+            Path batchFile = Paths.get(baseDir, "v" + pt.getVersion(), String.format("batch_%08d.dat", batchId));
+            batchGroups.computeIfAbsent(batchFile, k -> new ArrayList<>()).add(pt);
+        }
+
+        // Write groups and track offsets
+        for (var entry : batchGroups.entrySet()) {
+            Path batchFile = entry.getKey();
+            synchronized (getBatchLock(batchFile)) {
+                Files.createDirectories(batchFile.getParent());
+                File f = batchFile.toFile();
+
+                // Re-open in append mode
+                try (FileOutputStream fos = new FileOutputStream(f, true);
+                     DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(fos))) {
+
+                    long currentOffset = f.length();
+
+                    for (EncryptedPoint pt : entry.getValue()) {
+                        byte[] serialized = PersistenceUtils.serializePoint(pt);
+
+                        // Store the metadata mapping for this point
+                        Map<String, String> m = new HashMap<>();
+                        m.put("version", String.valueOf(pt.getVersion()));
+                        m.put("batchFile", batchFile.getFileName().toString());
+                        m.put("fileOffset", String.valueOf(currentOffset)); // CRITICAL
+                        m.put("shardId", String.valueOf(pt.getShardId()));
+                        m.put("dim", String.valueOf(pt.getVectorLength()));
+                        finalMetadataUpdates.put(pt.getId(), m);
+
+                        dos.writeInt(serialized.length);
+                        dos.write(serialized);
+
+                        // Increment offset by length of record (4 bytes for int + data length)
+                        currentOffset += (4 + serialized.length);
+                    }
+                    dos.flush();
                 }
-
-                // Read this point
-                int len = dis.readInt();
-                byte[] data = new byte[len];
-                dis.readFully(data);
-
-                return PersistenceUtils.deserializePoint(data);
             }
         }
 
-        // Fallback: old individual file format (backward compatibility)
-        Path p = Paths.get(baseDir, safeVersion, id + ".point");
-        if (!Files.exists(p)) {
-            return null;
-        }
-        return PersistenceUtils.loadObject(p.toString(), baseDir, EncryptedPoint.class);
+        // Update RocksDB shards with the calculated offsets
+        batchUpdateVectorMetadata(finalMetadataUpdates);
+    }
+
+    private Object getBatchLock(Path batchFile) {
+        return batchLocks.computeIfAbsent(batchFile, k -> new Object());
     }
 
     @Override
