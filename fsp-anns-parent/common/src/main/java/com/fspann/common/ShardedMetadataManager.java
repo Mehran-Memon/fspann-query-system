@@ -24,7 +24,7 @@ public class ShardedMetadataManager implements MetadataManager {
     private final Options[] shardOptions;
     private final String baseDir;
     private volatile boolean closed = false;
-    protected static final int POINTS_PER_FILE = 100000; // Optimal for 1B scale
+    protected static final int POINTS_PER_FILE = 50000; // Optimal for 1B scale
     private final ConcurrentHashMap<Path, Object> batchLocks = new ConcurrentHashMap<>();
     private final StorageMetrics storageMetrics;
 
@@ -48,20 +48,18 @@ public class ShardedMetadataManager implements MetadataManager {
             this.shardOptions[i] = new Options()
                     .setCreateIfMissing(true)
                     .setWriteBufferSize(128 * 1024 * 1024)
-                    .setMaxWriteBufferNumber(8)
+                    .setMaxWriteBufferNumber(6) // Reduced from 8 to save memory for compaction
                     .setMinWriteBufferNumberToMerge(2)
-                    .setTargetFileSizeBase(512 * 1024 * 1024)
-                    .setMaxBytesForLevelBase(1024 * 1024 * 1024)
-                    .setLevel0FileNumCompactionTrigger(10)
-                    .setLevel0SlowdownWritesTrigger(30)
-                    .setLevel0StopWritesTrigger(50)
-                    .setMaxBackgroundJobs(8)
-                    .setBytesPerSync(4 * 1024 * 1024)
+                    .setMaxBackgroundJobs(2)
+                    .setLevel0FileNumCompactionTrigger(20)
+                    .setLevel0SlowdownWritesTrigger(40)
+                    .setLevel0StopWritesTrigger(60)
+                    .setTargetFileSizeBase(256 * 1024 * 1024)
+                    .setBytesPerSync(8 * 1024 * 1024) // 8MB chunks for NVMe efficiency
                     .setCompressionType(CompressionType.LZ4_COMPRESSION)
-                    .setMaxOpenFiles(10000)
-                    .setKeepLogFileNum(2)
-                    .setInfoLogLevel(InfoLogLevel.WARN_LEVEL);
-
+                    .setTableFormatConfig(new BlockBasedTableConfig()
+                            .setFilterPolicy(new BloomFilter(10, false))
+                            .setBlockSize(16 * 1024));
             try {
                 this.shardDbs[i] = RocksDB.open(this.shardOptions[i], shardPath.toString());
             } catch (RocksDBException e) {
@@ -133,10 +131,23 @@ public class ShardedMetadataManager implements MetadataManager {
     public void saveEncryptedPointsBatch(Collection<EncryptedPoint> points) throws IOException {
         if (points == null || points.isEmpty()) return;
 
+        // PHASE 1: Parallel Pre-Serialization (CPU Work)
+        Map<String, byte[]> serializedData = points.parallelStream()
+                .collect(Collectors.toConcurrentMap(
+                        EncryptedPoint::getId,
+                        pt -> {
+                            try {
+                                return PersistenceUtils.serializePoint(pt);
+                            } catch (IOException e) {
+                                throw new UncheckedIOException("Serialization failed for ID: " + pt.getId(), e);
+                            }
+                        }
+                ));
+
+        // PHASE 2: Parallel I/O to Shard Folders
         ConcurrentHashMap<String, Map<String, String>> metadataUpdates = new ConcurrentHashMap<>();
         AtomicLong totalBytes = new AtomicLong(0);
 
-        // Group by physical shard-aware path
         Map<Path, List<EncryptedPoint>> groups = points.stream().collect(Collectors.groupingBy(pt -> {
             long pointId = Long.parseLong(pt.getId().replaceAll("[^0-9]", ""));
             int shardIdx = getShardIndex(pt.getId());
@@ -144,38 +155,31 @@ public class ShardedMetadataManager implements MetadataManager {
                     String.format("batch_%08d.dat", pointId / POINTS_PER_FILE));
         }));
 
-        // Parallel writes across 16 shards
         groups.entrySet().parallelStream().forEach(entry -> {
             Path file = entry.getKey();
             synchronized (getBatchLock(file)) {
                 try {
                     Files.createDirectories(file.getParent());
                     long offset = file.toFile().exists() ? file.toFile().length() : 0;
-                    try (DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(new FileOutputStream(file.toFile(), true)))) {
+                    try (DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(new FileOutputStream(file.toFile(), true), 1024*1024))) {
                         for (EncryptedPoint pt : entry.getValue()) {
-                            byte[] data = PersistenceUtils.serializePoint(pt);
+                            byte[] data = serializedData.get(pt.getId());
                             dos.writeInt(data.length);
                             dos.write(data);
-
                             Map<String, String> m = new HashMap<>();
                             m.put("version", String.valueOf(pt.getVersion()));
                             m.put("batchFile", file.getFileName().toString());
                             m.put("fileOffset", String.valueOf(offset));
-                            m.put("shardId", String.valueOf(pt.getShardId()));
-                            m.put("dim", String.valueOf(pt.getVectorLength()));
                             metadataUpdates.put(pt.getId(), m);
-
-                            int written = 4 + data.length;
-                            offset += written;
-                            totalBytes.addAndGet(written);
+                            offset += (4 + data.length);
+                            totalBytes.addAndGet(4 + data.length);
                         }
-                        dos.flush();
                     }
-                } catch (IOException e) { logger.error("File write error", e); }
+                } catch (IOException e) { logger.error("IO Error", e); }
             }
         });
 
-        // Parallel Metadata Shard Updates
+        // PHASE 3: Parallel Metadata Update
         metadataUpdates.entrySet().stream()
                 .collect(Collectors.groupingBy(e -> getShardIndex(e.getKey())))
                 .entrySet().parallelStream().forEach(shardEntry -> {
@@ -184,7 +188,7 @@ public class ShardedMetadataManager implements MetadataManager {
                             batch.put(e.getKey().getBytes(StandardCharsets.UTF_8), serializeMetadata(e.getValue()));
                         }
                         shardDbs[shardEntry.getKey()].write(wo, batch);
-                    } catch (RocksDBException e) { logger.error("RocksDB error", e); }
+                    } catch (RocksDBException e) { logger.error("DB Error", e); }
                 });
 
         storageMetrics.addPointsBytes(totalBytes.get());
