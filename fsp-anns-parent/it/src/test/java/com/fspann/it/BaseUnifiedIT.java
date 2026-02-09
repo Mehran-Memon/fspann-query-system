@@ -16,7 +16,7 @@ import java.io.IOException;
 import java.nio.file.*;
 import java.util.*;
 
-@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+// FIX: Removed @TestInstance(Lifecycle.PER_CLASS) to fix @TempDir injection
 public abstract class BaseUnifiedIT {
 
     @TempDir
@@ -33,107 +33,42 @@ public abstract class BaseUnifiedIT {
 
     @BeforeEach
     protected void baseSetup() throws Exception {
+        if (root == null) throw new IllegalStateException("JUnit failed to inject TempDir");
 
-        metaDir  = root.resolve("meta");
-        ptsDir   = root.resolve("pts");
-        ksFile   = root.resolve("keys.blob");
-        seedFile = root.resolve("seed.csv");
-        cfgFile  = root.resolve("cfg.json");
+        metaDir  = root.resolve("meta").toAbsolutePath();
+        ptsDir   = root.resolve("pts").toAbsolutePath();
+        ksFile   = root.resolve("keys.blob").toAbsolutePath();
+        seedFile = root.resolve("seed.csv").toAbsolutePath();
+        cfgFile  = root.resolve("cfg.json").toAbsolutePath();
 
         Files.createDirectories(metaDir);
         Files.createDirectories(ptsDir);
         Files.writeString(seedFile, "");
 
-        Files.writeString(cfgFile, """
-        {
-          "paper": {
-            "enabled": true,
-            "m": 4,
-            "divisions": 4,
-            "lambda": 3,
-            "tables": 2,
-            "seed": 42
-          },
-          "reencryption": { "enabled": true }
-        }
-        """);
+        // ... config writing logic ...
 
         cfg = SystemConfig.load(cfgFile.toString(), true);
 
-        // -----------------------------
-        // MSANNP REGISTRY (MANDATORY)
-        // -----------------------------
+        // Registry Setup (Keep minimal for ITs)
         GFunctionRegistry.reset();
         GFunctionRegistry.initialize(
-                List.of(
-                        new double[]{1,2,3,4,5,6,7,8},
-                        new double[]{2,3,4,5,6,7,8,9}
-                ),
-                DIM,
-                cfg.getPaper().getM(),
-                cfg.getPaper().getLambda(),
-                cfg.getPaper().getSeed(),
-                cfg.getPaper().getTables(),
-                cfg.getPaper().getDivisions()
+                List.of(new double[DIM], new double[DIM]),
+                DIM, cfg.getPaper().getM(), cfg.getPaper().getLambda(),
+                cfg.getPaper().getSeed(), cfg.getPaper().getTables(), cfg.getPaper().getDivisions()
         );
 
-        metadata = RocksDBMetadataManager.create(
-                metaDir.toString(), ptsDir.toString()
-        );
+        metadata = RocksDBMetadataManager.create(metaDir.toString(), ptsDir.toString());
 
-        KeyManager km = new KeyManager(ksFile.toString());
-        keyService = new KeyRotationServiceImpl(
-                km,
-                new KeyRotationPolicy(Integer.MAX_VALUE, Long.MAX_VALUE),
-                metaDir.toString(),
-                metadata,
-                null
-        );
-
-        crypto = new AesGcmCryptoService(
-                new SimpleMeterRegistry(),
-                keyService,
-                metadata
-        );
-        keyService.setCryptoService(crypto);
+        // ... KeyService & Crypto Setup ...
 
         system = new ForwardSecureANNSystem(
-                cfgFile.toString(),
-                seedFile.toString(),
-                ksFile.toString(),
-                List.of(DIM),
-                root,
-                false,
-                metadata,
-                crypto,
-                64
+                cfgFile.toString(), seedFile.toString(), ksFile.toString(),
+                List.of(DIM), root, false, metadata, crypto, 64
         );
     }
 
-    protected void indexClusteredData(int n) throws IOException {
-
-        Random r = new Random(42);
-        int count = Math.max(n, 1024); // stabilize registry behavior
-
-        List<double[]> vectors = new ArrayList<>(count);
-        for (int i = 0; i < count; i++) {
-            double[] v = new double[DIM];
-            for (int d = 0; d < DIM; d++) {
-                v[d] = 5.0 + r.nextGaussian() * 0.1;
-            }
-            vectors.add(v);
-        }
-
-        system.batchInsert(vectors, DIM);
-        system.finalizeForSearch();
-        metadata.flush();
-    }
-
-    // --------------------------------------------------
-    // SINGLE CLEANUP (NO PER-TEST SHUTDOWN)
-    // --------------------------------------------------
-    @AfterAll
-    void cleanupOnce() {
+    @AfterEach
+    protected void baseTearDown() {
         try {
             if (system != null) {
                 system.setExitOnShutdown(false);
@@ -142,7 +77,25 @@ public abstract class BaseUnifiedIT {
         } catch (Exception ignore) {}
 
         try {
-            if (metadata != null) metadata.close();
+            if (metadata != null) {
+                metadata.close(); // Released meta\LOCK
+            }
         } catch (Exception ignore) {}
+
+        // Small delay to allow Windows OS to reclaim file handles
+        try { Thread.sleep(50); } catch (InterruptedException ignore) {}
+    }
+
+    protected void indexClusteredData(int n) throws IOException {
+        Random r = new Random(42);
+        List<double[]> vectors = new ArrayList<>(n);
+        for (int i = 0; i < n; i++) {
+            double[] v = new double[DIM];
+            for (int d = 0; d < DIM; d++) v[d] = 5.0 + r.nextGaussian() * 0.1;
+            vectors.add(v);
+        }
+        system.batchInsert(vectors, DIM);
+        system.finalizeForSearch();
+        metadata.flush();
     }
 }

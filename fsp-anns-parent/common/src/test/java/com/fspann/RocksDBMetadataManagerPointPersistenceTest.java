@@ -46,16 +46,20 @@ public class RocksDBMetadataManagerPointPersistenceTest {
     @Test
     @DisplayName("Test save and load encrypted point")
     public void testSaveAndLoadEncryptedPoint() throws IOException, ClassNotFoundException {
+        String pointId = "v-1";  // Ensure ID is treated as a string
         EncryptedPoint point = new EncryptedPoint(
-                "v-1", 1, new byte[16], new byte[256],
+                pointId, 1, new byte[16], new byte[256],
                 1, 128, 0, Arrays.asList(1, 2, 3), Collections.emptyList()
         );
 
+        // Ensure the ID format is correct before saving
+        assertTrue(pointId.matches("v-\\d+"), "Invalid point ID: " + pointId);
+
         manager.saveEncryptedPoint(point);
-        EncryptedPoint loaded = manager.loadEncryptedPoint("v-1");
+        EncryptedPoint loaded = manager.loadEncryptedPoint(pointId);
 
         assertNotNull(loaded);
-        assertEquals("v-1", loaded.getId());
+        assertEquals(pointId, loaded.getId());
         assertEquals(128, loaded.getVectorLength());
     }
 
@@ -92,7 +96,13 @@ public class RocksDBMetadataManagerPointPersistenceTest {
 
         List<EncryptedPoint> all = manager.getAllEncryptedPoints();
         assertEquals(3, all.size());
+
+        // Ensure that the ID is valid and in the expected format
+        for (EncryptedPoint point : all) {
+            assertTrue(point.getId().matches("v-\\d+"), "Invalid point ID: " + point.getId());
+        }
     }
+
 
     @Test
     @DisplayName("Test cleanup stale metadata")

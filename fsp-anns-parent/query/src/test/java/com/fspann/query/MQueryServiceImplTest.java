@@ -10,6 +10,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import javax.crypto.SecretKey;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
@@ -56,26 +57,30 @@ class MQueryServiceImplTest {
 
     @Test
     void testSearchWithValidQuery() {
-
+        // 1. Setup Token
         QueryToken token = mock(QueryToken.class);
         when(token.getVersion()).thenReturn(1);
         when(token.getTopK()).thenReturn(10);
         when(token.getEncryptedQuery()).thenReturn(new byte[]{1, 2, 3});
         when(token.getIv()).thenReturn(new byte[]{4, 5, 6});
 
+        // 2. Setup Key Lifecycle
         SecretKey key = mock(SecretKey.class);
-        when(keyService.getVersion(1))
-                .thenReturn(new KeyVersion(1, key));
-        when(keyService.getCurrentVersion())
-                .thenReturn(new KeyVersion(1, key));
+        when(keyService.getVersion(1)).thenReturn(new KeyVersion(1, key));
+        when(keyService.getCurrentVersion()).thenReturn(new KeyVersion(1, key));
 
+        // 3. Setup Decryption
         when(crypto.decryptQuery(any(), any(), any()))
                 .thenReturn(new double[]{1.0, 2.0, 3.0});
 
-        // ---- Candidate IDs ----
-        when(index.lookupCandidateIds(token))
-                .thenReturn(List.of("id1", "id2"));
+        // 4. FIX: Mock the correct Index method used by QueryServiceImpl
+        List<PartitionedIndexService.CandidateWithScore> mockCandidates = new ArrayList<>(List.of(
+                new PartitionedIndexService.CandidateWithScore("id1", 5),
+                new PartitionedIndexService.CandidateWithScore("id2", 10)
+        ));
+        when(index.lookupCandidatesWithScores(token)).thenReturn(mockCandidates);
 
+        // 5. Setup Point Loading and Decryption
         EncryptedPoint p1 = mock(EncryptedPoint.class);
         when(p1.getId()).thenReturn("id1");
         when(p1.getKeyVersion()).thenReturn(1);
@@ -92,11 +97,11 @@ class MQueryServiceImplTest {
         when(crypto.decryptFromPoint(eq(p2), any()))
                 .thenReturn(new double[]{1.2, 2.2, 3.2});
 
+        // 6. Execute and Assert
         List<QueryResult> results = queryService.search(token);
 
         assertNotNull(results);
-        assertEquals(2, results.size());
-
+        assertEquals(2, results.size(), "Should have returned 2 results");
         assertTrue(results.stream().anyMatch(r -> r.getId().equals("id1")));
         assertTrue(results.stream().anyMatch(r -> r.getId().equals("id2")));
     }

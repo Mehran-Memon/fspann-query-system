@@ -91,9 +91,9 @@ public class ForwardSecureANNQuerySmokeIT {
         );
 
         // Insert test vectors
-        system.insert("0", new double[]{0.0, 0.0}, 2);
-        system.insert("1", new double[]{0.1, 0.1}, 2);
-        system.insert("2", new double[]{0.2, 0.2}, 2);
+        for (int i = 0; i < 1000; i++) {
+            system.insert(String.valueOf(i), new double[]{i * 0.001, i * 0.001}, 2);
+        }
 
         system.finalizeForSearch();
         system.flushAll();

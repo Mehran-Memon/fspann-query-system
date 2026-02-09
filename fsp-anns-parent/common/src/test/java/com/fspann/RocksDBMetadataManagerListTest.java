@@ -76,8 +76,9 @@ public class RocksDBMetadataManagerListTest {
     public void testAuditDrift() throws IOException {
         Map<String, String> meta = new HashMap<>();
         meta.put("id", "v-1");
-        meta.put("version", "1");
+        meta.put("version", "1"); // Make sure version is valid
         meta.put("shardId", "0");
+
         manager.updateVectorMetadata("v-1", meta);
 
         EncryptedPoint point = new EncryptedPoint(
@@ -88,15 +89,11 @@ public class RocksDBMetadataManagerListTest {
 
         RocksDBMetadataManager.DriftReport report = manager.auditDrift();
 
-        // Assertions: at least 1 entry (our created entry)
         assertTrue(report.metaCount >= 1, "Meta count should be >= 1, got " + report.metaCount);
         assertTrue(report.diskCount >= 1, "Disk count should be >= 1, got " + report.diskCount);
-
-        // Most importantly: metaCount should equal diskCount (no drift)
         assertEquals(report.metaCount, report.diskCount,
                 "Metadata count should equal disk count (no drift between metadata DB and disk files)");
 
-        // Our created entry should not be in drift sets
         assertFalse(report.onlyMeta.contains("v-1"), "v-1 should not be only in metadata");
         assertFalse(report.onlyDisk.contains("v-1"), "v-1 should not be only on disk");
     }

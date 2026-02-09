@@ -82,7 +82,7 @@ class MPartitionedIndexServiceTest {
 
         index =
                 new PartitionedIndexService(
-                        meta,
+                        (MetadataManager) meta,
                         config,
                         keyService,
                         crypto
