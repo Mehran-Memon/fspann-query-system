@@ -87,16 +87,17 @@ public class RocksDBMetadataManager implements MetadataManager {
 
         this.options = new Options()
                 .setCreateIfMissing(true)
-                .setWriteBufferSize(64 * 1024 * 1024)  // 64 MB buffer for more efficient handling of large data
+                .setWriteBufferSize(128 * 1024 * 1024)  // 128 MB buffer for more efficient handling of large data
                 .setMaxWriteBufferNumber(8)             // Increased write buffer count for efficient handling of large writes
                 .setMinWriteBufferNumberToMerge(2)      // Control the number of buffers to merge before writing to disk
                 .setTargetFileSizeBase(512 * 1024 * 1024) // Use larger files to reduce file fragmentation
                 .setMaxBytesForLevelBase(1024 * 1024 * 1024)  // Allow larger levels for better performance
-                .setLevel0FileNumCompactionTrigger(10)   // Trigger compaction at a higher threshold
-                .setLevel0SlowdownWritesTrigger(20)      // Allow more files before slowdown
-                .setLevel0StopWritesTrigger(40)          // Stop writes at an even higher threshold
-                .setMaxBackgroundJobs(4)                 // Limit background jobs to avoid resource contention
-                .setCompressionType(CompressionType.SNAPPY_COMPRESSION)  // Retain SNAPPY for balanced compression
+                .setLevel0FileNumCompactionTrigger(10)
+                .setLevel0SlowdownWritesTrigger(30)
+                .setLevel0StopWritesTrigger(50)       // Stop writes at an even higher threshold
+                .setMaxBackgroundJobs(8)                 // Limit background jobs to avoid resource contention
+                .setBytesPerSync(4 * 1024 * 1024)      // 4MB sync chunks
+                .setCompressionType(CompressionType.LZ4_COMPRESSION)  // Retain SNAPPY for balanced compression
                 .setMaxOpenFiles(10000)                  // Allow up to 10k open files for large-scale
                 .setKeepLogFileNum(2)                    // Reduce log file retention
                 .setInfoLogLevel(InfoLogLevel.WARN_LEVEL);  // Only warn level logs to minimize logging overhead
