@@ -25,13 +25,13 @@ public class AesGcmCryptoService implements CryptoService {
     private static final Logger log = LoggerFactory.getLogger(AesGcmCryptoService.class);
 
     private static final String ALGO = "AES/GCM/NoPadding";
-    private static final int IV_BITS = 96;       // 12 bytes
+    private static final int IV_BYTES = 12;
     private static final int TAG_BITS = 128;     // 16 bytes
     private static final int KEY_BITS = 256;
-
     private final MeterRegistry metrics;
     private KeyLifeCycleService keyService;
     private final MetadataManager metadataManager;
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     // Encryption listeners (optional)
     private final List<CryptoService.EncryptionListener> listeners =
@@ -49,116 +49,53 @@ public class AesGcmCryptoService implements CryptoService {
     }
 
     @Override
-    public EncryptedPoint encryptToPoint(String id, double[] plaintext, javax.crypto.SecretKey key) {
-        if (id == null || plaintext == null || key == null) {
-            throw new IllegalArgumentException("id, plaintext, and key cannot be null");
-        }
-
+    public EncryptedPoint encryptToPoint(String id, double[] plaintext, SecretKey key) {
         try {
-            KeyVersion kv = (keyService != null)
-                    ? keyService.getCurrentVersion()
-                    : new KeyVersion(1, key);
+            KeyVersion kv = (keyService != null) ? keyService.getCurrentVersion() : new KeyVersion(1, key);
             int version = kv.getVersion();
             int dim = plaintext.length;
 
-            // Generate IV
-            byte[] iv = new byte[IV_BITS / 8];
-            new java.security.SecureRandom().nextBytes(iv);
+            // PERFORMANCE FIX: Use shared static random
+            byte[] iv = new byte[IV_BYTES];
+            SECURE_RANDOM.nextBytes(iv);
 
-            // AAD
+            // AAD Binding: Ensures ciphertext integrity vs metadata context
             String aadStr = String.format("id:%s|v:%d|d:%d", id, version, dim);
             byte[] aad = aadStr.getBytes();
 
-            // Serialize plaintext
             byte[] plainBytes = serializeVector(plaintext);
 
-            // Encrypt
-            javax.crypto.Cipher cipher = javax.crypto.Cipher.getInstance(ALGO);
-            javax.crypto.spec.GCMParameterSpec spec = new javax.crypto.spec.GCMParameterSpec(TAG_BITS, iv);
-            cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, key, spec);
+            Cipher cipher = Cipher.getInstance(ALGO);
+            cipher.init(Cipher.ENCRYPT_MODE, key, new GCMParameterSpec(TAG_BITS, iv));
             cipher.updateAAD(aad);
             byte[] ciphertext = cipher.doFinal(plainBytes);
 
-            // Record encryption event
-            notifyListeners(id, 0);
-
-            // TRACK ENCRYPTION (via interface - no cyclic dependency)
             if (keyService != null) {
                 keyService.trackEncryption(id, version);
-                log.debug("✓ Tracked encryption: id={}, version={}", id, version);
-            } else {
-                log.warn("✗ Cannot track encryption for id={}: keyService is null", id);
             }
 
-            // Construct with ALL fields including shardId and buckets
-            return new EncryptedPoint(
-                    id,                    // id
-                    version,               // version
-                    iv,                    // iv
-                    ciphertext,            // ciphertext
-                    version,               // keyVersion
-                    dim,                   // dimension
-                    0,                     // shardId (default to 0)
-                    java.util.List.of(),   // buckets (empty list)
-                    java.util.List.of()    // metadata (empty list)
-            );
-
+            return new EncryptedPoint(id, version, iv, ciphertext, version, dim, 0, List.of(), List.of());
         } catch (Exception e) {
             throw new RuntimeException("Encryption failed for id=" + id, e);
         }
     }
 
-    /**
-     * FIXED: Decrypt using the CORRECT key version
-     *
-     * Before: Used the key parameter passed in (wrong if key rotated)
-     * After:  Uses point.getKeyVersion() to get the right key version
-     *
-     * This is CRITICAL for forward-security:
-     * - Vector encrypted with key v1 must decrypt with key v1
-     * - Even if current key is now v2
-     * - Key v1 is retrieved from keyService based on version in point
-     */
     @Override
     public double[] decryptFromPoint(EncryptedPoint encrypted, SecretKey providedKey) {
-
-        if (encrypted == null) {
-            throw new IllegalArgumentException("encrypted cannot be null");
-        }
-
         try {
-            final SecretKey keyToUse;
+            // Game-Based FS Rule: Use specific key if provided by adversary/test, else resolve from service
+            final SecretKey keyToUse = (providedKey != null) ? providedKey : keyService.getVersion(encrypted.getKeyVersion()).getKey();
 
-            // ===== GAME-BASED FS RULE =====
-            // If adversary supplies a key → use ONLY that key
-            // No fallback, no healing
-            if (providedKey != null) {
-                keyToUse = providedKey;
-            } else {
-                int kv = encrypted.getKeyVersion();
-                keyToUse = keyService.getVersion(kv).getKey();
-            }
-
-            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-            GCMParameterSpec spec =
-                    new GCMParameterSpec(128, encrypted.getIv());
-
-            cipher.init(Cipher.DECRYPT_MODE, keyToUse, spec);
+            Cipher cipher = Cipher.getInstance(ALGO);
+            cipher.init(Cipher.DECRYPT_MODE, keyToUse, new GCMParameterSpec(TAG_BITS, encrypted.getIv()));
 
             byte[] aad = encrypted.getAAD();
-            if (aad != null && aad.length > 0) {
-                cipher.updateAAD(aad);
-            }
+            if (aad != null) cipher.updateAAD(aad);
 
             byte[] plain = cipher.doFinal(encrypted.getCiphertext());
             return deserializeVector(plain);
-
-        } catch (Throwable t) {
-            // Crypto layer must NEVER leak IllegalArgumentException
-            // Always fail hard as RuntimeException
-            throw new RuntimeException(
-                    "Decryption failed for point " + encrypted.getId(), t
-            );
+        } catch (Exception e) {
+            throw new RuntimeException("Decryption integrity failure for point " + encrypted.getId(), e);
         }
     }
 
@@ -234,42 +171,17 @@ public class AesGcmCryptoService implements CryptoService {
         }
     }
 
+    // High-performance binary serialization
     private byte[] serializeVector(double[] v) {
-        byte[] bytes = new byte[v.length * 8];
-        for (int i = 0; i < v.length; i++) {
-            long bits = Double.doubleToLongBits(v[i]);
-            int offset = i * 8;
-            bytes[offset] = (byte) (bits >> 56);
-            bytes[offset + 1] = (byte) (bits >> 48);
-            bytes[offset + 2] = (byte) (bits >> 40);
-            bytes[offset + 3] = (byte) (bits >> 32);
-            bytes[offset + 4] = (byte) (bits >> 24);
-            bytes[offset + 5] = (byte) (bits >> 16);
-            bytes[offset + 6] = (byte) (bits >> 8);
-            bytes[offset + 7] = (byte) bits;
-        }
-        return bytes;
+        java.nio.ByteBuffer buffer = java.nio.ByteBuffer.allocate(v.length * 8);
+        for (double d : v) buffer.putDouble(d);
+        return buffer.array();
     }
 
-    /**
-     * Helper: Deserialize vector from bytes
-     * (keep existing implementation)
-     */
     private double[] deserializeVector(byte[] bytes) {
+        java.nio.ByteBuffer buffer = java.nio.ByteBuffer.wrap(bytes);
         double[] v = new double[bytes.length / 8];
-        for (int i = 0; i < v.length; i++) {
-            int offset = i * 8;
-            long bits = 0L;
-            bits |= ((long) (bytes[offset] & 0xFF)) << 56;
-            bits |= ((long) (bytes[offset + 1] & 0xFF)) << 48;
-            bits |= ((long) (bytes[offset + 2] & 0xFF)) << 40;
-            bits |= ((long) (bytes[offset + 3] & 0xFF)) << 32;
-            bits |= ((long) (bytes[offset + 4] & 0xFF)) << 24;
-            bits |= ((long) (bytes[offset + 5] & 0xFF)) << 16;
-            bits |= ((long) (bytes[offset + 6] & 0xFF)) << 8;
-            bits |= ((long) (bytes[offset + 7] & 0xFF));
-            v[i] = Double.longBitsToDouble(bits);
-        }
+        for (int i = 0; i < v.length; i++) v[i] = buffer.getDouble();
         return v;
     }
 }

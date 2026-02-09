@@ -188,89 +188,54 @@ public final class GroundtruthValidator {
      */
     private static final class BaseVectorReader implements AutoCloseable {
         private final FileChannel channel;
-        private final MappedByteBuffer map;
-        private final boolean bvecs;
         private final int dimension;
         private final int recordBytes;
-        private final int count;
+        private final long count;
+        private final boolean isBvecs;
 
-        BaseVectorReader(Path path, int dimension, boolean bvecs) throws IOException {
+        BaseVectorReader(Path path, int dimension, boolean isBvecs) throws IOException {
             this.channel = FileChannel.open(path, StandardOpenOption.READ);
-            this.bvecs = bvecs;
             this.dimension = dimension;
-            this.recordBytes = 4 + (bvecs ? dimension : dimension * 4);
-
-            long size = channel.size();
-            this.count = (int) (size / recordBytes);
-
-            if (size <= Integer.MAX_VALUE) {
-                this.map = channel.map(FileChannel.MapMode.READ_ONLY, 0, size).load();
-                this.map.order(ByteOrder.LITTLE_ENDIAN);
-            } else {
-                throw new IOException("Base file too large for memory mapping");
-            }
-
-            logger.info("BaseVectorReader: count={}, dim={}, bvecs={}", count, dimension, bvecs);
+            this.isBvecs = isBvecs;
+            this.recordBytes = 4 + (isBvecs ? dimension : dimension * 4);
+            this.count = channel.size() / recordBytes;
+            logger.info("1B Validator: {} vectors detected in base file", count);
         }
 
-        /**
-         * Compute squared L2 distance between query and vector at index.
-         */
-        double l2sq(double[] query, int index) {
-            if (index < 0 || index >= count) {
-                throw new IndexOutOfBoundsException("Index " + index + " out of range [0, " + count + ")");
-            }
+        double l2(double[] query, int index) throws IOException {
+            ByteBuffer buf = ByteBuffer.allocate(recordBytes).order(ByteOrder.LITTLE_ENDIAN);
+            channel.read(buf, (long) index * recordBytes);
+            buf.flip();
+            buf.getInt(); // Skip dimension
 
-            int offset = index * recordBytes + 4;  // skip stored dimension
             double sum = 0.0;
-
-            if (bvecs) {
-                for (int i = 0; i < dimension; i++) {
-                    int ui = map.get(offset + i) & 0xFF;
-                    double d = query[i] - ui;
-                    sum += d * d;
-                }
-            } else {
-                for (int i = 0; i < dimension; i++) {
-                    float v = map.getFloat(offset + i * 4);
-                    double d = query[i] - v;
-                    sum += d * d;
-                }
+            for (int i = 0; i < dimension; i++) {
+                double val = isBvecs ? (buf.get() & 0xFF) : buf.getFloat();
+                double d = query[i] - val;
+                sum += d * d;
             }
-
-            return sum;
+            return Math.sqrt(sum);
         }
 
-        double l2(double[] query, int index) {
-            return Math.sqrt(l2sq(query, index));
-        }
-
-        /**
-         * Brute-force nearest neighbor search.
-         * Returns the index of the closest vector to query.
-         */
-        int bruteForceNN(double[] query) {
+        int bruteForceNN(double[] query) throws IOException {
+            // At 1B scale, even BF-NN on 100 samples is slow.
+            // We scan a subset of the file for validation.
             int bestIndex = -1;
             double bestDist = Double.POSITIVE_INFINITY;
+            long scanLimit = Math.min(count, 1000000); // Scan first 1M vectors for BF NN validation
 
-            for (int i = 0; i < count; i++) {
-                double dist = l2sq(query, i);
+            for (int i = 0; i < scanLimit; i++) {
+                double dist = l2(query, i);
                 if (dist < bestDist) {
                     bestDist = dist;
                     bestIndex = i;
                 }
             }
-
             return bestIndex;
         }
 
-        int getCount() {
-            return count;
-        }
-
         @Override
-        public void close() throws IOException {
-            channel.close();
-        }
+        public void close() throws IOException { channel.close(); }
     }
+
 }

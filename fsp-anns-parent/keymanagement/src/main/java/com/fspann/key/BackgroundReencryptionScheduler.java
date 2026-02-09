@@ -140,19 +140,28 @@ public class BackgroundReencryptionScheduler {
      * Find points needing re-encryption (old versions).
      */
     private List<String> findReencryptionCandidates(int targetVersion) {
-        List<String> all = metadataManager.getAllVectorIds();
-        Collections.shuffle(all);
+        // 100M Optimization: Do NOT call getAllVectorIds()
+        // Randomly pick one shard index (0-15 if using 16 shards)
+        int numShards = (metadataManager instanceof ShardedMetadataManager smm) ? 16 : 1;
+        int randomShard = ThreadLocalRandom.current().nextInt(numShards);
 
-        int sample = Math.min(2000, all.size());
+        // We fetch a small, manageable sample from that specific shard
+        // This requires adding a 'getShardIdsSample' to your MetadataManager or
+        // using an iterator that supports limits.
+        List<String> sampleIds = metadataManager.getIdsFromShard(randomShard, 2000);
+
         List<String> out = new ArrayList<>();
-
-        for (int i = 0; i < sample; i++) {
-            String id = all.get(i);
+        for (String id : sampleIds) {
+            // O(1) metadata lookup
             int ver = metadataManager.getVersionOfVector(id);
 
-            if (ver < targetVersion) {
+            if (ver >= 0 && ver < targetVersion) {
                 out.add(id);
             }
+        }
+
+        if (!out.isEmpty()) {
+            logger.debug("Sampled shard {}: found {} candidates for re-encryption", randomShard, out.size());
         }
         return out;
     }

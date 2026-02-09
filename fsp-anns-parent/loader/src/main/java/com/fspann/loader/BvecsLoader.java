@@ -1,72 +1,72 @@
-// loader/src/main/java/com/fspann/loader/BvecsLoader.java
 package com.fspann.loader;
 
 import java.io.*;
-import java.nio.file.Files;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.util.*;
 
-/**
- * Loader for BVECs format: binary unsigned-byte vectors with each entry
- * prefixed by the dimension (little-endian int).
- *
- * Record layout per vector:
- *   int32 dim (LE), then dim bytes (uint8, 0..255)
- *
- * Returned as double[] (0..255) to match the rest of the pipeline.
- * Use with StreamingBatchLoader for large datasets (e.g., SIFT1B).
- */
 public class BvecsLoader implements FormatLoader {
-
     @Override
     public Iterator<double[]> openVectorIterator(Path file) throws IOException {
-        DataInputStream in = new DataInputStream(
-                new BufferedInputStream(Files.newInputStream(file))
-        );
+        FileChannel channel = FileChannel.open(file);
+        // We use a Direct Buffer to bypass JVM heap for raw IO
+        ByteBuffer buffer = ByteBuffer.allocateDirect(1024 * 1024); // 1MB chunk
+        buffer.order(ByteOrder.LITTLE_ENDIAN);
+        buffer.flip(); // Set to "empty" to trigger first read
+
         return new Iterator<>() {
             private double[] next = readOne();
 
             private double[] readOne() {
                 try {
-                    int dim = Integer.reverseBytes(in.readInt()); // BVECs uses LE
-                    if (dim <= 0 || dim > 1_000_000) {
-                        throw new IOException("Invalid dimension: " + dim);
+                    // Check if we have enough for the 4-byte dimension header
+                    if (buffer.remaining() < 4) {
+                        if (!refill()) return null;
                     }
-                    byte[] buf = new byte[dim];
-                    in.readFully(buf);
+
+                    int dim = buffer.getInt();
+                    if (dim <= 0 || dim > 10000) return null; // Sanity check
+
+                    // Ensure the vector data is in the buffer
+                    if (buffer.remaining() < dim) {
+                        if (!refill()) return null;
+                    }
 
                     double[] v = new double[dim];
                     for (int i = 0; i < dim; i++) {
-                        v[i] = buf[i] & 0xFF; // unsigned → 0..255
+                        v[i] = buffer.get() & 0xFF; // Unsigned uint8
                     }
                     return v;
-                } catch (EOFException eof) {
-                    closeQuietly();
+                } catch (Exception e) {
+                    close();
                     return null;
-                } catch (IOException e) {
-                    closeQuietly();
-                    throw new UncheckedIOException(e);
                 }
             }
 
-            private void closeQuietly() {
-                try { in.close(); } catch (IOException ignored) {}
+            private boolean refill() throws IOException {
+                buffer.compact();
+                int read = channel.read(buffer);
+                buffer.flip();
+                return read != -1;
+            }
+
+            private void close() {
+                try { channel.close(); } catch (IOException ignored) {}
             }
 
             @Override public boolean hasNext() { return next != null; }
-
-            @Override
-            public double[] next() {
-                if (next == null) throw new NoSuchElementException();
+            @Override public double[] next() {
                 double[] v = next;
                 next = readOne();
+                if (next == null) close();
                 return v;
             }
         };
     }
 
-    @Override
-    public Iterator<int[]> openIndexIterator(Path file) {
-        throw new UnsupportedOperationException("BVECs has no indices");
+    @Override public Iterator<int[]> openIndexIterator(Path file) {
+        throw new UnsupportedOperationException();
     }
 }

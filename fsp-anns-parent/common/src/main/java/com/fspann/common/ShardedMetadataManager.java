@@ -24,6 +24,7 @@ public class ShardedMetadataManager implements MetadataManager {
     protected static final int POINTS_PER_FILE = 1000;
     private final ConcurrentHashMap<Path, Object> batchLocks = new ConcurrentHashMap<>();
     private boolean syncWrites = true;
+    private final StorageMetrics storageMetrics;
 
     static {
         try {
@@ -47,6 +48,8 @@ public class ShardedMetadataManager implements MetadataManager {
         this.shardDbs = new RocksDB[numShards];
         this.shardOptions = new Options[numShards];
         this.shardPaths = new Path[numShards];
+
+        this.storageMetrics = new StorageMetrics(Paths.get(baseDir), Paths.get(basePath));
 
         for (int i = 0; i < numShards; i++) {
             Path shardPath = Paths.get(basePath, "shard_" + i);
@@ -213,27 +216,40 @@ public class ShardedMetadataManager implements MetadataManager {
         Path batchFile = Paths.get(baseDir, safeVersion, String.format("batch_%08d.dat", batchId));
 
         long fileOffset = 0;
+        int serializedSize = 0;
 
-        // 2. Lock-Protected Byte Offset Calculation
+        // 2. Lock-Protected Byte Offset Calculation & Physical Write
         synchronized (getBatchLock(batchFile)) {
             Files.createDirectories(batchFile.getParent());
             File f = batchFile.toFile();
             if (f.exists()) fileOffset = f.length();
 
             try (FileOutputStream fos = new FileOutputStream(f, true);
-                 DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(fos))) {
+                 BufferedOutputStream bos = new BufferedOutputStream(fos);
+                 DataOutputStream dos = new DataOutputStream(bos)) {
+
                 byte[] serialized = PersistenceUtils.serializePoint(pt);
-                dos.writeInt(serialized.length);
+                serializedSize = serialized.length;
+
+                dos.writeInt(serializedSize);
                 dos.write(serialized);
                 dos.flush();
             }
+        }
+
+        // --- NEW: INCREMENTAL STORAGE TRACKING ---
+        if (this.storageMetrics != null) {
+            // Increment points counter: Data length + 4 bytes for the Int header
+            storageMetrics.addPointsBytes(serializedSize + 4);
+            // Estimate metadata growth in RocksDB (~200 bytes per record)
+            storageMetrics.addMetaBytes(200);
         }
 
         // 3. Shard-Aware Metadata Update
         Map<String, String> meta = new HashMap<>();
         meta.put("version", String.valueOf(pt.getVersion()));
         meta.put("batchFile", batchFile.getFileName().toString());
-        meta.put("fileOffset", String.valueOf(fileOffset)); // USE BYTE OFFSET
+        meta.put("fileOffset", String.valueOf(fileOffset));
         meta.put("shardId", String.valueOf(pt.getShardId()));
         meta.put("dim", String.valueOf(pt.getVectorLength()));
 
@@ -267,11 +283,13 @@ public class ShardedMetadataManager implements MetadataManager {
         }
     }
 
+    @Override
     public void saveEncryptedPointsBatch(Collection<EncryptedPoint> points) throws IOException {
         if (points == null || points.isEmpty()) return;
 
         // Map to store final metadata for all points in this batch
         Map<String, Map<String, String>> finalMetadataUpdates = new HashMap<>();
+        long totalBatchBytesWritten = 0;
 
         // Group by batch file
         Map<Path, List<EncryptedPoint>> batchGroups = new HashMap<>();
@@ -291,34 +309,46 @@ public class ShardedMetadataManager implements MetadataManager {
 
                 // Re-open in append mode
                 try (FileOutputStream fos = new FileOutputStream(f, true);
-                     DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(fos))) {
+                     BufferedOutputStream bos = new BufferedOutputStream(fos);
+                     DataOutputStream dos = new DataOutputStream(bos)) {
 
                     long currentOffset = f.length();
 
                     for (EncryptedPoint pt : entry.getValue()) {
                         byte[] serialized = PersistenceUtils.serializePoint(pt);
+                        int recordLen = serialized.length;
 
                         // Store the metadata mapping for this point
                         Map<String, String> m = new HashMap<>();
                         m.put("version", String.valueOf(pt.getVersion()));
                         m.put("batchFile", batchFile.getFileName().toString());
-                        m.put("fileOffset", String.valueOf(currentOffset)); // CRITICAL
+                        m.put("fileOffset", String.valueOf(currentOffset)); // CRITICAL: Byte Offset
                         m.put("shardId", String.valueOf(pt.getShardId()));
                         m.put("dim", String.valueOf(pt.getVectorLength()));
                         finalMetadataUpdates.put(pt.getId(), m);
 
-                        dos.writeInt(serialized.length);
+                        dos.writeInt(recordLen);
                         dos.write(serialized);
 
-                        // Increment offset by length of record (4 bytes for int + data length)
-                        currentOffset += (4 + serialized.length);
+                        // Accounting for this file
+                        int totalWrittenForThisPoint = 4 + recordLen;
+                        currentOffset += totalWrittenForThisPoint;
+                        totalBatchBytesWritten += totalWrittenForThisPoint;
                     }
                     dos.flush();
                 }
             }
         }
 
-        // Update RocksDB shards with the calculated offsets
+        // --- NEW: INCREMENTAL STORAGE TRACKING ---
+        if (this.storageMetrics != null) {
+            // Add total binary data size to points counter
+            storageMetrics.addPointsBytes(totalBatchBytesWritten);
+            // Add estimated RocksDB growth (batch size * ~200 bytes) to meta counter
+            storageMetrics.addMetaBytes(points.size() * 200L);
+        }
+
+        // Update RocksDB shards with the calculated offsets in a single WriteBatch
         batchUpdateVectorMetadata(finalMetadataUpdates);
     }
 
@@ -356,9 +386,7 @@ public class ShardedMetadataManager implements MetadataManager {
 
     @Override
     public StorageMetrics getStorageMetrics() {
-        // Create a new StorageMetrics instance, passing in the relevant directories for points and metadata
-        // Assuming the `baseDir` holds the data for both metadata and points storage.
-        return new StorageMetrics(Paths.get(baseDir, "points"), Paths.get(baseDir, "metadata"));
+        return this.storageMetrics;
     }
 
     @Override
@@ -547,4 +575,26 @@ public class ShardedMetadataManager implements MetadataManager {
             logger.error("Failed to hard delete vector {} from shard {}", vectorId, shard, e);
         }
     }
+
+    @Override
+    public List<String> getIdsFromShard(int shardIndex, int limit) {
+        if (shardIndex < 0 || shardIndex >= numShards) {
+            return Collections.emptyList();
+        }
+
+        List<String> ids = new ArrayList<>(limit);
+        // Use a try-with-resources to ensure the iterator is closed
+        try (RocksIterator it = shardDbs[shardIndex].newIterator()) {
+            it.seekToFirst();
+            while (it.isValid() && ids.size() < limit) {
+                String key = new String(it.key(), StandardCharsets.UTF_8);
+                if (!"index".equals(key)) {
+                    ids.add(key);
+                }
+                it.next();
+            }
+        }
+        return ids;
+    }
+
 }

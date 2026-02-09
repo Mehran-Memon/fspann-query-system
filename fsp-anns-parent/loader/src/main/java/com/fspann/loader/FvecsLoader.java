@@ -1,56 +1,65 @@
 package com.fspann.loader;
 
 import java.io.*;
-import java.nio.file.Files;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.util.*;
 
-/**
- * Loader for FVECS format: binary float vectors with each entry prefixed by dimension.
- * Now supports streaming with per-path offset.
- */
 public class FvecsLoader implements FormatLoader {
 
     @Override
     public Iterator<double[]> openVectorIterator(Path file) throws IOException {
-        DataInputStream in = new DataInputStream(
-                new BufferedInputStream(Files.newInputStream(file))
-        );
+        FileChannel channel = FileChannel.open(file);
+        // 1MB Direct Buffer bypasses the Java Heap
+        ByteBuffer buffer = ByteBuffer.allocateDirect(1024 * 1024);
+        buffer.order(ByteOrder.LITTLE_ENDIAN); // FVECS is Little Endian
+        buffer.flip();
+
         return new Iterator<>() {
             private double[] next = readOne();
+
             private double[] readOne() {
                 try {
-                    int dim = Integer.reverseBytes(in.readInt());
-                    if (dim <= 0 || dim > 1_000_000) {
-                        throw new IOException("Invalid dimension: " + dim);
+                    if (buffer.remaining() < 4) {
+                        if (!refill()) return null;
                     }
+
+                    int dim = buffer.getInt();
+                    int bytesNeeded = dim * 4;
+
+                    if (buffer.remaining() < bytesNeeded) {
+                        if (!refill()) return null;
+                    }
+
                     double[] v = new double[dim];
                     for (int i = 0; i < dim; i++) {
-                        v[i] = Float.intBitsToFloat(Integer.reverseBytes(in.readInt()));
+                        v[i] = buffer.getFloat();
                     }
                     return v;
-                } catch (EOFException eof) {
+                } catch (Exception e) {
                     close();
                     return null;
-                } catch (IOException e) {
-                    close();
-                    throw new UncheckedIOException(e);
                 }
             }
+
+            private boolean refill() throws IOException {
+                buffer.compact();
+                int read = channel.read(buffer);
+                buffer.flip();
+                return read != -1;
+            }
+
             private void close() {
-                try {
-                    in.close();
-                } catch (IOException ignored) {}
+                try { channel.close(); } catch (IOException ignored) {}
             }
-            @Override
-            public boolean hasNext() {
-                return next != null;
-            }
-            @Override
-            public double[] next() {
-                if (next == null) throw new NoSuchElementException();
+
+            @Override public boolean hasNext() { return next != null; }
+            @Override public double[] next() {
                 double[] v = next;
                 next = readOne();
+                if (next == null) close();
                 return v;
             }
         };

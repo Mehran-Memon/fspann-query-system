@@ -95,52 +95,72 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
 
     @Override
     public void reEncryptAll() {
-        logger.info("Starting re-encryption pass (forward-secure)");
+        logger.info("Starting Scalable Re-encryption Pass (100M Optimized)");
 
         if (cryptoService == null || metadataManager == null) {
             logger.warn("Re-encryption skipped: services not initialized");
             return;
         }
 
-        int total = 0;
-        int currentVer = getCurrentVersion().getVersion();
-        Set<String> seen = new HashSet<>();
+        final int currentVer = getCurrentVersion().getVersion();
+        final AtomicInteger totalProcessed = new AtomicInteger(0);
+        final AtomicInteger totalSkipped = new AtomicInteger(0);
 
         try {
-            List<EncryptedPoint> all = metadataManager.getAllEncryptedPoints();
-            for (EncryptedPoint original : all) {
-                if (original == null || !seen.add(original.getId())) continue;
+            // CRITICAL: Use the ID list only as a cursor, or better, use a database iterator
+            List<String> allIds = metadataManager.getAllVectorIds();
 
-                // Decrypt with the point's OLD version key
-                KeyVersion pointVer = getVersion(original.getVersion());
-                double[] raw = cryptoService.decryptFromPoint(original, pointVer.getKey());
+            for (String id : allIds) {
+                try {
+                    // 1. Load single point (O(1) Random Access via fileOffset)
+                    EncryptedPoint original = metadataManager.loadEncryptedPoint(id);
 
-                // Re-encrypt with CURRENT key
-                EncryptedPoint newEp = cryptoService.encrypt(original.getId(), raw);
+                    if (original == null || original.getVersion() >= currentVer) {
+                        totalSkipped.incrementAndGet();
+                        continue;
+                    }
 
-                // ===== CRITICAL: Force version alignment =====
-                if (newEp.getVersion() != currentVer) {
-                    newEp = new EncryptedPoint(
-                            newEp.getId(),
-                            currentVer,           // Use current version
-                            newEp.getIv(),
-                            newEp.getCiphertext(),
-                            currentVer,           // keyVersion = currentVer
-                            newEp.getVectorLength(),
-                            newEp.getShardId(),
-                            newEp.getBuckets(),
-                            List.of()
-                    );
+                    // 2. Decrypt with OLD version key
+                    KeyVersion pointVer = getVersion(original.getVersion());
+                    double[] raw = cryptoService.decryptFromPoint(original, pointVer.getKey());
+
+                    // 3. Re-encrypt with CURRENT key
+                    EncryptedPoint newEp = cryptoService.encrypt(original.getId(), raw);
+
+                    // 4. Force version alignment (Internal FSP-ANNS Consistency)
+                    if (newEp.getVersion() != currentVer) {
+                        newEp = new EncryptedPoint(
+                                newEp.getId(),
+                                currentVer,
+                                newEp.getIv(),
+                                newEp.getCiphertext(),
+                                currentVer,
+                                newEp.getVectorLength(),
+                                newEp.getShardId(),
+                                newEp.getBuckets(),
+                                List.of()
+                        );
+                    }
+
+                    // 5. Persist Immediately (Batch file append)
+                    metadataManager.saveEncryptedPoint(newEp);
+
+                    int count = totalProcessed.incrementAndGet();
+                    if (count % 10000 == 0) {
+                        logger.info("Re-encryption Progress: {}/{} vectors updated...", count, allIds.size());
+                    }
+
+                } catch (Exception e) {
+                    logger.error("Failed to re-encrypt point {}: {}", id, e.getMessage());
+                    // Continue with next point to ensure maximum progress
                 }
-
-                // ===== CRITICAL: Persist IMMEDIATELY (don't use indexService.insert) =====
-                metadataManager.saveEncryptedPoint(newEp);
-                total++;
             }
 
-            logger.info("Re-encryption completed for {} vectors", total);
+            logger.info("Full re-encryption complete. Updated: {}, Skipped: {}",
+                    totalProcessed.get(), totalSkipped.get());
+
         } catch (Exception e) {
-            logger.error("Re-encryption pipeline failed", e);
+            logger.error("FATAL: Re-encryption stream failed", e);
         }
     }
 

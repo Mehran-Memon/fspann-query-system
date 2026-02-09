@@ -914,26 +914,38 @@ public class ForwardSecureANNSystem {
     }
 
     public int restoreIndexFromDisk(int version) throws IOException {
-        logger.info("Restoring index from metadata for v{} ...", version);
+        logger.info("Restoring 1B Index from metadata for v{} (Streaming Mode)...", version);
 
         int restored = 0;
-        for (EncryptedPoint ep : metadataManager.getAllEncryptedPoints()) {
-            if (ep == null || ep.getVersion() != version) continue;
+        // 1B Optimization: Loop through IDs rather than loading all objects
+        List<String> allIds = metadataManager.getAllVectorIds();
 
-            double[] vec =
-                    cryptoService.decryptFromPoint(
-                            ep,
-                            keyService.getCurrentVersion().getKey()
-                    );
+        for (String id : allIds) {
+            try {
+                // Load and process one-by-one to keep Heap usage O(1)
+                EncryptedPoint ep = metadataManager.loadEncryptedPoint(id);
+                if (ep == null || ep.getVersion() != version) continue;
 
-            if (vec != null) {
-                indexService.insert(ep.getId(), vec);
-                restored++;
+                double[] vec = cryptoService.decryptFromPoint(
+                        ep,
+                        keyService.getVersion(ep.getKeyVersion()).getKey()
+                );
+
+                if (vec != null) {
+                    indexService.insert(ep.getId(), vec);
+                    restored++;
+                }
+
+                if (restored % 100000 == 0) {
+                    logger.info("Restore Progress: {} vectors mapped to index...", restored);
+                }
+            } catch (Exception e) {
+                logger.warn("Failed to restore point {}: {}", id, e.getMessage());
             }
         }
 
         indexService.finalizeForSearch();
-        logger.info("Restore complete: {} points", restored);
+        logger.info("1B Restore complete: {} points active in memory partitions", restored);
         return restored;
     }
 

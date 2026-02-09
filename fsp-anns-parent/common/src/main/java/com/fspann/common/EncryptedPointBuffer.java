@@ -1,177 +1,101 @@
 package com.fspann.common;
 
-import org.rocksdb.RocksDBException;
-import org.rocksdb.WriteBatch;
-import org.rocksdb.WriteOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
 
+/**
+ * Optimized buffer for batching encrypted points before persistence.
+ * Leverages the high-performance batch API to reduce IOPS at 100M scale.
+ */
 public class EncryptedPointBuffer {
     private static final Logger logger = LoggerFactory.getLogger(EncryptedPointBuffer.class);
 
-    // version -> pending points (flushed in batches)
     private final Map<Integer, List<EncryptedPoint>> versionBuffer = new HashMap<>();
-    private final Map<Integer, Integer> batchCounters = new HashMap<>();
     private final Path pointsDir;
-    private final RocksDBMetadataManager metadataManager;
+    private final MetadataManager metadataManager; // Interface-based for Sharding support
 
     private static final double MEMORY_THRESHOLD_RATIO =
-            Double.parseDouble(System.getProperty("buffer.mem.ratio", "0.80"));
+            Double.parseDouble(System.getProperty("buffer.mem.ratio", "0.75"));
 
     private final int flushThreshold;
-    private int  globalBufferCount    = 0;
-    private int  totalFlushedPoints   = 0;
+    private int globalBufferCount = 0;
+    private int totalFlushedPoints = 0;
     private long lastBatchInsertTimeMs = 0;
 
-    public EncryptedPointBuffer(String pointsPath, RocksDBMetadataManager metadataManager) throws IOException {
-        this(pointsPath, metadataManager, 1000);
-    }
-
-    public EncryptedPointBuffer(String pointsPath,
-                                RocksDBMetadataManager metadataManager,
-                                int flushThreshold) throws IOException {
+    public EncryptedPointBuffer(String pointsPath, MetadataManager metadataManager, int flushThreshold) throws IOException {
         Path p = Paths.get(pointsPath);
-        this.pointsDir = p.isAbsolute() ? p.normalize() : FsPaths.baseDir().resolve(p).normalize();
+        this.pointsDir = p.isAbsolute() ? p.normalize() : p.toAbsolutePath().normalize();
         this.metadataManager = Objects.requireNonNull(metadataManager, "MetadataManager cannot be null");
-        this.flushThreshold  = flushThreshold;
+        this.flushThreshold = flushThreshold;
         Files.createDirectories(pointsDir);
     }
 
     public synchronized void add(EncryptedPoint pt) {
-        Objects.requireNonNull(pt, "EncryptedPoint cannot be null");
-
-        // Create bucket for this key version if missing
         List<EncryptedPoint> bucket = versionBuffer.computeIfAbsent(
-                pt.getVersion(), v -> new ArrayList<>(Math.max(1024, flushThreshold)));
+                pt.getVersion(), v -> new ArrayList<>(flushThreshold));
 
         bucket.add(pt);
         globalBufferCount++;
 
-        // Memory backpressure
-        long maxMemory  = Runtime.getRuntime().maxMemory();
-        long usedMemory = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
-        if ((double) usedMemory / maxMemory > MEMORY_THRESHOLD_RATIO) {
-            logger.warn("Memory > {}% ({} MB / {} MB). Flushing all buffers.",
-                    (int)(MEMORY_THRESHOLD_RATIO * 100),
-                    usedMemory / (1024 * 1024), maxMemory / (1024 * 1024));
-            flushAll(); // re-entrant safe (synchronized)
+        // Rapid memory backpressure check
+        if (globalBufferCount % 500 == 0) {
+            checkMemoryPressure();
         }
 
-        // Per-version flush threshold
         if (bucket.size() >= flushThreshold) {
             flush(pt.getVersion());
         }
     }
 
+    private void checkMemoryPressure() {
+        Runtime rt = Runtime.getRuntime();
+        long used = rt.totalMemory() - rt.freeMemory();
+        if ((double) used / rt.maxMemory() > MEMORY_THRESHOLD_RATIO) {
+            logger.warn("JVM Memory Pressure Detected ({}/{} MB). Forcing Flush.",
+                    used/1024/1024, rt.maxMemory()/1024/1024);
+            flushAll();
+        }
+    }
+
     public synchronized void flushAll() {
         if (globalBufferCount == 0) return;
-        logger.info("Flushing all version buffers ({} total points)", globalBufferCount);
-        // copy keys to avoid CME while flush(...) mutates the map
-        for (Integer v : new ArrayList<>(versionBuffer.keySet())) {
-            flush(v);
-        }
+        logger.info("Emergency flush triggered: persisting {} buffered points.", globalBufferCount);
+        new ArrayList<>(versionBuffer.keySet()).forEach(this::flush);
     }
 
     public synchronized void flush(int version) {
         long t0 = System.nanoTime();
-
         List<EncryptedPoint> points = versionBuffer.get(version);
         if (points == null || points.isEmpty()) return;
 
-        int flushedSize = points.size();
-        int batchIndex  = batchCounters.getOrDefault(version, 0);
-        String batchFileName = String.format("v%d_batch_%03d.points", version, batchIndex);
-        Path versionDir = pointsDir.resolve("v" + version);
+        int batchSize = points.size();
 
-        try { Files.createDirectories(versionDir); }
-        catch (IOException ioe) {
-            logger.error("Failed to create version dir {}: {}", versionDir, ioe.toString());
-            return;
-        }
-
-        // 1) Prepare metadata (dimension, version, shard and per-table buckets)
-        Map<String, Map<String, String>> allMeta = new HashMap<>(flushedSize * 2);
-        for (EncryptedPoint pt : points) {
-            Map<String, String> meta = new HashMap<>();
-            meta.put("version", String.valueOf(pt.getVersion()));
-            meta.put("dim",     String.valueOf(pt.getVectorLength()));
-            meta.put("shardId", String.valueOf(pt.getShardId()));
-            List<Integer> buckets = pt.getBuckets();
-            if (buckets != null) {
-                for (int t = 0; t < buckets.size(); t++) {
-                    meta.put("b" + t, String.valueOf(buckets.get(t)));
-                }
-            }
-            allMeta.put(pt.getId(), meta);
-        }
-
-        // 2) Write metadata first (RocksDB)
         try {
-            // Prefer the existing bulk API your code already uses elsewhere:
-            metadataManager.batchUpdateVectorMetadata(allMeta);
-        } catch (RuntimeException e) {
-            logger.error("batchUpdateVectorMetadata failed for v{}, falling back per-point", version, e);
-            for (var entry : allMeta.entrySet()) {
-                try {
-                    metadataManager.updateVectorMetadata(entry.getKey(), entry.getValue());
-                } catch (RuntimeException ex) {
-                    logger.error("updateVectorMetadata failed for id={}", entry.getKey(), ex);
-                }
-            }
+            // CONSOLIDATED IO: Metadata and Binary Data are saved in one optimized pass
+            metadataManager.saveEncryptedPointsBatch(points);
+
+            globalBufferCount -= batchSize;
+            totalFlushedPoints += batchSize;
+            versionBuffer.remove(version);
+
+            lastBatchInsertTimeMs = (System.nanoTime() - t0) / 1_000_000;
+            logger.info("Successfully flushed batch of {} points for v{} in {}ms",
+                    batchSize, version, lastBatchInsertTimeMs);
         } catch (IOException e) {
-            throw new RuntimeException(e);
+            logger.error("FATAL: Batch flush failed for v{}. Data remains in memory to prevent loss.", version, e);
         }
-
-        // 3) Persist encrypted points (Rocks + sidecar file)
-        //    Use a bulk call if your manager has one; otherwise per-point.
-        try {
-            // Bulk path (preferred, if available in your manager)
-            // metadataManager.saveEncryptedPointsBulk(points);
-
-            // Fallback: per-point
-            for (EncryptedPoint pt : points) {
-                metadataManager.saveEncryptedPoint(pt); // <-- ensures Rocks can restore later
-
-                // Optional: keep sidecar on disk for audits/debugging (as you had)
-                Path pointFile = versionDir.resolve(pt.getId() + ".point");
-                PersistenceUtils.saveObject(pt, pointFile.toString(), pointsDir.toString());
-            }
-            logger.info("Flushed {} points to v{} ({})", flushedSize, version, batchFileName);
-        } catch (Exception e) {
-            logger.error("Failed to persist EncryptedPoints for v{}: {}", version, e.toString());
-            // We keep the batch in memory if persistence failed; return to avoid dropping it.
-            return;
-        }
-
-        // 4) Accounting + clear
-        globalBufferCount     -= flushedSize;
-        totalFlushedPoints    += flushedSize;
-        batchCounters.put(version, batchIndex + 1);
-        versionBuffer.remove(version);
-
-        lastBatchInsertTimeMs = (System.nanoTime() - t0) / 1_000_000;
     }
 
-    public synchronized void clear() {
-        versionBuffer.clear();
-        batchCounters.clear();
-        globalBufferCount = 0; // Reset the global buffer count
-        logger.info("Cleared all buffered points.");
-    }
-    public synchronized int getCount() {
-        // Sum up the sizes of all lists in versionBuffer to get the total number of buffered points
-        return globalBufferCount;
-    }
+    public synchronized int getCount() { return globalBufferCount; }
+    public synchronized int getTotalFlushed() { return totalFlushedPoints; }
 
     public void shutdown() {
         flushAll();
-        logger.info("EncryptedPointBuffer shutdown complete. totalFlushed={}", totalFlushedPoints);
+        logger.info("EncryptedPointBuffer shutdown complete. Total Flushed: {}", totalFlushedPoints);
     }
 }

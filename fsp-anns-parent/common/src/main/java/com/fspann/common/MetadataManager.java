@@ -110,4 +110,10 @@ public interface MetadataManager extends AutoCloseable {
     boolean isDeleted(String vectorId);
     long getDeletedTimestamp(String vectorId);
     void hardDeleteVector(String vectorId);
+
+    /**
+     * Retrieves a limited sample of vector IDs from a specific shard.
+     * Useful for O(1) memory sampling at 100M scale.
+     */
+    List<String> getIdsFromShard(int shardIndex, int limit);
 }

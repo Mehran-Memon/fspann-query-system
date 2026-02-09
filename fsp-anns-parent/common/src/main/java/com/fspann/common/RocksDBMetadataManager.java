@@ -806,6 +806,7 @@ public class RocksDBMetadataManager implements MetadataManager {
 
     /**
      * Update storage metrics for a specific dimension.
+     * In the O(1) version, we simply tag the current total points size to this dimension.
      */
     public void updateDimensionStorage(int dim) {
         if (storageMetrics != null) {
@@ -814,13 +815,12 @@ public class RocksDBMetadataManager implements MetadataManager {
     }
 
     /**
-     * Get current storage snapshot (cached, refreshed every 5 seconds).
+     * Get current storage snapshot (O(1) retrieval via Atomic Counters).
      */
     public StorageMetrics.StorageSnapshot getStorageSnapshot() {
         if (storageMetrics == null) {
-            return new StorageMetrics.StorageSnapshot(0L, 0L, 0L,
-                    new ConcurrentHashMap<>(),
-                    new ConcurrentHashMap<>());
+            // Updated to match the 4-argument constructor/record
+            return new StorageMetrics.StorageSnapshot(0L, 0L, 0L, new ConcurrentHashMap<>());
         }
         return storageMetrics.getSnapshot();
     }
@@ -913,5 +913,23 @@ public class RocksDBMetadataManager implements MetadataManager {
 
     private String unescape(String in) {
         return in.replace("\\=", "=").replace("\\;", ";");
+    }
+
+
+    @Override
+    public List<String> getIdsFromShard(int shardIndex, int limit) {
+        // In monolithic mode, we only have one shard
+        List<String> ids = new ArrayList<>(limit);
+        try (RocksIterator it = db.newIterator()) {
+            it.seekToFirst();
+            while (it.isValid() && ids.size() < limit) {
+                String key = new String(it.key(), StandardCharsets.UTF_8);
+                if (!"index".equals(key)) {
+                    ids.add(key);
+                }
+                it.next();
+            }
+        }
+        return ids;
     }
 }
