@@ -4,14 +4,14 @@ import org.rocksdb.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
+import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
-public class ShardedMetadataManager implements AutoCloseable {
+public class ShardedMetadataManager implements MetadataManager {
     private static final Logger logger = LoggerFactory.getLogger(ShardedMetadataManager.class);
 
     private final int numShards;
@@ -20,6 +20,9 @@ public class ShardedMetadataManager implements AutoCloseable {
     private final Path[] shardPaths;
     private final String baseDir;
     private volatile boolean closed = false;
+    protected static final int POINTS_PER_FILE = 1000;
+    private final ConcurrentHashMap<Path, Object> batchLocks = new ConcurrentHashMap<>();
+    private boolean syncWrites = true;
 
     static {
         try {
@@ -52,9 +55,14 @@ public class ShardedMetadataManager implements AutoCloseable {
 
             this.shardOptions[i] = new Options()
                     .setCreateIfMissing(true)
-                    .setWriteBufferSize(16 * 1024 * 1024)
-                    .setMaxBackgroundJobs(2)
+                    .setWriteBufferSize(32 * 1024 * 1024)      // 32 MB (was 16 MB)
+                    .setMaxWriteBufferNumber(4)                 // Allow buffering (was none)
+                    .setMaxBackgroundJobs(4)                    // More parallelism (was 2)
+                    .setLevel0FileNumCompactionTrigger(8)       // Trigger compaction earlier
+                    .setLevel0SlowdownWritesTrigger(16)         // Prevent write stalls
+                    .setLevel0StopWritesTrigger(24)             // Emergency brake
                     .setCompressionType(CompressionType.SNAPPY_COMPRESSION)
+                    .setMaxOpenFiles(10000)                     // 10k per shard = 160k total
                     .setInfoLogLevel(InfoLogLevel.WARN_LEVEL);
 
             try {
@@ -75,9 +83,52 @@ public class ShardedMetadataManager implements AutoCloseable {
      * Determine which shard a vector ID belongs to.
      */
     private int getShardIndex(String vectorId) {
+        // Hash the vector ID and apply modulo operation for even distribution
         int hash = vectorId.hashCode();
-        return Math.abs(hash % numShards);
+        return Math.abs(hash) % numShards; // Ensure positive shard index
     }
+
+    public void batchUpdateMetadata(Collection<EncryptedPoint> points) throws IOException {
+        if (points == null || points.isEmpty()) return;
+
+        // Group the metadata updates by shard
+        Map<Integer, Map<String, Map<String, String>>> shardMetadataUpdates = new HashMap<>();
+
+        for (EncryptedPoint pt : points) {
+            String vectorId = pt.getId();
+            Map<String, String> metadata = new HashMap<>();
+            metadata.put("version", String.valueOf(pt.getVersion()));
+            metadata.put("shardId", String.valueOf(pt.getShardId()));
+            metadata.put("dim", String.valueOf(pt.getVectorLength()));
+            metadata.put("batchFile", String.format("batch_%08d.dat", pt.getBatchId()));
+            metadata.put("offsetInBatch", String.valueOf(pt.getOffsetInBatch()));
+
+            // Determine the shard based on vectorId
+            int shardIndex = getShardIndex(vectorId);
+
+            // Add metadata to the corresponding shard group
+            shardMetadataUpdates
+                    .computeIfAbsent(shardIndex, k -> new HashMap<>())
+                    .put(vectorId, metadata);
+        }
+
+        // Perform batch update for each shard
+        for (Map.Entry<Integer, Map<String, Map<String, String>>> shardEntry : shardMetadataUpdates.entrySet()) {
+            int shard = shardEntry.getKey();
+            Map<String, Map<String, String>> updates = shardEntry.getValue();
+
+            try (WriteBatch batch = new WriteBatch(); WriteOptions writeOptions = new WriteOptions().setSync(syncWrites)) {
+                for (Map.Entry<String, Map<String, String>> entry : updates.entrySet()) {
+                    batch.put(entry.getKey().getBytes(StandardCharsets.UTF_8), serializeMetadata(entry.getValue()));
+                }
+                // Write batch to the corresponding shard's RocksDB
+                shardDbs[shard].write(writeOptions, batch);
+            } catch (RocksDBException e) {
+                throw new IOException("Batch update failed for shard " + shard, e);
+            }
+        }
+    }
+
 
     /**
      * Get metadata for a single vector.
@@ -138,28 +189,196 @@ public class ShardedMetadataManager implements AutoCloseable {
         }
     }
 
-    /**
-     * Save encrypted point (delegates to appropriate shard).
-     */
     public void saveEncryptedPoint(EncryptedPoint pt) throws IOException {
+        // REMOVED synchronized from method signature
+
         Objects.requireNonNull(pt, "pt");
+        long pointId = Long.parseLong(pt.getId());
+        long batchId = pointId / POINTS_PER_FILE;
 
         String safeVersion = "v" + pt.getVersion();
-        Path versionDir = Paths.get(baseDir, safeVersion);
-        Files.createDirectories(versionDir);
+        Path batchFile = Paths.get(baseDir, safeVersion,
+                String.format("batch_%08d.dat", batchId));
 
-        Path tmp = versionDir.resolve(pt.getId() + ".point.tmp");
-        Path dst = versionDir.resolve(pt.getId() + ".point");
+        // Lock only this specific batch file
+        synchronized (getBatchLock(batchFile)) {
+            Files.createDirectories(batchFile.getParent());
 
-        PersistenceUtils.saveObject(pt, tmp.toString(), baseDir);
-        Files.move(tmp, dst, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            try (DataOutputStream dos = new DataOutputStream(
+                    new BufferedOutputStream(
+                            new FileOutputStream(batchFile.toFile(), true)))) {
 
+                byte[] serialized = PersistenceUtils.serializePoint(pt);
+                dos.writeInt(serialized.length);
+                dos.write(serialized);
+            }
+        }
+
+        // Update metadata (shard-specific, no global lock needed)
         Map<String, String> meta = new HashMap<>();
         meta.put("version", String.valueOf(pt.getVersion()));
         meta.put("shardId", String.valueOf(pt.getShardId()));
         meta.put("dim", String.valueOf(pt.getVectorLength()));
+        meta.put("batchFile", batchFile.getFileName().toString());
+        meta.put("offsetInBatch", String.valueOf(pointId % POINTS_PER_FILE));
 
         updateVectorMetadata(pt.getId(), meta);
+    }
+
+
+    public void saveEncryptedPointsBatch(Collection<EncryptedPoint> points) throws IOException {
+        if (points == null || points.isEmpty()) return;
+
+        // Group points by batch file (sequentially)
+        Map<Path, List<EncryptedPoint>> batchGroups = new HashMap<>();
+        for (EncryptedPoint pt : points) {
+            long pointId = Long.parseLong(pt.getId());
+            long batchId = pointId / POINTS_PER_FILE;
+            String safeVersion = "v" + pt.getVersion();
+            Path batchFile = Paths.get(baseDir, safeVersion, String.format("batch_%08d.dat", batchId));
+
+            batchGroups.computeIfAbsent(batchFile, k -> new ArrayList<>()).add(pt);
+        }
+
+        // Write batch files sequentially
+        for (Map.Entry<Path, List<EncryptedPoint>> entry : batchGroups.entrySet()) {
+            Path batchFile = entry.getKey();
+            List<EncryptedPoint> batchPoints = entry.getValue();
+
+            // Sequentially write data to disk without parallelism
+            synchronized (getBatchLock(batchFile)) {
+                Files.createDirectories(batchFile.getParent());
+                try (DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(new FileOutputStream(batchFile.toFile(), true)))) {
+                    for (EncryptedPoint pt : batchPoints) {
+                        byte[] serialized = PersistenceUtils.serializePoint(pt);
+                        dos.writeInt(serialized.length);
+                        dos.write(serialized);
+                    }
+                }
+            }
+        }
+
+        // Update metadata after sequential batch writes
+        batchUpdateMetadata(points);
+    }
+
+    private Object getBatchLock(Path batchFile) {
+        return batchLocks.computeIfAbsent(batchFile, k -> new Object());
+    }
+
+    public EncryptedPoint loadEncryptedPoint(String id) throws IOException, ClassNotFoundException {
+        Objects.requireNonNull(id, "id");
+        Map<String, String> meta = getVectorMetadata(id);
+
+        if (meta.isEmpty() || !meta.containsKey("version")) {
+            return null;
+        }
+
+        String ver = meta.get("version");
+        String safeVersion = ver.startsWith("v") ? ver : "v" + ver;
+
+        // Check if using batch file format
+        if (meta.containsKey("batchFile")) {
+            String batchFileName = meta.get("batchFile");
+            int offset = Integer.parseInt(meta.get("offsetInBatch"));
+
+            Path batchFile = Paths.get(baseDir, safeVersion, batchFileName);
+            if (!Files.exists(batchFile)) {
+                return null;
+            }
+
+            // Read from batch file
+            try (DataInputStream dis = new DataInputStream(
+                    new BufferedInputStream(
+                            new FileInputStream(batchFile.toFile())))) {
+
+                // Skip to the correct offset
+                for (int i = 0; i < offset; i++) {
+                    int len = dis.readInt();
+                    dis.skipBytes(len);
+                }
+
+                // Read this point
+                int len = dis.readInt();
+                byte[] data = new byte[len];
+                dis.readFully(data);
+
+                return PersistenceUtils.deserializePoint(data);
+            }
+        }
+
+        // Fallback: old individual file format (backward compatibility)
+        Path p = Paths.get(baseDir, safeVersion, id + ".point");
+        if (!Files.exists(p)) {
+            return null;
+        }
+        return PersistenceUtils.loadObject(p.toString(), baseDir, EncryptedPoint.class);
+    }
+
+    @Override
+    public void putVectorMetadata(String vectorId, Map<String, String> metadataMap) {
+        updateVectorMetadata(vectorId, metadataMap);
+    }
+
+    /**
+     * Get all encrypted points (needed for re-encryption)
+     */
+    public List<EncryptedPoint> getAllEncryptedPoints() {
+        List<EncryptedPoint> list = new ArrayList<>();
+        List<String> allIds = getAllVectorIds();
+
+        for (String id : allIds) {
+            try {
+                EncryptedPoint pt = loadEncryptedPoint(id);
+                if (pt != null) {
+                    list.add(pt);
+                }
+            } catch (IOException | ClassNotFoundException e) {
+                logger.warn("Failed to load point {}", id, e);
+            }
+        }
+
+        logger.info("Loaded {} encrypted points from {} shards", list.size(), numShards);
+        return list;
+    }
+
+
+    @Override
+    public StorageMetrics getStorageMetrics() {
+        // Create a new StorageMetrics instance, passing in the relevant directories for points and metadata
+        // Assuming the `baseDir` holds the data for both metadata and points storage.
+        return new StorageMetrics(Paths.get(baseDir, "points"), Paths.get(baseDir, "metadata"));
+    }
+
+    @Override
+    public void saveIndexVersion(int version) {
+
+    }
+
+    @Override
+    public void printSummary() {
+
+    }
+
+    @Override
+    public void logStats() {
+
+    }
+
+    /**
+     * Flush all shards (ensure durability)
+     */
+    public void flush() {
+        for (int i = 0; i < numShards; i++) {
+            try {
+                if (shardDbs[i] != null && !closed) {
+                    shardDbs[i].syncWal();
+                }
+            } catch (Exception e) {
+                logger.warn("Flush failed for shard {}", i, e);
+            }
+        }
+        logger.debug("All {} shards flushed", numShards);
     }
 
     /**

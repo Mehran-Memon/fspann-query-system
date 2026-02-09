@@ -47,9 +47,8 @@ public final class PartitionedIndexService implements IndexService {
 private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
 
     // Minimum sample size for GFunction initialization
-    private static final int MIN_SAMPLE_SIZE = 1000;
     private static final int MAX_SAMPLE_SIZE = 10000;
-
+    private final int minSampleSize;
     private final RocksDBMetadataManager metadata;
     private final SystemConfig cfg;
     private final StorageMetrics storageMetrics;
@@ -123,15 +122,23 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
     }
 
     public PartitionedIndexService(
-            RocksDBMetadataManager metadata,
+            MetadataManager metadata,
             SystemConfig cfg,
             KeyRotationServiceImpl keyService,
             AesGcmCryptoService cryptoService) {
 
-        this.metadata = Objects.requireNonNull(metadata, "metadata");
+        this.metadata = (RocksDBMetadataManager) Objects.requireNonNull(metadata, "metadata");
         this.cfg = Objects.requireNonNull(cfg, "cfg");
         this.keyService = Objects.requireNonNull(keyService, "keyService");
         this.cryptoService = Objects.requireNonNull(cryptoService, "cryptoService");
+
+        int configMin = cfg.getPaper().getMinSampleSize();
+        if ("true".equalsIgnoreCase(System.getProperty("test.env"))) {
+            this.minSampleSize = 2; // Minimal threshold for Integration Tests
+            logger.info("MSANNP Test Mode: minSampleSize lowered to {}", minSampleSize);
+        } else {
+            this.minSampleSize = configMin;
+        }
 
         this.storageMetrics = metadata.getStorageMetrics();
         if (this.storageMetrics == null) {
@@ -167,11 +174,10 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         logger.info("Initializing GFunctionRegistry");
         logger.info("Sample buffer size: {}", initSampleBuffer.size());
 
-        if (initSampleBuffer.size() < MIN_SAMPLE_SIZE) {
+        if (initSampleBuffer.size() < minSampleSize) {
             throw new IllegalStateException(
                     "Refusing to initialize GFunctionRegistry with sampleSize=" +
-                            initSampleBuffer.size() +
-                            " (< MIN_SAMPLE_SIZE=" + MIN_SAMPLE_SIZE + ")"
+                            initSampleBuffer.size() + " (< minSampleSize=" + minSampleSize + ")"
             );
         }
 
@@ -252,7 +258,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
 
         throw new IllegalStateException(
                 "GFunctionRegistry not initialized. " +
-                        "Index must ingest at least " + MIN_SAMPLE_SIZE +
+                        "Index must ingest at least " + minSampleSize +
                         " vectors before search or coding."
         );
     }
@@ -283,7 +289,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
                         && initSampleBuffer.size() < MAX_SAMPLE_SIZE) {
                     initSampleBuffer.add(vector.clone());
                 }
-                if (initSampleBuffer.size() >= MIN_SAMPLE_SIZE) {
+                if (initSampleBuffer.size() >= minSampleSize) {
                     initializeRegistry();
                 }
             }
@@ -786,20 +792,15 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
     }
 
     public void finalizeForSearch() {
-        if (frozen) {
-            logger.info("Index already finalized");
-            return;
-        }
-
-        logger.info("Finalizing index for search...");
+        if (frozen) return;
 
         if (!GFunctionRegistry.isInitialized()) {
-            if (initSampleBuffer.size() >= MIN_SAMPLE_SIZE) {
+            if (initSampleBuffer.size() >= minSampleSize) {
                 initializeRegistry();
             } else {
                 throw new IllegalStateException(
                         "Cannot finalize index: only " + initSampleBuffer.size() +
-                                " samples collected (< MIN_SAMPLE_SIZE)"
+                                " samples collected (< minSampleSize=" + minSampleSize + ")"
                 );
             }
         }

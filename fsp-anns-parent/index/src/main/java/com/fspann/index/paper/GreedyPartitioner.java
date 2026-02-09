@@ -75,29 +75,47 @@ public final class GreedyPartitioner {
         return out;
     }
 
-    public static long hamming(BitSet a, BitSet b) {
-        BitSet x = (BitSet) a.clone();
-        x.xor(b);
-        return x.cardinality();
-    }
+
 
     // ============================================================
     // BitSet -> sortable long (MSB-first safe)
     // ============================================================
+    /**
+     * Maps a BitSet to a sortable long key.
+     * Uses MSB-first mapping to ensure prefixes dominate the sort order.
+     */
     public static long computeKey(BitSet bs) {
         long v = 0L;
-        int len = Math.min(63, bs.size());
-        for (int i = 0; i < len; i++) {
+        // We only use up to 63 bits to avoid the sign-bit in signed Longs
+        // This provides 2^63 possible partitions, which is more than enough.
+        int limit = Math.min(63, bs.length());
+        for (int i = 0; i < limit; i++) {
             if (bs.get(i)) {
+                // Bit 0 (MSB) moves to position 62
                 v |= (1L << (62 - i));
             }
         }
         return v;
     }
 
+    /**
+     * Efficient Hamming distance using BitSet cardinality.
+     * Note: BitSet doesn't provide a non-destructive XOR, so we must clone.
+     */
+    public static long hamming(BitSet a, BitSet b) {
+        if (a == null || b == null) return Long.MAX_VALUE;
+        BitSet copy = (BitSet) a.clone();
+        copy.xor(b);
+        return copy.cardinality();
+    }
+
     // ============================================================
     // Find nearest partition by key (binary search by range)
     // ============================================================
+    /**
+     * Finds the index of the partition whose range (min-max) or center
+     * is closest to the query key.
+     */
     public static int findNearestPartition(List<Partition> parts, long qKey) {
         if (parts == null || parts.isEmpty()) return 0;
 
@@ -108,19 +126,19 @@ public final class GreedyPartitioner {
 
             if (qKey < p.minKey) hi = mid - 1;
             else if (qKey > p.maxKey) lo = mid + 1;
-            else return mid; // inside range
+            else return mid; // Target key is inside this partition's range
         }
 
-        // Not inside any range: return closest boundary partition
+        // Binary search missed: target is between or outside ranges.
+        // Clamp and return the closest boundary partition.
         if (lo <= 0) return 0;
         if (lo >= parts.size()) return parts.size() - 1;
 
-        Partition left = parts.get(lo - 1);
-        Partition right = parts.get(lo);
+        // Check if the previous or current 'lo' is closer
+        long distLeft = Math.abs(parts.get(lo - 1).maxKey - qKey);
+        long distRight = Math.abs(parts.get(lo).minKey - qKey);
 
-        long dl = distanceToRange(qKey, left.minKey, left.maxKey);
-        long dr = distanceToRange(qKey, right.minKey, right.maxKey);
-        return (dl <= dr) ? (lo - 1) : lo;
+        return (distLeft <= distRight) ? (lo - 1) : lo;
     }
 
     public static long distanceToRange(long q, long minK, long maxK) {

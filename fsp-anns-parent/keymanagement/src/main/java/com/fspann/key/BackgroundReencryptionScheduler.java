@@ -42,12 +42,12 @@ public class BackgroundReencryptionScheduler {
             KeyRotationServiceImpl keyService,
             CryptoService cryptoService,
             IndexService indexService,
-            RocksDBMetadataManager metadataManager
+            MetadataManager metadataManager
     ) {
         this.keyService = keyService;
         this.cryptoService = cryptoService;
         this.indexService = indexService;
-        this.metadataManager = metadataManager;
+        this.metadataManager = (RocksDBMetadataManager) metadataManager;
 
         if (!(keyService instanceof SelectiveReencryptor sr)) {
             throw new IllegalStateException(

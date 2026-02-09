@@ -259,13 +259,18 @@ public final class GFunctionRegistry {
     /**
      * Compute BitSet codes for all tables.
      * Shape: [table][division]
+     * * This is the primary entry point for MSANNP indexing.
      */
     public static BitSet[][] codeAllTables(double[] vec) {
         validateVector(vec);
 
         BitSet[][] out = new BitSet[TABLES][];
         for (int t = 0; t < TABLES; t++) {
-            out[t] = codeForTable(vec, t);
+            out[t] = new BitSet[DIVISIONS];
+            for (int d = 0; d < DIVISIONS; d++) {
+                Coding.GFunction G = get(vec.length, t, d);
+                out[t][d] = Coding.C(vec, G);
+            }
         }
         return out;
     }
@@ -279,7 +284,11 @@ public final class GFunctionRegistry {
         return dim + "_" + table + "_" + division;
     }
 
+    /**
+     * Helper to compute a deterministic seed for a specific GFunction.
+     */
     private static long computeSeed(long baseSeed, int table, int division) {
-        return baseSeed + (table * 1_000_003L) + division;
+        // Use a large prime to ensure table/division seeds don't overlap
+        return baseSeed + (table * 1_000_003L) + (division * 101L);
     }
 }

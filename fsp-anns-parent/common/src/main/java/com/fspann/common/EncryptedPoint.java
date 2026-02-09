@@ -4,6 +4,8 @@ import java.io.Serializable;
 import java.util.List;
 import java.util.Objects;
 
+import static com.fspann.common.ShardedMetadataManager.POINTS_PER_FILE;
+
 /**
  * EncryptedPoint: An encrypted vector with metadata.
  *
@@ -102,4 +104,18 @@ public class EncryptedPoint implements Serializable {
     public int hashCode() {
         return Objects.hash(id, version, dimension);
     }
+
+    public long getBatchId() {
+        // Assuming the batch ID is derived from the point ID
+        long pointId = Long.parseLong(id);  // Assuming the point ID is numeric
+        return pointId / ShardedMetadataManager.POINTS_PER_FILE;  // Use the class constant
+    }
+
+    public long getOffsetInBatch() {
+        // Assuming the offset is the remainder of the point ID divided by POINTS_PER_FILE
+        long pointId = Long.parseLong(id);  // Assuming the point ID is numeric
+        return pointId % ShardedMetadataManager.POINTS_PER_FILE;  // Use the class constant
+    }
+
+
 }

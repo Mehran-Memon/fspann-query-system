@@ -52,7 +52,7 @@ public class ForwardSecureANNSystem {
     private final String configPath;
     private final Profiler profiler;
     private final boolean verbose;
-    private final RocksDBMetadataManager metadataManager;
+    private final MetadataManager metadataManager;
     private volatile boolean queryOnlyMode = false;
     private BaseVectorReader baseReader = null;
     private final ReencryptionTracker reencTracker;
@@ -79,7 +79,6 @@ public class ForwardSecureANNSystem {
             System.getProperty("metadata.sharded", "false")
     );
 
-    private final ShardedMetadataManager shardedMetadata;
     private final DecoyQueryGenerator decoyGenerator;
     private final boolean decoyEnabled;
     private final RatioSource ratioSource;
@@ -130,7 +129,7 @@ public class ForwardSecureANNSystem {
             List<Integer> dimensions,
             Path metadataPath,
             boolean verbose,
-            RocksDBMetadataManager metadataManager,
+            MetadataManager metadataManager,
             CryptoService cryptoService,
             int batchSize
     ) throws IOException {
@@ -251,21 +250,12 @@ public class ForwardSecureANNSystem {
         Files.createDirectories(pointsPath);
         Files.createDirectories(metaDBPath);
 
-        // ==== metadata manager + optional sharding ====
+        // Unified MetadataManager
+        this.metadataManager = metadataManager;
 
-        this.metadataManager = Objects.requireNonNull(metadataManager, "MetadataManager cannot be null");
-
-        if (useShardedMetadata) {
-            int shardCount = Integer.getInteger("metadata.shards", 16);
-            this.shardedMetadata = new ShardedMetadataManager(
-                    metadataPath.resolve("sharded_metadata").toString(),
-                    shardCount,
-                    pointsPath.toString()
-            );
-            logger.info("Using sharded metadata: {} shards", shardCount);
-        } else {
-            this.shardedMetadata = null;
-        }
+        // Log which implementation is active
+        String implName = metadataManager.getClass().getSimpleName();
+        logger.info("Using MetadataManager implementation: {}", implName);
 
         // ==== Crypto + key lifecycle ====
 
@@ -2034,11 +2024,26 @@ public class ForwardSecureANNSystem {
         }
 
         // ===================== METADATA + CRYPTO =====================
-        RocksDBMetadataManager metadataManager =
-                RocksDBMetadataManager.create(
-                        metaDBRoot.toString(),
-                        pointsRoot.toString()
-                );
+        MetadataManager metadataManager;
+
+// Use system property to decide if we need sharded metadata
+        boolean useShardedMetadata = Boolean.parseBoolean(System.getProperty("metadata.sharded", "false"));
+
+        if (useShardedMetadata) {
+            int shardCount = Integer.getInteger("metadata.shards", 16);
+            metadataManager = new ShardedMetadataManager(
+                    metaDBRoot.toString(),
+                    shardCount,
+                    pointsRoot.toString()
+            );
+            logger.info("Created SHARDED metadata manager: {} shards", shardCount);
+        } else {
+            metadataManager = RocksDBMetadataManager.create(
+                    metaDBRoot.toString(),
+                    pointsRoot.toString()
+            );
+            logger.info("Created MONOLITHIC metadata manager (RocksDB)");
+        }
 
         Path resolvedKS = resolveKeyStorePath(keysFile, metadataPath);
         Files.createDirectories(resolvedKS.getParent());
@@ -2058,7 +2063,7 @@ public class ForwardSecureANNSystem {
                 new AesGcmCryptoService(
                         new SimpleMeterRegistry(),
                         keyService,
-                        metadataManager
+                        (RocksDBMetadataManager) metadataManager
                 );
         keyService.setCryptoService(crypto);
 
@@ -2126,7 +2131,7 @@ public class ForwardSecureANNSystem {
         }
 
         // =====================================================================
-        // ✅ GT VALIDATION (WORKS FOR BOTH MODES)
+        // GT VALIDATION (WORKS FOR BOTH MODES)
         // =====================================================================
         GroundtruthManager gt = new GroundtruthManager();
         gt.load(groundtruth);

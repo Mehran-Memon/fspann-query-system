@@ -1,9 +1,6 @@
 package com.fspann.crypto;
 
-import com.fspann.common.EncryptedPoint;
-import com.fspann.common.KeyLifeCycleService;
-import com.fspann.common.KeyVersion;
-import com.fspann.common.RocksDBMetadataManager;
+import com.fspann.common.*;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
@@ -34,7 +31,7 @@ public class AesGcmCryptoService implements CryptoService {
 
     private final MeterRegistry metrics;
     private KeyLifeCycleService keyService;
-    private final RocksDBMetadataManager metadataManager;
+    private final MetadataManager metadataManager;
 
     // Encryption listeners (optional)
     private final List<CryptoService.EncryptionListener> listeners =

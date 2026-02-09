@@ -47,12 +47,12 @@ public class KeyRotationServiceImpl implements KeyLifeCycleService, SelectiveRee
     public KeyRotationServiceImpl(KeyManager keyManager,
                                   KeyRotationPolicy policy,
                                   String rotationMetaDir,
-                                  RocksDBMetadataManager metadataManager,
+                                  MetadataManager metadataManager,
                                   CryptoService cryptoService) {
         this.keyManager = Objects.requireNonNull(keyManager, "keyManager");
         this.policy = Objects.requireNonNull(policy, "policy");
         this.rotationMetaDir = Objects.requireNonNull(rotationMetaDir, "rotationMetaDir");
-        this.metadataManager = Objects.requireNonNull(metadataManager, "metadataManager");
+        this.metadataManager = (RocksDBMetadataManager) Objects.requireNonNull(metadataManager, "metadataManager");
         this.cryptoService = cryptoService;
     }
 

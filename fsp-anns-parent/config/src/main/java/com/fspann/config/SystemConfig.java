@@ -254,12 +254,18 @@ public final class SystemConfig {
         @JsonProperty("seed")
         public long seed = 13L;
 
+        @JsonProperty("minSampleSize")
+        public int minSampleSize = 1000;
+
         public boolean isEnabled() { return enabled; }
         public int getM() { return Math.max(1, m); }
         public int getLambda() { return Math.max(1, lambda); }
         public int getDivisions() { return Math.max(1, divisions); }
         public int getTables() { return Math.max(1, tables); }
         public long getSeed() { return seed; }
+        public int getMinSampleSize() {
+            return Math.max(1, minSampleSize);
+        }
     }
 
     public static final class RuntimeConfig {

@@ -12,7 +12,7 @@ import java.util.concurrent.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-public class RocksDBMetadataManager implements AutoCloseable {
+public class RocksDBMetadataManager implements MetadataManager {
     private static final Logger logger = LoggerFactory.getLogger(RocksDBMetadataManager.class);
     private static final Object LOCK = new Object();
     private static final Map<String, RocksDBMetadataManager> instances = new ConcurrentHashMap<>();
@@ -87,21 +87,19 @@ public class RocksDBMetadataManager implements AutoCloseable {
 
         this.options = new Options()
                 .setCreateIfMissing(true)
-                .setWriteBufferSize(32 * 1024 * 1024)
-                .setMaxWriteBufferNumber(8)             // Allow more buffers
-                .setMinWriteBufferNumberToMerge(2)
-                .setTargetFileSizeBase(512 * 1024 * 1024)  // 512MB SST files (smaller files may compact faster)
-                .setMaxBytesForLevelBase(1024 * 1024 * 1024) // 1GB for L1 level
-                .setLevel0FileNumCompactionTrigger(12)
-                .setLevel0SlowdownWritesTrigger(24)        // Trigger slow down when 24 files
-                .setLevel0StopWritesTrigger(40)            // Stop writes when 40 files are present
-                .setMaxBackgroundJobs(16)                  // Increase background compaction threads
-                .setIncreaseParallelism(16)                // Higher parallelism for RocksDB
-                .setCompressionType(CompressionType.SNAPPY_COMPRESSION)
-                .setBottommostCompressionType(CompressionType.ZSTD_COMPRESSION)
-                .setMaxOpenFiles(50000)
-                .setKeepLogFileNum(4)  // Keep more logs for diagnostics
-                .setInfoLogLevel(InfoLogLevel.WARN_LEVEL); // Log compaction info for debugging
+                .setWriteBufferSize(64 * 1024 * 1024)  // 64 MB buffer for more efficient handling of large data
+                .setMaxWriteBufferNumber(8)             // Increased write buffer count for efficient handling of large writes
+                .setMinWriteBufferNumberToMerge(2)      // Control the number of buffers to merge before writing to disk
+                .setTargetFileSizeBase(512 * 1024 * 1024) // Use larger files to reduce file fragmentation
+                .setMaxBytesForLevelBase(1024 * 1024 * 1024)  // Allow larger levels for better performance
+                .setLevel0FileNumCompactionTrigger(10)   // Trigger compaction at a higher threshold
+                .setLevel0SlowdownWritesTrigger(20)      // Allow more files before slowdown
+                .setLevel0StopWritesTrigger(40)          // Stop writes at an even higher threshold
+                .setMaxBackgroundJobs(4)                 // Limit background jobs to avoid resource contention
+                .setCompressionType(CompressionType.SNAPPY_COMPRESSION)  // Retain SNAPPY for balanced compression
+                .setMaxOpenFiles(10000)                  // Allow up to 10k open files for large-scale
+                .setKeepLogFileNum(2)                    // Reduce log file retention
+                .setInfoLogLevel(InfoLogLevel.WARN_LEVEL);  // Only warn level logs to minimize logging overhead
 
         try {
             this.db = RocksDB.open(this.options, dbPath);
@@ -203,6 +201,11 @@ public class RocksDBMetadataManager implements AutoCloseable {
         } catch (RocksDBException e) {
             logger.warn("removeVectorMetadata failed for {}", vectorId, e);
         }
+    }
+
+    @Override
+    public void putVectorMetadata(String vectorId, Map<String, String> metadataMap) {
+        updateVectorMetadata(vectorId, metadataMap);
     }
 
     /**
@@ -352,37 +355,52 @@ public class RocksDBMetadataManager implements AutoCloseable {
     public synchronized void saveEncryptedPoint(EncryptedPoint pt) throws IOException {
         Objects.requireNonNull(pt, "pt");
 
-        // Calculate batch file
-        long pointId = Long.parseLong(pt.getId());
-        long batchId = pointId / POINTS_PER_FILE;
+        // 1. Consistent ID Parsing for Filename
+        String rawId = pt.getId();
+        long numericId;
+        try {
+            String digits = rawId.replaceAll("[^0-9]", "");
+            numericId = digits.isEmpty() ? 0 : Long.parseLong(digits);
+        } catch (NumberFormatException e) {
+            numericId = 0;
+        }
 
+        long batchId = numericId / POINTS_PER_FILE;
         String safeVersion = "v" + pt.getVersion();
-        Path batchFile = Paths.get(baseDir, safeVersion,
-                String.format("batch_%08d.dat", batchId));
+        Path batchFile = Paths.get(baseDir, safeVersion, String.format("batch_%08d.dat", batchId));
 
-        // Append to batch file
+        long fileOffset = 0; // The exact byte position in the file
+
+        // 2. Physical Write (Synchronized and Flushed)
         synchronized (getBatchLock(batchFile)) {
             Files.createDirectories(batchFile.getParent());
 
-            try (DataOutputStream dos = new DataOutputStream(
-                    new BufferedOutputStream(
-                            new FileOutputStream(batchFile.toFile(), true)))) {
+            File file = batchFile.toFile();
+            if (file.exists()) {
+                fileOffset = file.length(); // New record starts where the file currently ends
+            }
+
+            try (FileOutputStream fos = new FileOutputStream(file, true);
+                 BufferedOutputStream bos = new BufferedOutputStream(fos);
+                 DataOutputStream dos = new DataOutputStream(bos)) {
 
                 byte[] serialized = PersistenceUtils.serializePoint(pt);
                 dos.writeInt(serialized.length);
                 dos.write(serialized);
+                dos.flush();
             }
         }
 
-        // Update metadata
+        // 3. Metadata Persistence
         Map<String, String> meta = new HashMap<>();
         meta.put("version", String.valueOf(pt.getVersion()));
+        meta.put("batchFile", batchFile.getFileName().toString());
+        meta.put("fileOffset", String.valueOf(fileOffset)); // Store byte position
         meta.put("shardId", String.valueOf(pt.getShardId()));
         meta.put("dim", String.valueOf(pt.getVectorLength()));
-        meta.put("batchFile", batchFile.getFileName().toString());
-        meta.put("offsetInBatch", String.valueOf(pointId % POINTS_PER_FILE));
 
-        updateVectorMetadata(pt.getId(), meta);
+        putVectorMetadata(pt.getId(), meta);
+        logger.debug("Saved point {} to {} at byte offset {}", pt.getId(), batchFile.getFileName(), fileOffset);
     }
 
     public synchronized void saveEncryptedPointsBatch(Collection<EncryptedPoint> points) throws IOException {
@@ -538,51 +556,51 @@ public class RocksDBMetadataManager implements AutoCloseable {
         Objects.requireNonNull(id, "id");
         Map<String, String> meta = getVectorMetadata(id);
 
-        if (meta.isEmpty() || !meta.containsKey("version")) {
-            return null;
+        if (meta == null || meta.isEmpty()) return null;
+
+        // --- STEP 1: Try Batched Format (.dat) via Byte Offset ---
+        if (meta.containsKey("batchFile") && meta.containsKey("fileOffset")) {
+            String ver = meta.get("version");
+            String safeVersion = ver.startsWith("v") ? ver : "v" + ver;
+            String batchFileName = meta.get("batchFile");
+            long fileOffset = Long.parseLong(meta.get("fileOffset"));
+
+            Path batchPath = Paths.get(baseDir, safeVersion, batchFileName);
+            if (Files.exists(batchPath)) {
+                try (RandomAccessFile raf = new RandomAccessFile(batchPath.toFile(), "r")) {
+                    raf.seek(fileOffset); // Jump to the exact start of this point
+                    int len = raf.readInt();
+                    byte[] data = new byte[len];
+                    raf.readFully(data);
+                    return PersistenceUtils.deserializePoint(data);
+                } catch (Exception e) {
+                    logger.warn("Batched read failed for {} at offset {}: {}", id, fileOffset, e.getMessage());
+                }
+            }
         }
 
-        String ver = meta.get("version");
+        // --- STEP 2: Legacy Fallback (.point) ---
+        String ver = meta.getOrDefault("version", "1");
         String safeVersion = ver.startsWith("v") ? ver : "v" + ver;
+        Path legacyPath = Paths.get(baseDir, safeVersion, id + ".point");
 
-        // Check if using batch file format
-        if (meta.containsKey("batchFile")) {
-            // New batched format
-            String batchFileName = meta.get("batchFile");
-            int offset = Integer.parseInt(meta.get("offsetInBatch"));
+        if (Files.exists(legacyPath)) {
+            return PersistenceUtils.loadObject(legacyPath.toString(), baseDir, EncryptedPoint.class);
+        }
 
-            Path batchFile = Paths.get(baseDir, safeVersion, batchFileName);
-            if (!Files.exists(batchFile)) {
-                return null;
-            }
+        return null;
+    }
 
-            // Read from batch file
-            try (DataInputStream dis = new DataInputStream(
-                    new BufferedInputStream(
-                            new FileInputStream(batchFile.toFile())))) {
-
-                // Skip to the correct offset
-                for (int i = 0; i < offset; i++) {
-                    int len = dis.readInt();
-                    dis.skipBytes(len);
-                }
-
-                // Read this point
-                int len = dis.readInt();
-                byte[] data = new byte[len];
-                dis.readFully(data);
-
-                return PersistenceUtils.deserializePoint(data);
-            }
-        } else {
-            // Old individual file format (backward compatibility)
-            Path p = Paths.get(baseDir, safeVersion, id + ".point");
-            if (!Files.exists(p)) {
-                return null;
-            }
+    private EncryptedPoint loadLegacyPoint(String id, Map<String, String> meta) throws IOException, ClassNotFoundException {
+        String ver = (meta != null) ? meta.getOrDefault("version", "1") : "1";
+        String safeVersion = ver.startsWith("v") ? ver : "v" + ver;
+        Path p = Paths.get(baseDir, safeVersion, id + ".point");
+        if (Files.exists(p)) {
             return PersistenceUtils.loadObject(p.toString(), baseDir, EncryptedPoint.class);
         }
+        return null;
     }
+
     public void cleanupStaleMetadata(Set<String> validIds) {
         Objects.requireNonNull(validIds, "validIds");
         RocksIterator it = null;
@@ -668,14 +686,18 @@ public class RocksDBMetadataManager implements AutoCloseable {
     public String quickSummaryLine() {
         int version = loadIndexVersion();
         int metaKeys = getAllVectorIds().size();
-        long files = 0L;
+        long filesCount = 0L;
         try (Stream<Path> s = Files.walk(Paths.get(baseDir))) {
-            files = s.filter(Files::isRegularFile)
-                    .filter(p -> p.toString().endsWith(".point"))
+            filesCount = s.filter(Files::isRegularFile)
+                    .filter(p -> {
+                        String name = p.getFileName().toString();
+                        return name.endsWith(".point") || name.endsWith(".dat");
+                    })
                     .count();
         } catch (IOException ignore) {}
-        return String.format("RocksDB[%s] v=%d metaKeys=%d pointFiles=%d",
-                dbPath, version, metaKeys, files);
+
+        return String.format("RocksDB[%s] v=%d metaKeys=%d dataFiles=%d",
+                dbPath, version, metaKeys, filesCount);
     }
 
     public String getDbPath() {
@@ -687,33 +709,65 @@ public class RocksDBMetadataManager implements AutoCloseable {
     }
 
     public DriftReport auditDrift() {
-        Set<String> idsInMeta = new HashSet<>(getAllVectorIds());
-
+        // 1. Get all IDs known to the Metadata DB
+        List<String> allMetaIds = getAllVectorIds();
+        Set<String> idsInMeta = new HashSet<>(allMetaIds);
         Set<String> idsOnDisk = new HashSet<>();
+
+        // 2. Pre-calculate a mapping of BatchFiles -> List of IDs to avoid O(N^2) complexity
+        // This maps "batch_00000000.dat" -> ["v-1", "v-2", ...]
+        Map<String, List<String>> batchFileToIds = allMetaIds.stream()
+                .map(id -> new AbstractMap.SimpleEntry<>(id, getVectorMetadata(id)))
+                .filter(entry -> entry.getValue().containsKey("batchFile"))
+                .collect(Collectors.groupingBy(
+                        entry -> entry.getValue().get("batchFile"),
+                        Collectors.mapping(Map.Entry::getKey, Collectors.toList())
+                ));
+
         try (Stream<Path> s = Files.walk(Paths.get(baseDir))) {
-            s.filter(Files::isRegularFile)
-                    .filter(p -> p.toString().endsWith(".point"))
-                    .forEach(p -> idsOnDisk.add(stripExt(p.getFileName().toString())));
+            s.filter(Files::isRegularFile).forEach(p -> {
+                String fileName = p.getFileName().toString();
+
+                if (fileName.endsWith(".point")) {
+                    // Legacy individual files
+                    idsOnDisk.add(stripExt(fileName));
+                } else if (fileName.endsWith(".dat")) {
+                    // Batch files: find all metadata IDs that claim to live in this file
+                    List<String> associatedIds = batchFileToIds.get(fileName);
+                    if (associatedIds != null) {
+                        idsOnDisk.addAll(associatedIds);
+                    }
+                }
+            });
         } catch (IOException e) {
             logger.warn("auditDrift walk failed", e);
         }
 
+        // 3. Calculate differences
         Set<String> onlyMeta = new HashSet<>(idsInMeta);
         onlyMeta.removeAll(idsOnDisk);
+
         Set<String> onlyDisk = new HashSet<>(idsOnDisk);
         onlyDisk.removeAll(idsInMeta);
 
+        // Note: onlyDisk might also include orphan .point files not in metadata
+
+        int metaCount = idsInMeta.size();
+        int diskCount = idsOnDisk.size();
+
         if (!onlyMeta.isEmpty() || !onlyDisk.isEmpty()) {
-            logger.warn("Drift detected: onlyInMeta={}, onlyOnDisk={}", onlyMeta.size(), onlyDisk.size());
+            logger.warn("Drift detected! Meta: {}, Disk: {}. Missing on Disk: {}, Orphan on Disk: {}",
+                    metaCount, diskCount, onlyMeta.size(), onlyDisk.size());
         } else {
-            logger.info("Drift audit: OK ({} ids)", idsInMeta.size());
+            logger.info("Drift audit passed. All {} IDs consistent.", metaCount);
         }
-        return new DriftReport(idsInMeta.size(), idsOnDisk.size(), onlyMeta, onlyDisk);
+
+        return new DriftReport(metaCount, diskCount, onlyMeta, onlyDisk);
     }
 
     private static String stripExt(String name) {
-        int i = name.lastIndexOf('.');
-        return (i < 0) ? name : name.substring(0, i);
+        int lastDot = name.lastIndexOf('.');
+        return (lastDot == -1) ? name : name.substring(0, lastDot);
     }
 
     public static final class DriftReport {
@@ -833,21 +887,22 @@ public class RocksDBMetadataManager implements AutoCloseable {
      */
     public int getVersionOfVector(String id) {
         Map<String, String> meta = getVectorMetadata(id);
-        if (meta.isEmpty()) {
+        if (meta == null || meta.isEmpty()) {
             return -1;
         }
 
         String v = meta.get("version");
-        if (v == null) {
+        if (v == null || v.trim().isEmpty()) {
             return -1;
         }
 
         try {
-            if (v.startsWith("v")) {
-                v = v.substring(1);
-            }
-            return Integer.parseInt(v);
-        } catch (Exception e) {
+            // FIX: Strip everything except digits and the negative sign '-'
+            // This handles "v1", "version-1", or just "1"
+            String cleaned = v.replaceAll("[^0-9\\-]", "");
+            return Integer.parseInt(cleaned);
+        } catch (NumberFormatException e) {
+            logger.warn("Failed to parse version string '{}' for ID {}", v, id);
             return -1;
         }
     }

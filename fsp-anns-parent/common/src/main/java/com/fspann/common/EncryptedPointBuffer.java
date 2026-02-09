@@ -1,9 +1,13 @@
 package com.fspann.common;
 
+import org.rocksdb.RocksDBException;
+import org.rocksdb.WriteBatch;
+import org.rocksdb.WriteOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -15,7 +19,6 @@ public class EncryptedPointBuffer {
     // version -> pending points (flushed in batches)
     private final Map<Integer, List<EncryptedPoint>> versionBuffer = new HashMap<>();
     private final Map<Integer, Integer> batchCounters = new HashMap<>();
-
     private final Path pointsDir;
     private final RocksDBMetadataManager metadataManager;
 
@@ -156,10 +159,6 @@ public class EncryptedPointBuffer {
         lastBatchInsertTimeMs = (System.nanoTime() - t0) / 1_000_000;
     }
 
-    public int  getBufferSize()          { return globalBufferCount; }
-    public int  getTotalFlushedPoints()  { return totalFlushedPoints; }
-    public int  getFlushThreshold()      { return flushThreshold; }
-    public long getLastBatchInsertTimeMs(){ return lastBatchInsertTimeMs; }
     public synchronized void clear() {
         versionBuffer.clear();
         batchCounters.clear();
