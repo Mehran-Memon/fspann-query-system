@@ -127,7 +127,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
             KeyRotationServiceImpl keyService,
             AesGcmCryptoService cryptoService) {
 
-        this.metadata = (RocksDBMetadataManager) Objects.requireNonNull(metadata, "metadata");
+        this.metadata = Objects.requireNonNull(metadata, "metadata");
         this.cfg = Objects.requireNonNull(cfg, "cfg");
         this.keyService = Objects.requireNonNull(keyService, "keyService");
         this.cryptoService = Objects.requireNonNull(cryptoService, "cryptoService");
@@ -143,7 +143,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
         this.storageMetrics = metadata.getStorageMetrics();
         if (this.storageMetrics == null) {
             throw new IllegalStateException(
-                    "StorageMetrics not available from RocksDBMetadataManager"
+                    "StorageMetrics not available from MetadataManager"
             );
         }
 
