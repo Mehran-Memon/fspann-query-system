@@ -207,4 +207,31 @@ public class UnifiedMetadataManager implements MetadataManager {
         }
     }
 
+
+    @Override
+    public boolean isDeleted(String vectorId) {
+        if (useSharding) {
+            return shardedMetadataManager.isDeleted(vectorId);
+        } else {
+            return rocksDBMetadataManager.isDeleted(vectorId);
+        }
+    }
+
+    @Override
+    public long getDeletedTimestamp(String vectorId) {
+        if (useSharding) {
+            return shardedMetadataManager.getDeletedTimestamp(vectorId);
+        } else {
+            return rocksDBMetadataManager.getDeletedTimestamp(vectorId);
+        }
+    }
+
+    @Override
+    public void hardDeleteVector(String vectorId) {
+        if (useSharding) {
+            shardedMetadataManager.hardDeleteVector(vectorId);
+        } else {
+            rocksDBMetadataManager.hardDeleteVector(vectorId);
+        }
+    }
 }

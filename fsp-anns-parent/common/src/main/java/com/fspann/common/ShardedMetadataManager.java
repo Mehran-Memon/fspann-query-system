@@ -508,4 +508,43 @@ public class ShardedMetadataManager implements MetadataManager {
             return (v == null) ? -1 : Integer.parseInt(v.replaceAll("[^0-9]", ""));
         } catch (Exception e) { return -1; }
     }
+
+    @Override
+    public boolean isDeleted(String vectorId) {
+        Objects.requireNonNull(vectorId, "vectorId cannot be null");
+
+        // Route to the correct shard
+        Map<String, String> meta = getVectorMetadata(vectorId);
+        if (meta == null || meta.isEmpty()) {
+            return false;
+        }
+
+        String deletedFlag = meta.getOrDefault("deleted", "false");
+        return "true".equalsIgnoreCase(deletedFlag);
+    }
+
+    @Override
+    public long getDeletedTimestamp(String vectorId) {
+        Map<String, String> meta = getVectorMetadata(vectorId);
+        if (meta == null) return -1L;
+
+        String timestampStr = meta.get("deleted_at");
+        try {
+            return (timestampStr != null) ? Long.parseLong(timestampStr) : -1L;
+        } catch (NumberFormatException e) {
+            return -1L;
+        }
+    }
+
+    @Override
+    public void hardDeleteVector(String vectorId) {
+        if (!isDeleted(vectorId)) return;
+
+        int shard = Math.abs(vectorId.hashCode()) % numShards;
+        try {
+            shardDbs[shard].delete(vectorId.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (org.rocksdb.RocksDBException e) {
+            logger.error("Failed to hard delete vector {} from shard {}", vectorId, shard, e);
+        }
+    }
 }

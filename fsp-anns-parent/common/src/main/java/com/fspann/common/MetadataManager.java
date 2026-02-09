@@ -106,4 +106,8 @@ public interface MetadataManager extends AutoCloseable {
 
     /** Returns the version of a specific vector */
     int getVersionOfVector(String id);
+
+    boolean isDeleted(String vectorId);
+    long getDeletedTimestamp(String vectorId);
+    void hardDeleteVector(String vectorId);
 }

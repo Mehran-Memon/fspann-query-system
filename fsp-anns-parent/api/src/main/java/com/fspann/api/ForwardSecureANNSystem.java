@@ -2026,7 +2026,6 @@ public class ForwardSecureANNSystem {
         // ===================== METADATA + CRYPTO =====================
         MetadataManager metadataManager;
 
-// Use system property to decide if we need sharded metadata
         boolean useShardedMetadata = Boolean.parseBoolean(System.getProperty("metadata.sharded", "false"));
 
         if (useShardedMetadata) {
@@ -2063,7 +2062,7 @@ public class ForwardSecureANNSystem {
                 new AesGcmCryptoService(
                         new SimpleMeterRegistry(),
                         keyService,
-                        (RocksDBMetadataManager) metadataManager
+                        metadataManager
                 );
         keyService.setCryptoService(crypto);
 

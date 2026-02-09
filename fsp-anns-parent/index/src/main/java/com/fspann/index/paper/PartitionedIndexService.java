@@ -49,7 +49,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
     // Minimum sample size for GFunction initialization
     private static final int MAX_SAMPLE_SIZE = 10000;
     private final int minSampleSize;
-    private final RocksDBMetadataManager metadata;
+    private final MetadataManager metadata;
     private final SystemConfig cfg;
     private final StorageMetrics storageMetrics;
     private final KeyRotationServiceImpl keyService;
