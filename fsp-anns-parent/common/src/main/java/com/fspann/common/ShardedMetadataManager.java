@@ -47,7 +47,6 @@ public class ShardedMetadataManager implements MetadataManager {
         this.shardOptions = new Options[numShards];
         this.shardPaths = new Path[numShards];
 
-        // Initialize each shard
         for (int i = 0; i < numShards; i++) {
             Path shardPath = Paths.get(basePath, "shard_" + i);
             Files.createDirectories(shardPath);
@@ -55,14 +54,22 @@ public class ShardedMetadataManager implements MetadataManager {
 
             this.shardOptions[i] = new Options()
                     .setCreateIfMissing(true)
-                    .setWriteBufferSize(32 * 1024 * 1024)      // 32 MB (was 16 MB)
-                    .setMaxWriteBufferNumber(4)                 // Allow buffering (was none)
-                    .setMaxBackgroundJobs(4)                    // More parallelism (was 2)
-                    .setLevel0FileNumCompactionTrigger(8)       // Trigger compaction earlier
-                    .setLevel0SlowdownWritesTrigger(16)         // Prevent write stalls
-                    .setLevel0StopWritesTrigger(24)             // Emergency brake
+                    // 64MB is the sweet spot for 16 shards on 384GB RAM
+                    .setWriteBufferSize(64 * 1024 * 1024)
+                    .setMaxWriteBufferNumber(4)
+                    .setMinWriteBufferNumberToMerge(1)
+
+                    // Performance optimizations for massive ingestion
+                    .setMaxBackgroundJobs(4)
+                    .setLevel0FileNumCompactionTrigger(4)
+                    .setLevel0SlowdownWritesTrigger(20)
+                    .setLevel0StopWritesTrigger(30)
+
+                    // Critical for 100M: Prevent OS IO-stall by syncing in small chunks
+                    .setBytesPerSync(1024 * 1024)
+
                     .setCompressionType(CompressionType.SNAPPY_COMPRESSION)
-                    .setMaxOpenFiles(10000)                     // 10k per shard = 160k total
+                    .setMaxOpenFiles(10000)
                     .setInfoLogLevel(InfoLogLevel.WARN_LEVEL);
 
             try {
