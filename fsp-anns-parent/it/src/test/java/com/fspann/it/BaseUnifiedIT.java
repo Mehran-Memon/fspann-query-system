@@ -141,6 +141,11 @@ public abstract class BaseUnifiedIT {
         } catch (Exception ignore) {}
     }
 
+    @BeforeEach
+    void disableHardExit() {
+        system.setExitOnShutdown(false);
+    }
+
 
     // --------------------------------------------------
     // SINGLE CLEANUP (NO PER-TEST SHUTDOWN)
