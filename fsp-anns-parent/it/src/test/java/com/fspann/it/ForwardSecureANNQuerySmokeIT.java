@@ -94,6 +94,7 @@ public class ForwardSecureANNQuerySmokeIT {
         system.insert("0", new double[]{0.0, 0.0}, 2);
         system.insert("1", new double[]{0.1, 0.1}, 2);
         system.insert("2", new double[]{0.2, 0.2}, 2);
+        system.insert("3", new double[]{0.3, 0.3}, 2);
 
         system.finalizeForSearch();
         system.flushAll();
