@@ -103,9 +103,20 @@ public class DefaultDataLoader implements Closeable {
 
     @Override
     public void close() {
+        vectorIts.values().forEach(it -> {
+            if (it instanceof AutoCloseable c) {
+                try { c.close(); } catch (Exception ignored) {}
+            }
+        });
+        indexIts.values().forEach(it -> {
+            if (it instanceof AutoCloseable c) {
+                try { c.close(); } catch (Exception ignored) {}
+            }
+        });
         vectorIts.clear();
         indexIts.clear();
         exhaustedVectors.clear();
         exhaustedIndices.clear();
     }
+
 }

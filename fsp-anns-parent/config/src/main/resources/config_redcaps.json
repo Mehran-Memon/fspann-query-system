@@ -42,36 +42,89 @@
   "profiles":
   [
     {
-      "name": "RED_M8_COARSE_NUCLEAR",
-      "description": "HIGH-D STRESS: Optimized coarse-grained LSH for 512-D CLIP",
+      "name": "REDCAPS_P6_BASE",
+      "description": "BASELINE: Noisy multimodal setting",
       "overrides": {
-        "paper": { "m": 8, "lambda": 2, "divisions": 4, "tables": 50 },
-        "runtime": { "refinementLimit": 8000, "maxGlobalCandidates": 15000 }
+        "paper": { "m": 26, "lambda": 2, "divisions": 8, "tables": 7 },
+        "runtime": {
+          "probeOverride": 6,
+          "refinementLimit": 18000,
+          "maxGlobalCandidates": 24000,
+          "maxRelaxationDepth": 7,
+          "hammingPrefilterThreshold": 0
+        }
       }
     },
     {
-      "name": "RED_M12_COARSE_NUCLEAR",
-      "description": "HIGH-D STRESS: Balanced coarse-grained LSH for 512-D CLIP",
+      "name": "REDCAPS_P10_HIGH",
+      "description": "HIGH RECALL: Aggressive probing under noise",
       "overrides": {
-        "paper": { "m": 12, "lambda": 2, "divisions": 4, "tables": 50 },
-        "runtime": { "refinementLimit": 12000, "maxGlobalCandidates": 20000 }
+        "paper": { "m": 26, "lambda": 2, "divisions": 8, "tables": 7 },
+        "runtime": {
+          "probeOverride": 10,
+          "refinementLimit": 26000,
+          "maxGlobalCandidates": 32000,
+          "maxRelaxationDepth": 8,
+          "hammingPrefilterThreshold": 0
+        }
       }
     },
     {
-      "name": "ABL_TABLES_25_REDCAPS",
-      "description": "SENSITIVITY ABLATION: Impact of hash diversity (tables=25) on High-D",
+      "name": "REDCAPS_M30",
+      "description": "ABLATION: Higher m for noisy projections",
       "overrides": {
-        "paper": { "m": 8, "lambda": 2, "divisions": 4, "tables": 25 },
-        "runtime": { "refinementLimit": 8000 }
+        "paper": { "m": 30, "lambda": 2, "divisions": 8, "tables": 7 },
+        "runtime": {
+          "probeOverride": 8,
+          "refinementLimit": 24000,
+          "maxGlobalCandidates": 30000,
+          "maxRelaxationDepth": 8,
+          "hammingPrefilterThreshold": 0
+        }
       }
     },
     {
-      "name": "ABL_TABLES_75_REDCAPS",
-      "description": "SENSITIVITY ABLATION: Impact of hash diversity (tables=75) on High-D",
+      "name": "REDCAPS_LAMBDA3",
+      "description": "ABLATION: λ=3 under heavy noise",
       "overrides": {
-        "paper": { "m": 8, "lambda": 2, "divisions": 4, "tables": 75 },
-        "runtime": { "refinementLimit": 8000 }
+        "paper": { "m": 26, "lambda": 3, "divisions": 8, "tables": 7 },
+        "runtime": {
+          "probeOverride": 10,
+          "refinementLimit": 28000,
+          "maxGlobalCandidates": 34000,
+          "maxRelaxationDepth": 9,
+          "hammingPrefilterThreshold": 0
+        }
+      }
+    },
+    {
+      "name": "REDCAPS_DIV6",
+      "description": "ABLATION: Coarser partitions for speed",
+      "overrides": {
+        "paper": { "m": 26, "lambda": 2, "divisions": 6, "tables": 7 },
+        "runtime": {
+          "probeOverride": 6,
+          "refinementLimit": 16000,
+          "maxGlobalCandidates": 22000,
+          "maxRelaxationDepth": 6,
+          "hammingPrefilterThreshold": 0
+        }
+      }
+    },
+    {
+      "name": "REDCAPS_P4_FAST",
+      "description": "BASELINE: Fast but low-recall multimodal search",
+      "overrides": {
+        "paper": { "m": 22, "lambda": 2, "divisions": 8, "tables": 6 },
+        "runtime": {
+          "probeOverride": 4,
+          "refinementLimit": 12000,
+          "maxGlobalCandidates": 16000,
+          "maxRelaxationDepth": 5,
+          "hammingPrefilterThreshold": 0
+        }
       }
     }
+
   ]
 }

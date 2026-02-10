@@ -8,7 +8,7 @@
   "paper": {
     "enabled": true,
     "m": 16,
-    "lambda": 2.5,
+    "lambda": 3,
     "divisions": 4,
     "tables": 10,
     "seed": 13
@@ -44,36 +44,76 @@
   "profiles":
     [
       {
-        "name": "GLOVE_NUCLEAR_10K",
-        "description": "RATIO WAR: High diversity tables (50) for semantic fidelity",
+        "name": "GLOVE_P4_FAST",
+        "description": "BASELINE: Fast semantic lookup",
         "overrides": {
-          "paper": { "m": 12, "lambda": 2, "divisions": 4, "tables": 50 },
-          "runtime": { "refinementLimit": 10000, "maxGlobalCandidates": 20000 }
+          "paper": { "m": 18, "lambda": 2, "divisions": 8, "tables": 5 },
+          "runtime": {
+            "probeOverride": 4,
+            "refinementLimit": 9000,
+            "maxGlobalCandidates": 12000,
+            "maxCandidateFactor": 3,
+            "maxRelaxationDepth": 5,
+            "hammingPrefilterThreshold": 0
+          }
         }
       },
       {
-        "name": "GLOVE_NUCLEAR_20K",
-        "description": "RATIO WAR: Deep semantic search @ 20k limit",
+        "name": "GLOVE_P6_BALANCED",
+        "description": "BALANCED: Semantic recall vs ART",
         "overrides": {
-          "paper": { "m": 12, "lambda": 2, "divisions": 4, "tables": 50 },
-          "runtime": { "refinementLimit": 20000, "maxGlobalCandidates": 30000 }
+          "paper": { "m": 22, "lambda": 2, "divisions": 8, "tables": 6 },
+          "runtime": {
+            "probeOverride": 6,
+            "refinementLimit": 16000,
+            "maxGlobalCandidates": 20000,
+            "maxRelaxationDepth": 7,
+            "hammingPrefilterThreshold": 0
+          }
         }
       },
       {
-        "name": "GLOVE_NUCLEAR_30K",
-        "description": "RATIO WAR: Peak semantic recall anchor point",
+        "name": "GLOVE_TABLES8",
+        "description": "ABLATION: More tables for semantic diversity",
         "overrides": {
-          "paper": { "m": 12, "lambda": 2, "divisions": 4, "tables": 50 },
-          "runtime": { "refinementLimit": 30000, "maxGlobalCandidates": 45000 }
+          "paper": { "m": 22, "lambda": 2, "divisions": 8, "tables": 8 },
+          "runtime": {
+            "probeOverride": 6,
+            "refinementLimit": 20000,
+            "maxGlobalCandidates": 24000,
+            "maxRelaxationDepth": 7,
+            "hammingPrefilterThreshold": 0
+          }
         }
       },
       {
-        "name": "ABL_DIV8_SEMANTIC",
-        "description": "ARCHITECTURAL ABLATION: Impact of fine-grained partitions (div=8) on GloVe",
+        "name": "GLOVE_LAMBDA3",
+        "description": "ABLATION: λ=3 on embeddings",
         "overrides": {
-          "paper": { "m": 12, "lambda": 2, "divisions": 8, "tables": 50 },
-          "runtime": { "refinementLimit": 20000 }
+          "paper": { "m": 22, "lambda": 3, "divisions": 8, "tables": 6 },
+          "runtime": {
+            "probeOverride": 8,
+            "refinementLimit": 22000,
+            "maxGlobalCandidates": 26000,
+            "maxRelaxationDepth": 9,
+            "hammingPrefilterThreshold": 0
+          }
+        }
+      },
+      {
+        "name": "GLOVE_DIV10_FINE",
+        "description": "ABLATION: Finer partitions (precision oriented)",
+        "overrides": {
+          "paper": { "m": 22, "lambda": 2, "divisions": 10, "tables": 6 },
+          "runtime": {
+            "probeOverride": 6,
+            "refinementLimit": 18000,
+            "maxGlobalCandidates": 22000,
+            "maxRelaxationDepth": 7,
+            "hammingPrefilterThreshold": 0
+          }
         }
       }
+
     ]
 }

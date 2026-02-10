@@ -1,6 +1,7 @@
 package com.fspann.common;
 
 import java.io.Serializable;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Objects;
 
@@ -77,8 +78,8 @@ public class EncryptedPoint implements Serializable {
     public List<Integer> getBuckets() { return buckets; }
     public List<String> getMetadata() { return metadata; }
     public byte[] getAAD() {
-        String aadStr = String.format("id:%s|v:%d|d:%d", id, version, dimension);
-        return aadStr.getBytes();
+        String aadStr = String.format("id:%s|v:%d|d:%d", id, keyVersion, dimension);
+        return aadStr.getBytes(StandardCharsets.UTF_8);
     }
 
     @Override

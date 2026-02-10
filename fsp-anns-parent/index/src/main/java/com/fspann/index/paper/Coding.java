@@ -288,14 +288,12 @@ public final class Coding {
 
         int pos = 0;
 
-        // ============================================================
-        // CRITICAL FIX: Iterate i from (lambda-1) DOWN to 0
-        // This puts MSBs at low positions for correct prefix matching
-        // ============================================================
-        for (int i = G.lambda - 1; i >= 0; i--) { // MSB first!
+        for (int i = G.lambda - 1; i >= 0; i--) { // MSB-first (within lambda bits)
             for (int j = 0; j < G.m; j++) {
-                if (((H[j] >>> i) & 1) != 0)
+                int hj = H[j] ^ 0x8000_0000; // sign-bit shift for stable bit extraction
+                if (((hj >>> i) & 1) != 0) {
                     out.set(pos);
+                }
                 pos++;
             }
         }

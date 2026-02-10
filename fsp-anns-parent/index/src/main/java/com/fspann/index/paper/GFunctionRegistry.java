@@ -73,6 +73,15 @@ public final class GFunctionRegistry {
         if (sample.isEmpty()) {
             throw new IllegalArgumentException("Sample vectors cannot be empty");
         }
+        for (double[] v : sample) {
+            if (v.length != dimension) {
+                throw new IllegalArgumentException(
+                        "Mixed dimensions in GFunctionRegistry sample: expected " +
+                                dimension + ", got " + v.length
+                );
+            }
+        }
+
 
         if (initialized &&
                 DIM == dimension &&
