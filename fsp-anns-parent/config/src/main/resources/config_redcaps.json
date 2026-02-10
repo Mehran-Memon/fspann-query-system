@@ -39,32 +39,38 @@
     "gtSample": 100,
     "gtMismatchTolerance": 0.08
   },
-  "profiles": [
+  "profiles":
+  [
     {
-      "name": "P_NUCLEAR_FINAL",
-      "description": "FINAL PAPER CONFIG: optimized for Angular/Semantic distribution",
+      "name": "RED_M8_COARSE_NUCLEAR",
+      "description": "HIGH-D STRESS: Optimized coarse-grained LSH for 512-D CLIP",
       "overrides": {
-        "paper": {
-          "m": 8,
-          "k": 100,
-          "tables": 50,
-          "w": 0,
-          "l": 50,
-          "lambda": 2,
-          "divisions": 4,
-          "seed": 13
-        },
-        "stabilization": {
-          "enabled": true,
-          "alpha": 0.40,
-          "minCandidatesRatio": 2.0
-        },
-        "runtime": {
-          "probeOverride": 800,
-          "refinementLimit": 8000,
-          "maxGlobalCandidates": 100000,
-          "maxCandidateFactor": 15
-        }
+        "paper": { "m": 8, "lambda": 2, "divisions": 4, "tables": 50 },
+        "runtime": { "refinementLimit": 8000, "maxGlobalCandidates": 15000 }
+      }
+    },
+    {
+      "name": "RED_M12_COARSE_NUCLEAR",
+      "description": "HIGH-D STRESS: Balanced coarse-grained LSH for 512-D CLIP",
+      "overrides": {
+        "paper": { "m": 12, "lambda": 2, "divisions": 4, "tables": 50 },
+        "runtime": { "refinementLimit": 12000, "maxGlobalCandidates": 20000 }
+      }
+    },
+    {
+      "name": "ABL_TABLES_25_REDCAPS",
+      "description": "SENSITIVITY ABLATION: Impact of hash diversity (tables=25) on High-D",
+      "overrides": {
+        "paper": { "m": 8, "lambda": 2, "divisions": 4, "tables": 25 },
+        "runtime": { "refinementLimit": 8000 }
+      }
+    },
+    {
+      "name": "ABL_TABLES_75_REDCAPS",
+      "description": "SENSITIVITY ABLATION: Impact of hash diversity (tables=75) on High-D",
+      "overrides": {
+        "paper": { "m": 8, "lambda": 2, "divisions": 4, "tables": 75 },
+        "runtime": { "refinementLimit": 8000 }
       }
     }
   ]

@@ -39,192 +39,39 @@
     "gtSample": 150,
     "gtMismatchTolerance": 0.05
   },
-
   "profiles": [
-    {
-      "name": "P6_SWEET_SPOT",
-      "description": "TARGET: 85% recall @ 2s (competitive edge)",
-      "overrides": {
-        "paper": { "m": 24, "lambda": 2, "divisions": 8, "tables": 6 },
-        "runtime": {
-          "probeOverride": 6,
-          "refinementLimit": 12000,
-          "maxGlobalCandidates": 16000,
-          "maxCandidateFactor": 4,
-          "maxRelaxationDepth": 7,
-          "hammingPrefilterThreshold": 0
-        }
-      }
-    },
-
-    {
-      "name": "P10_COMPETITIVE",
-      "description": "TARGET: 90% recall @ 3.5s (beat mSANNP)",
-      "overrides": {
-        "paper": { "m": 26, "lambda": 2, "divisions": 8, "tables": 7 },
-        "runtime": {
-          "probeOverride": 10,
-          "refinementLimit": 20000,
-          "maxGlobalCandidates": 26000,
-          "maxCandidateFactor": 6,
-          "maxRelaxationDepth": 8,
-          "hammingPrefilterThreshold": 0
-        }
-      }
-    },
-
-    {
-      "name": "P8_HAMMING",
-      "description": "OPTIMIZATION: Hamming pre-filter (expect 20-30% speedup)",
-      "overrides": {
-        "paper": { "m": 24, "lambda": 2, "divisions": 8, "tables": 6 },
-        "runtime": {
-          "probeOverride": 8,
-          "refinementLimit": 14000,
-          "maxGlobalCandidates": 20000,
-          "maxCandidateFactor": 5,
-          "maxRelaxationDepth": 7,
-          "hammingPrefilterThreshold": 95
-        }
-      }
-    },
-
-    {
-      "name": "P10_HAMMING",
-      "description": "High recall + Hamming speedup",
-      "overrides": {
-        "paper": { "m": 26, "lambda": 2, "divisions": 8, "tables": 7 },
-        "runtime": {
-          "probeOverride": 10,
-          "refinementLimit": 16000,
-          "maxGlobalCandidates": 26000,
-          "maxCandidateFactor": 6,
-          "maxRelaxationDepth": 8,
-          "hammingPrefilterThreshold": 95
-        }
-      }
-    },
-
-    {
-      "name": "M28_HIGH",
-      "description": "ABLATION: m=28 (21.9% of dim, high projection count)",
-      "overrides": {
-        "paper": { "m": 28, "lambda": 2, "divisions": 8, "tables": 6 },
-        "runtime": {
-          "probeOverride": 8,
-          "refinementLimit": 16000,
-          "maxGlobalCandidates": 20000,
-          "maxRelaxationDepth": 7,
-          "hammingPrefilterThreshold": 0
-        }
-      }
-    },
-
-    {
-      "name": "M22_LOW",
-      "description": "ABLATION: m=22 (17.2% of dim, low projection count)",
-      "overrides": {
-        "paper": { "m": 22, "lambda": 2, "divisions": 8, "tables": 6 },
-        "runtime": {
-          "probeOverride": 8,
-          "refinementLimit": 16000,
-          "maxGlobalCandidates": 20000,
-          "maxRelaxationDepth": 7,
-          "hammingPrefilterThreshold": 0
-        }
-      }
-    },
-
-    {
-      "name": "LAMBDA3_DEEP",
-      "description": "ABLATION: λ=3 (deeper relaxation, expect +10% recall, +30% time)",
-      "overrides": {
-        "paper": { "m": 24, "lambda": 3, "divisions": 8, "tables": 6 },
-        "runtime": {
-          "probeOverride": 8,
-          "refinementLimit": 20000,
-          "maxGlobalCandidates": 28000,
-          "maxRelaxationDepth": 9,
-          "hammingPrefilterThreshold": 0
-        }
-      }
-    },
-
-    {
-      "name": "DIV6_COARSE",
-      "description": "ABLATION: divisions=6 (fewer partitions, faster search)",
-      "overrides": {
-        "paper": { "m": 24, "lambda": 2, "divisions": 6, "tables": 6 },
-        "runtime": {
-          "probeOverride": 8,
-          "refinementLimit": 16000,
-          "maxGlobalCandidates": 20000,
-          "maxRelaxationDepth": 7,
-          "hammingPrefilterThreshold": 0
-        }
-      }
-    },
-
-    {
-      "name": "DIV10_FINE",
-      "description": "ABLATION: divisions=10 (more partitions, precision)",
-      "overrides": {
-        "paper": { "m": 24, "lambda": 2, "divisions": 10, "tables": 6 },
-        "runtime": {
-          "probeOverride": 8,
-          "refinementLimit": 16000,
-          "maxGlobalCandidates": 20000,
-          "maxRelaxationDepth": 7,
-          "hammingPrefilterThreshold": 0
-        }
-      }
-    },
-
-    {
-      "name": "T10_DIVERSITY",
-      "description": "ABLATION: tables=10 (max hash diversity)",
-      "overrides": {
-        "paper": { "m": 24, "lambda": 2, "divisions": 8, "tables": 10 },
-        "runtime": {
-          "probeOverride": 8,
-          "refinementLimit": 18000,
-          "maxGlobalCandidates": 24000,
-          "maxRelaxationDepth": 7,
-          "hammingPrefilterThreshold": 0
-        }
-      }
-    },
-
-    {
-      "name": "NO_REENCRYPT_P8",
-      "description": "SECURITY OVERHEAD: Baseline without re-encryption",
-      "overrides": {
-        "reencryptionEnabled": false,
-        "paper": { "m": 24, "lambda": 2, "divisions": 8, "tables": 6 },
-        "runtime": {
-          "probeOverride": 8,
-          "refinementLimit": 16000,
-          "maxGlobalCandidates": 20000,
-          "maxRelaxationDepth": 7,
-          "hammingPrefilterThreshold": 0
-        }
-      }
-    },
-
-    {
-      "name": "P4_FAST",
-      "description": "BASELINE: Speed reference (keep existing)",
-      "overrides": {
-        "paper": { "m": 20, "lambda": 2, "divisions": 8, "tables": 5 },
-        "runtime": {
-          "probeOverride": 4,
-          "refinementLimit": 8000,
-          "maxGlobalCandidates": 10000,
-          "maxCandidateFactor": 3,
-          "maxRelaxationDepth": 5,
-          "hammingPrefilterThreshold": 0
-        }
-      }
+  {
+    "name": "GAP_SIFT_M20_SMOOTH",
+    "description": "PARETO SMOOTHING: Bridge the gap between P4 and P8 Balanced",
+    "overrides": {
+      "paper": { "m": 20, "lambda": 2, "divisions": 8, "tables": 8 },
+      "runtime": { "refinementLimit": 10000, "maxGlobalCandidates": 15000 }
     }
-  ]
+  },
+  {
+    "name": "GAP_SIFT_M28_HIGH_PRECISION",
+    "description": "TAIL SMOOTHING: High-limit search for upper Pareto bound",
+    "overrides": {
+      "paper": { "m": 28, "lambda": 2, "divisions": 8, "tables": 10 },
+      "runtime": { "refinementLimit": 32000, "maxGlobalCandidates": 40000 }
+    }
+  },
+  {
+    "name": "OPT_ABL_HAMMING_95",
+    "description": "OPTIMIZATION WIN: Hamming pre-filter speedup vs standard P8",
+    "overrides": {
+      "paper": { "m": 24, "lambda": 2, "divisions": 8, "tables": 8 },
+      "runtime": { "refinementLimit": 16000, "hammingPrefilterThreshold": 95 }
+    }
+  },
+  {
+    "name": "SEC_TAX_REENC_ACTIVE",
+    "description": "SECURITY TAX: End-to-end latency with active background re-encryption",
+    "overrides": {
+      "reencryptionEnabled": true,
+      "paper": { "m": 24, "lambda": 2, "divisions": 8, "tables": 8 },
+      "runtime": { "refinementLimit": 16000 }
+    }
+  }
+]
 }

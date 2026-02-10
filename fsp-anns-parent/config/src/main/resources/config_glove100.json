@@ -41,29 +41,39 @@
     "gtSample": 150,
     "gtMismatchTolerance": 0.05
   },
-  "profiles": [
-    {
-      "name": "P_BALANCED_NUCLEAR",
-      "description": "FINAL PAPER CONFIG: optimized for Angular/Semantic distribution",
-      "overrides": {
-        "paper": {
-          "m": 12,
-          "tables": 50,
-          "lambda": 2,
-          "divisions": 4,
-          "seed": 13
-        },
-        "stabilization": {
-          "enabled": true,
-          "alpha": 0.40
-        },
-        "runtime": {
-          "probeOverride": 1200,
-          "refinementLimit": 25000,
-          "maxGlobalCandidates": 100000,
-          "maxCandidateFactor": 20
+  "profiles":
+    [
+      {
+        "name": "GLOVE_NUCLEAR_10K",
+        "description": "RATIO WAR: High diversity tables (50) for semantic fidelity",
+        "overrides": {
+          "paper": { "m": 12, "lambda": 2, "divisions": 4, "tables": 50 },
+          "runtime": { "refinementLimit": 10000, "maxGlobalCandidates": 20000 }
+        }
+      },
+      {
+        "name": "GLOVE_NUCLEAR_20K",
+        "description": "RATIO WAR: Deep semantic search @ 20k limit",
+        "overrides": {
+          "paper": { "m": 12, "lambda": 2, "divisions": 4, "tables": 50 },
+          "runtime": { "refinementLimit": 20000, "maxGlobalCandidates": 30000 }
+        }
+      },
+      {
+        "name": "GLOVE_NUCLEAR_30K",
+        "description": "RATIO WAR: Peak semantic recall anchor point",
+        "overrides": {
+          "paper": { "m": 12, "lambda": 2, "divisions": 4, "tables": 50 },
+          "runtime": { "refinementLimit": 30000, "maxGlobalCandidates": 45000 }
+        }
+      },
+      {
+        "name": "ABL_DIV8_SEMANTIC",
+        "description": "ARCHITECTURAL ABLATION: Impact of fine-grained partitions (div=8) on GloVe",
+        "overrides": {
+          "paper": { "m": 12, "lambda": 2, "divisions": 8, "tables": 50 },
+          "runtime": { "refinementLimit": 20000 }
         }
       }
-    }
-  ]
+    ]
 }
