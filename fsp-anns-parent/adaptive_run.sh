@@ -107,7 +107,7 @@ echo "dataset,profile,ART_ms,AvgRatio,recall_at_100,queries_used" > "$GLOBAL_SUM
 query_budget_for_profile() {
   local name="$1"
   if [[ "$name" =~ (_FAST|_BALANCED|_HIGH|_BASE)$ ]]; then
-    echo "$FULL_QUERIES"; return
+    echo "$ABLATION_QUERIES"; return
   fi
   if [[ "$name" =~ (_M[0-9]+|_LAMBDA|_DIV|_TABLE) ]]; then
     echo "$ABLATION_QUERIES"; return
