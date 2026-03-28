@@ -1,4 +1,4 @@
-# Secure Vector Search Engine with Forward Security — Architecture
+# FSPANN — Architecture
 
 This document describes the internal architecture of the FSPANN system: its structural decomposition, the layered design principle that separates routing from cryptographic state, the full component map, the query pipeline, and the lifecycle of key evolution.
 
