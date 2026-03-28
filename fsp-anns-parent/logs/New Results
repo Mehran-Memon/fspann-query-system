@@ -1,0 +1,156 @@
+PS /home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent> ./adaptive_run.sh
+==========================================
+TMPDIR: /mnt/data/mehran/tmp (1.4T free)
+Root:   /tmp (18G free)
+==========================================
+
+✓ Disk space: 1397GB available
+FSP-ANNS SWEEP
+Started: 2026年 02月 11日 星期三 03:33:12 CST
+Datasets: SIFT1M, Glove-100, RedCaps
+
+
+==========================================
+DATASET: SIFT1M
+==========================================
+Profiles: 6
+
+[SIFT1M] 1/6: SIFT_P4_FAST
+  Started: 03:33:13
+  ✓ DONE in 255m
+  Queries used: 10000
+  Recall@100: 0.550634 | ART: 1429.849300ms | Ratio: 1.027552
+
+[SIFT1M] 2/6: SIFT_P6_BALANCED
+  Started: 07:48:24
+  ✓ DONE in 489m
+  Queries used: 10000
+  Recall@100: 0.711652 | ART: 2827.726000ms | Ratio: 1.013466
+
+[SIFT1M] 3/6: SIFT_M28_HIGH
+  Started: 15:57:40
+  ✓ DONE in 557m
+  Queries used: 10000
+  Recall@100: 0.720616 | ART: 3231.806700ms | Ratio: 1.012796
+  → Using 1000 queries (ablation mode)
+
+[SIFT1M] 4/6: SIFT_LAMBDA3
+  Started: 01:15:24
+  ✓ DONE in 80m
+  Queries used: 1000
+  Recall@100: 0.748940 | ART: 3798.553000ms | Ratio: 1.010611
+  → Using 1000 queries (ablation mode)
+
+[SIFT1M] 5/6: SIFT_DIV6_COARSE
+  Started: 02:36:20
+  ✓ DONE in 57m
+  Queries used: 1000
+  Recall@100: 0.613510 | ART: 2442.387000ms | Ratio: 1.020566
+
+[SIFT1M] 6/6: SIFT_P10_HIGH
+  Started: 03:34:09
+  ✓ DONE in 717m
+  Queries used: 10000
+  Recall@100: 0.771397 | ART: 4185.552100ms | Ratio: 1.009719
+
+✓ SIFT1M completed
+
+==========================================
+DATASET: glove-100
+==========================================
+Profiles: 5
+
+[glove-100] 1/5: GLOVE_P4_FAST
+  Started: 15:31:19
+  ✓ DONE in 272m
+  Queries used: 10000
+  Recall@100: 0.136710 | ART: 1589.109200ms | Ratio: 1.068982
+
+[glove-100] 2/5: GLOVE_P6_BALANCED
+  Started: 20:04:01
+  ✓ DONE in 491m
+  Queries used: 10000
+  Recall@100: 0.220203 | ART: 2894.038500ms | Ratio: 1.047351
+  → Using 1000 queries (ablation mode)
+
+[glove-100] 3/5: GLOVE_TABLES8
+  Started: 04:15:05
+  ✓ DONE in 69m
+  Queries used: 1000
+  Recall@100: 0.271700 | ART: 3619.695000ms | Ratio: 1.039054
+  → Using 1000 queries (ablation mode)
+
+[glove-100] 4/5: GLOVE_LAMBDA3
+  Started: 05:25:05
+  ✓ DONE in 72m
+  Queries used: 1000
+  Recall@100: 0.257770 | ART: 3852.049000ms | Ratio: 1.041014
+  → Using 1000 queries (ablation mode)
+
+[glove-100] 5/5: GLOVE_DIV10_FINE
+  Started: 06:37:51
+  ✓ DONE in 64m
+  Queries used: 1000
+  Recall@100: 0.252250 | ART: 3292.829000ms | Ratio: 1.042245
+
+✓ glove-100 completed
+
+==========================================
+DATASET: RedCaps
+==========================================
+Profiles: 6
+
+[RedCaps] 1/6: REDCAPS_P6_BASE
+  Started: 07:42:07
+  ✓ DONE in 80m
+  Queries used: 10000
+  Recall@100: 0.059470 | ART: 3584.923000ms | Ratio: 1.022636
+
+[RedCaps] 2/6: REDCAPS_P10_HIGH
+  Started: 09:02:48
+  ✓ DONE in 107m
+  Queries used: 10000
+  Recall@100: 0.080030 | ART: 5185.706000ms | Ratio: 1.019944
+  → Using 1000 queries (ablation mode)
+
+[RedCaps] 3/6: REDCAPS_M30
+  Started: 10:50:20
+  ✓ DONE in 102m
+  Queries used: 1000
+  Recall@100: 0.072610 | ART: 4738.479000ms | Ratio: 1.020719
+  → Using 1000 queries (ablation mode)
+
+[RedCaps] 4/6: REDCAPS_LAMBDA3
+  Started: 12:33:02
+  ✓ DONE in 114m
+  Queries used: 1000
+  Recall@100: 0.096860 | ART: 5607.233000ms | Ratio: 1.018297
+  → Using 1000 queries (ablation mode)
+
+[RedCaps] 5/6: REDCAPS_DIV6
+  Started: 14:28:05
+  ✓ DONE in 69m
+  Queries used: 1000
+  Recall@100: 0.050680 | ART: 3115.453000ms | Ratio: 1.024116
+
+[RedCaps] 6/6: REDCAPS_P4_FAST
+  Started: 15:37:38
+  ✓ DONE in 56m
+  Queries used: 10000
+  Recall@100: 0.042680 | ART: 2360.540000ms | Ratio: 1.025951
+
+✓ RedCaps completed
+
+SWEEP COMPLETE
+Finished: 2026年 02月 13日 星期五 16:34:30 CST
+Duration: 61h 1m
+
+✅ ALL PROFILES SUCCESS!
+
+Results:
+  Global: /mnt/data/mehran/global_summary.csv
+  SIFT1M: /mnt/data/mehran/SIFT1M/dataset_summary.csv
+  Glove:  /mnt/data/mehran/glove-100/dataset_summary.csv
+  RedCaps:/mnt/data/mehran/RedCaps/dataset_summary.csv
+==========================================
+PS /home/jeco/IdeaProjects/fspann-query-system/fsp-anns-parent> 

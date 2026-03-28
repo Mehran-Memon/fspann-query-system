@@ -1,82 +1,82 @@
 package com.fspann.crypto;
 
+import com.fspann.common.KeyVersion;
 import com.fspann.common.EncryptedPoint;
 import com.fspann.common.KeyLifeCycleService;
 
-import javax.crypto.SecretKey;
-
 /**
- * CryptoService defines the contract for encryption and decryption
- * operations in the FSP-ANN framework using AES-GCM.
+ * CryptoService: AES-GCM encryption with AAD binding.
+ * Supports forward-security via multi-version key management.
  */
 public interface CryptoService {
 
     /**
-     * Encrypts a vector and returns an EncryptedPoint with metadata.
-     *
-     * @param id Unique identifier for the vector.
-     * @param vector The vector to encrypt.
-     * @param key The AES-GCM key to use.
-     * @return EncryptedPoint object.
+     * Encrypt a plaintext vector to an EncryptedPoint.
      */
-    EncryptedPoint encryptToPoint(String id, double[] vector, SecretKey key);
+    EncryptedPoint encryptToPoint(String id, double[] plaintext, javax.crypto.SecretKey key);
 
     /**
-     * Decrypts an EncryptedPoint using the provided key.
-     *
-     * @param pt EncryptedPoint to decrypt.
-     * @param key AES-GCM key used for decryption.
-     * @return Decrypted vector.
+     * Convenience: Encrypt using current key version.
+     * This is an alias for encryptToPoint() with getCurrentKeyVersion().getKey()
      */
-    double[] decryptFromPoint(EncryptedPoint pt, SecretKey key);
+    default EncryptedPoint encrypt(String id, double[] plaintext) {
+        KeyVersion kv = getCurrentKeyVersion();
+        if (kv == null) {
+            throw new IllegalStateException("Current key version not available");
+        }
+        return encryptToPoint(id, plaintext, kv.getKey());
+    }
 
     /**
-     * Encrypts a raw vector using the given key and IV.
-     *
-     * @param vector Vector to encrypt.
-     * @param key AES-GCM key.
-     * @param iv Initialization vector.
-     * @return Ciphertext.
+     * Convenience: Encrypt using explicit key version.
      */
-    byte[] encrypt(double[] vector, SecretKey key, byte[] iv);
+    default EncryptedPoint encrypt(String id, double[] plaintext, KeyVersion keyVersion) {
+        if (keyVersion == null) {
+            throw new IllegalArgumentException("keyVersion cannot be null");
+        }
+        return encryptToPoint(id, plaintext, keyVersion.getKey());
+    }
 
     /**
-     * Decrypts a query ciphertext using the provided key and IV.
-     *
-     * @param encryptedQuery Ciphertext of the query.
-     * @param iv Initialization vector used during encryption.
-     * @param key AES-GCM key.
-     * @return Decrypted vector.
+     * Decrypt an EncryptedPoint back to plaintext double[].
      */
-    double[] decryptQuery(byte[] encryptedQuery, byte[] iv, SecretKey key);
+    double[] decryptFromPoint(EncryptedPoint encrypted, javax.crypto.SecretKey key);
 
     /**
-     * Re-encrypts a vector using a new key (key rotation support).
-     *
-     * @param pt The existing EncryptedPoint.
-     * @param newKey New AES-GCM key to use.
-     * @return Re-encrypted point.
+     * Encrypt a query vector for encrypted search.
      */
-    EncryptedPoint reEncrypt(EncryptedPoint pt, SecretKey newKey, byte[] newIv);
+    byte[] encryptQuery(double[] queryVector, javax.crypto.SecretKey key, byte[] iv);
 
     /**
-     * Generates a secure IV for AES-GCM encryption.
-     *
-     * @return Random IV.
+     * Decrypt a query vector.
      */
-    byte[] generateIV();
+    double[] decryptQuery(byte[] encryptedQuery, byte[] iv, javax.crypto.SecretKey key);
 
     /**
-     * Returns the key lifecycle service used for key management.
-     * @return The KeyLifeCycleService instance.
+     * Get the key service for accessing current/historical keys.
      */
     KeyLifeCycleService getKeyService();
 
     /**
-     * Encrypts a vector using the current key from the KeyLifeCycleService.
-     * @param id Unique identifier for the vector.
-     * @param vector The vector to encrypt.
-     * @return EncryptedPoint object containing ciphertext and metadata.
+     * Set the key service (optional, for late initialization).
      */
-    EncryptedPoint encrypt(String id, double[] vector);
+    void setKeyService(KeyLifeCycleService keyService);
+
+    /**
+     * Get current key version.
+     */
+    KeyVersion getCurrentKeyVersion();
+
+    /**
+     * Listener for encryption events (optional).
+     */
+    @FunctionalInterface
+    interface EncryptionListener {
+        void onEncryption(String vectorId, long encryptionTimeMs);
+    }
+
+    /**
+     * Register an encryption listener (optional).
+     */
+    void addEncryptionListener(EncryptionListener listener);
 }

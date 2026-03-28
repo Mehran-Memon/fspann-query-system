@@ -9,44 +9,49 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Arrays;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
 /**
- * Canonical system configuration for FSP-ANN.
+ * Canonical, paper-aligned configuration for FSP-ANN (MSANNP).
  *
- * - Loaded from JSON via {@link #load(String, boolean)}.
- * - Cached per absolute/real path.
- * - Exposes nested config blocks: LSH, paper, reencryption, eval, output, audit, cloak, ratio, kAware.
+ * RULES:
+ * - Every field here is used by the system.
+ * - No speculative or half-wired knobs.
+ * - JSON structure is flat and deterministic.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
-public class SystemConfig {
+public final class SystemConfig {
+
+    // ---------------- limits ----------------
 
     private static final int  MAX_SHARDS        = 8192;
-    private static final int  MAX_TABLES        = 1024;
     private static final long MAX_OPS_THRESHOLD = 1_000_000_000L;
-    private static final long MAX_AGE_THRESHOLD = 365L * 24L * 60L * 60L * 1000L; // 1 year
+    private static final long MAX_AGE_THRESHOLD = 365L * 24L * 60L * 60L * 1000L;
+
+    // ---------------- loader ----------------
 
     private static final ObjectMapper MAPPER = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
-    /** Per-path cache for loaded configs. */
-    private static final ConcurrentMap<String, SystemConfig> configCache = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<String, SystemConfig> CACHE =
+            new ConcurrentHashMap<>();
 
-    /* ======================== Top-level fields ======================== */
+    // ================= top-level =================
+
+    @JsonProperty("profiles")
+    private ProfileConfig[] profiles;
 
     @JsonProperty("numShards")
     private int numShards = 32;
-
-    @JsonProperty("numTables")
-    private int numTables = 8;
 
     @JsonProperty("opsThreshold")
     private long opsThreshold = 500_000_000L;
 
     @JsonProperty("ageThresholdMs")
-    private long ageThresholdMs = 24L * 60L * 60L * 1000L; // 1 day
+    private long ageThresholdMs = 24L * 60L * 60L * 1000L;
 
     @JsonProperty("reencryptionEnabled")
     private boolean reencryptionEnabled = true;
@@ -54,94 +59,142 @@ public class SystemConfig {
     @JsonProperty("forwardSecurityEnabled")
     private boolean forwardSecurityEnabled = true;
 
-    @JsonProperty("partitionedIndexingEnabled")
-    private boolean partitionedIndexingEnabled = true;
-
-    /** Whether MicrometerProfiler should be enabled. */
     @JsonProperty("profilerEnabled")
     private boolean profilerEnabled = true;
-
-    @JsonProperty("lsh")
-    private LshConfig lsh = new LshConfig();
-
-    @JsonProperty("reencryption")
-    private ReencryptionConfig reencryption = new ReencryptionConfig();
 
     @JsonProperty("paper")
     private PaperConfig paper = new PaperConfig();
 
+    @JsonProperty("runtime")
+    private RuntimeConfig runtime = new RuntimeConfig();
+
+    @JsonProperty("stabilization")
+    private StabilizationConfig stabilization = new StabilizationConfig();
+
     @JsonProperty("eval")
     private EvalConfig eval = new EvalConfig();
-
-    @JsonProperty("output")
-    private OutputConfig output = new OutputConfig();
-
-    @JsonProperty("audit")
-    private AuditConfig audit = new AuditConfig();
-
-    @JsonProperty("cloak")
-    private CloakConfig cloak = new CloakConfig();
 
     @JsonProperty("ratio")
     private RatioConfig ratio = new RatioConfig();
 
-    @JsonProperty("kAware")
-    private KAwareConfig kAware = new KAwareConfig();
+    @JsonProperty("reencryption")
+    private ReencryptionConfig reencryption = new ReencryptionConfig();
 
-    /* ======================== Static loading API ======================== */
+    private KAdaptiveConfig kAdaptive;
+    private OutputConfig output;
+    private CloakConfig cloak;
 
-    public static SystemConfig load(String path, boolean refresh) throws ConfigLoadException {
-        Objects.requireNonNull(path, "Config path cannot be null");
+
+
+    // ================= loading =================
+
+    public static SystemConfig load(String path, boolean refresh)
+            throws ConfigLoadException {
+
+        Objects.requireNonNull(path, "config path");
+
         String key;
         try {
             Path p = Paths.get(path).toAbsolutePath().normalize();
-            try {
-                p = p.toRealPath();
-            } catch (IOException ignore) {
-                // fall back to normalized absolute path
-            }
+            try { p = p.toRealPath(); } catch (IOException ignore) {}
             key = p.toString();
         } catch (Exception e) {
-            throw new ConfigLoadException("Invalid config path: " + path, e);
+            throw new ConfigLoadException("Invalid config path", e);
         }
 
         if (!refresh) {
-            SystemConfig cached = configCache.get(key);
+            SystemConfig cached = CACHE.get(key);
             if (cached != null) return cached;
         }
 
         SystemConfig cfg;
         try {
             Path p = Paths.get(key);
-            if (!Files.isRegularFile(p) || !Files.isReadable(p)) {
-                throw new IOException("Config file not found or not readable: " + key);
+            if (!Files.isReadable(p)) {
+                throw new IOException("Config not readable: " + key);
             }
             cfg = MAPPER.readValue(p.toFile(), SystemConfig.class);
         } catch (IOException e) {
-            throw new ConfigLoadException("Failed to read/parse SystemConfig from " + key, e);
+            throw new ConfigLoadException("Failed to load config", e);
+        }
+
+        int maxK = Arrays.stream(cfg.getEval().kVariants).max().orElse(1);
+        if (cfg.getRuntime().getMaxGlobalCandidates() < maxK) {
+            throw new IllegalStateException(
+                    "Invalid config: maxGlobalCandidates < maxK (" +
+                            cfg.getRuntime().getMaxGlobalCandidates() + " < " + maxK + ")"
+            );
+        }
+
+// Get active profile from system property
+        String activeProfile = System.getProperty("cli.profile", "BASE");
+
+        if (cfg.profiles != null && !activeProfile.equals("BASE")) {
+            ProfileConfig selected = null;
+
+            // Find matching profile
+            for (ProfileConfig p : cfg.profiles) {
+                if (p.name != null && p.name.equals(activeProfile)) {
+                    selected = p;
+                    break;
+                }
+            }
+
+            if (selected != null && selected.overrides != null) {
+                // Apply paper overrides
+                if (selected.overrides.paper != null) {
+                    PaperConfig po = selected.overrides.paper;
+                    if (po.m > 0) cfg.paper.m = po.m;
+                    if (po.lambda > 0) cfg.paper.lambda = po.lambda;
+                    if (po.divisions > 0) cfg.paper.divisions = po.divisions;
+                    if (po.tables > 0) cfg.paper.tables = po.tables;
+                    if (po.seed != 0) cfg.paper.seed = po.seed;
+                }
+
+                // Apply runtime overrides
+                if (selected.overrides.runtime != null) {
+                    RuntimeConfig ro = selected.overrides.runtime;
+
+                    // Apply refinementLimit
+                    if (ro.refinementLimit > 0) {
+                        cfg.runtime.refinementLimit = ro.refinementLimit;
+                    }
+
+                    // Apply probeOverride (critical!)
+                    if (ro.probeOverride >= 0) {
+                        cfg.runtime.probeOverride = ro.probeOverride;
+                    }
+
+                    // Apply other runtime params
+                    if (ro.maxCandidateFactor > 0) {
+                        cfg.runtime.maxCandidateFactor = ro.maxCandidateFactor;
+                    }
+                }
+
+                // Apply stabilization overrides
+                if (selected.overrides.stabilization != null) {
+                    StabilizationConfig so = selected.overrides.stabilization;
+                    cfg.stabilization.enabled = so.enabled;
+                    cfg.stabilization.alpha = so.alpha;
+                    cfg.stabilization.minCandidatesRatio = so.minCandidatesRatio;
+                }
+            }
         }
 
         cfg.numShards      = clamp(cfg.numShards, 1, MAX_SHARDS);
-        cfg.numTables      = clamp(cfg.numTables, 1, MAX_TABLES);
         cfg.opsThreshold   = clamp(cfg.opsThreshold, 1L, MAX_OPS_THRESHOLD);
         cfg.ageThresholdMs = clamp(cfg.ageThresholdMs, 0L, MAX_AGE_THRESHOLD);
 
-        configCache.put(key, cfg);
+        CACHE.put(key, cfg);
         return cfg;
     }
 
-    public static void clearCache() {
-        configCache.clear();
-    }
+    // ================= getters =================
 
-    /* ======================== Getters used by other modules ======================== */
+    public ProfileConfig[] getProfiles() { return profiles; }
 
     public int getNumShards() {
         return clamp(numShards, 1, MAX_SHARDS);
-    }
-
-    public int getNumTables() {
-        return clamp(numTables, 1, MAX_TABLES);
     }
 
     public long getOpsThreshold() {
@@ -156,154 +209,158 @@ public class SystemConfig {
         return forwardSecurityEnabled;
     }
 
-    public boolean isPartitionedIndexingEnabled() {
-        return partitionedIndexingEnabled;
-    }
-
-    public boolean isReencryptionEnabled() {
-        return reencryptionEnabled;
-    }
-
-    /** Global re-encryption toggle used by ForwardSecureANNSystem. */
-    public boolean isReencryptionGloballyEnabled() {
-        return reencryptionEnabled && (reencryption == null || reencryption.isEnabled());
-    }
-
     public boolean isProfilerEnabled() {
         return profilerEnabled;
     }
 
-    public LshConfig getLsh() {
-        return lsh;
+    public boolean isReencryptionGloballyEnabled() {
+        return reencryptionEnabled && reencryption.isEnabled();
     }
 
-    public ReencryptionConfig getReencryption() {
-        return reencryption;
+    public PaperConfig getPaper() { return paper; }
+    public RuntimeConfig getRuntime() { return runtime; }
+    public StabilizationConfig getStabilization() { return stabilization; }
+    public EvalConfig getEval() { return eval; }
+    public RatioConfig getRatio() { return ratio; }
+    public ReencryptionConfig getReencryption() { return reencryption; }
+    public KAdaptiveConfig getKAdaptive() {
+        return kAdaptive;
     }
-
-    public PaperConfig getPaper() {
-        return paper;
-    }
-
-    public EvalConfig getEval() {
-        return eval;
-    }
-
     public OutputConfig getOutput() {
         return output;
     }
-
-    public AuditConfig getAudit() {
-        return audit;
-    }
-
     public CloakConfig getCloak() {
         return cloak;
     }
+    // ================= nested configs =================
 
-    public RatioConfig getRatio() {
-        return ratio;
-    }
+    public static final class PaperConfig {
 
-    public KAwareConfig getKAware() {
-        return kAware;
-    }
-
-    /* ======================== Nested config types ======================== */
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class LshConfig {
-        @JsonProperty("numTables")
-        public int numTables = 8;
-
-        @JsonProperty("rowsPerBand")
-        public int rowsPerBand = 0;
-
-        @JsonProperty("probeShards")
-        public int probeShards = 0;
-
-        public int getNumTables() {
-            return clamp(numTables, 1, MAX_TABLES);
-        }
-        public int getProbeShards() {
-            // 0 means "use default" at higher level; otherwise clamp
-            if (probeShards <= 0) return 0;
-            return clamp(probeShards, 1, MAX_SHARDS);
-        }
-    }
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class ReencryptionConfig {
         @JsonProperty("enabled")
         public boolean enabled = true;
 
-        @JsonProperty("batchSize")
-        public int batchSize = 1024;
-
-        @JsonProperty("maxMsPerBatch")
-        public long maxMsPerBatch = 50L;
-
-        public boolean isEnabled() {
-            return enabled;
-        }
-
-        public int getBatchSize() {
-            return Math.max(1, batchSize);
-        }
-
-        public long getMaxMsPerBatch() {
-            return Math.max(0L, maxMsPerBatch);
-        }
-    }
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class PaperConfig {
-        @JsonProperty("enabled")
-        public boolean enabled = false;
-
         @JsonProperty("m")
-        public int m = 12;
+        public int m = 24;
 
         @JsonProperty("lambda")
-        public int lambda = 6;
+        public int lambda = 2;
 
         @JsonProperty("divisions")
-        public int divisions = 8;
+        public int divisions = 3;
+
+        @JsonProperty("tables")
+        public int tables = 6;
 
         @JsonProperty("seed")
-        public long seed = 42L;
+        public long seed = 13L;
 
-        @JsonProperty("safetyMaxCandidates")
-        public int safetyMaxCandidates = 0;
+        public boolean isEnabled() { return enabled; }
+        public int getM() { return Math.max(1, m); }
+        public int getLambda() { return Math.max(1, lambda); }
+        public int getDivisions() { return Math.max(1, divisions); }
+        public int getTables() { return Math.max(1, tables); }
+        public long getSeed() { return seed; }
+    }
 
-        public boolean isEnabled() {
-            return enabled;
+    public static final class RuntimeConfig {
+
+        @JsonProperty("maxCandidateFactor")
+        public int maxCandidateFactor = 600;
+
+        @JsonProperty("maxRefinementFactor")
+        public int maxRefinementFactor = 200;
+
+        @JsonProperty("maxRelaxationDepth")
+        public int maxRelaxationDepth = Integer.MAX_VALUE;
+
+        @JsonProperty("earlyStopCandidates")
+        public int earlyStopCandidates = Integer.MAX_VALUE;
+
+        @JsonProperty("refinementLimit")
+        public int refinementLimit = 20_000;
+
+        @JsonProperty("maxGlobalCandidates")
+        public int maxGlobalCandidates = 20000;
+
+        @JsonProperty("probeOverride")
+        public int probeOverride = -1;
+
+        public int getProbeOverride() {
+            return probeOverride;
         }
 
-        public int getM() {
-            return Math.max(1, m);
+        public int getMaxCandidateFactor() {
+            return Math.max(1, maxCandidateFactor);
         }
 
-        public int getLambda() {
-            return Math.max(1, lambda);
+        public int getMaxRefinementFactor() {
+            return Math.max(1, maxRefinementFactor);
         }
 
-        public int getDivisions() {
-            return Math.max(1, divisions);
+        public int getMaxRelaxationDepth() {
+            return Math.max(0, maxRelaxationDepth);
         }
 
-        public long getSeed() {
-            return seed;
+        public int getEarlyStopCandidates() {
+            return Math.max(1, earlyStopCandidates);
         }
 
-        public int getSafetyMaxCandidates() {
-            return Math.max(0, safetyMaxCandidates);
+
+        public int getMaxGlobalCandidates() {
+            return Math.max(1, maxGlobalCandidates);
+        }
+
+        public transient Integer refinementLimitOverride = null;
+
+        public int getRefinementLimit() {
+            return (refinementLimitOverride != null)
+                    ? refinementLimitOverride
+                    : refinementLimit;
+        }
+
+        public void overrideRefinementLimit(int limit) {
+            this.refinementLimitOverride = Math.max(1, limit);
+        }
+
+        public void clearRefinementLimitOverride() {
+            this.refinementLimitOverride = null;
+        }
+
+        private int hammingPrefilterThreshold = 0;  // 0 = disabled, >0 = threshold
+
+        public int getHammingPrefilterThreshold() {
+            return hammingPrefilterThreshold;
+        }
+
+        public void setHammingPrefilterThreshold(int threshold) {
+            this.hammingPrefilterThreshold = threshold;
         }
     }
 
-    /** Evaluation knobs (precision, K-variants, etc.). */
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class EvalConfig {
+    public static final class StabilizationConfig {
+
+        @JsonProperty("enabled")
+        public boolean enabled = true;
+
+        @JsonProperty("alpha")
+        public double alpha = 0.06;
+
+        @JsonProperty("minCandidatesRatio")
+        public double minCandidatesRatio = 1.5;
+
+        public boolean isEnabled() { return enabled; }
+
+        public double getAlpha() {
+            return clamp(alpha, 0.01, 1.0);
+        }
+
+        public double getMinCandidatesRatio() {
+            return clamp(minCandidatesRatio, 1.0, 2.0);
+        }
+    }
+
+    public static final class EvalConfig {
+
         @JsonProperty("computePrecision")
         public boolean computePrecision = true;
 
@@ -311,137 +368,108 @@ public class SystemConfig {
         public boolean writeGlobalPrecisionCsv = true;
 
         @JsonProperty("kVariants")
-        public int[] kVariants = new int[]{1, 5, 10, 20, 40, 60, 80, 100};
+        public int[] kVariants = {1, 10, 20, 40, 60, 80, 100};
+
+        public int getMaxK() {
+            int max = 1;
+            if (kVariants != null) {
+                for (int k : kVariants) {
+                    if (k > max) max = k;
+                }
+            }
+            return max;
+        }
     }
 
-    /** Output / export behavior. */
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class OutputConfig {
-        @JsonProperty("resultsDir")
-        public String resultsDir = "results";
+    public static final class RatioConfig {
 
-        @JsonProperty("suppressLegacyMetrics")
-        public boolean suppressLegacyMetrics = false;
-
-        @JsonProperty("exportArtifacts")
-        public boolean exportArtifacts = true;
-    }
-
-    /** Audit sampling & worst-K logging. */
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class AuditConfig {
-        @JsonProperty("enable")
-        public boolean enable = false;
-
-        @JsonProperty("k")
-        public int k = 100;
-
-        @JsonProperty("sampleEvery")
-        public int sampleEvery = 100;
-
-        @JsonProperty("worstKeep")
-        public int worstKeep = 25;
-    }
-
-    /** Cloaked query parameters (noise scale, etc.). */
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class CloakConfig {
-        @JsonProperty("noise")
-        public double noise = 0.0;
-    }
-
-    /** Ratio / groundtruth evaluation settings. */
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class RatioConfig {
-        /** "auto" | "gt" | "base". */
         @JsonProperty("source")
-        public String source = "auto";
+        public String source = "gt";
 
-        /** Explicit GT path (optional). */
         @JsonProperty("gtPath")
         public String gtPath;
 
-        /** If true, we may compute GT when missing. */
-        @JsonProperty("allowComputeIfMissing")
-        public boolean allowComputeIfMissing = false;
-
-        /** If true and allowed, auto-compute GT when absent. */
-        @JsonProperty("autoComputeGT")
-        public boolean autoComputeGT = false;
-
-        /** How many queries to sample when validating GT vs base. */
         @JsonProperty("gtSample")
-        public int gtSample = 16;
+        public int gtSample = 100;
 
-        /** Allowed mismatch fraction between GT@1 and base true NN. */
         @JsonProperty("gtMismatchTolerance")
         public double gtMismatchTolerance = 0.10;
     }
 
-    /** Optional K-aware candidate selection options. */
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class KAwareConfig {
+    public static final class ReencryptionConfig {
+
         @JsonProperty("enabled")
-        public boolean enabled = false;
+        private boolean enabled = true;
 
-        @JsonProperty("baseOversample")
-        public double baseOversample = 2.0;
+        @JsonProperty("batchSize")
+        private int batchSize = 1024;
 
-        @JsonProperty("logFactor")
-        public double logFactor = 0.5;
+        @JsonProperty("maxMsPerBatch")
+        private long maxMsPerBatch = 50L;
 
-        @JsonProperty("minPerDiv")
-        public int minPerDiv = 1;
-
-        @JsonProperty("maxPerDiv")
-        public int maxPerDiv = 0;
+        public boolean isEnabled() { return enabled; }
+        public int getBatchSize() { return Math.max(1, batchSize); }
+        public long getMaxMsPerBatch() { return Math.max(0L, maxMsPerBatch); }
     }
 
-    /* ======================== Helper methods ======================== */
-
-    private static int clamp(int v, int min, int max) {
-        if (v < min) return min;
-        if (v > max) return max;
-        return v;
-    }
-
-    private static long clamp(long v, long min, long max) {
-        if (v < min) return min;
-        if (v > max) return max;
-        return v;
-    }
-    @JsonProperty("kAdaptive")
-    private KAdaptiveConfig kAdaptive = new KAdaptiveConfig();
-    public KAdaptiveConfig getKAdaptive() { return kAdaptive; }
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
     public static class KAdaptiveConfig {
-        @JsonProperty("enabled")
         public boolean enabled = false;
-
-        // maximum times to widen for a single query
-        @JsonProperty("maxRounds")
-        public int maxRounds = 3;
-
-        // target minimum return-rate at Kmax (e.g. 0.8 → 80%)
-        @JsonProperty("targetReturnRate")
-        public double targetReturnRate = 0.80;
-
-        // guard to avoid insane work
-        @JsonProperty("maxFanout")
-        public double maxFanout = 4000.0;
-
-        // how aggressively to widen probes / tables per round
-        @JsonProperty("probeFactor")
-        public double probeFactor = 1.5;
+        public double probeFactor = 2.0;
+        public int maxFanout = 64;
     }
 
+    public static class OutputConfig {
+        public String resultsDir;
+        public boolean exportArtifacts = true;
+    }
 
-    /* ======================== Exception type ======================== */
+    public static class CloakConfig {
+        public double noise = 0.0;
+    }
 
-    public static class ConfigLoadException extends Exception {
-        public ConfigLoadException(String message, Throwable cause) {
-            super(message, cause);
+    // ================= profiles =================
+
+    public static final class ProfileConfig {
+
+        @JsonProperty("name")
+        public String name;
+
+        @JsonProperty("overrides")
+        public OverrideConfig overrides;
+    }
+
+    public static final class OverrideConfig {
+
+        @JsonProperty("paper")
+        public PaperConfig paper;
+
+        @JsonProperty("runtime")
+        public RuntimeConfig runtime;
+
+        @JsonProperty("stabilization")
+        public StabilizationConfig stabilization;
+    }
+
+    // ================= helpers =================
+
+    private static int clamp(int v, int lo, int hi) {
+        return Math.max(lo, Math.min(hi, v));
+    }
+
+    private static long clamp(long v, long lo, long hi) {
+        return Math.max(lo, Math.min(hi, v));
+    }
+
+    private static double clamp(double v, double lo, double hi) {
+        if (Double.isNaN(v)) return lo;
+        if (v < lo) return lo;
+        if (v > hi) return hi;
+        return v;
+    }
+
+    public static final class ConfigLoadException extends Exception {
+        public ConfigLoadException(String msg, Throwable t) {
+            super(msg, t);
         }
     }
 }

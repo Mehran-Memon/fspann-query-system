@@ -1,642 +1,900 @@
 package com.fspann.index.paper;
 
-import com.fspann.common.EncryptedPoint;
-import com.fspann.index.service.SecureLSHIndexService.PaperSearchEngine;
+import com.fspann.common.*;
+import com.fspann.config.SystemConfig;
+import com.fspann.key.KeyRotationServiceImpl;
+import com.fspann.crypto.AesGcmCryptoService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.ConcurrentMap;
 
 /**
- * PartitionedIndexService
- * -----------------------
- * Implements the partitioning scheme with multi-division codes and forward-secure indexing.
+ * PartitionedIndexService - MSANNP Implementation with Data-Adaptive GFunctions
+ * ==============================================================================
  *
- * Core ideas:
- *  - Index is per-dimension (d) -> DimensionState.
- *  - Each dimension has ℓ divisions. Each division:
- *      * Has a CodeFamily (G) and SubsetBounds index I (ordered in code-space).
- *      * Maps subset tags -> lists of EncryptedPoint.
- *  - Insert path uses precomputed codes from the client (CodedPoint).
- *  - Lookup path uses ONLY client codes (token.getCodes()) for privacy.
+ * KEY CHANGE (v2.0):
+ * ------------------
+ * Now uses GFunctionRegistry for data-adaptive omega computation.
  *
- * K-Adaptive:
- *  - PAPER_W_ALPHA controls the base per-division fanout:
- *        w_div ≈ α * |D| / ℓ
- *  - System property `probe.shards` rescales w_div via applyProbeScaling().
- *  - Global candidate cap is derived from:
- *        paper.maxCandidatesAllDivs  OR  probe.shards  OR  Integer.MAX_VALUE
+ * The registry is initialized automatically during the first batch insert
+ * using a sample of actual vectors. This ensures:
+ *   1. omega_j values are computed from actual projection ranges
+ *   2. Index and query use IDENTICAL GFunction parameters
+ *   3. Works correctly for ANY dataset (SIFT, Glove, Deep1B, etc.)
+ *
+ * INITIALIZATION FLOW:
+ * --------------------
+ * 1. First call to insert() triggers initializeRegistry() if not done
+ * 2. initializeRegistry() samples staged vectors and calls GFunctionRegistry.initialize()
+ * 3. All subsequent insert() and code() calls use cached GFunctions
+ *
+ * QUERY FLOW:
+ * -----------
+ * 1. QueryTokenFactory calls code(vec, seedOverride) or uses GFunctionRegistry directly
+ * 2. GFunctionRegistry returns the SAME GFunction used during indexing
+ * 3. Codes match -> correct candidates returned
  */
-public class PartitionedIndexService implements PaperSearchEngine {
+public final class PartitionedIndexService implements IndexService {
 
-    // ----------------------------- Tunables -----------------------------
-    private final int m;                // projections per division
-    private final int lambda;           // bits per projection
-    private final int divisions;        // ℓ (number of divisions)
-    private final long seedBase;        // base seed to derive per-division seeds
-    private final int buildThreshold;   // min items per dimension to build partitions
-    private final int maxCandidates;    // optional upper bound (currently unused directly)
+    private static final Logger logger =
+            LoggerFactory.getLogger(PartitionedIndexService.class);
 
-    private static final Logger logger = LoggerFactory.getLogger(PartitionedIndexService.class);
+//    private static final int DEFAULT_BUILD_THRESHOLD =
+//            Math.max(20_000, Runtime.getRuntime().availableProcessors() * 20_000);
+private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
 
-    // paper.alpha (0.5%–10% clamp)
-    private static final double PAPER_W_ALPHA = clampAlpha(
-            Double.parseDouble(System.getProperty("paper.alpha", "0.02"))
-    );
+    // Minimum sample size for GFunction initialization
+    private static final int MIN_SAMPLE_SIZE = 1000;
+    private static final int MAX_SAMPLE_SIZE = 10000;
+
+    private final RocksDBMetadataManager metadata;
+    private final SystemConfig cfg;
+    private final StorageMetrics storageMetrics;
+    private final KeyRotationServiceImpl keyService;
+    private final AesGcmCryptoService cryptoService;
+
+    // dim -> per-table states (tables = ℓ)
+    private final Map<Integer, DimensionState[]> dims = new ConcurrentHashMap<>();
+
+    private volatile boolean frozen = false;
+    private volatile int lastRawVisited = 0;
+
+    // Buffer for collecting sample vectors before initialization
+    private final List<double[]> initSampleBuffer = Collections.synchronizedList(new ArrayList<>());
+
+    private final ThreadLocal<Integer> lastTouched =
+            ThreadLocal.withInitial(() -> 0);
+    private final ThreadLocal<Set<String>> lastTouchedIds =
+            ThreadLocal.withInitial(() -> new HashSet<>(2048));
+    private final ThreadLocal<Integer> probeOverride =
+            ThreadLocal.withInitial(() -> -1);
+
+    private final List<PendingVector> pendingVectors =
+            Collections.synchronizedList(new ArrayList<>());
 
     /**
-     * Hard global cap across all divisions if > 0.
-     * Otherwise, we fall back to probe.shards or Integer.MAX_VALUE.
+     * Candidate with pre-computed Hamming distance to query.
+     * Used for pre-decrypt filtering.
      */
-    private static final int MAX_ALL_CANDIDATES =
-            Integer.getInteger("paper.maxCandidatesAllDivs", -1);
+    public record CandidateWithScore(String id, long hammingDist)
+            implements Comparable<CandidateWithScore> {
+
+        @Override
+        public int compareTo(CandidateWithScore other) {
+            return Long.compare(this.hammingDist, other.hammingDist);
+        }
+    }
+
+    // Greedy partition parameters (local defaults, no config dependency)
+    private static final int DEFAULT_GREEDY_BLOCK_SIZE = 64;
+    private static final int DEFAULT_MAX_PROBES = 5;
+
+
+    private static final class DimensionState {
+        final int dim;
+        final int table; // 0..L-1
+
+        final List<DivisionState> divisions = new ArrayList<>();
+
+        final List<EncryptedPoint> staged = new ArrayList<>();
+        final List<BitSet[]> stagedCodes = new ArrayList<>();
+
+        DimensionState(int dim, int table) {
+            this.dim = dim;
+            this.table = table;
+        }
+    }
+
+    private static final class DivisionState {
+        List<GreedyPartitioner.Partition> partitions;
+    }
+
+    private static class PendingVector {
+        final String id;
+        final double[] vector;
+
+        PendingVector(String id, double[] vector) {
+            this.id = id;
+            this.vector = vector.clone();
+        }
+    }
+
+    public PartitionedIndexService(
+            RocksDBMetadataManager metadata,
+            SystemConfig cfg,
+            KeyRotationServiceImpl keyService,
+            AesGcmCryptoService cryptoService) {
+
+        this.metadata = Objects.requireNonNull(metadata, "metadata");
+        this.cfg = Objects.requireNonNull(cfg, "cfg");
+        this.keyService = Objects.requireNonNull(keyService, "keyService");
+        this.cryptoService = Objects.requireNonNull(cryptoService, "cryptoService");
+
+        this.storageMetrics = metadata.getStorageMetrics();
+        if (this.storageMetrics == null) {
+            throw new IllegalStateException(
+                    "StorageMetrics not available from RocksDBMetadataManager"
+            );
+        }
+
+        logger.info("PartitionedIndexService initialized | buildThreshold={} | registry=data-adaptive",
+                DEFAULT_BUILD_THRESHOLD);
+        SystemConfig.PaperConfig pc = cfg.getPaper();
+        logger.info(
+                "CONFIG ASSERT: m={} lambda={} tables={} divisions={} seed={}",
+                pc.getM(), pc.getLambda(), pc.getTables(), pc.getDivisions(), pc.getSeed()
+        );
+
+    }
+
+    // =====================================================
+    // GFUNCTION REGISTRY INITIALIZATION
+    // =====================================================
 
     /**
-     * Upper bound for per-division fanout after probe.shards scaling.
+     * Force initialization with current sample buffer.
+     * Called when we have enough samples or at build time.
      */
-    private static final int MAX_PER_DIV =
-            Integer.getInteger("paper.maxPerDiv", 65_536);
+    private synchronized void initializeRegistry() {
+        if (GFunctionRegistry.isInitialized()) {
+            logger.debug("GFunctionRegistry already initialized (concurrent call)");
+            return;
+        }
 
-    // dimension -> state
-    private final ConcurrentMap<Integer, DimensionState> dims = new ConcurrentHashMap<>();
-    private final ConcurrentMap<String, Integer> idToDim = new ConcurrentHashMap<>();
+        logger.info("Initializing GFunctionRegistry");
+        logger.info("Sample buffer size: {}", initSampleBuffer.size());
 
-    public PartitionedIndexService(int m, int lambda, int divisions, long seedBase) {
-        this(m, lambda, divisions, seedBase,
-                Integer.getInteger("paper.buildThreshold", 2_000),
-                Integer.getInteger("paper.maxCandidates", -1)
+        if (initSampleBuffer.size() < MIN_SAMPLE_SIZE) {
+            throw new IllegalStateException(
+                    "Refusing to initialize GFunctionRegistry with sampleSize=" +
+                            initSampleBuffer.size() +
+                            " (< MIN_SAMPLE_SIZE=" + MIN_SAMPLE_SIZE + ")"
+            );
+        }
+
+        if (initSampleBuffer.isEmpty()) {
+            throw new IllegalStateException(
+                    "Cannot initialize GFunctionRegistry: no sample vectors available"
+            );
+        }
+
+        SystemConfig.PaperConfig pc = cfg.getPaper();
+        int dimension = initSampleBuffer.get(0).length;
+
+        logger.info("Parameters: dim={} m={} λ={} tables={} divisions={} sampleSize={}",
+                dimension, pc.getM(), pc.getLambda(), pc.getTables(), pc.getDivisions(), initSampleBuffer.size()
+        );
+
+        try {
+            GFunctionRegistry.initialize(
+                    initSampleBuffer,
+                    dimension,
+                    pc.getM(),
+                    pc.getLambda(),
+                    pc.getSeed(),
+                    pc.getTables(),
+                    pc.getDivisions()
+            );
+
+            logger.info("GFunctionRegistry initialized successfully");
+            logger.info("Stats: {}", GFunctionRegistry.getStats());
+
+            // ← ADD: Sample omega values for verification
+            try {
+                Coding.GFunction g0 = GFunctionRegistry.get(dimension, 0, 0);
+
+                // Log first 5 omega values for first GFunction
+                double[] omega = g0.omega;
+                if (omega != null && omega.length > 0) {
+                    StringBuilder sb = new StringBuilder();
+                    for (int i = 0; i < Math.min(5, omega.length); i++) {
+                        sb.append(String.format("%.2f", omega[i]));
+                        if (i < Math.min(4, omega.length - 1)) sb.append(", ");
+                    }
+                    logger.info("Sample omega[table=0,div=0]: [{}...] (showing first 5 of {})",
+                            sb.toString(), omega.length);
+
+                    // Check if hardcoded (all values near 1.0)
+                    boolean hardcoded = true;
+                    for (double w : omega) {
+                        if (Math.abs(w - 1.0) > 0.1) {
+                            hardcoded = false;
+                            break;
+                        }
+                    }
+
+                    if (hardcoded) {
+                        logger.error("⚠️ OMEGA VALUES ARE HARDCODED! All values near 1.0 - this will cause zero recall!");
+                    } else {
+                        logger.info("✓ Omega values are data-adaptive (not hardcoded)");
+                    }
+                }
+            } catch (Exception e) {
+                logger.warn("Could not inspect GFunction omega values", e);
+            }
+
+        } catch (Exception e) {
+            logger.error("FATAL: GFunctionRegistry initialization failed!", e);
+            throw new RuntimeException("Failed to initialize GFunctionRegistry", e);
+        }
+
+        initSampleBuffer.clear();
+    }
+
+    /**
+     * Ensure registry is initialized before any coding operation.
+     */
+    private void ensureRegistryInitialized() {
+        if (GFunctionRegistry.isInitialized()) return;
+
+        throw new IllegalStateException(
+                "GFunctionRegistry not initialized. " +
+                        "Index must ingest at least " + MIN_SAMPLE_SIZE +
+                        " vectors before search or coding."
         );
     }
 
-    public PartitionedIndexService(int m, int lambda, int divisions, long seedBase,
-                                   int buildThreshold, int maxCandidates) {
-        if (m <= 0 || lambda <= 0 || divisions <= 0) {
-            throw new IllegalArgumentException("m, lambda, divisions must be > 0");
-        }
-        this.m = m;
-        this.lambda = lambda;
-        this.divisions = divisions;
-        this.seedBase = seedBase;
-        this.buildThreshold = buildThreshold;
-        this.maxCandidates = maxCandidates;
-    }
 
-    private static double clampAlpha(double x) {
-        if (Double.isNaN(x)) return 0.03;
-        if (x < 0.005) return 0.005;
-        if (x > 0.10) return 0.10;
-        return x;
-    }
+    // =====================================================
+    // INSERT
+    // =====================================================
 
-    // --------------------------------------------------------------------
-    // Coding: must match QueryTokenFactory.code(...)
-    // --------------------------------------------------------------------
+    @Override
+    public void insert(String id, double[] vector) {
+        Objects.requireNonNull(id, "id cannot be null");
+        Objects.requireNonNull(vector, "vector cannot be null");
 
-    public BitSet[] code(double[] vec) {
-        Objects.requireNonNull(vec, "vec");
-        final BitSet[] out = new BitSet[divisions];
-        for (int div = 0; div < divisions; div++) {
-            final BitSet bits = new BitSet(m);
-            for (int proj = 0; proj < m; proj++) {
-                long seed = mix64(seedBase
-                        ^ ((long) div * 0x9E3779B97F4A7C15L)
-                        ^ ((long) proj * 0xBF58476D1CE4E5B9L));
-                double dot = 0.0;
-                long s = seed;
-                for (double v : vec) {
-                    // xorshift-ish update
-                    s ^= (s << 21);
-                    s ^= (s >>> 35);
-                    s ^= (s << 4);
-                    // map to [-1, 1]
-                    double r = ((s & 0x3fffffffL) / (double) 0x3fffffffL) * 2.0 - 1.0;
-                    dot += v * r;
-                }
-                if (dot >= 0) bits.set(proj);
+        if (GFunctionRegistry.isInitialized()) {
+            int regDim = (int) GFunctionRegistry.getStats().get("dimension");
+            if (vector.length != regDim) {
+                throw new IllegalArgumentException(
+                        "Mixed dimensions not supported in single index: got "
+                                + vector.length + ", expected " + regDim
+                );
             }
-            out[div] = bits;
         }
-        return out;
-    }
 
-    /** Only returns a GFunction if already present; we don’t rebuild from GMeta here. */
-    @SuppressWarnings("unused")
-    private static Coding.GFunction toLegacyGFunction(Coding.CodeFamily g) {
-        if (g instanceof Coding.GFunction gf) {
-            return gf;
+        if (!GFunctionRegistry.isInitialized()) {
+            synchronized (initSampleBuffer) {
+                if (!GFunctionRegistry.isInitialized()
+                        && initSampleBuffer.size() < MAX_SAMPLE_SIZE) {
+                    initSampleBuffer.add(vector.clone());
+                }
+                if (initSampleBuffer.size() >= MIN_SAMPLE_SIZE) {
+                    initializeRegistry();
+                }
+            }
         }
-        return null;
+
+        if (!GFunctionRegistry.isInitialized()) {
+            // Stage plaintext for later indexing
+            PendingVector pv = new PendingVector(id, vector);
+            synchronized (pendingVectors) {
+                pendingVectors.add(pv);
+            }
+            return;
+        }
+
+
+        // -------- INDEXING PHASE --------
+        EncryptedPoint ep;
+        try {
+            ep = cryptoService.encrypt(id, vector, keyService.getCurrentVersion());
+            if (ep == null) throw new RuntimeException("encrypt() returned null");
+        } catch (Exception e) {
+            throw new RuntimeException("Encryption failed for vector " + id, e);
+        }
+
+        insert(ep, vector);
     }
 
-    private static long mix64(long z) {
-        z = (z ^ (z >>> 33)) * 0xff51afd7ed558ccdl;
-        z = (z ^ (z >>> 33)) * 0xc4ceb9fe1a85ec53l;
-        return z ^ (z >>> 33);
+    public void insert(EncryptedPoint pt, double[] vec) {
+        Objects.requireNonNull(pt, "EncryptedPoint cannot be null");
+        Objects.requireNonNull(vec, "vector cannot be null");
+
+        int dim = vec.length;
+
+        // Persist once (global metadata)
+        try {
+            metadata.saveEncryptedPoint(pt);
+        } catch (IOException e) {
+            logger.error("Failed to persist encrypted point {}: {}", pt.getId(), e.getMessage());
+            throw new RuntimeException("Persistence failed for point " + pt.getId(), e);
+        }
+
+        DimensionState[] tables = dims.computeIfAbsent(dim, d -> newTableStates(d));
+
+        // Stage into ALL tables (ℓ)
+        for (DimensionState S : tables) {
+
+            BitSet[] codes = new BitSet[cfg.getPaper().getDivisions()];
+
+            for (int d = 0; d < codes.length; d++) {
+                Coding.GFunction G =
+                        GFunctionRegistry.get(dim, S.table, d);
+                codes[d] = Coding.C(vec, G);
+            }
+
+            synchronized (S) {
+                S.staged.add(pt);
+                S.stagedCodes.add(codes);
+
+            }
+        }
     }
 
-    private static long mix(long seedBase, int d, int m, int lambda, int division) {
-        long x = seedBase;
-        x ^= ((long) d * 0xBF58476D1CE4E5B9L);
-        x ^= ((long) m * 0x94D049BB133111EBL);
-        x ^= ((long) lambda * 0x2545F4914F6CDD1DL);
-        x ^= ((long) division * 0xD1342543DE82EF95L);
-        x ^= (x >>> 33); x *= 0xff51afd7ed558ccdl;
-        x ^= (x >>> 33); x *= 0xc4ceb9fe1a85ec53l;
-        x ^= (x >>> 33);
-        return x;
+    private DimensionState[] newTableStates(int dim) {
+        int L = cfg.getPaper().getTables();
+        DimensionState[] arr = new DimensionState[L];
+        for (int t = 0; t < L; t++) arr[t] = new DimensionState(dim, t);
+        return arr;
     }
 
-    // ------------------------- In-memory state --------------------------
-
-    private static final class DivisionState {
-        final Coding.CodeFamily G;  // LSH function family descriptor
-        List<GreedyPartitioner.SubsetBounds> I = Collections.emptyList(); // sorted
-        Map<String, List<EncryptedPoint>> tagToSubset = new ConcurrentHashMap<>();
-        int w = 0; // base per-division paper-w target
-
-        DivisionState(Coding.CodeFamily g) { this.G = g; }
-    }
-
-    private static final class DimensionState {
-        final int d;
-        final List<EncryptedPoint> staged = new ArrayList<>();
-        final List<BitSet[]> stagedCodes = new ArrayList<>();
-        final List<DivisionState> divisions = new ArrayList<>();
-        DimensionState(int d) { this.d = d; }
-    }
-
-    // --------------------------------------------------------------------
-    // PaperSearchEngine API
-    // --------------------------------------------------------------------
-
-    @Override
-    @Deprecated
-    public void insert(EncryptedPoint pt) {
-        throw new UnsupportedOperationException("Server requires precomputed codes; use insertWithCodes().");
-    }
-
-    @Override
-    @Deprecated
-    public void insert(EncryptedPoint pt, double[] plaintextVector) {
-        if (plaintextVector == null) throw new IllegalArgumentException("plaintextVector cannot be null");
-        final BitSet[] codes = code(plaintextVector);
-        insertWithCodes(new CodedPoint(pt, codes, this.divisions));
+    private long tableSeed(int table) {
+        SystemConfig.PaperConfig pc = cfg.getPaper();
+        return pc.getSeed() + (table * 1_000_003L);
     }
 
     /**
-     * Main insert path: server receives EncryptedPoint + codes (for all ℓ divisions).
+     * Returns the number of tables (L) configured for the index.
      */
-    public void insertWithCodes(CodedPoint cp) {
-        if (cp == null || cp.pt == null || cp.codes == null || cp.codes.length != divisions) {
-            throw new IllegalArgumentException("CodedPoint must provide codes for all divisions.");
-        }
-        final int d = cp.pt.getVectorLength();
-        idToDim.put(cp.pt.getId(), d);
-        final DimensionState S = dims.computeIfAbsent(d, DimensionState::new);
-        synchronized (S) {
-            if (isBuilt(S)) {
-                // Already partitioned: insert into appropriate subsets immediately
-                for (int divIdx = 0; divIdx < divisions; divIdx++) {
-                    final DivisionState div = S.divisions.get(divIdx);
-                    final BitSet code = cp.codes[divIdx];
-                    for (int idx : findCoveringIntervals(code, div.I)) {
-                        final GreedyPartitioner.SubsetBounds sb = div.I.get(idx);
-                        div.tagToSubset
-                                .computeIfAbsent(sb.tag, k -> new CopyOnWriteArrayList<>())
-                                .add(cp.pt);
-                    }
-                }
-            } else {
-                // Still staging: buffer for later build
-                S.staged.add(cp.pt);
-                S.stagedCodes.add(cp.codes);
-            }
-            maybeBuild(S);
-        }
+    public int numTables() {
+        return cfg.getPaper().getTables();
     }
 
-    @Override
-    public List<EncryptedPoint> lookup(com.fspann.common.QueryToken token) {
-        Objects.requireNonNull(token, "QueryToken must not be null");
-        final int d = token.getDimension();
-        final DimensionState S = dims.get(d);
-        if (S == null) return Collections.emptyList();
+    // =====================================================
+    // BUILD (Algorithm-2) per table
+    // =====================================================
 
-        ensureBuilt(S);
+    private void build(DimensionState S) {
+        ensureRegistryInitialized();
 
-        final Set<String> seen = new LinkedHashSet<>();
-        final List<EncryptedPoint> cands = new ArrayList<>();
+        SystemConfig.PaperConfig pc = cfg.getPaper();
+        int divisions = pc.getDivisions();
+        int blockSize = DEFAULT_GREEDY_BLOCK_SIZE;
 
-        // We rely only on client-supplied codes in partitioned mode.
-        final BitSet[] codesFromClient = token.getCodes();
-        final int globalCap = resolveGlobalCap();
+        if (!S.divisions.isEmpty()) {
+            logger.warn("build() called on non-empty divisions - skipping");
+            return;
+        }
 
-        for (int divIdx = 0; divIdx < S.divisions.size(); divIdx++) {
-            if (cands.size() >= globalCap) break;
-
-            final DivisionState div = S.divisions.get(divIdx);
-            if (div.I.isEmpty()) continue;
-
-            // Use code from token for this division (if provided)
-            BitSet Cq = null;
-            if (codesFromClient != null && divIdx < codesFromClient.length) {
-                BitSet src = codesFromClient[divIdx];
-                if (src != null) {
-                    Cq = (BitSet) src.clone();
-                }
-            }
-
-            // If no code is supplied for this division, skip (privacy-preserving).
-            if (Cq == null) continue;
-
-            // Seed intervals that cover Cq; fallback to nearest interval
-            List<Integer> hits = findCoveringIntervals(Cq, div.I);
-            if (hits.isEmpty()) {
-                int seed = nearestIdx(Cq, div.I);
-                if (seed >= 0) hits = List.of(seed);
-            }
-            if (hits.isEmpty()) continue;
-
-            final int currentSize = getVectorCountForDimension(S.d);
-
-            // Base target per division (paper α rule)
-            int baseTargetPerDiv = Math.max(
-                    1,
-                    (int) Math.ceil(PAPER_W_ALPHA * currentSize / (double) this.divisions)
+        // Log GFunction used for first build
+        if (S.table == 0) {
+            Coding.GFunction g0 = GFunctionRegistry.get(S.dim, 0, 0);
+            logger.info(
+                    "BUILD GFunction[table=0,div=0]: seed={}, m={}, lambda={}, omega[0]={}, omega[5]={}",
+                    g0.seed, g0.m, g0.lambda,
+                    g0.omega[0],
+                    g0.omega.length > 5 ? g0.omega[5] : -1.0
             );
 
-            // Apply probe.shards-based scaling (K-adaptive widening)
-            int targetPerDiv = applyProbeScaling(baseTargetPerDiv);
-
-            int gatheredThisDiv = 0;
-            final boolean[] visited = new boolean[div.I.size()];
-
-            // 1) Anchors
-            for (int idx : hits) {
-                if (idx < 0 || idx >= div.I.size() || visited[idx]) continue;
-                GreedyPartitioner.SubsetBounds sb = div.I.get(idx);
-                List<EncryptedPoint> subset = div.tagToSubset.get(sb.tag);
-                if (subset != null && !subset.isEmpty()) {
-                    for (EncryptedPoint p : subset) {
-                        if (cands.size() >= globalCap) break;
-                        if (seen.add(p.getId())) {
-                            cands.add(p);
-                            if (++gatheredThisDiv >= targetPerDiv) break;
-                        }
-                    }
-                }
-                visited[idx] = true;
-                if (gatheredThisDiv >= targetPerDiv || cands.size() >= globalCap) break;
+            StringBuilder omegaStr = new StringBuilder();
+            for (int i = 0; i < Math.min(5, g0.omega.length); i++) {
+                omegaStr.append(String.format("%.2f", g0.omega[i]));
+                if (i < Math.min(4, g0.omega.length - 1)) omegaStr.append(", ");
             }
-            if (gatheredThisDiv >= targetPerDiv || cands.size() >= globalCap) continue;
+            logger.info("BUILD omega sample[table=0,div=0]: [{}...]", omegaStr.toString());
 
-            // 2) Symmetric widening around anchors
-            for (int radius = 1; gatheredThisDiv < targetPerDiv && radius < div.I.size(); radius++) {
-                for (int anchor : hits) {
-                    if (cands.size() >= globalCap) break;
-
-                    int left = anchor - radius;
-                    if (left >= 0 && !visited[left]) {
-                        GreedyPartitioner.SubsetBounds sbL = div.I.get(left);
-                        List<EncryptedPoint> subsetL = div.tagToSubset.get(sbL.tag);
-                        if (subsetL != null && !subsetL.isEmpty()) {
-                            for (EncryptedPoint p : subsetL) {
-                                if (cands.size() >= globalCap) break;
-                                if (seen.add(p.getId())) {
-                                    cands.add(p);
-                                    if (++gatheredThisDiv >= targetPerDiv) break;
-                                }
-                            }
-                        }
-                        visited[left] = true;
-                    }
-                    if (gatheredThisDiv >= targetPerDiv || cands.size() >= globalCap) break;
-
-                    int right = anchor + radius;
-                    if (right < div.I.size() && !visited[right]) {
-                        GreedyPartitioner.SubsetBounds sbR = div.I.get(right);
-                        List<EncryptedPoint> subsetR = div.tagToSubset.get(sbR.tag);
-                        if (subsetR != null && !subsetR.isEmpty()) {
-                            for (EncryptedPoint p : subsetR) {
-                                if (cands.size() >= globalCap) break;
-                                if (seen.add(p.getId())) {
-                                    cands.add(p);
-                                    if (++gatheredThisDiv >= targetPerDiv) break;
-                                }
-                            }
-                        }
-                        visited[right] = true;
-                    }
-                    if (gatheredThisDiv >= targetPerDiv || cands.size() >= globalCap) break;
-                }
+            if (!S.staged.isEmpty() && !S.stagedCodes.isEmpty()) {
+                BitSet sampleCode = S.stagedCodes.get(0)[0];
+                logger.info(
+                        "BUILD BitSet sample[table=0,div=0]: length={}, cardinality={}, first10bits={}",
+                        sampleCode.length(),
+                        sampleCode.cardinality(),
+                        getBitString(sampleCode, 10)
+                );
             }
         }
 
-        return cands;
-    }
+        for (int d = 0; d < divisions; d++) {
+            Map<String, BitSet> idToCode = new HashMap<>(S.staged.size());
 
-    @Override
-    public void delete(String id) {
-        Integer d = idToDim.remove(id);
-        if (d == null) return;
-        DimensionState S = dims.get(d);
-        if (S == null) return;
-
-        synchronized (S) {
-            // Remove from staged
-            for (int i = S.staged.size() - 1; i >= 0; i--) {
-                if (id.equals(S.staged.get(i).getId())) {
-                    S.staged.remove(i);
-                    break;
-                }
-            }
-            // Remove from built subsets
-            for (DivisionState div : S.divisions) {
-                for (List<EncryptedPoint> subset : div.tagToSubset.values()) {
-                    subset.removeIf(p -> id.equals(p.getId()));
-                }
-            }
-        }
-    }
-
-    @Override
-    public int getVectorCountForDimension(int dimension) {
-        DimensionState S = dims.get(dimension);
-        if (S == null) return 0;
-        synchronized (S) {
-            // Collect unique ids from staged points
-            Set<String> ids = new HashSet<>();
-            for (EncryptedPoint p : S.staged) {
-                ids.add(p.getId());
+            for (int i = 0; i < S.staged.size(); i++) {
+                idToCode.put(
+                        S.staged.get(i).getId(),
+                        S.stagedCodes.get(i)[d]
+                );
             }
 
-            // Collect unique ids from all built divisions / subsets
-            for (DivisionState div : S.divisions) {
-                for (List<EncryptedPoint> subset : div.tagToSubset.values()) {
-                    for (EncryptedPoint p : subset) {
-                        ids.add(p.getId());
-                    }
-                }
-            }
-
-            return ids.size();
-        }
-    }
-
-    private boolean isBuilt(DimensionState S) {
-        return !S.divisions.isEmpty() && !S.divisions.get(0).I.isEmpty();
-    }
-
-    private void maybeBuild(DimensionState S) {
-        if (isBuilt(S)) return;
-        if (S.staged.size() >= buildThreshold) {
-            buildAllDivisions(S);
-        }
-    }
-
-    private void ensureBuilt(DimensionState S) {
-        if (isBuilt(S)) return;
-        synchronized (S) {
-            if (!isBuilt(S)) buildAllDivisions(S);
-        }
-    }
-
-    private void buildAllDivisions(DimensionState S) {
-        List<EncryptedPoint> pts = new ArrayList<>();
-        List<BitSet[]> codes = new ArrayList<>();
-
-        for (int i = 0; i < S.staged.size(); i++) {
-            BitSet[] cs = S.stagedCodes.get(i);
-            if (cs != null && cs.length == divisions) {
-                pts.add(S.staged.get(i));
-                codes.add(cs);
-            }
-        }
-
-        if (pts.isEmpty()) return;
-
-        final int d = S.d;
-        S.divisions.clear();
-
-        for (int divIdx = 0; divIdx < divisions; divIdx++) {
-            long seed = mix(seedBase, d, m, lambda, divIdx);
-            Coding.GMeta G = Coding.fromSeedOnly(m, lambda, seed);
-
-            List<GreedyPartitioner.Item> items = new ArrayList<>(pts.size());
-            for (int i = 0; i < pts.size(); i++) {
-                items.add(new GreedyPartitioner.Item(pts.get(i).getId(), pts.get(i), codes.get(i)[divIdx]));
-            }
-
-            GreedyPartitioner.BuildResult br = GreedyPartitioner.build(
-                    items, G.codeBits(), seed ^ 0x9E3779B97F4A7C15L
-            );
-
-            DivisionState D = new DivisionState(G);
-            D.I = br.indexI;
-
-            Map<String, List<EncryptedPoint>> safe = new ConcurrentHashMap<>();
-            for (var e : br.tagToSubset.entrySet()) {
-                safe.put(e.getKey(), new CopyOnWriteArrayList<>(e.getValue()));
-            }
-            D.tagToSubset = safe;
-
-            D.w = Math.max(1, (int) Math.ceil(PAPER_W_ALPHA * pts.size() / (double) this.divisions));
-
-            logger.info("Division {} paper-w target set to {} (alpha={} * |D|={} / ℓ={})",
-                    (divIdx + 1), D.w, PAPER_W_ALPHA, pts.size(), this.divisions);
-
-            S.divisions.add(D);
+            DivisionState div = new DivisionState();
+            div.partitions = GreedyPartitioner.build(idToCode, blockSize);
+            S.divisions.add(div);
         }
 
         S.staged.clear();
         S.stagedCodes.clear();
+
+        logger.debug(
+                "Built MSANNP greedy partitions: dim={} table={} divisions={} blockSize={}",
+                S.dim, S.table, S.divisions.size(), blockSize
+        );
     }
 
-    private List<Integer> findCoveringIntervals(BitSet code, List<GreedyPartitioner.SubsetBounds> I) {
-        if (I.isEmpty()) return Collections.emptyList();
-        GreedyPartitioner.CodeComparator cmp = new GreedyPartitioner.CodeComparator(I.get(0).codeBits);
-        int lo = 0, hi = I.size() - 1, ans = -1;
+    // ← ADD: Helper method
+    private String getBitString(BitSet bs, int maxBits) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < Math.min(maxBits, bs.length()); i++){
+            sb.append(bs.get(i) ? '1' : '0');
+        }
+        return sb.toString();
+    }
 
-        // rightmost lower <= code
-        while (lo <= hi) {
-            int mid = (lo + hi) >>> 1;
-            if (cmp.compare(I.get(mid).lower, code) <= 0) { ans = mid; lo = mid + 1; }
-            else { hi = mid - 1; }
+
+    // =====================================================
+    // REAL RUN path: candidate IDs only (unions across tables)
+    // =====================================================
+
+    /**
+     * Lookup candidate IDs from partitioned index.
+     *
+     * Key behavior:
+     * 1. Validates that token has codes for all tables
+     * 2. Iterates through relaxation levels (0 to lambda)
+     * 3. Unions candidates across all tables
+     * 4. Stops when HARD_CAP (global safety limit) is reached
+     */
+    public List<String> lookupCandidateIds(QueryToken token) {
+        Objects.requireNonNull(token, "token");
+        if (!frozen) throw new IllegalStateException("Index not finalized");
+
+        int dim = token.getDimension();
+        DimensionState[] tables = dims.get(dim);
+        if (tables == null) return List.of();
+
+        BitSet[][] qCodes = token.getBitCodes();
+        if (qCodes == null) {
+            throw new IllegalStateException("MSANNP violation: QueryToken missing BitSet codes");
+        }
+        if (qCodes.length != tables.length) {
+            throw new IllegalStateException(
+                    "Token tables mismatch: token=" + qCodes.length + " index=" + tables.length
+            );
         }
 
-        if (ans < 0) return Collections.emptyList();
+        final int K = token.getTopK();
+        final int requiredK = Math.max(K, cfg.getEval().getMaxK());
+        final int HARD_CAP = Math.max(
+                cfg.getRuntime().getMaxGlobalCandidates(),
+                cfg.getRuntime().getRefinementLimit()
+        );
+        final int perDivisionMaxProbes = effectiveMaxProbes();
 
-        List<Integer> hits = new ArrayList<>();
-        for (int j = Math.max(0, ans - 1); j <= Math.min(I.size() - 1, ans + 1); j++) {
-            if (cmp.compare(I.get(j).lower, code) <= 0 && cmp.compare(code, I.get(j).upper) <= 0) {
-                hits.add(j);
-            }
-        }
-        return hits.isEmpty() ? List.of(Math.max(0, Math.min(ans, I.size() - 1))) : hits;
-    }
+        // bestScore[id] = minimum distance-to-partition-range seen so far
+        Map<String, Long> bestScore = new HashMap<>(Math.min(HARD_CAP, 1 << 16));
+        Set<String> deleted = new HashSet<>(2048);
+        int rawSeen = 0;
 
-    private int nearestIdx(BitSet Cq, List<GreedyPartitioner.SubsetBounds> I) {
-        if (I == null || I.isEmpty()) return -1;
-        int best = -1, bestGap = Integer.MAX_VALUE;
-        for (int j = 0; j < I.size(); j++) {
-            GreedyPartitioner.SubsetBounds sb = I.get(j);
-            BitSet rep = (sb.lower != null) ? sb.lower : sb.upper;
-            int gap = hammingGap(Cq, rep);
-            if (gap < bestGap) { bestGap = gap; best = j; }
-        }
-        return best;
-    }
+        for (int t = 0; t < tables.length && bestScore.size() < HARD_CAP; t++) {
+            DimensionState S = tables[t];
+            if (S.divisions == null || S.divisions.isEmpty()) continue;
 
-    private int hammingGap(BitSet a, BitSet b) {
-        if (a == null || b == null) return Integer.MAX_VALUE;
-        BitSet x = (BitSet) a.clone();
-        x.xor(b);
-        return x.cardinality();
-    }
-
-    public int getDivisions() {
-        return this.divisions;
-    }
-
-    // --------------------------------------------------------------------
-    // Extra helpers for SecureLSHIndexService / re-encryption
-    // --------------------------------------------------------------------
-
-    public Set<Integer> getRegisteredDimensions() {
-        return Collections.unmodifiableSet(dims.keySet());
-    }
-
-    public int getTotalVectorCount() {
-        int sum = 0;
-        for (Integer dim : dims.keySet()) {
-            sum += getVectorCountForDimension(dim);
-        }
-        return sum;
-    }
-
-    public void updateCachedPoint(EncryptedPoint pt) {
-        Objects.requireNonNull(pt, "pt");
-        Integer d = idToDim.get(pt.getId());
-        if (d == null) return;
-        DimensionState S = dims.get(d);
-        if (S == null) return;
-
-        synchronized (S) {
-            for (int i = 0; i < S.staged.size(); i++) {
-                if (pt.getId().equals(S.staged.get(i).getId())) {
-                    S.staged.set(i, pt);
+            for (int d = 0; d < S.divisions.size() && bestScore.size() < HARD_CAP; d++) {
+                if (d >= qCodes[t].length) {
+                    throw new IllegalStateException(
+                            "Token divisions mismatch at table=" + t +
+                                    " expectedDivisions>=" + (d + 1)
+                    );
                 }
-            }
-            for (DivisionState div : S.divisions) {
-                for (List<EncryptedPoint> subset : div.tagToSubset.values()) {
-                    for (int i = 0; i < subset.size(); i++) {
-                        if (pt.getId().equals(subset.get(i).getId())) {
-                            subset.set(i, pt);
-                        }
+
+                DivisionState div = S.divisions.get(d);
+                List<GreedyPartitioner.Partition> parts = div.partitions;
+                if (parts == null || parts.isEmpty()) continue;
+
+                long qKey = GreedyPartitioner.computeKey(qCodes[t][d]);
+                int center = GreedyPartitioner.findNearestPartition(parts, qKey);
+
+                // PriorityQueue entries: [partitionIndex, distanceToRange]
+                PriorityQueue<long[]> probeQueue =
+                        new PriorityQueue<>(Comparator.comparingLong(a -> a[1]));
+
+                boolean[] visited = new boolean[parts.size()];
+
+                BitSet qBits = qCodes[t][d];
+
+                GreedyPartitioner.Partition centerPart = parts.get(center);
+                long centerDist = GreedyPartitioner.hamming(qBits, centerPart.repCode);
+
+                probeQueue.add(new long[]{center, centerDist});
+                visited[center] = true;
+
+                int probesUsed = 0;
+
+                while (!probeQueue.isEmpty()
+                        && probesUsed < perDivisionMaxProbes
+                        && bestScore.size() < HARD_CAP) {
+
+                    long[] cur = probeQueue.poll();
+                    int idx = (int) cur[0];
+                    probesUsed++;
+
+                    rawSeen += collectPartitionOrdered(
+                            parts.get(idx),
+                            qBits,
+                            bestScore,
+                            deleted
+                    );
+
+                    int left = idx - 1;
+                    if (left >= 0 && !visited[left]) {
+                        visited[left] = true;
+                        long dist = GreedyPartitioner.hamming(qBits, parts.get(left).repCode);
+                        probeQueue.add(new long[]{left, dist});
+                    }
+
+                    int right = idx + 1;
+                    if (right < parts.size() && !visited[right]) {
+                        visited[right] = true;
+                        long dist = GreedyPartitioner.hamming(qBits, parts.get(right).repCode);
+                        probeQueue.add(new long[]{right, dist});
                     }
                 }
             }
         }
-    }
 
-    // --------------------------------------------------------------------
-    // Legacy bucket helpers (if you ever need bucket IDs for logging)
-    // --------------------------------------------------------------------
+        // ---- FINAL ORDERING (AFTER ALL TABLES & DIVISIONS) ----
+        List<Map.Entry<String, Long>> ordered =
+                new ArrayList<>(bestScore.entrySet());
+        ordered.sort(Comparator.comparingLong(Map.Entry::getValue));
 
-    private int computeBucket(BitSet code) {
-        if (code == null) return 0;
-
-        int bucket = 0;
-        for (int i = 0; i < lambda; i++) {
-            if (code.get(i)) {
-                bucket |= (1 << i);
-            }
+        List<String> out = new ArrayList<>(Math.min(ordered.size(), HARD_CAP));
+        for (int i = 0; i < ordered.size() && out.size() < HARD_CAP; i++) {
+            out.add(ordered.get(i).getKey());
         }
-        return bucket;
-    }
 
-    public int[] getBucketsForCodes(BitSet[] codes) {
-        int[] buckets = new int[codes.length];
-        for (int t = 0; t < codes.length; t++) {
-            buckets[t] = computeBucket(codes[t]);
+        lastTouched.set(out.size());
+        lastTouchedIds.get().clear();
+        lastTouchedIds.get().addAll(out);
+        lastRawVisited = rawSeen;
+
+        logger.info(
+                "LSH Lookup: K={} | perDivProbes={} | rawSeen={} | uniqueCands={} | returned={} | deleted={}",
+                K, perDivisionMaxProbes, rawSeen, bestScore.size(), out.size(), deleted.size()
+        );
+
+        if (out.size() < requiredK) {
+            logger.warn("Recall floor violated: returned={} required={}", out.size(), requiredK);
         }
-        return buckets;
-    }
 
-    // --------------------------------------------------------------------
-    // probe.shards integration helpers (K-adaptive hook)
-    // --------------------------------------------------------------------
+        return out;
+    }
 
     /**
-     * Global cap for candidates across all divisions.
-     * Priority:
-     *   1) paper.maxCandidatesAllDivs (if > 0)
-     *   2) probe.shards (if > 0)
-     *   3) Integer.MAX_VALUE
+     * Lookup candidates WITH Hamming scores for pre-decrypt filtering.
+     * This method returns the Hamming distances that are already computed
+     * during candidate retrieval, enabling cheap pre-filtering before decryption.
+     *
+     * @param token Query token with bitsets
+     * @return List of candidates with Hamming distances, sorted by distance
      */
-    private int resolveGlobalCap() {
-        if (MAX_ALL_CANDIDATES > 0) {
-            return MAX_ALL_CANDIDATES;
+    public List<CandidateWithScore> lookupCandidatesWithScores(QueryToken token) {
+        Objects.requireNonNull(token, "token");
+        if (!frozen) throw new IllegalStateException("Index not finalized");
+
+        int dim = token.getDimension();
+        DimensionState[] tables = dims.get(dim);
+        if (tables == null) return List.of();
+
+        BitSet[][] qCodes = token.getBitCodes();
+        if (qCodes == null) {
+            throw new IllegalStateException("MSANNP violation: QueryToken missing BitSet codes");
         }
-        String prop = System.getProperty("probe.shards");
-        if (prop != null) {
-            try {
-                int v = Integer.parseInt(prop.trim());
-                if (v > 0) {
-                    // defensive clamp
-                    int cap = Math.min(v, 1_000_000_000);
-                    logger.trace("resolveGlobalCap: using probe.shards={} -> globalCap={}", v, cap);
-                    return cap;
+        if (qCodes.length != tables.length) {
+            throw new IllegalStateException(
+                    "Token tables mismatch: token=" + qCodes.length + " index=" + tables.length
+            );
+        }
+
+        final int K = token.getTopK();
+        final int requiredK = Math.max(K, cfg.getEval().getMaxK());
+        final int HARD_CAP = Math.max(
+                cfg.getRuntime().getMaxGlobalCandidates(),
+                cfg.getRuntime().getRefinementLimit()
+        );
+        final int perDivisionMaxProbes = effectiveMaxProbes();
+
+        // bestScore[id] = minimum Hamming distance seen across all tables/divisions
+        Map<String, Long> bestScore = new HashMap<>(Math.min(HARD_CAP, 1 << 16));
+        Set<String> deleted = new HashSet<>(2048);
+        int rawSeen = 0;
+
+        // Same candidate retrieval logic as lookupCandidateIds()
+        for (int t = 0; t < tables.length && bestScore.size() < HARD_CAP; t++) {
+            DimensionState S = tables[t];
+            if (S.divisions == null || S.divisions.isEmpty()) continue;
+
+            for (int d = 0; d < S.divisions.size() && bestScore.size() < HARD_CAP; d++) {
+                if (d >= qCodes[t].length) {
+                    throw new IllegalStateException(
+                            "Token divisions mismatch at table=" + t +
+                                    " expectedDivisions>=" + (d + 1)
+                    );
                 }
-            } catch (NumberFormatException ignore) {
-                // fall through
+
+                DivisionState div = S.divisions.get(d);
+                List<GreedyPartitioner.Partition> parts = div.partitions;
+                if (parts == null || parts.isEmpty()) continue;
+
+                long qKey = GreedyPartitioner.computeKey(qCodes[t][d]);
+                int center = GreedyPartitioner.findNearestPartition(parts, qKey);
+
+                PriorityQueue<long[]> probeQueue =
+                        new PriorityQueue<>(Comparator.comparingLong(a -> a[1]));
+
+                boolean[] visited = new boolean[parts.size()];
+                BitSet qBits = qCodes[t][d];
+
+                GreedyPartitioner.Partition centerPart = parts.get(center);
+                long centerDist = GreedyPartitioner.hamming(qBits, centerPart.repCode);
+
+                probeQueue.add(new long[]{center, centerDist});
+                visited[center] = true;
+
+                int probesUsed = 0;
+
+                while (!probeQueue.isEmpty()
+                        && probesUsed < perDivisionMaxProbes
+                        && bestScore.size() < HARD_CAP) {
+
+                    long[] cur = probeQueue.poll();
+                    int idx = (int) cur[0];
+                    probesUsed++;
+
+                    rawSeen += collectPartitionOrdered(
+                            parts.get(idx),
+                            qBits,
+                            bestScore,
+                            deleted
+                    );
+
+                    int left = idx - 1;
+                    if (left >= 0 && !visited[left]) {
+                        visited[left] = true;
+                        long dist = GreedyPartitioner.hamming(qBits, parts.get(left).repCode);
+                        probeQueue.add(new long[]{left, dist});
+                    }
+
+                    int right = idx + 1;
+                    if (right < parts.size() && !visited[right]) {
+                        visited[right] = true;
+                        long dist = GreedyPartitioner.hamming(qBits, parts.get(right).repCode);
+                        probeQueue.add(new long[]{right, dist});
+                    }
+                }
             }
         }
-        return Integer.MAX_VALUE;
-    }
 
-    /**
-     * Scale baseTargetPerDiv based on probe.shards (K-adaptive widening).
-     *
-     * Mapping:
-     *   - If probe.shards is absent/invalid/<=0 → factor = 1 (no change).
-     *   - Else factor ≈ log2(probe.shards), clamped to [1, 64].
-     *
-     * Each doubling of probe.shards increases per-division fanout linearly,
-     * without exploding too fast. Final result is clamped by paper.maxPerDiv.
-     */
-    private int applyProbeScaling(int baseTargetPerDiv) {
-        String prop = System.getProperty("probe.shards");
-        if (prop == null) {
-            return baseTargetPerDiv;
-        }
-        int v;
-        try {
-            v = Integer.parseInt(prop.trim());
-        } catch (NumberFormatException e) {
-            return baseTargetPerDiv;
-        }
-        if (v <= 0) return baseTargetPerDiv;
-
-        // log2-based factor: 1,2,3,... as probe.shards grows
-        int factor = (int) Math.round(Math.log(v) / Math.log(2.0));
-        if (factor < 1) factor = 1;
-        if (factor > 64) factor = 64;
-
-        long scaled = (long) baseTargetPerDiv * (long) factor;
-        int result;
-        if (scaled > MAX_PER_DIV) {
-            result = MAX_PER_DIV;
-        } else {
-            result = (int) scaled;
+        // ---- RETURN WITH SCORES (key change!) ----
+        List<CandidateWithScore> result = new ArrayList<>(bestScore.size());
+        for (Map.Entry<String, Long> entry : bestScore.entrySet()) {
+            result.add(new CandidateWithScore(entry.getKey(), entry.getValue()));
         }
 
-        logger.trace("applyProbeScaling: baseTargetPerDiv={} probe.shards={} factor={} -> targetPerDiv={} (maxPerDiv={})",
-                baseTargetPerDiv, v, factor, result, MAX_PER_DIV);
+        // Sort by Hamming distance (ascending)
+        result.sort(Comparator.comparingLong(CandidateWithScore::hammingDist));
+
+        lastTouched.set(result.size());
+        lastTouchedIds.get().clear();
+        for (CandidateWithScore c : result) {
+            lastTouchedIds.get().add(c.id());
+        }
+        lastRawVisited = rawSeen;
+
+        logger.info(
+                "LSH Lookup (with scores): K={} | perDivProbes={} | rawSeen={} | uniqueCands={} | returned={} | deleted={}",
+                K, perDivisionMaxProbes, rawSeen, bestScore.size(), result.size(), deleted.size()
+        );
+
+        if (result.size() < requiredK) {
+            logger.warn("Recall floor violated: returned={} required={}", result.size(), requiredK);
+        }
 
         return result;
     }
+
+    public EncryptedPoint loadPointIfActive(String id) {
+        if (metadata.isDeleted(id)) return null;
+        try {
+            return metadata.loadEncryptedPoint(id);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private int collectPartitionOrdered(
+            GreedyPartitioner.Partition p,
+            BitSet qBits,
+            Map<String, Long> bestScore,
+            Set<String> deleted
+    ) {
+        int newlySeen = 0;
+
+        long partDist = GreedyPartitioner.hamming(qBits, p.repCode);
+
+        for (String id : p.ids) {
+            if (deleted.contains(id)) continue;
+
+            if (metadata.isDeleted(id)) {
+                deleted.add(id);
+                continue;
+            }
+
+            Long prev = bestScore.get(id);
+            long score = partDist;
+
+            if (prev == null || score < prev) {
+                bestScore.put(id, score);
+                newlySeen++;
+            }
+        }
+        return newlySeen;
+    }
+
+    // =====================================================
+    // FINALIZATION
+    // =====================================================
+
+    private void directInsert(EncryptedPoint pt, double[] vec) {
+        int dim = vec.length;
+
+        try {
+            metadata.saveEncryptedPoint(pt);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+
+        DimensionState[] tables = dims.computeIfAbsent(dim, d -> newTableStates(d));
+
+        int divisions = cfg.getPaper().getDivisions();
+
+        for (DimensionState S : tables) {
+
+            BitSet[] codes = new BitSet[divisions];
+
+            for (int d = 0; d < divisions; d++) {
+                Coding.GFunction G =
+                        GFunctionRegistry.get(dim, S.table, d);
+                codes[d] = Coding.C(vec, G);
+            }
+
+            synchronized (S) {
+                S.staged.add(pt);
+                S.stagedCodes.add(codes);
+            }
+        }
+    }
+
+    public void finalizeForSearch() {
+        if (frozen) {
+            logger.info("Index already finalized");
+            return;
+        }
+
+        logger.info("Finalizing index for search...");
+
+        if (!GFunctionRegistry.isInitialized()) {
+            if (initSampleBuffer.size() >= MIN_SAMPLE_SIZE) {
+                initializeRegistry();
+            } else {
+                throw new IllegalStateException(
+                        "Cannot finalize index: only " + initSampleBuffer.size() +
+                                " samples collected (< MIN_SAMPLE_SIZE)"
+                );
+            }
+        }
+
+        // HARD registry consistency check
+        Map<String, Object> stats = GFunctionRegistry.getStats();
+        SystemConfig.PaperConfig pc = cfg.getPaper();
+        if ((int) stats.get("m") != pc.getM()
+                || (int) stats.get("lambda") != pc.getLambda()
+                || (int) stats.get("tables") != pc.getTables()
+                || (int) stats.get("divisions") != pc.getDivisions()) {
+            throw new IllegalStateException(
+                    "GFunctionRegistry mismatch at finalize: " + stats
+            );
+        }
+
+        // Flush pending plaintext vectors (NO recursive insert)
+        if (!pendingVectors.isEmpty()) {
+            logger.info("Flushing {} pending vectors after registry init",
+                    pendingVectors.size());
+
+            for (PendingVector pv : pendingVectors) {
+                EncryptedPoint ep =
+                        cryptoService.encrypt(pv.id, pv.vector);
+                directInsert(ep, pv.vector);
+            }
+            pendingVectors.clear();
+        }
+
+        // Build all tables
+        for (DimensionState[] arr : dims.values()) {
+            for (DimensionState S : arr) {
+                synchronized (S) {
+                    if (!S.staged.isEmpty()) build(S);
+                }
+            }
+        }
+
+        frozen = true;
+
+        logger.info("Index finalization complete");
+    }
+
+    public boolean isFrozen() {
+        return frozen;
+    }
+
+    // =====================================================
+    // REQUIRED IndexService METHODS
+    // =====================================================
+
+    @Override
+    public EncryptedPointBuffer getPointBuffer() {
+        return null;
+    }
+
+    public Set<String> getLastTouchedIds() {
+        return Collections.unmodifiableSet(lastTouchedIds.get());
+    }
+
+    public int getLastTouchedCount() {
+        return lastTouched.get();
+    }
+
+    public void setProbeOverride(int probes) {
+        probeOverride.set(probes);
+    }
+
+    public void clearProbeOverride() {
+        probeOverride.remove();
+    }
+
+    public int getLastRawCandidateCount() {
+        return lastRawVisited;
+    }
+
+    private int effectiveMaxProbes() {
+        Integer o = probeOverride.get();
+        if (o != null && o > 0) return o;
+
+        int cfgOverride = cfg.getRuntime().getProbeOverride();
+        if (cfgOverride > 0) return cfgOverride;
+
+        return DEFAULT_MAX_PROBES;
+    }
+
+    /**
+     * Default per-division probe budget (paper baseline).
+     * Does NOT include runtime overrides.
+     */
+    public int getDefaultMaxProbes() {
+        return DEFAULT_MAX_PROBES;
+    }
+
+
+
 }

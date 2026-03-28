@@ -7,22 +7,28 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
-import java.security.SecureRandom;
 import java.util.*;
+import java.util.concurrent.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class RocksDBMetadataManager implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(RocksDBMetadataManager.class);
     private static final Object LOCK = new Object();
-    private static RocksDBMetadataManager instance = null;
+    private static final Map<String, RocksDBMetadataManager> instances = new ConcurrentHashMap<>();
     private volatile boolean syncWrites = false;
+    private final StorageMetrics storageMetrics;
 
     private final RocksDB db;
     private final String dbPath;
     private final String baseDir;
     private final Options options;
     private volatile boolean closed = false;
+
+    private static final Object INIT_LOCK = new Object();
+
+    // Track old point files for deferred cleanup
+    private final Queue<Path> oldPointFilesForCleanup = new ConcurrentLinkedQueue<>();
 
     static {
         try {
@@ -33,24 +39,41 @@ public class RocksDBMetadataManager implements AutoCloseable {
         }
     }
 
-    private static RocksDBMetadataManager createDefaultMetadataManager() {
-        try {
-            return RocksDBMetadataManager.create(
-                    FsPaths.metadataDb().toString(),
-                    FsPaths.pointsDir().toString()
-            );
-        } catch (IOException e) {
-            throw new RuntimeException("Failed to initialize RocksDBMetadataManager", e);
-        }
-    }
 
+    /**
+     * Path-based instance cache instead of singleton.
+     * Each unique (dbPath, pointsPath) pair gets its own instance.
+     */
     public static RocksDBMetadataManager create(String dbPath, String pointsPath) throws IOException {
+        Objects.requireNonNull(dbPath, "dbPath cannot be null");
+        Objects.requireNonNull(pointsPath, "pointsPath cannot be null");
+
+        // Normalize paths for cache key
+        String normalizedDb = Paths.get(dbPath).toAbsolutePath().normalize().toString();
+        String normalizedPts = Paths.get(pointsPath).toAbsolutePath().normalize().toString();
+        String cacheKey = normalizedDb + "|" + normalizedPts;
+
         synchronized (LOCK) {
-            if (instance != null && !instance.closed) {
-                return instance;
+            RocksDBMetadataManager existing = instances.get(cacheKey);
+
+            // Return existing instance if still open
+            if (existing != null && !existing.closed) {
+                logger.debug("Reusing existing RocksDBMetadataManager for {}", cacheKey);
+                return existing;
             }
-            instance = new RocksDBMetadataManager(dbPath, pointsPath);
-            return instance;
+
+            // Remove closed instance from cache
+            if (existing != null && existing.closed) {
+                instances.remove(cacheKey);
+                logger.debug("Removed closed instance from cache: {}", cacheKey);
+            }
+
+            // Create new instance
+            logger.info("Creating new RocksDBMetadataManager: db={}, pts={}", dbPath, pointsPath);
+            RocksDBMetadataManager newInstance = new RocksDBMetadataManager(dbPath, pointsPath);
+            instances.put(cacheKey, newInstance);
+
+            return newInstance;
         }
     }
 
@@ -74,6 +97,13 @@ public class RocksDBMetadataManager implements AutoCloseable {
             throw new IOException("RocksDB open failed at " + dbPath, e);
         }
         logger.debug("RocksDBMetadataManager opened at {} (points at {})", dbPath, baseDir);
+
+        Path pointsDir = Paths.get(baseDir);
+        Path metaDir = Paths.get(dbPath);
+        this.storageMetrics = new StorageMetrics(pointsDir, metaDir);
+        logger.info("StorageMetrics initialized for base={}, db={}", baseDir, dbPath);
+
+        this.closed = false;
     }
 
     @Override
@@ -89,27 +119,36 @@ public class RocksDBMetadataManager implements AutoCloseable {
                 logger.warn("Error closing RocksDB at {}", dbPath, t);
             } finally {
                 try { options.close(); } catch (Throwable ignore) {}
+                if (storageMetrics != null) {
+                    logger.info("Final storage snapshot: {}", storageMetrics.getSummary());
+                }
                 closed = true;
-                instance = null;
-                logger.debug("RocksDBMetadataManager closed for {}", dbPath);
+
+                // FIXED: Remove from cache on close
+                String normalizedDb = Paths.get(dbPath).toAbsolutePath().normalize().toString();
+                String normalizedPts = Paths.get(baseDir).toAbsolutePath().normalize().toString();
+                String cacheKey = normalizedDb + "|" + normalizedPts;
+                instances.remove(cacheKey);
+
+                logger.debug("RocksDBMetadataManager closed and removed from cache: {}", cacheKey);
             }
         }
     }
 
     // ------------------- CRUD: metadata -------------------
 
-    public synchronized Map<String, Map<String, String>> multiGetVectorMetadata(Collection<String> vectorIds) {
+    public Map<String, Map<String, String>> multiGetVectorMetadata(Collection<String> vectorIds) {
         Objects.requireNonNull(vectorIds, "vectorIds");
         if (vectorIds.isEmpty()) return Collections.emptyMap();
 
         Map<String, Map<String, String>> out = new LinkedHashMap<>(vectorIds.size());
         for (String id : vectorIds) {
-            out.put(id, getVectorMetadata(id)); // reuse your single-get
+            out.put(id, getVectorMetadata(id));
         }
         return out;
     }
 
-    public synchronized Map<String, String> getVectorMetadata(String vectorId) {
+    public Map<String, String> getVectorMetadata(String vectorId) {
         Objects.requireNonNull(vectorId, "vectorId");
         try {
             byte[] v = db.get(vectorId.getBytes(StandardCharsets.UTF_8));
@@ -133,13 +172,17 @@ public class RocksDBMetadataManager implements AutoCloseable {
     public synchronized void mergeVectorMetadata(String vectorId, Map<String, String> updates) {
         Objects.requireNonNull(vectorId, "vectorId");
         Objects.requireNonNull(updates, "updates");
+
         Map<String, String> existing = getVectorMetadata(vectorId);
-        if (existing.isEmpty()) {
-            existing = new HashMap<>(updates);
-        } else {
-            updates.forEach(existing::putIfAbsent);
+        Map<String, String> merged = new HashMap<>();
+
+        if (!existing.isEmpty()) {
+            merged.putAll(existing);
         }
-        updateVectorMetadata(vectorId, existing);
+        // OVERWRITE semantics (correct for version, shard, buckets)
+        merged.putAll(updates);
+
+        updateVectorMetadata(vectorId, merged);
     }
 
     public synchronized void removeVectorMetadata(String vectorId) {
@@ -148,6 +191,120 @@ public class RocksDBMetadataManager implements AutoCloseable {
             db.delete(vectorId.getBytes(StandardCharsets.UTF_8));
         } catch (RocksDBException e) {
             logger.warn("removeVectorMetadata failed for {}", vectorId, e);
+        }
+    }
+
+    /**
+     * Check if a vector is marked as deleted.
+     *
+     * @param vectorId the vector ID
+     * @return true if deleted, false otherwise (or if not found)
+     */
+    public boolean isDeleted(String vectorId) {
+        Objects.requireNonNull(vectorId, "vectorId cannot be null");
+
+        try {
+            Map<String, String> meta = getVectorMetadata(vectorId);
+            if (meta == null) {
+                return false;
+            }
+
+            String deletedFlag = meta.getOrDefault("deleted", "false");
+            boolean isDeleted = "true".equalsIgnoreCase(deletedFlag);
+
+            if (isDeleted) {
+                logger.trace("Vector {} is marked deleted", vectorId);
+            }
+
+            return isDeleted;
+        } catch (Exception e) {
+            logger.warn("Error checking deletion status of {}: {}", vectorId, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Get the timestamp when a vector was deleted.
+     *
+     * @param vectorId the vector ID
+     * @return deletion timestamp in milliseconds, or -1 if not deleted or not found
+     */
+    public long getDeletedTimestamp(String vectorId) {
+        Objects.requireNonNull(vectorId, "vectorId cannot be null");
+
+        try {
+            Map<String, String> meta = getVectorMetadata(vectorId);
+            if (meta == null) {
+                return -1L;
+            }
+
+            String deletedFlag = meta.getOrDefault("deleted", "false");
+            if (!"true".equalsIgnoreCase(deletedFlag)) {
+                return -1L;
+            }
+
+            String timestampStr = meta.get("deleted_at");
+            if (timestampStr == null) {
+                logger.warn("Vector {} marked deleted but no timestamp", vectorId);
+                return -1L;
+            }
+
+            long timestamp = Long.parseLong(timestampStr);
+            logger.trace("Vector {} deleted at timestamp {}", vectorId, timestamp);
+            return timestamp;
+        } catch (NumberFormatException e) {
+            logger.warn("Invalid deletion timestamp for {}: {}", vectorId, e.getMessage());
+            return -1L;
+        } catch (Exception e) {
+            logger.warn("Error getting deletion timestamp for {}: {}", vectorId, e.getMessage());
+            return -1L;
+        }
+    }
+
+    /**
+     * Get count of deleted vectors (for metrics).
+     * Note: This is expensive as it scans all metadata.
+     *
+     * @return count of vectors marked as deleted
+     */
+    public int countDeletedVectors() {
+        try {
+            int count = 0;
+            List<String> allIds = getAllVectorIds();
+            for (String id : allIds) {
+                if (isDeleted(id)) {
+                    count++;
+                }
+            }
+            logger.info("Total deleted vectors: {}", count);
+            return count;
+        } catch (Exception e) {
+            logger.warn("Error counting deleted vectors", e);
+            return -1;
+        }
+    }
+
+    /**
+     * Permanently remove a deleted vector from metadata (hard delete).
+     * Only call this after re-encryption if you want to reclaim space.
+     *
+     * ISSUE #1 FIX: Now properly synchronized to prevent TOCTOU race condition
+     *
+     * @param vectorId the vector ID
+     */
+    public synchronized void hardDeleteVector(String vectorId) {
+        Objects.requireNonNull(vectorId, "vectorId cannot be null");
+
+        if (!isDeleted(vectorId)) {
+            logger.warn("Attempted hard delete of non-deleted vector {}", vectorId);
+            return;
+        }
+
+        try {
+            removeVectorMetadata(vectorId);
+            logger.info("Hard deleted vector {} (removed from metadata)", vectorId);
+        } catch (Exception e) {
+            logger.error("Failed to hard delete vector {}", vectorId, e);
         }
     }
 
@@ -177,76 +334,54 @@ public class RocksDBMetadataManager implements AutoCloseable {
 
     // ------------------- points persistence -------------------
 
-    public void saveEncryptedPoint(EncryptedPoint pt) throws IOException {
+    /**
+     * ISSUE #2 FIX: Now properly synchronized to prevent concurrent writes
+     * ISSUE #3 FIX: Deferred secure deletion (moved to background cleanup)
+     * ISSUE #4 FIX: Metadata written FIRST (atomic in RocksDB), then point file
+     */
+    public synchronized void saveEncryptedPoint(EncryptedPoint pt) throws IOException {
         Objects.requireNonNull(pt, "pt");
+
         String safeVersion = "v" + pt.getVersion();
         Path versionDir = Paths.get(baseDir, safeVersion);
         Files.createDirectories(versionDir);
 
-        Path tmp = versionDir.resolve(pt.getId() + ".point.tmp");
-        Path dst = versionDir.resolve(pt.getId() + ".point");
-
-        PersistenceUtils.saveObject(pt, tmp.toString(), baseDir);
-
-        Files.move(tmp, dst, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-
+        // ISSUE #4 FIX: Step 1 - Update metadata FIRST (RocksDB is atomic)
         Map<String, String> meta = new HashMap<>();
         meta.put("version", String.valueOf(pt.getVersion()));
         meta.put("shardId", String.valueOf(pt.getShardId()));
-        meta.put("dim", String.valueOf(pt.getVectorLength()));  // cheap and very useful
+        meta.put("dim", String.valueOf(pt.getVectorLength()));
         try {
             updateVectorMetadata(pt.getId(), meta);
         } catch (RuntimeException e) {
-            try { Files.deleteIfExists(dst); } catch (IOException ignore) {}
+            logger.error("Failed to update metadata for {}", pt.getId(), e);
             throw e;
         }
 
-        // SECURE DELETION OF OLD VERSION ***
+        // ISSUE #4 FIX: Step 2 - NOW save point file
+        Path tmp = versionDir.resolve(pt.getId() + ".point.tmp");
+        Path dst = versionDir.resolve(pt.getId() + ".point");
+
         try {
-            // Delete point files from older version directories (v1, v2, ...)
-            try (DirectoryStream<Path> dirs = Files.newDirectoryStream(Paths.get(baseDir))) {
-                for (Path dir : dirs) {
-                    if (!Files.isDirectory(dir)) continue;
-                    String name = dir.getFileName().toString();
-
-                    // Expecting version directories like "v1", "v2", "v3"
-                    if (!name.startsWith("v")) continue;
-
-                    int ver;
-                    try {
-                        ver = Integer.parseInt(name.substring(1));
-                    } catch (Exception ignore) {
-                        continue;
-                    }
-
-                    // Skip current version; only wipe older versions
-                    if (ver == pt.getVersion()) continue;
-
-                    Path old = dir.resolve(pt.getId() + ".point");
-                    if (!Files.exists(old)) continue;
-
-                    // Secure deletion: zeroize file contents before delete
-                    try {
-                        byte[] zero = new byte[(int) Files.size(old)];
-                        Arrays.fill(zero, (byte) 0);
-                        Files.write(old, zero, StandardOpenOption.WRITE);
-                    } catch (Throwable ignore) {
-                        // If overwrite fails, proceed to delete
-                    }
-
-                    // Delete old version file
-                    try { Files.deleteIfExists(old); } catch (IOException ignore) {}
-                }
-            }
-        } catch (IOException ignore) {
-            // Best effort
+            PersistenceUtils.saveObject(pt, tmp.toString(), baseDir);
+            Files.move(tmp, dst, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (IOException e) {
+            logger.error("Failed to save point file for {}", pt.getId(), e);
+            throw e;
         }
 
+        // ISSUE #3 FIX: Queue old version files for cleanup, don't do it now
+        queueOldVersionFileForCleanup(pt.getId(), pt.getVersion());
     }
 
-    public void saveEncryptedPointsBatch(Collection<EncryptedPoint> points) throws IOException {
+    /**
+     * ISSUE #2 FIX: Now properly synchronized
+     * ISSUE #3 FIX: Batch operations don't do per-point secure deletion
+     */
+    public synchronized void saveEncryptedPointsBatch(Collection<EncryptedPoint> points) throws IOException {
         if (points == null || points.isEmpty()) return;
 
+        // Step 1: Save all point files (no secure deletion per-point)
         List<Path> tmps = new ArrayList<>(points.size());
         List<Path> dsts = new ArrayList<>(points.size());
         for (EncryptedPoint pt : points) {
@@ -256,13 +391,16 @@ public class RocksDBMetadataManager implements AutoCloseable {
             Path tmp = versionDir.resolve(pt.getId() + ".point.tmp");
             Path dst = versionDir.resolve(pt.getId() + ".point");
             PersistenceUtils.saveObject(pt, tmp.toString(), baseDir);
-            tmps.add(tmp); dsts.add(dst);
+            tmps.add(tmp);
+            dsts.add(dst);
         }
 
+        // Step 2: Move all files atomically
         for (int i = 0; i < tmps.size(); i++) {
             Files.move(tmps.get(i), dsts.get(i), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         }
 
+        // Step 3: Batch update metadata
         Map<String, Map<String, String>> allMeta = new LinkedHashMap<>();
         for (EncryptedPoint pt : points) {
             Map<String, String> m = new HashMap<>();
@@ -271,51 +409,137 @@ public class RocksDBMetadataManager implements AutoCloseable {
             m.put("dim", String.valueOf(pt.getVectorLength()));
             List<Integer> buckets = pt.getBuckets();
             if (buckets != null) {
-                for (int t = 0; t < buckets.size(); t++) m.put("b" + t, String.valueOf(buckets.get(t)));
+                for (int t = 0; t < buckets.size(); t++) {
+                    m.put("b" + t, String.valueOf(buckets.get(t)));
+                }
             }
             allMeta.put(pt.getId(), m);
         }
         batchPutMetadata(allMeta);
+
+        // ISSUE #3 FIX: Queue old version files for cleanup
+        for (EncryptedPoint pt : points) {
+            queueOldVersionFileForCleanup(pt.getId(), pt.getVersion());
+        }
     }
 
+    /**
+     * ISSUE #3 FIX: Queue old version files for deferred cleanup
+     * Call cleanupOldVersionFiles() during low-activity periods
+     */
+    private void queueOldVersionFileForCleanup(String pointId, int currentVersion) {
+        try (DirectoryStream<Path> dirs = Files.newDirectoryStream(Paths.get(baseDir))) {
+            for (Path dir : dirs) {
+                if (!Files.isDirectory(dir)) continue;
+                String name = dir.getFileName().toString();
+
+                if (!name.startsWith("v")) continue;
+
+                int ver;
+                try {
+                    ver = Integer.parseInt(name.substring(1));
+                } catch (Exception ignore) {
+                    continue;
+                }
+
+                if (ver >= currentVersion) continue;
+
+                Path old = dir.resolve(pointId + ".point");
+                if (Files.exists(old)) {
+                    oldPointFilesForCleanup.offer(old);
+                }
+            }
+        } catch (IOException ignore) {
+            // Best effort
+        }
+    }
+
+    /**
+     * ISSUE #3 FIX: Background cleanup for old version files
+     * Call this during low-activity periods (e.g., off-peak hours)
+     *
+     * @param maxOldFilesToProcess maximum number of files to process in one call
+     * @return number of files actually cleaned up
+     */
+    public int cleanupOldVersionFilesDeferred(int maxOldFilesToProcess) {
+        int cleaned = 0;
+        int processed = 0;
+
+        while (processed < maxOldFilesToProcess && !oldPointFilesForCleanup.isEmpty()) {
+            Path old = oldPointFilesForCleanup.poll();
+            if (old == null) break;
+
+            try {
+                if (Files.exists(old)) {
+                    // Secure deletion: zero out file before deleting
+                    try {
+                        byte[] zeros = new byte[(int) Files.size(old)];
+                        Files.write(old, zeros);
+                    } catch (Throwable ignore) {
+                        // If overwrite fails, proceed to delete
+                    }
+
+                    Files.deleteIfExists(old);
+                    cleaned++;
+                    logger.debug("Cleaned up old point file: {}", old);
+                }
+            } catch (Exception e) {
+                logger.warn("Failed to cleanup old point file {}", old, e);
+            }
+            processed++;
+        }
+
+        if (cleaned > 0) {
+            logger.info("Cleaned up {} old version files ({} remaining in queue)",
+                    cleaned, oldPointFilesForCleanup.size());
+        }
+
+        return cleaned;
+    }
+
+    /**
+     * ISSUE #6 FIX: Improved getAllEncryptedPoints()
+     * Now uses metadata as source of truth, loads only referenced points
+     */
     public List<EncryptedPoint> getAllEncryptedPoints() {
         List<EncryptedPoint> list = new ArrayList<>();
-        Set<String> seen = new HashSet<>();
-        try (Stream<Path> s = Files.walk(Paths.get(baseDir))) {
-            s.filter(Files::isRegularFile)
-                    .filter(p -> p.toString().endsWith(".point"))
-                    .forEach(p -> {
-                        try {
-                            EncryptedPoint pt = PersistenceUtils.loadObject(p.toString(), baseDir, EncryptedPoint.class);
-                            if (pt == null) return;
-                            if (!seen.add(pt.getId())) return;
+        try {
+            // Enumerate from metadata (source of truth)
+            List<String> allIds = getAllVectorIds();
 
-                            Map<String, String> meta = getVectorMetadata(pt.getId());
-                            if (meta.isEmpty() || !meta.containsKey("version") || !meta.containsKey("shardId")) {
-                                logger.warn("Skipping point {} due to missing metadata (version/shardId).", pt.getId());
-                                return;
-                            }
-                            list.add(pt);
-                        } catch (Exception e) {
-                            logger.warn("Failed to load point {}", p, e);
-                        }
-                    });
-        } catch (IOException e) {
-            logger.warn("getAllEncryptedPoints walk failed", e);
+            for (String id : allIds) {
+                try {
+                    EncryptedPoint pt = loadEncryptedPoint(id);
+                    if (pt != null) {
+                        list.add(pt);
+                    }
+                } catch (IOException | ClassNotFoundException e) {
+                    logger.warn("Failed to load point {}", id, e);
+                }
+            }
+
+            logger.info("Loaded {} encrypted points from disk ({} unique ids).",
+                    list.size(),
+                    list.stream().map(EncryptedPoint::getId).distinct().count());
+        } catch (Exception e) {
+            logger.error("getAllEncryptedPoints failed", e);
         }
-        logger.info("Loaded {} encrypted points from disk ({} unique ids).", list.size(), list.stream().map(EncryptedPoint::getId).distinct().count());
         return list;
     }
 
     public EncryptedPoint loadEncryptedPoint(String id) throws IOException, ClassNotFoundException {
         Objects.requireNonNull(id, "id");
         Map<String, String> meta = getVectorMetadata(id);
-        if (meta.isEmpty() || !meta.containsKey("version")) return null;
+        if (meta.isEmpty() || !meta.containsKey("version")) {
+            return null;
+        }
 
         String ver = meta.get("version");
         String safeVersion = ver.startsWith("v") ? ver : "v" + ver;
         Path p = Paths.get(baseDir, safeVersion, id + ".point");
-        if (!Files.exists(p)) return null;
+        if (!Files.exists(p)) {
+            return null;
+        }
         return PersistenceUtils.loadObject(p.toString(), baseDir, EncryptedPoint.class);
     }
 
@@ -333,14 +557,18 @@ public class RocksDBMetadataManager implements AutoCloseable {
             }
             if (!toDelete.isEmpty()) {
                 try (WriteBatch batch = new WriteBatch(); WriteOptions wo = new WriteOptions()) {
-                    for (byte[] k : toDelete) batch.delete(k);
+                    for (byte[] k : toDelete) {
+                        batch.delete(k);
+                    }
                     db.write(wo, batch);
                 }
             }
         } catch (RocksDBException e) {
             logger.warn("cleanupStaleMetadata failed", e);
         } finally {
-            if (it != null) it.close();
+            if (it != null) {
+                it.close();
+            }
         }
     }
 
@@ -372,10 +600,14 @@ public class RocksDBMetadataManager implements AutoCloseable {
             it = db.newIterator();
             for (it.seekToFirst(); it.isValid(); it.next()) {
                 String key = new String(it.key(), StandardCharsets.UTF_8);
-                if (!"index".equals(key)) out.add(key);
+                if (!"index".equals(key)) {
+                    out.add(key);
+                }
             }
         } finally {
-            if (it != null) it.close();
+            if (it != null) {
+                it.close();
+            }
         }
         return out;
     }
@@ -398,13 +630,21 @@ public class RocksDBMetadataManager implements AutoCloseable {
         int metaKeys = getAllVectorIds().size();
         long files = 0L;
         try (Stream<Path> s = Files.walk(Paths.get(baseDir))) {
-            files = s.filter(Files::isRegularFile).filter(p -> p.toString().endsWith(".point")).count();
+            files = s.filter(Files::isRegularFile)
+                    .filter(p -> p.toString().endsWith(".point"))
+                    .count();
         } catch (IOException ignore) {}
-        return String.format("RocksDB[%s] v=%d metaKeys=%d pointFiles=%d", dbPath, version, metaKeys, files);
+        return String.format("RocksDB[%s] v=%d metaKeys=%d pointFiles=%d",
+                dbPath, version, metaKeys, files);
     }
 
-    public String getDbPath() { return dbPath; }
-    public String getPointsBaseDir() { return baseDir; }
+    public String getDbPath() {
+        return dbPath;
+    }
+
+    public String getPointsBaseDir() {
+        return baseDir;
+    }
 
     public DriftReport auditDrift() {
         Set<String> idsInMeta = new HashSet<>(getAllVectorIds());
@@ -418,8 +658,10 @@ public class RocksDBMetadataManager implements AutoCloseable {
             logger.warn("auditDrift walk failed", e);
         }
 
-        Set<String> onlyMeta = new HashSet<>(idsInMeta); onlyMeta.removeAll(idsOnDisk);
-        Set<String> onlyDisk = new HashSet<>(idsOnDisk); onlyDisk.removeAll(idsInMeta);
+        Set<String> onlyMeta = new HashSet<>(idsInMeta);
+        onlyMeta.removeAll(idsOnDisk);
+        Set<String> onlyDisk = new HashSet<>(idsOnDisk);
+        onlyDisk.removeAll(idsInMeta);
 
         if (!onlyMeta.isEmpty() || !onlyDisk.isEmpty()) {
             logger.warn("Drift detected: onlyInMeta={}, onlyOnDisk={}", onlyMeta.size(), onlyDisk.size());
@@ -437,9 +679,56 @@ public class RocksDBMetadataManager implements AutoCloseable {
     public static final class DriftReport {
         public final int metaCount, diskCount;
         public final Set<String> onlyMeta, onlyDisk;
+
         DriftReport(int metaCount, int diskCount, Set<String> onlyMeta, Set<String> onlyDisk) {
-            this.metaCount = metaCount; this.diskCount = diskCount; this.onlyMeta = onlyMeta; this.onlyDisk = onlyDisk;
+            this.metaCount = metaCount;
+            this.diskCount = diskCount;
+            this.onlyMeta = onlyMeta;
+            this.onlyDisk = onlyDisk;
         }
+    }
+
+    /**
+     * Count how many encrypted points are stored with a given key version.
+     * Diagnostic-only, used for migration safety checks.
+     */
+    public int countWithVersion(int keyVersion) throws IOException {
+        int count = 0;
+        for (EncryptedPoint ep : getAllEncryptedPoints()) {
+            if (ep != null && ep.getKeyVersion() == keyVersion) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+
+    /**
+     * Get storage metrics tracker for this metadata manager.
+     */
+    public StorageMetrics getStorageMetrics() {
+        return storageMetrics;
+    }
+
+    /**
+     * Update storage metrics for a specific dimension.
+     */
+    public void updateDimensionStorage(int dim) {
+        if (storageMetrics != null) {
+            storageMetrics.updateDimensionStorage(dim);
+        }
+    }
+
+    /**
+     * Get current storage snapshot (cached, refreshed every 5 seconds).
+     */
+    public StorageMetrics.StorageSnapshot getStorageSnapshot() {
+        if (storageMetrics == null) {
+            return new StorageMetrics.StorageSnapshot(0L, 0L, 0L,
+                    new ConcurrentHashMap<>(),
+                    new ConcurrentHashMap<>());
+        }
+        return storageMetrics.getSnapshot();
     }
 
     // ------------------- serialization helpers -------------------
@@ -450,6 +739,7 @@ public class RocksDBMetadataManager implements AutoCloseable {
                 .collect(Collectors.joining(";"));
         return s.getBytes(StandardCharsets.UTF_8);
     }
+
     private Map<String, String> deserializeMetadata(byte[] data) {
         String s = new String(data, StandardCharsets.UTF_8);
         return Arrays.stream(s.split("(?<!\\\\);"))
@@ -460,36 +750,73 @@ public class RocksDBMetadataManager implements AutoCloseable {
                         kv -> unescape(kv[1])
                 ));
     }
-    /** Returns total size of all .point files in the points base directory. */
+
+    /**
+     * Flush any pending writes in RocksDB to disk.
+     * RocksDB doesn't have explicit flush, but accessing DB triggers durability.
+     */
+    public void flush() {
+        try {
+            if (this.db != null && !closed) {
+                // Sync WAL to ensure durability
+                this.db.syncWal();
+                logger.debug("RocksDB WAL synced");
+            }
+        } catch (Exception e) {
+            logger.warn("RocksDB flush/syncWal failed", e);
+        }
+    }
+
+    /**
+     * Returns total size of all .point files in the points base directory.
+     */
     public long sizePointsDir() {
         try (var walk = Files.walk(Paths.get(baseDir))) {
             return walk
                     .filter(Files::isRegularFile)
                     .filter(p -> p.toString().endsWith(".point"))
                     .mapToLong(p -> {
-                        try { return Files.size(p); }
-                        catch (IOException ignore) { return 0L; }
+                        try {
+                            return Files.size(p);
+                        } catch (IOException ignore) {
+                            return 0L;
+                        }
                     })
                     .sum();
         } catch (IOException e) {
-            return 0L; // safe fallback
+            return 0L;
         }
     }
-    /** Returns the version number for a given vector ID (or -1 if missing). */
+
+    /**
+     * Returns the version number for a given vector ID (or -1 if missing).
+     */
     public int getVersionOfVector(String id) {
         Map<String, String> meta = getVectorMetadata(id);
-        if (meta.isEmpty()) return -1;
+        if (meta.isEmpty()) {
+            return -1;
+        }
 
         String v = meta.get("version");
-        if (v == null) return -1;
+        if (v == null) {
+            return -1;
+        }
 
         try {
-            if (v.startsWith("v")) v = v.substring(1);
+            if (v.startsWith("v")) {
+                v = v.substring(1);
+            }
             return Integer.parseInt(v);
         } catch (Exception e) {
             return -1;
         }
     }
-    private String escape(String in)   { return in.replace("=", "\\=").replace(";", "\\;"); }
-    private String unescape(String in) { return in.replace("\\=", "=").replace("\\;", ";"); }
+
+    private String escape(String in) {
+        return in.replace("=", "\\=").replace(";", "\\;");
+    }
+
+    private String unescape(String in) {
+        return in.replace("\\=", "=").replace("\\;", ";");
+    }
 }
