@@ -1,0 +1,115 @@
+{
+  "opsThreshold": 500000000,
+  "ageThresholdMs": 86400000,
+  "reencryptionEnabled": false,
+  "forwardSecurityEnabled": true,
+  "profilerEnabled": true,
+
+  "paper": {
+    "enabled": true,
+    "m": 22,
+    "lambda": 3,
+    "divisions": 16,
+    "tables": 4,
+    "seed": 13
+  },
+
+  "stabilization": { "enabled": false },
+
+  "runtime": {
+    "precisionMode": false,
+    "probeOverride": -1,
+    "refinementLimit": 3500,
+    "maxCandidateFactor": 2,
+    "maxGlobalCandidates": 6000,
+    "maxRelaxationDepth": 4,
+    "hammingPrefilterThreshold": 7
+  },
+
+  "eval": {
+    "computePrecision": true,
+    "writeGlobalPrecisionCsv": true,
+    "kVariants": [1,10,20,40,60,80,100]
+  },
+
+  "ratio": {
+    "source": "gt",
+    "gtSample": 60,
+    "gtMismatchTolerance": 0.08
+  },
+
+  "profiles": [
+
+    {
+      "name": "REDCAPS_UltraFast",
+      "overrides": {
+        "paper": { "m": 20, "lambda": 3, "divisions": 20, "tables": 3 },
+        "runtime": {
+          "probeOverride": 3,
+          "refinementLimit": 1500,
+          "maxGlobalCandidates": 2200,
+          "maxRelaxationDepth": 3,
+          "hammingPrefilterThreshold": 8
+        }
+      }
+    },
+
+    {
+      "name": "REDCAPS_Fast",
+      "overrides": {
+        "paper": { "m": 22, "lambda": 3, "divisions": 18, "tables": 3 },
+        "runtime": {
+          "probeOverride": 4,
+          "refinementLimit": 2500,
+          "maxGlobalCandidates": 3500,
+          "maxRelaxationDepth": 4,
+          "hammingPrefilterThreshold": 7
+        }
+      }
+    },
+
+    {
+      "name": "REDCAPS_Balanced",
+      "overrides": {
+        "paper": { "m": 24, "lambda": 3, "divisions": 16, "tables": 4 },
+        "runtime": {
+          "probeOverride": 6,
+          "refinementLimit": 4000,
+          "maxGlobalCandidates": 6000,
+          "maxRelaxationDepth": 5,
+          "hammingPrefilterThreshold": 6
+        }
+      }
+    },
+
+    {
+      "name": "REDCAPS_HighRecall",
+      "overrides": {
+        "paper": { "m": 26, "lambda": 3, "divisions": 14, "tables": 5 },
+        "runtime": {
+          "probeOverride": 8,
+          "refinementLimit": 6500,
+          "maxGlobalCandidates": 9000,
+          "maxRelaxationDepth": 6,
+          "hammingPrefilterThreshold": 5
+        }
+      }
+    },
+
+    {
+      "name": "REDCAPS_HighRecall_Reenc",
+      "overrides": {
+        "reencryptionEnabled": true,
+        "paper": { "m": 26, "lambda": 3, "divisions": 14, "tables": 5 },
+        "runtime": {
+          "probeOverride": 8,
+          "refinementLimit": 6500,
+          "maxGlobalCandidates": 9000,
+          "maxRelaxationDepth": 6,
+          "hammingPrefilterThreshold": 5
+        }
+      }
+    }
+
+  ]
+}

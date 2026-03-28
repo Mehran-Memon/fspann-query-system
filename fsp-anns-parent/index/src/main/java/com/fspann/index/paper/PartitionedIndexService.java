@@ -436,7 +436,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
     // ← ADD: Helper method
     private String getBitString(BitSet bs, int maxBits) {
         StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < Math.min(63, bs.size()); i++) {
+        for (int i = 0; i < Math.min(maxBits, bs.length()); i++){
             sb.append(bs.get(i) ? '1' : '0');
         }
         return sb.toString();
@@ -731,7 +731,6 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
     ) {
         int newlySeen = 0;
 
-        // Partition score = Hamming distance to representative
         long partDist = GreedyPartitioner.hamming(qBits, p.repCode);
 
         for (String id : p.ids) {
@@ -743,8 +742,10 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
             }
 
             Long prev = bestScore.get(id);
-            if (prev == null || partDist < prev) {
-                bestScore.put(id, partDist);
+            long score = partDist;
+
+            if (prev == null || score < prev) {
+                bestScore.put(id, score);
                 newlySeen++;
             }
         }
@@ -823,7 +824,7 @@ private static final int DEFAULT_BUILD_THRESHOLD = 20_000;
 
             for (PendingVector pv : pendingVectors) {
                 EncryptedPoint ep =
-                        cryptoService.encrypt(pv.id, pv.vector, keyService.getCurrentVersion());
+                        cryptoService.encrypt(pv.id, pv.vector);
                 directInsert(ep, pv.vector);
             }
             pendingVectors.clear();

@@ -129,6 +129,24 @@ public abstract class BaseUnifiedIT {
         metadata.flush();
     }
 
+    @AfterEach
+    void forceCleanup() {
+        try {
+            system.setExitOnShutdown(false);
+            system.shutdown();
+        } catch (Exception ignore) {}
+
+        try {
+            metadata.close();
+        } catch (Exception ignore) {}
+    }
+
+    @BeforeEach
+    void disableHardExit() {
+        system.setExitOnShutdown(false);
+    }
+
+
     // --------------------------------------------------
     // SINGLE CLEANUP (NO PER-TEST SHUTDOWN)
     // --------------------------------------------------

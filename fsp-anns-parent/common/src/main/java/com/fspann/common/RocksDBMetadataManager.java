@@ -172,13 +172,17 @@ public class RocksDBMetadataManager implements AutoCloseable {
     public synchronized void mergeVectorMetadata(String vectorId, Map<String, String> updates) {
         Objects.requireNonNull(vectorId, "vectorId");
         Objects.requireNonNull(updates, "updates");
+
         Map<String, String> existing = getVectorMetadata(vectorId);
-        if (existing.isEmpty()) {
-            existing = new HashMap<>(updates);
-        } else {
-            updates.forEach(existing::putIfAbsent);
+        Map<String, String> merged = new HashMap<>();
+
+        if (!existing.isEmpty()) {
+            merged.putAll(existing);
         }
-        updateVectorMetadata(vectorId, existing);
+        // OVERWRITE semantics (correct for version, shard, buckets)
+        merged.putAll(updates);
+
+        updateVectorMetadata(vectorId, merged);
     }
 
     public synchronized void removeVectorMetadata(String vectorId) {

@@ -28,6 +28,7 @@
     <!-- Index probing & partition traversal -->
     <logger name="com.fspann.index.paper.PartitionedIndexService" level="WARN" />
     <logger name="com.fspann.index.paper.GFunctionRegistry" level="WARN" />
+    <logger name="com.fspann.query.core.QueryTokenFactory" level="WARN" />
 
     <!-- Crypto / keys -->
     <logger name="com.fspann.crypto" level="WARN" />

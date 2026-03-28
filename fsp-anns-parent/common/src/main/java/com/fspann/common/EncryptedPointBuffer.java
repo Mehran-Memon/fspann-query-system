@@ -136,9 +136,6 @@ public class EncryptedPointBuffer {
             for (EncryptedPoint pt : points) {
                 metadataManager.saveEncryptedPoint(pt); // <-- ensures Rocks can restore later
 
-                // Optional: keep sidecar on disk for audits/debugging (as you had)
-                Path pointFile = versionDir.resolve(pt.getId() + ".point");
-                PersistenceUtils.saveObject(pt, pointFile.toString(), pointsDir.toString());
             }
             logger.info("Flushed {} points to v{} ({})", flushedSize, version, batchFileName);
         } catch (Exception e) {

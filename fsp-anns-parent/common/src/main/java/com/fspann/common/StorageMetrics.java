@@ -2,11 +2,12 @@ package com.fspann.common;
 
 import java.io.IOException;
 import java.nio.file.*;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 
 /**
  * Storage Metrics Tracker
@@ -136,27 +137,42 @@ public final class StorageMetrics {
     }
 
     private long computeDimensionStorageBytes(int dim) {
-        if (!Files.exists(pointsBaseDir)) return 0L;
+        long sum = 0L;
 
-        try (Stream<Path> stream = Files.walk(pointsBaseDir)) {
-            return stream
-                    .filter(Files::isDirectory)
-                    .filter(p -> p.getFileName().toString().equals("v*"))  // version dirs
-                    .flatMap(vdir -> {
-                        try {
-                            return Files.walk(vdir)
-                                    .filter(Files::isRegularFile)
-                                    .filter(f -> f.toString().endsWith(".point"));
-                        } catch (IOException e) {
-                            return Stream.empty();
-                        }
-                    })
-                    .mapToLong(StorageMetrics::safeFileSize)
-                    .sum();
-        } catch (IOException e) {
-            logger.warn("Failed to compute dimension {} storage", dim, e);
-            return 0L;
-        }
+        try {
+            // metadata is source of truth
+            RocksDBMetadataManager mgr =
+                    RocksDBMetadataManager.create(
+                            metaDBDir.toString(),
+                            pointsBaseDir.toString()
+                    );
+
+            for (String id : mgr.getAllVectorIds()) {
+                Map<String, String> meta = mgr.getVectorMetadata(id);
+                if (meta.isEmpty()) continue;
+
+                int mdim;
+                try {
+                    mdim = Integer.parseInt(meta.getOrDefault("dim", "-1"));
+                } catch (Exception e) {
+                    continue;
+                }
+
+                if (mdim != dim) continue;
+
+                String ver = meta.get("version");
+                if (ver == null) continue;
+
+                String safeVer = ver.startsWith("v") ? ver : "v" + ver;
+                Path p = pointsBaseDir.resolve(safeVer).resolve(id + ".point");
+
+                if (Files.exists(p)) {
+                    sum += Files.size(p);
+                }
+            }
+        } catch (Exception ignore) {}
+
+        return sum;
     }
 
     public DimensionStorageStats getDimensionStats(int dim) {

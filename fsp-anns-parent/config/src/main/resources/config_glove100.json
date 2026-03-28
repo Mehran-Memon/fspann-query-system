@@ -1,32 +1,32 @@
 {
   "opsThreshold": 500000000,
   "ageThresholdMs": 86400000,
-  "reencryptionEnabled": true,
+  "reencryptionEnabled": false,
   "forwardSecurityEnabled": true,
   "profilerEnabled": true,
 
   "paper": {
     "enabled": true,
-    "m": 20,
-    "lambda": 2,
-    "divisions": 3,
-    "tables": 6,
+    "m": 16,
+    "lambda": 3,
+    "divisions": 4,
+    "tables": 10,
     "seed": 13
   },
 
   "stabilization": {
-    "enabled": false,
-    "alpha": 0.02,
-    "minCandidatesRatio": 1.25
+    "enabled": true,
+    "alpha": 0.30,
+    "minCandidatesRatio": 1.5
   },
 
   "runtime": {
     "precisionMode": false,
     "probeOverride": -1,
-    "refinementLimit": 20000,
-    "maxCandidateFactor": 6,
-    "maxGlobalCandidates": 30000,
-    "maxRelaxationDepth": 7,
+    "refinementLimit": 40000,
+    "maxCandidateFactor": 10,
+    "maxGlobalCandidates": 50000,
+    "maxRelaxationDepth": 9,
     "hammingPrefilterThreshold": 0
   },
 
@@ -38,146 +38,82 @@
 
   "ratio": {
     "source": "gt",
-    "gtSample": 200,
+    "gtSample": 150,
     "gtMismatchTolerance": 0.05
   },
-
-  "profiles": [
-    {
-      "name": "P4_FAST",
-      "description": "Trade-off point 1: Fast baseline (<1s target)",
-      "overrides": {
-        "paper": { "m": 16, "lambda": 2, "divisions": 3, "tables": 5 },
-        "runtime": {
-          "probeOverride": 4,
-          "refinementLimit": 8000,
-          "maxGlobalCandidates": 12000,
-          "maxCandidateFactor": 3,
-          "maxRelaxationDepth": 5,
-          "hammingPrefilterThreshold": 0
+  "profiles":
+    [
+      {
+        "name": "GLOVE_P4_FAST",
+        "description": "BASELINE: Fast semantic lookup",
+        "overrides": {
+          "paper": { "m": 18, "lambda": 2, "divisions": 8, "tables": 5 },
+          "runtime": {
+            "probeOverride": 4,
+            "refinementLimit": 9000,
+            "maxGlobalCandidates": 12000,
+            "maxCandidateFactor": 3,
+            "maxRelaxationDepth": 5,
+            "hammingPrefilterThreshold": 0
+          }
+        }
+      },
+      {
+        "name": "GLOVE_P6_BALANCED",
+        "description": "BALANCED: Semantic recall vs ART",
+        "overrides": {
+          "paper": { "m": 22, "lambda": 2, "divisions": 8, "tables": 6 },
+          "runtime": {
+            "probeOverride": 6,
+            "refinementLimit": 16000,
+            "maxGlobalCandidates": 20000,
+            "maxRelaxationDepth": 7,
+            "hammingPrefilterThreshold": 0
+          }
+        }
+      },
+      {
+        "name": "GLOVE_TABLES8",
+        "description": "ABLATION: More tables for semantic diversity",
+        "overrides": {
+          "paper": { "m": 22, "lambda": 2, "divisions": 8, "tables": 8 },
+          "runtime": {
+            "probeOverride": 6,
+            "refinementLimit": 20000,
+            "maxGlobalCandidates": 24000,
+            "maxRelaxationDepth": 7,
+            "hammingPrefilterThreshold": 0
+          }
+        }
+      },
+      {
+        "name": "GLOVE_LAMBDA3",
+        "description": "ABLATION: λ=3 on embeddings",
+        "overrides": {
+          "paper": { "m": 22, "lambda": 3, "divisions": 8, "tables": 6 },
+          "runtime": {
+            "probeOverride": 8,
+            "refinementLimit": 22000,
+            "maxGlobalCandidates": 26000,
+            "maxRelaxationDepth": 9,
+            "hammingPrefilterThreshold": 0
+          }
+        }
+      },
+      {
+        "name": "GLOVE_DIV10_FINE",
+        "description": "ABLATION: Finer partitions (precision oriented)",
+        "overrides": {
+          "paper": { "m": 22, "lambda": 2, "divisions": 10, "tables": 6 },
+          "runtime": {
+            "probeOverride": 6,
+            "refinementLimit": 18000,
+            "maxGlobalCandidates": 22000,
+            "maxRelaxationDepth": 7,
+            "hammingPrefilterThreshold": 0
+          }
         }
       }
-    },
 
-    {
-      "name": "P8_BALANCED",
-      "description": "Trade-off point 2: PRIMARY RESULT (production config)",
-      "overrides": {
-        "paper": { "m": 20, "lambda": 2, "divisions": 3, "tables": 6 },
-        "runtime": {
-          "probeOverride": 8,
-          "refinementLimit": 16000,
-          "maxGlobalCandidates": 22000,
-          "maxCandidateFactor": 5,
-          "maxRelaxationDepth": 6,
-          "hammingPrefilterThreshold": 0
-        }
-      }
-    },
-
-    {
-      "name": "P12_HIGHRECALL",
-      "description": "Trade-off point 3: High recall config",
-      "overrides": {
-        "paper": { "m": 20, "lambda": 2, "divisions": 3, "tables": 6 },
-        "runtime": {
-          "probeOverride": 12,
-          "refinementLimit": 24000,
-          "maxGlobalCandidates": 32000,
-          "maxCandidateFactor": 7,
-          "maxRelaxationDepth": 8,
-          "hammingPrefilterThreshold": 0
-        }
-      }
-    },
-
-    {
-      "name": "P16_MAXRECALL",
-      "description": "Trade-off point 4: Maximum recall (diminishing returns)",
-      "overrides": {
-        "paper": { "m": 20, "lambda": 2, "divisions": 3, "tables": 8 },
-        "runtime": {
-          "probeOverride": 16,
-          "refinementLimit": 32000,
-          "maxGlobalCandidates": 45000,
-          "maxCandidateFactor": 10,
-          "maxRelaxationDepth": 9,
-          "hammingPrefilterThreshold": 0
-        }
-      }
-    },
-
-    {
-      "name": "M26_ABLATION",
-      "description": "Ablation: Projection count (m=26, larger index)",
-      "overrides": {
-        "paper": { "m": 26, "lambda": 2, "divisions": 3, "tables": 6 },
-        "runtime": {
-          "probeOverride": 8,
-          "refinementLimit": 16000,
-          "maxGlobalCandidates": 22000,
-          "hammingPrefilterThreshold": 0
-        }
-      }
-    },
-
-    {
-      "name": "LAMBDA3_ABLATION",
-      "description": "Ablation: Relaxation depth (λ=3, deeper search)",
-      "overrides": {
-        "paper": { "m": 20, "lambda": 3, "divisions": 3, "tables": 6 },
-        "runtime": {
-          "probeOverride": 8,
-          "refinementLimit": 16000,
-          "maxGlobalCandidates": 22000,
-          "hammingPrefilterThreshold": 0
-        }
-      }
-    },
-
-    {
-      "name": "DIV4_ABLATION",
-      "description": "Ablation: Partition granularity (divisions=4, finer)",
-      "overrides": {
-        "paper": { "m": 20, "lambda": 2, "divisions": 4, "tables": 6 },
-        "runtime": {
-          "probeOverride": 8,
-          "refinementLimit": 16000,
-          "maxGlobalCandidates": 22000,
-          "hammingPrefilterThreshold": 0
-        }
-      }
-    },
-
-    {
-      "name": "HAMMING_RANKED",
-      "description": "Optimization: Ranked Hamming pre-filtering speedup",
-      "overrides": {
-        "paper": { "m": 20, "lambda": 2, "divisions": 3, "tables": 6 },
-        "runtime": {
-          "probeOverride": 8,
-          "refinementLimit": 12000,
-          "maxGlobalCandidates": 22000,
-          "maxCandidateFactor": 5,
-          "maxRelaxationDepth": 6,
-          "hammingPrefilterThreshold": 99
-        }
-      }
-    },
-
-    {
-      "name": "NO_REENCRYPT",
-      "description": "Ablation: Quantify re-encryption security overhead",
-      "overrides": {
-        "reencryptionEnabled": false,
-        "paper": { "m": 20, "lambda": 2, "divisions": 3, "tables": 6 },
-        "runtime": {
-          "probeOverride": 8,
-          "refinementLimit": 16000,
-          "maxGlobalCandidates": 22000,
-          "hammingPrefilterThreshold": 0
-        }
-      }
-    }
-  ]
+    ]
 }

@@ -86,7 +86,7 @@ public final class GreedyPartitioner {
     // ============================================================
     public static long computeKey(BitSet bs) {
         long v = 0L;
-        int len = Math.min(63, bs.size());
+        int len = Math.min(63, bs.length());
         for (int i = 0; i < len; i++) {
             if (bs.get(i)) {
                 v |= (1L << (62 - i));
