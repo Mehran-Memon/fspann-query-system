@@ -1,314 +1,372 @@
-# FSPANN — Forward-Secure Privacy-Preserving Approximate Nearest Neighbour Search
+# FSPANN: Forward-Secure and Privacy-Preserving ANN Search with Routing–Ciphertext Orthogonality
 
-A systems-oriented implementation of encrypted ANN retrieval with forward-secure key evolution over high-dimensional vector data.
+FSPANN is a Java implementation of lifecycle-aware approximate nearest neighbor
+(ANN) retrieval over encrypted high-dimensional vectors. It combines bounded
+geometric candidate generation with versioned authenticated encryption, gradual
+ciphertext migration, and safe epoch-key retirement.
 
----
-
-## Overview
-
-FSPANN is a Java-based system for approximate nearest neighbour (ANN) retrieval over encrypted high-dimensional vectors. It is designed for settings where vector embeddings are operationally useful but also sensitive — semantic retrieval, retrieval-augmented generation (RAG), recommendation, and large-scale embedding search.
-
-The system combines sub-linear geometric routing with authenticated encryption and version-aware key evolution. Its central design principle is that **routing state and ciphertext state are deliberately separated**, so cryptographic key rotation does not require rebuilding the ANN index. This allows the system to support forward security while preserving stable query behaviour and practical search performance.
+The project is designed for long-lived encrypted vector databases in which keys
+must evolve without forcing reconstruction of the ANN routing structure.
 
 ---
 
-## Problem Statement
+## Scope
 
-Modern vector databases are increasingly used as infrastructure for AI systems, but they are usually optimised for speed rather than long-term security. In many deployments, embeddings are stored in plaintext or under static protection. This creates an important risk: if current key material is exposed, historical vector data may also become exposed.
+FSPANN targets encrypted vector retrieval for applications such as semantic
+search, retrieval-augmented generation, recommendation, multimodal retrieval,
+and large-scale embedding analytics.
 
-The main systems question addressed here is:
+Its central contribution is **routing–ciphertext orthogonality**, defined as a
+lifecycle invariant:
 
-> How can we support efficient ANN retrieval over encrypted high-dimensional vectors while allowing keys to evolve over time, without forcing index reconstruction after every key update?
+> For a fixed indexed collection, ANN candidate-generation semantics remain
+> unchanged while ciphertexts, record versions, and online epoch keys evolve
+> through rotation, selective migration, and safe retirement.
 
-FSPANN answers that question through a forward-secure retrieval architecture in which geometric routing remains stable while ciphertexts and key versions evolve independently.
+This is not a claim that routing and encrypted storage are physically
+disconnected. Routed identifiers still resolve to encrypted records. The
+invariant requires cryptographic maintenance not to alter routing codes,
+partition membership, representatives, probe behavior, or routed candidate
+identifiers.
 
----
-
-## Why This Matters in Modern AI
-
-Vector search now underpins many AI workflows, including semantic document retrieval, hybrid search, multimodal retrieval, recommendation pipelines, and RAG. In these settings, embeddings may encode sensitive signals derived from proprietary documents, user activity, internal corpora, or confidential knowledge bases.
-
-This creates a gap in current infrastructure:
-
-- Plaintext vector databases provide strong performance but weak confidentiality
-- Heavy cryptographic retrieval methods provide stronger security but often become too expensive at scale
-- Many secure ANN designs couple routing with encrypted representation, making key rotation operationally costly
-
-FSPANN is aimed at that gap. It explores a design that preserves practical ANN behaviour while introducing forward-secure cryptographic maintenance.
+Ordinary insertions, deletions, and geometric index updates remain operations of
+the underlying ANN index and are outside this fixed-collection invariance claim.
 
 ---
 
-## Core Features
+## Core Capabilities
 
-**Forward-secure key evolution**
-- Versioned encryption keys derived from a master secret
-- Safe retirement of obsolete keys after ciphertext migration
-- Protection against retrospective exposure of older ciphertext epochs after current-key compromise
+### Stable routing under key evolution
 
-**Stable ANN routing under key rotation**
-- Routing depends on geometric structure and fixed public parameters
-- Ciphertext evolution does not alter partition boundaries or routing topology
-- No index rebuild required after normal key rotation
+- Multi-table binary-code partition routing
+- Fixed routing codes, partitions, representatives, and identifier memberships
+- Candidate generation independent of ciphertext contents, nonces, versions,
+  and migration status
+- No routing-index reconstruction during normal rotation, migration, or
+  retirement
 
-**Partition-based approximate retrieval**
-- Geometric coding and ordered partition construction for candidate generation
-- Bounded decrypt-and-refine pipeline
-- Multi-probe style local partition expansion during search
+### Version-aware encrypted storage
 
-**Version-aware retrieval**
-- Stored encrypted records carry explicit key-version metadata
-- Mixed-version ciphertext populations coexist safely
-- Query-time decryption resolves the correct key version per candidate
+Each vector is stored as a versioned authenticated-encryption record:
 
-**Lazy selective re-encryption**
-- Ciphertext migration amortised into normal access rather than forced as a blocking full-dataset operation
-- Accessed vectors re-encrypted incrementally under newer key versions
+```text
+EP_i = (id_i, v_i, iv_i, ct_i, d)
+ct_i = AEAD.Enc(K_{v_i}, iv_i, x_i, aad_i)
+aad_i = concat(id_i, v_i, d)
+```
 
-**Persistent metadata and recovery support**
-- RocksDB-backed metadata layer
-- Version-aware encrypted payload storage
-- Restart and recovery workflows for restoring queryable state after interruption
+The prototype uses AES-GCM. Associated data bind the ciphertext to its
+persistent identifier, key version, and dimensionality.
 
-**Evaluation and profiling support**
-- Ground-truth-based quality evaluation
-- Recall, ratio, and latency export
-- Smoke-test and experiment runner support
+### Bounded trusted refinement
+
+- Routing returns a candidate identifier set
+- At most `B` encrypted records are selected for refinement
+- Each record is decrypted under its stored key version
+- Exact distances are computed only inside the client-side or otherwise trusted
+  refinement component
+- Query-time cryptographic work is bounded by the refinement budget rather than
+  the full database size
+
+### Cryptographic lifecycle operations
+
+FSPANN defines seven system primitives:
+
+```text
+Setup, TokenGen, Route, Refine, Rotate, Migrate, Retire
+```
+
+The lifecycle operations are:
+
+- **Rotate**: derive and activate a new epoch key without modifying routing
+  state
+- **Migrate**: authenticate, decrypt, and re-encrypt outdated records in a
+  selected touched or scheduled maintenance set
+- **Retire**: remove an obsolete epoch key from online key state only after no
+  live ciphertext remains dependent on that version
+
+### Forward security after safe retirement
+
+Exposure of the current online epoch key does not reveal historical ciphertexts
+from safely retired epochs, assuming:
+
+- PRF key separation
+- AES-GCM confidentiality
+- an uncompromised master secret
+- removal of the retired epoch key from online state
+- no remaining live ciphertext under the retired version
+
+Master-secret compromise and master-secret rotation are outside the current
+formal guarantee.
 
 ---
 
-## Design Principle: Routing–Ciphertext Orthogonality
+## Repository Structure
 
-The key architectural idea is that **geometric routing must not depend on ciphertext state**.
-
-In conventional secure retrieval designs, encrypted representation and index structure are often tightly coupled, meaning key rotation can force expensive re-encryption alongside index mutation or full reconstruction.
-
-FSPANN avoids that by separating:
-
-**Geometric state**
-- Projection functions
-- Routing codes
-- Sortable keys
-- Partition layout
-
-**Cryptographic state**
-- Key versions
-- Encrypted vector payloads
-- Ciphertext migration
-- Safe key deletion
-
-Because of that separation, the routing layer remains stable even while the cryptographic layer evolves.
-
----
-
-## Architecture
-
-The implementation is organised as a multi-module Maven project with explicit service boundaries.
+The implementation is organized as a multi-module Maven project.
 
 ```text
 .
-├── api/             # System facade and executable entry-point orchestration
-├── common/          # Shared models, utilities, and common abstractions
-├── config/          # Configuration loading, validation, and profile management
-├── crypto/          # Authenticated encryption, encrypted record handling, and crypto utilities
-├── index/           # Geometric encoding, partition construction, and routing services
-├── it/              # Integration tests, security validation, and experiment-oriented test workflows
-├── keymanagement/   # Key derivation, active-version control, rotation policies, and safe deletion
-├── loader/          # Streaming dataset ingestion for supported vector formats
-├── query/           # Query token generation, candidate retrieval, decrypt-and-refine, and evaluation
-├── data/            # Local datasets (ignored in VCS)
-├── metadata/        # Local metadata (ignored in VCS)
-└── Results/         # Generated outputs (ignored in VCS)
+├── api/             # System facade and lifecycle orchestration
+├── common/          # Shared models, utilities, and abstractions
+├── config/          # Configuration loading and validation
+├── crypto/          # AES-GCM and encrypted-record handling
+├── index/           # Geometric encoding, partition construction, and routing
+├── keymanagement/   # Key derivation, version control, rotation, and retirement
+├── loader/          # Streaming dataset ingestion
+├── query/           # Token generation, candidate retrieval, refinement, evaluation
+├── it/              # Integration and security-oriented tests
+├── data/            # Local datasets, excluded from version control
+├── metadata/        # Local metadata state, excluded from version control
+└── Results/         # Generated experiment outputs, excluded from version control
 ```
 
----
-
-## Execution Lifecycle
-
-The system follows an ordered lifecycle.
-
-1. **Setup** — load validated configuration; initialise projection and routing functions; open metadata and keystore state
-2. **Indexing / ingestion** — stream vectors in batches; compute geometric representations; encrypt under the current active version; persist metadata and encrypted payloads
-3. **Finalisation** — sort routing keys; construct immutable partition boundaries; switch from ingestion mode to query mode
-4. **Querying** — construct a query token; route geometrically to a bounded candidate set; decrypt and refine; return top-k nearest neighbours
-5. **Key evolution and migration** — rotate active key version; selectively re-encrypt outdated ciphertexts; preserve routing topology during cryptographic maintenance
-6. **Evaluation / export** — write profiling summaries; export recall, ratio, latency, and experimental artifacts
-7. **Shutdown / recovery** — flush state; close metadata resources; support restore-from-disk and query-only restart workflows
+See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the detailed state model,
+component boundaries, query path, and key-lifecycle workflow.
 
 ---
 
-## Query Pipeline
+## System Roles
 
-1. A query vector is converted into the geometric routing representation used during indexing
-2. The routing layer identifies the relevant partition and nearby candidate partitions
-3. A bounded candidate identifier set is produced
-4. Encrypted payloads for those candidates are fetched
-5. Each candidate is decrypted using its recorded key version
-6. Exact distances are computed over the decrypted candidates
-7. The top-k results are returned
-8. If enabled, touched outdated ciphertexts may be migrated to the current version
+FSPANN uses three logical roles.
 
-Expensive cryptographic work is bounded by the configured refinement budget rather than the total dataset size.
+### Data owner
 
----
+- Constructs the routing structure
+- Encrypts the vector collection
+- Controls the master secret and epoch-key lifecycle
+- Authorizes rotation, migration, and retirement
 
-## Security Model
+### Honest-but-curious server
 
-The system is designed under an **honest-but-curious server** model. The server is assumed to follow the prescribed protocol correctly while attempting to infer information from stored state and execution behaviour.
+- Stores routing metadata and encrypted records
+- Executes geometric candidate routing
+- Returns encrypted candidate records
+- Observes the routing and maintenance information declared in the leakage model
 
-**Protected**
-- Vector payload contents through authenticated encryption
-- Historical ciphertext confidentiality after safe deletion of obsolete keys
-- Integrity of encrypted records bound to associated metadata
+The server is not trusted with plaintext vectors, plaintexts produced during
+trusted refinement, the master secret, or safely retired epoch keys.
 
-**Observable / leakage side**
+### Client or trusted refinement component
 
-Like other practical sub-linear retrieval systems, the design does not eliminate all leakage. Observable behaviour may include partition access patterns, candidate-set sizes, version metadata, and migration-side access patterns.
-
-The system is best understood as a **leakage-aware secure ANN design**, not a fully oblivious retrieval protocol.
-
----
-
-## Technology Stack
-
-| Layer          | Technology                                          |
-| -------------- | --------------------------------------------------- |
-| Language       | Java 21                                             |
-| Build          | Maven                                               |
-| Metadata store | RocksDB                                             |
-| Encryption     | AES-GCM                                             |
-| Routing / ANN  | Partitioned geometric routing with LSH-style coding |
-| Profiling      | Micrometer and profiler exports                     |
-| Testing        | JUnit-based integration and adversarial validation  |
+- Generates query tokens
+- Receives a bounded encrypted candidate set
+- Decrypts each candidate under its recorded version
+- Computes exact distances
+- Returns the approximate top-\(k\) result and the touched set
 
 ---
 
-## Build Instructions
+## Query Workflow
 
-### Prerequisites
+1. The query vector is mapped to the same routing representation used during
+   indexing.
+2. The server probes the nearest routing partitions and bounded neighboring
+   partitions.
+3. Routing produces a candidate identifier set.
+4. At most `B` encrypted records are selected for trusted refinement.
+5. Each selected record is authenticated and decrypted under its stored version.
+6. Exact distances are computed over the decrypted candidates.
+7. The top-\(k\) identifiers are returned.
+8. Successfully authenticated identifiers form the touched set used by optional
+   selective migration.
+
+---
+
+## Key Evolution Workflow
+
+1. `Rotate` derives and activates a new epoch key.
+2. Existing records remain under their stored versions, allowing mixed-version
+   retrieval.
+3. Query-generated touched sets or scheduled maintenance sets identify outdated
+   records.
+4. `Migrate` authenticates each selected old record, decrypts it under its stored
+   key version, and re-encrypts it under the active version with a fresh nonce
+   and updated associated data.
+5. Ciphertext and version metadata are replaced atomically under the same
+   persistent identifier.
+6. Per-version live-record counts are updated.
+7. `Retire` removes an obsolete key only when its live-record count reaches zero.
+
+Routing codes, partitions, representatives, probe behavior, and routed
+identifiers remain unchanged throughout these cryptographic operations.
+
+---
+
+## Security Scope and Declared Leakage
+
+FSPANN uses an adaptive honest-but-curious server model. The server follows the
+protocol but may observe:
+
+- public parameters and record counts
+- ciphertext lengths
+- fixed routing metadata
+- routing tokens
+- partition-probe traces
+- candidate and refinement identifiers
+- access order
+- accessed key versions
+- activated and retired version labels
+- migrated identifiers
+- version transitions
+- observable update sizes
+- retirement outcomes
+
+Across repeated queries and epochs, these observations may reveal coarse
+geometric locality, repeated-query behavior, candidate overlap, access
+correlations, frequently accessed records, and migration progress.
+
+FSPANN does **not** provide ORAM/PIR-style access-pattern hiding.
+
+During normal operation, vector contents remain confidential beyond the
+declared leakage. In the current-key compromise experiment, current-epoch
+confidentiality is not claimed after exposure of the current online epoch key.
+The forward-security guarantee applies to historical ciphertexts from safely
+retired epochs.
+
+---
+
+## Build
+
+### Requirements
 
 - Java 21
 - Maven
-- RocksDB JNI dependencies available for your environment
-- Sufficient RAM depending on dataset scale and configuration
+- A platform supported by the RocksDB Java bindings
+- Sufficient memory and storage for the selected dataset and profile
 
-### Build
+### Compile and install
 
 ```bash
 mvn clean install
 ```
 
-If your packaging uses a specific module entry point rather than a root fat JAR, run from the appropriate module or with the module-specific Maven goal used in your repository.
+Dataset paths, dimensions, routing parameters, refinement budgets, key-rotation
+settings, and output locations are profile-driven. Use the committed
+configuration profiles and experiment runners associated with the desired
+dataset.
 
----
-
-## Running the System
-
-Use the actual entry path for your `api` module. If your repository provides experiment scripts or profile-driven runners, prefer those over a generic invocation.
-
-```bash
-# Build
-mvn clean install
-
-# Run the API/system facade module
-mvn -pl api exec:java
-```
-
-If you use shell scripts for smoke tests or dataset sweeps, document those commands here instead.
+Before launching a full-scale experiment, verify the installation with the
+repository's integration and smoke-test targets.
 
 ---
 
 ## Configuration
 
-Because the system is profile-driven, configuration should be treated as part of the experimental artifact, not just runtime convenience. Typical runtime configuration covers:
+Typical configuration fields include:
 
-- Dataset path and format
-- Vector dimensionality
-- Top-k query size
-- Refinement bound / candidate budget
-- Routing parameters and probe settings
-- Key rotation thresholds
-- Profiling and export toggles
-- Restore / query-only mode
+- dataset path and file format
+- vector count and dimensionality
+- query and ground-truth paths
+- top-\(k\)
+- routing-table and division counts
+- routing-code length
+- partition and probe budgets
+- refinement budget
+- active key version and rotation policy
+- migration mode
+- restore or query-only mode
+- output and profiling paths
+- deterministic seeds
 
----
-
-## Datasets
-
-The evaluation is centred on large-scale vector retrieval benchmarks:
-
-- **SIFT** — 128-dimensional local descriptor vectors
-- **GloVe** — pre-trained word embedding vectors
-- **RedCaps** — 512-dimensional image-text embedding vectors
-
-The thesis evaluates FSPANN on SIFT and RedCaps and analyses the trade-off among recall, latency, and security-aware refinement cost. GloVe is included in the experimental setup; recall figures for that dataset are reported in the full thesis rather than summarised here.
+Configuration files used for reported experiments should be treated as part of
+the reproduction artifact.
 
 ---
 
-## Results
+## Evaluated Datasets
 
-All figures below are taken directly from thesis-measured results.
+The final paper evaluates FSPANN on:
 
-- On **SIFT**, the system reaches **Recall@10 up to 0.879**
-- Supports **interactive configurations with query latency as low as 400 ms**
-- On **RedCaps (512 dimensions)**, reaches **Recall@10 up to 0.120**
-- Complete key rotation costs approximately **381–414 seconds per million vectors**
-- Selective re-encryption introduces **no measurable additional per-query overhead** under the reported evaluation setting
+- **SIFT1M**, 128-dimensional descriptor vectors
+- **GloVe-100**, 100-dimensional word embeddings
+- **RedCaps**, 512-dimensional multimodal embeddings
+- **SIFT1B subsets**, used for scalability experiments
 
-| Dataset         | Dimension | Representative Result                                       |
-| --------------- | --------: | ----------------------------------------------------------- |
-| SIFT            |       128 | Recall@10 up to 0.879; interactive latency as low as 400 ms |
-| RedCaps         |       512 | Recall@10 up to 0.120                                       |
-| Key maintenance |         — | Full key rotation ~381–414 s per million vectors            |
-
-For complete tables and plots, see [`RESULTS.md`](./RESULTS.md).
+Datasets are not included in the repository. Obtain them from their official
+sources and configure local paths before running an experiment.
 
 ---
 
-## What This Project Demonstrates
+## Representative Results
 
-This repository demonstrates more than a secure storage wrapper. It shows the implementation of a system that combines:
+All average response time values below were measured on an Intel Xeon
+E5-2630 v4 platform with 40 logical cores at 2.20 GHz and 380 GiB RAM using
+10,000 warmed-up queries.
 
-- **ANN retrieval engineering** — geometric routing preserved under encryption
-- **Persistent metadata management** — RocksDB-backed index state
-- **Forward-secure cryptographic maintenance** — key evolution without index rebuild
-- **Bounded decrypt-and-refine querying** — controlled cryptographic work per query
-- **Experiment orchestration and evaluation** — profile-driven runners and dataset sweeps
-- **Integration and adversarial testing** — end-to-end correctness and security validation
+| Profile | Dataset | Refinement budget | Recall@10 | ART |
+| --- | --- | ---: | ---: | ---: |
+| Interactive | SIFT1M | 6K | 0.502 | 745.7 ms |
+| Balanced | SIFT1M | 20K | 0.838 | 2828.0 ms |
+| High recall | SIFT1M | 22K | 0.879 | 4186.0 ms |
+| High recall | GloVe-100 | 24K | 0.427 | 3620.0 ms |
+| High recall | RedCaps | 28K | 0.1197 | 5607.2 ms |
 
-This makes it relevant not only to secure retrieval research, but also to production-oriented AI infrastructure roles where vector search, retrieval systems, and privacy-aware design matter.
+Additional observations:
+
+- The strongest reported distance ratios are approximately 1.010 on SIFT1M,
+  1.037 on GloVe-100, and 1.018 on RedCaps.
+- Authenticated decryption and exact refinement account for approximately
+  89–93% of measured query latency.
+- Routing and candidate transfer account for approximately 7–11%.
+- Selective migration of a selected one-million-record outdated maintenance set
+  completes in approximately 31–41 seconds.
+- Measured total system-storage footprints are 1.03–1.09 GB for SIFT1M,
+  0.98–1.03 GB for GloVe-100, and 3.35–3.41 GB for RedCaps.
+- The complete evaluation pipeline finishes on SIFT1B subsets up to 75M
+  vectors.
+- The 100M target run stops near 92.6M vectors because of JVM heap exhaustion,
+  an implementation-level memory limitation rather than a formal algorithmic
+  boundary.
+
+FSPANN does not claim universal recall–latency dominance. The evaluation
+measures the cost of combining encrypted ANN retrieval with routing-invariant
+key evolution, mixed-version refinement, selective migration, and safe
+retirement.
 
 ---
 
 ## Current Limitations
 
-- Query-time cryptographic work remains significant compared with plaintext ANN systems
-- The design is not fully oblivious and leaks routing-side access patterns
-- The current implementation is CPU-oriented
-- Performance and security trade-offs remain configuration-sensitive
-- This is a specialised secure ANN architecture, not a drop-in replacement for mainstream vector databases
+- The system is routing-visible rather than access-pattern oblivious.
+- Query latency is dominated by authenticated decryption and exact refinement.
+- The current implementation is CPU-oriented.
+- Performance depends on routing, probing, and refinement configuration.
+- Master-secret compromise is outside the current security theorem.
+- Routing invariance is stated for cryptographic maintenance over a fixed
+  indexed collection.
+- The current prototype has a JVM-memory limitation at the largest tested scale.
+- FSPANN is a research prototype, not a drop-in replacement for a production
+  vector database.
 
 ---
 
-## Future Work
+## Reproducibility Notes
 
-- Crypto acceleration for query-time decryption
-- Tighter candidate-reduction and adaptive probing strategies
-- Hybrid routing with stronger ANN backends
-- GPU-assisted refinement
-- Broader vector-database integration
-- Stronger leakage mitigation and obliviousness extensions
-- Production-facing API and deployment wrappers
+For a clean reproduction:
+
+1. Build from a fresh clone.
+2. Confirm the documented Java and Maven versions.
+3. Run the integration and smoke-test targets.
+4. Download datasets from their official sources.
+5. Update only local dataset and output paths in the committed profiles.
+6. Preserve the committed routing parameters, budgets, and seeds.
+7. Run one dataset profile at a time unless sufficient memory is available.
+8. Record the exact commit, JVM options, hardware, and output directory.
+9. Compare generated Recall@10, Ratio, ART, migration, and storage summaries
+   with the reported operating points.
+10. Do not commit datasets, generated ciphertexts, RocksDB state, keystores, or
+    machine-specific paths.
 
 ---
 
-## Thesis Context
+## Project Status
 
-This repository is closely aligned with the system described in the thesis on forward-secure privacy-preserving ANN retrieval over high-dimensional data. The thesis formalises the architectural principles, describes the implementation in detail, and reports the full evaluation used to validate the system design.
+This repository accompanies the anonymous ICICS 2026 submission:
 
----
+**FSPANN: Forward-Secure and Privacy-Preserving ANN Search with
+Routing–Ciphertext Orthogonality**
 
-## Summary
-
-FSPANN is a systems-oriented implementation of encrypted ANN retrieval with forward-secure key evolution. Its central contribution is not merely that vectors are encrypted, but that cryptographic maintenance is introduced **without destabilising the geometric routing layer** required for practical ANN search.
-
-That separation is the core reason this project is technically differentiated from both plaintext ANN engines and conventional secure retrieval designs.
+The repository is intended for review, inspection, and experimental
+reproduction. It should not be interpreted as providing stronger privacy or
+performance guarantees than those stated above.
