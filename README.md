@@ -362,11 +362,8 @@ For a clean reproduction:
 
 ## Project Status
 
-This repository accompanies the anonymous ICICS 2026 submission:
+This repository accompanies the ICICS 2026 submission:
 
-**FSPANN: Forward-Secure and Privacy-Preserving ANN Search with
-Routing–Ciphertext Orthogonality**
+**FSPANN: Forward-Secure and Privacy-Preserving ANN Search with Routing–Ciphertext Orthogonality**
 
-The repository is intended for review, inspection, and experimental
-reproduction. It should not be interpreted as providing stronger privacy or
-performance guarantees than those stated above.
+The repository is intended for review, inspection, and experimental reproduction. It should not be interpreted as providing stronger privacy or performance guarantees than those stated above.
